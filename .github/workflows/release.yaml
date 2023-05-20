@@ -91,6 +91,14 @@ jobs:
           version: latest
           install: true
 
+      - name: Run go-generate
+        run: |
+          echo -e "\n###\nFetching NPM dependencies\n"
+          (cd client; npm ci)
+
+          echo -e "\n###\nRunning 'go generate'\n"
+          go generate -v ./...
+
       - name: Run golangci-Lint
         uses: golangci/golangci-lint-action@v3
         with:
@@ -105,12 +113,6 @@ jobs:
       - name: Build for all platforms
         run: |
           mkdir -p .bin .out
-
-          echo -e "\n###\nFetching NPM dependencies\n"
-          (cd client; npm ci)
-
-          echo -e "\n###\nRunning 'go generate'\n"
-          go generate -v ./...
 
           echo -e "\n###\nSetting BUILD_LDFLAGS\n"
           BUILDINFO_PKG="github.com/italypaleale/revaulter/pkg/buildinfo"
