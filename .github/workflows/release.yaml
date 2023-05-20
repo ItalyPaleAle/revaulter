@@ -16,6 +16,7 @@ jobs:
     name: Build and release
     runs-on: ubuntu-22.04
     permissions:
+      contents: read
       packages: write
     env:
       CGO_ENABLED: "0"
