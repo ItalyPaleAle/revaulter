@@ -152,11 +152,11 @@ func TestSetCookieKeys(t *testing.T) {
 		err = csk.Raw(&cskRaw)
 		require.NoError(t, err)
 
-		require.Equal(t, "G3IonJt59Sym1DI63hdLcg", base64.RawStdEncoding.EncodeToString(cekRaw))
-		require.Equal(t, "8TXMP0eG09zvB9gQQIBQNcdzHCC2z5dZgnnLY+uewdk", base64.RawStdEncoding.EncodeToString(cskRaw))
+		require.Equal(t, "l8LxoY6e2c/nZigC7n0cJg", base64.RawStdEncoding.EncodeToString(cekRaw))
+		require.Equal(t, "HyY6TBU8Qwd2yXspvM0zDEPt/Sz7DEcTdjvEHNgENxw", base64.RawStdEncoding.EncodeToString(cskRaw))
 
-		require.Equal(t, "BJAimQR5siBAh8_6", cek.KeyID())
-		require.Equal(t, "BJAimQR5siBAh8_6", csk.KeyID())
+		require.Equal(t, "o2Bqhc6QPigj8GwA", cek.KeyID())
+		require.Equal(t, "o2Bqhc6QPigj8GwA", csk.KeyID())
 	})
 
 	t.Run("cookieEncryptionKey no present", func(t *testing.T) {
