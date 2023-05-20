@@ -1,7 +1,4 @@
 # Builds the application and makes releases
-#
-# Required secrets:
-# - DOCKERHUB_TOKEN: Token for publishing to Docker Hub (optional)
 
 name: Build and release
 
@@ -12,10 +9,6 @@ on:
     tags:
       # Push to tags matching v*
       - 'v*'
-
-env:
-  # Username for Docker Hub-set to empty to disable pushing to Docker Hub
-  DOCKERHUB_USERNAME: "italypaleale"
 
 jobs:
 
@@ -79,13 +72,6 @@ jobs:
           echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
           echo "BRANCH=$BRANCH" >> $GITHUB_ENV
           echo "PRERELEASE=$PRERELEASE" >> $GITHUB_ENV
-
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2
@@ -321,18 +307,6 @@ jobs:
             ghcr.io/${{ env.REPO_OWNER }}/revaulter:edge
           push: true
 
-      - name: Docker build and push to Docker Hub - edge
-        uses: docker/build-push-action@v4
-        if: env.BUILD_VERSION == 'edge' && env.DOCKERHUB_USERNAME != ''
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          tags: |
-            ${{ env.DOCKERHUB_USERNAME }}/revaulter:edge
-            ${{ env.DOCKERHUB_USERNAME }}/revaulter:edge
-          push: true
-
       - name: Docker build and push to GHCR - release
         uses: docker/build-push-action@v4
         if: env.BUILD_VERSION != 'edge'
@@ -343,16 +317,4 @@ jobs:
           tags: |
             ghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BUILD_VERSION}}
             ghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BRANCH}}
-          push: true
-
-      - name: Docker build and push to Docker Hub - release
-        uses: docker/build-push-action@v4
-        if: env.BUILD_VERSION != 'edge' && env.DOCKERHUB_USERNAME != ''
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          tags: |
-            ${{ env.DOCKERHUB_USERNAME }}/revaulter:${{env.BUILD_VERSION}}
-            ${{ env.DOCKERHUB_USERNAME }}/revaulter:${{env.BRANCH}}
           push: true
