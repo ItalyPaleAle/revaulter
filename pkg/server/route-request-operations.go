@@ -25,8 +25,8 @@ import (
 // - POST /request/decrypt
 // - POST /request/sign
 // - POST /request/verify
-// - POST /request/wrap
-// - POST /request/unwrap
+// - POST /request/wrapkey
+// - POST /request/unwrapkey
 func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Get the fields from the body
