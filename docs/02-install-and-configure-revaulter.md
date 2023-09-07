@@ -1,6 +1,6 @@
 # Install and configure Revaulter
 
-evaulter runs as a lightweight app on a server you control that exposes a HTTPS endpoint. You can install it on the same server where your application that requires the cryptographic key runs or on a separate machine.
+Revaulter runs as a lightweight app on a server you control that exposes a HTTPS endpoint. You can install it on the same server where the application that requires the cryptographic key runs, or on a separate machine.
 
 > **Firewall rules:** Revaulter must be deployed on a server that admins can connect to via HTTPS, on a port of your choice. While Revaulter doesn't need to be exposed on the public Internet, your admins must be able to connect to it, even if through a private IP or VPN. Additionally, Revaulter must be able to make outgoing HTTPS requests.
 
@@ -22,10 +22,10 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
 
 - Azure credentials:
   - **`azureClientId`** (**required**):  
-    Client ID of the Azure AD application (see the [Azure AD application](./01-set-up.md#azure-ad-application) step in the [Set up](./01-set-up.md) document).  
+    Client ID of the Azure AD application (see the [Azure AD application](./01-set-up.md#azure-ad-application) step in the [Set up](./01-set-up.md) document).  
     Environmental variable name: `REVAULTER_AZURECLIENTID`
   - **`azureTenantId`** (**required**):  
-    Tenant ID of the Azure AD application.  
+    Tenant ID of the Azure AD application.  
     Environmental variable name: `REVAULTER_AZURETENANTID`
 - Webhooks:
   - **`webhookUrl`** (**required**):  
@@ -63,7 +63,7 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
     Environmental variable name: `REVAULTER_TLSKEYPEM`
   - **`allowedIps`** (optional):  
     If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.  
-    Note that this value is used to restrict connections to the `/wrap`, `/unwrap`, and `/status` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.  
+    Note that this value is used to restrict connections to the `/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.  
     Environmental variable name: `REVAULTER_ALLOWEDIPS`
   - **`origins`** (optional, default is equal to the value of `baseUrl`):  
     Comma-separated lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).  
@@ -106,7 +106,7 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
 
 Using Revaulter requires TLS, for security and performance reasons (to be able to use HTTP/2 for the long-lived requests).
 
-Using a self-signed certificate is an acceptable option if running Revaulter in the same server as your app. To generate a self-signed TLS certificate, you can use OpenSSL, for example:
+Using a self-signed certificate is an acceptable option if running Revaulter in the same server as your app. You can generate a self-signed TLS certificate using OpenSSL, for example:
 
 ```sh
 openssl req -x509 -newkey rsa:4096 -keyout tls-key.pem -out tls-cert.pem -days 365 -nodes

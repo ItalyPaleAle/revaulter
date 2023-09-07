@@ -1,10 +1,10 @@
 # Set up
 
-Before you can deploy and use Revaulter, you need to perform a few setup steps to create resources on Azure: a Key Vault and an Azure AD application that allows the admin to authenticate and allow or deny operations.
+Before you can deploy and use Revaulter, you need to perform a few setup steps to create resources on Azure: a Key Vault and an Azure AD application that allows the admin to authenticate and allow or deny operations.
 
 All the steps below must be run on your laptop before you deploy the app. At the end, you'll have the values required for the [`config.yaml`](02-install-and-configure-revaulter.md#configuration) file and for making requests to the service.
 
-You will need an Azure subscription to deploy these services; if you don't have one, you can start a [free trial](https://azure.com/free). All the services we need for Revaulter are either free (Azure AD) or very inexpensive (for most scenarios, you should not spend more than a few cents on Azure Key Vault every month).
+You will need an Azure subscription to deploy these services; if you don't have one, you can start a [free trial](https://azure.com/free). All the services we need for Revaulter are either free (Azure AD) or very inexpensive (for most scenarios, you should not spend more than a few cents on Azure Key Vault every month).
 
 ## Requirements
 
@@ -64,7 +64,7 @@ az keyvault create \
   --location $LOCATION
 ```
 
-Then assign permissions to the current user to perform operations on keys (using RBAC):
+Then assign permissions to the current user to perform operations on keys using Azure RBAC (Role-Based Access Control):
 
 ```sh
 USER_ACCOUNT=$(az account show | jq -r .user.name)
@@ -81,7 +81,7 @@ Lastly, create a new RSA-4096 key directly inside the vault. You may create mult
 KEYVAULT_KEY="wrappingkey1"
 
 # Allowed operations on the key, as a space-separated list.
-# Operations should include all operations you plan on performing using this key.
+# The list should include all operations you plan on performing using this key.
 # Supported values: encrypt decrypt sign verify wrapKey unwrapKey
 KEY_OPS="encrypt decrypt sign verify wrapKey unwrapKey"
 az keyvault key create \
@@ -100,9 +100,9 @@ Take note of the value of `KEYVAULT_KEY`, which will be used when making request
 >
 > If you need access to the private key, consider importing a key inside the Key Vault rather than having it generate a new one for you (e.g. [using the Azure CLI](https://docs.microsoft.com/en-us/cli/azure/keyvault/key?view=azure-cli-latest#az-keyvault-key-import)).
 
-### Azure AD application
+### Azure AD application
 
-Create an app in Azure AD to access Azure Key Vault with a user's delegated permissions.
+Create an app in Azure AD to access Azure Key Vault with a user's delegated permissions.
 
 ```sh
 # Friendly name for the application
@@ -132,4 +132,4 @@ Take note of the output of the last command, which includes the values for the `
 - `appId` is the value for `azureClientId`
 - `tenant` is the value for `azureTenantId`
 
-> Note that the Azure AD application does not need permissions on the Key Vault. Instead, Revaulter uses delegated permissions, matching whatever access level the authenticated user has.
+> Note that the Azure AD application does not need permissions on the Key Vault. Instead, Revaulter uses delegated permissions, matching whatever access level the authenticated user has.
