@@ -120,7 +120,7 @@ jobs:
 
           echo -e "\n###\nSetting BUILD_LDFLAGS\n"
           BUILDINFO_PKG="github.com/italypaleale/revaulter/pkg/buildinfo"
-          BUILD_LDFLAGS="-X ${BUILDINFO_PKG}.Production=1 -X ${BUILDINFO_PKG}.AppVersion=${{env.BUILD_VERSION}} -X ${BUILDINFO_PKG}.BuildId=${{env.BUILD_ID}} -X ${BUILDINFO_PKG}.BuildDate=${{env.BUILD_DATE}} -X ${BUILDINFO_PKG}.CommitHash=${{env.COMMIT_HASH}}"
+          BUILD_LDFLAGS="-X ${BUILDINFO_PKG}.Production=1 -X ${BUILDINFO_PKG}.AppVersion=${{env.BUILD_VERSION}} -X ${BUILDINFO_PKG}.BuildId=${{env.BUILD_ID}} -X ${BUILDINFO_PKG}.BuildDate=${{env.BUILD_DATE}} -X ${BUILDINFO_PKG}.CommitHash=${{env.COMMIT_HASH}} -buildid=${{env.BUILD_ID}}"
           echo "BUILD_LDFLAGS=${BUILD_LDFLAGS}"
 
           echo -e "\n###\nBuilding linux/amd64\n"
@@ -130,6 +130,7 @@ jobs:
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
               -o .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64/revaulter \
+              -trimpath \
               ./cmd/revaulter
           cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64
           cp README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64
@@ -142,6 +143,7 @@ jobs:
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
               -o .bin/revaulter-${{ env.BUILD_ID }}-linux-386/revaulter \
+              -trimpath \
               ./cmd/revaulter
           cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-386
           cp README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-386
@@ -154,6 +156,7 @@ jobs:
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
               -o .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64/revaulter \
+              -trimpath \
               ./cmd/revaulter
           cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64
           cp README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64
@@ -167,6 +170,7 @@ jobs:
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
               -o .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7/revaulter \
+              -trimpath \
               ./cmd/revaulter
           cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7
           cp README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7
@@ -179,6 +183,7 @@ jobs:
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
               -o .bin/revaulter-${{ env.BUILD_ID }}-macos-x64/revaulter \
+              -trimpath \
               ./cmd/revaulter
           cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-macos-x64
           cp README.md .bin/revaulter-${{ env.BUILD_ID }}-macos-x64
@@ -191,6 +196,7 @@ jobs:
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
               -o .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64/revaulter \
+              -trimpath \
               ./cmd/revaulter
           cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64
           cp README.md .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64
