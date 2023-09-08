@@ -1051,7 +1051,7 @@ func closeBody(res *http.Response) {
 // mockKVClient implements the keyvault.Client interface
 type mockKVClient struct{}
 
-func (kv *mockKVClient) Encrypt(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationsParameters) (*keyvault.KeyVaultEncryptResponse, error) {
+func (kv *mockKVClient) Encrypt(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*keyvault.KeyVaultEncryptResponse, error) {
 	res := &keyvault.KeyVaultEncryptResponse{
 		Data: params.Value,
 	}
@@ -1059,7 +1059,7 @@ func (kv *mockKVClient) Encrypt(ctx context.Context, vault, keyName, keyVersion 
 	return res, nil
 }
 
-func (kv *mockKVClient) Decrypt(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationsParameters) (*keyvault.KeyVaultDecryptResponse, error) {
+func (kv *mockKVClient) Decrypt(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*keyvault.KeyVaultDecryptResponse, error) {
 	res := &keyvault.KeyVaultDecryptResponse{
 		Data: params.Value,
 	}
@@ -1067,7 +1067,7 @@ func (kv *mockKVClient) Decrypt(ctx context.Context, vault, keyName, keyVersion 
 	return res, nil
 }
 
-func (kv *mockKVClient) WrapKey(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationsParameters) (*keyvault.KeyVaultEncryptResponse, error) {
+func (kv *mockKVClient) WrapKey(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*keyvault.KeyVaultEncryptResponse, error) {
 	res := &keyvault.KeyVaultEncryptResponse{
 		Data: params.Value,
 	}
@@ -1075,7 +1075,7 @@ func (kv *mockKVClient) WrapKey(ctx context.Context, vault, keyName, keyVersion 
 	return res, nil
 }
 
-func (kv *mockKVClient) UnwrapKey(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationsParameters) (*keyvault.KeyVaultDecryptResponse, error) {
+func (kv *mockKVClient) UnwrapKey(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*keyvault.KeyVaultDecryptResponse, error) {
 	res := &keyvault.KeyVaultDecryptResponse{
 		Data: params.Value,
 	}

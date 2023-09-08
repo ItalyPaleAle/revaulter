@@ -5,8 +5,8 @@ import "github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 var supportedAlgorithms map[string]struct{}
 
 func init() {
-	enc := azkeys.PossibleJSONWebKeyEncryptionAlgorithmValues()
-	sig := azkeys.PossibleJSONWebKeySignatureAlgorithmValues()
+	enc := azkeys.PossibleEncryptionAlgorithmValues()
+	sig := azkeys.PossibleSignatureAlgorithmValues()
 	supportedAlgorithms = make(map[string]struct{}, len(enc)+len(sig))
 	for _, alg := range enc {
 		supportedAlgorithms[string(alg)] = struct{}{}

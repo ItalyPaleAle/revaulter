@@ -116,21 +116,21 @@ func (rs requestState) Public(stateId string) requestStatePublic {
 	}
 }
 
-// AzkeysKeyOperationsParams returns the azkeys.KeyOperationsParameters object for this request, that can be used with the Azure SDK.
-func (rs requestState) AzkeysKeyOperationsParams() azkeys.KeyOperationsParameters {
-	return azkeys.KeyOperationsParameters{
-		Algorithm: to.Ptr(azkeys.JSONWebKeyEncryptionAlgorithm(rs.Algorithm)),
-		Value:     rs.Value,
-		AAD:       rs.AdditionalData,
-		IV:        rs.Nonce,
-		Tag:       rs.Tag,
+// AzkeysKeyOperationsParams returns the azkeys.KeyOperationParameters object for this request, that can be used with the Azure SDK.
+func (rs requestState) AzkeysKeyOperationsParams() azkeys.KeyOperationParameters {
+	return azkeys.KeyOperationParameters{
+		Algorithm:                   to.Ptr(azkeys.EncryptionAlgorithm(rs.Algorithm)),
+		Value:                       rs.Value,
+		AdditionalAuthenticatedData: rs.AdditionalData,
+		IV:                          rs.Nonce,
+		AuthenticationTag:           rs.Tag,
 	}
 }
 
 // AzkeysSignParams returns the azkeys.SignParameters object for this request, that can be used with the Azure SDK.
 func (rs requestState) AzkeysSignParams() azkeys.SignParameters {
 	return azkeys.SignParameters{
-		Algorithm: to.Ptr(azkeys.JSONWebKeySignatureAlgorithm(rs.Algorithm)),
+		Algorithm: to.Ptr(azkeys.SignatureAlgorithm(rs.Algorithm)),
 		Value:     rs.Digest,
 	}
 }
@@ -138,7 +138,7 @@ func (rs requestState) AzkeysSignParams() azkeys.SignParameters {
 // AzkeysVerifyParams returns the azkeys.VerifyParameters object for this request, that can be used with the Azure SDK.
 func (rs requestState) AzkeysVerifyParams() azkeys.VerifyParameters {
 	return azkeys.VerifyParameters{
-		Algorithm: to.Ptr(azkeys.JSONWebKeySignatureAlgorithm(rs.Algorithm)),
+		Algorithm: to.Ptr(azkeys.SignatureAlgorithm(rs.Algorithm)),
 		Digest:    rs.Digest,
 		Signature: rs.Signature,
 	}
