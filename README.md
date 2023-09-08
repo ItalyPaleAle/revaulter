@@ -1,4 +1,4 @@
-# 🔐 Revaulter v1.0-beta.1
+# 🔐 Revaulter v1.0
 
 Revaulter lets you perform cryptographic operations with keys stored on [Azure Key Vault](https://learn.microsoft.com/en-us/azure/key-vault/general/overview), securely after getting consent from an admin. You can use Revaulter for:
 
@@ -18,11 +18,11 @@ Some example usages:
 
 Revaulter exposes a few REST endpoints that can be used to perform cryptographic operations, including: encrypting and decrypting arbitrary data, wrapping and unwrapping keys, calculating and verifying digital signatures. These operations are performed on Azure Key Vault, a safe, cloud-based key vault that uses strong keys, including RSA (up to 4096 bits), ECDSA (with NIST curves including P-256, P-384, and P-521), and AES (on Managed HSM Azure Key Vault only).
 
-Revaulter doesn't have standing permission to perform operations on the vault, so every time a request comes in, Revaulter sends a notification to an admin (via a webhook), who can sign into Revaulter via Azure AD and allow (or deny) the operation. Revaulter uses delegated permissions to access the Key Vault, so access is restricted to specific users via Role-Based Access Control on the Azure Key Vault resource.
+Revaulter doesn't have standing permission to perform operations on the vault, so every time a request comes in, Revaulter sends a notification to an admin (via a webhook), who can sign into Revaulter via Azure AD and allow (or deny) the operation. Revaulter uses delegated permissions to access the Key Vault, so access is restricted to specific users via Role-Based Access Control on the Azure Key Vault resource.
 
 ![Example of a notification sent by Revaulter (to a Discord chat)](/notification-example.png)
 
-Alternatively, Revaulter can be invoked with a bearer token issued by Azure AD, obtained outside of Revaulter, with permission to access the Key Vault. This allows, for example, using the client credentials flow to obtain an access token (i.e. using a client ID and client secret pair).
+Alternatively, Revaulter can be invoked with a bearer token issued by Azure AD, obtained outside of Revaulter, with permission to access the Key Vault. This allows, for example, using the client credentials flow to obtain an access token (i.e. using a client ID and client secret pair).
 
 # 📘 Docs
 
