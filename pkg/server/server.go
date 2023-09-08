@@ -44,13 +44,15 @@ type Server struct {
 	appSrv     *http.Server
 	metricsSrv *http.Server
 	// Method that forces a reload of TLS certificates from disk
-	tlsCertWatchFn tlsCertWatchFn
-	running        atomic.Bool
+	tlsCertWatchFn  tlsCertWatchFn
+	running         atomic.Bool
+	appSrvRunningCh chan struct{}
 
 	// Listeners for the app and metrics servers
 	// These can be used for testing without having to start an actual TCP listener
-	appListener     net.Listener
-	metricsListener net.Listener
+	appListener         net.Listener
+	metricsListener     net.Listener
+	metricsSrvRunningCh chan struct{}
 
 	// Factory for keyvault.Client objects
 	// This is defined as a property to allow for mocking
@@ -226,6 +228,8 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) startAppServer() error {
+	s.appSrvRunningCh = make(chan struct{})
+
 	bindAddr := viper.GetString(config.KeyBind)
 	if bindAddr == "" {
 		bindAddr = "0.0.0.0"
@@ -258,14 +262,15 @@ func (s *Server) startAppServer() error {
 	}
 
 	// Start the HTTPS server in a background goroutine
+	s.log.Raw().Info().
+		Str("bind", bindAddr).
+		Int("port", bindPort).
+		Str("url", viper.GetString(config.KeyBaseUrl)).
+		Msg("App server started")
 	go func() {
 		defer s.appListener.Close()
+		defer close(s.appSrvRunningCh)
 
-		s.log.Raw().Info().
-			Str("bind", bindAddr).
-			Int("port", bindPort).
-			Str("url", viper.GetString(config.KeyBaseUrl)).
-			Msg("App server started")
 		// Next call blocks until the server is shut down
 		err := s.appSrv.ServeTLS(s.appListener, "", "")
 		if err != http.ErrServerClosed {
@@ -287,10 +292,13 @@ func (s *Server) stopAppServer() error {
 			Msg("App server shutdown error")
 		return err
 	}
+	<-s.appSrvRunningCh
 	return nil
 }
 
 func (s *Server) startMetricsServer() error {
+	s.metricsSrvRunningCh = make(chan struct{})
+
 	bindAddr := viper.GetString(config.KeyMetricsBind)
 	if bindAddr == "" {
 		bindAddr = "0.0.0.0"
@@ -323,13 +331,14 @@ func (s *Server) startMetricsServer() error {
 	}
 
 	// Start the HTTPS server in a background goroutine
+	s.log.Raw().Info().
+		Str("bind", bindAddr).
+		Int("port", bindPort).
+		Msg("Metrics server started")
 	go func() {
 		defer s.metricsListener.Close()
+		defer close(s.metricsSrvRunningCh)
 
-		s.log.Raw().Info().
-			Str("bind", bindAddr).
-			Int("port", bindPort).
-			Msg("Metrics server started")
 		// Next call blocks until the server is shut down
 		err := s.metricsSrv.Serve(s.metricsListener)
 		if err != http.ErrServerClosed {
@@ -351,6 +360,7 @@ func (s *Server) stopMetricsServer() error {
 			Msg("Metrics server shutdown error")
 		return err
 	}
+	<-s.metricsSrvRunningCh
 	return nil
 }
 
