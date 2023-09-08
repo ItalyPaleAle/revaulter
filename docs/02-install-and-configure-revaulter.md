@@ -130,10 +130,10 @@ docker run \
   -d \
   -p 8080:8080 \
   -v $HOME/.revaulter:/etc/revaulter \
-  ghcr.io/italypaleale/revaulter:1.0
+  ghcr.io/italypaleale/revaulter:1
 ```
 
-> Revaulter follows semver for versioning. The command above uses the latest version in the 1.0 branch. We do not publish a container image tagged "latest".
+> Revaulter follows semver for versioning. The command above uses the latest version in the 1.x branch. We do not publish a container image tagged "latest".
 
 ### Start as standalone app
 
