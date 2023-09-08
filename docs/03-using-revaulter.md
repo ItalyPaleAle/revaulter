@@ -37,7 +37,7 @@ Obtaining is the access token for the "headless flow" is outside of the scope of
 
 ## APIs
 
-Unlocker has 7 API endpoints, including one for each of the 6 supported operations and one to retrieve the result.
+Revaulter has 7 API endpoints, including one for each of the 6 supported operations and one to retrieve the result.
 
 For `POST` requests, the data must be passed in the request body. Revaulter supports multiple formats, including:
 
