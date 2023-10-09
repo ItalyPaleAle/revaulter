@@ -18,8 +18,8 @@ webhookKey: ""
 
 # Base URL where the application is deployed, used for authentication callbacks and in notifications
 # This URL must be routable by clients (administrators), but doesn't need to be public
-# Default: "https://localhost:8080"
-baseUrl: "https://localhost:8080"
+# Default: "https://localhost:<port>" if TLS is enabled, or "http://localhost:<port>" otherwise
+baseUrl: ""
 
 # Port to listen on
 # Default: 8080

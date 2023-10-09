@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -28,17 +27,19 @@ type tlsCertProvider struct {
 	key     string
 }
 
+// Creates a new tlsCertProvider object
+// If we cannot find a TLS certificates, the returned object will be nil
 func newTLSCertProvider(path string) (*tlsCertProvider, error) {
 	var exists bool
 
 	// Check if the certificate and key exist
 	cert := filepath.Join(path, tlsCertFile)
 	if exists, _ = utils.FileExists(cert); !exists {
-		return nil, errors.New("TLS certificate not found: " + tlsCertFile)
+		return nil, nil
 	}
 	key := filepath.Join(path, tlsKeyFile)
 	if exists, _ = utils.FileExists(key); !exists {
-		return nil, errors.New("TLS key not found: " + tlsKeyFile)
+		return nil, nil
 	}
 
 	// Load the certificates initially

@@ -59,7 +59,6 @@ func TestMain(m *testing.M) {
 		config.KeyLogLevel:                    "info",
 		config.KeyPort:                        testServerPort,
 		config.KeyBind:                        "127.0.0.1",
-		config.KeyBaseUrl:                     "https://localhost:" + strconv.Itoa(testServerPort),
 		config.KeySessionTimeout:              5 * time.Minute,
 		config.KeyRequestTimeout:              5 * time.Minute,
 		config.KeyWebhookUrl:                  "http://test.local",
@@ -343,7 +342,7 @@ func TestServerAppRoutes(t *testing.T) {
 				require.Equal(t, http.StatusTemporaryRedirect, res.StatusCode)
 
 				loc := res.Header.Get("location")
-				require.Equal(t, viper.GetString(config.KeyBaseUrl), loc)
+				require.Equal(t, fmt.Sprintf("https://localhost:%d", testServerPort), loc)
 
 				// Ensure the cookies are present
 				// Should both set _at and reset _auth_state
@@ -906,6 +905,15 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	if wh == nil {
 		wh = &mockWebhook{}
 	}
+
+	cert, key, err := getSelfSignedTLSCredentials()
+	require.NoError(t, err, "cannot get TLS credentials")
+
+	cleanup := utils.SetTestConfigs(map[string]any{
+		config.KeyTLSCertPEM: cert,
+		config.KeyTLSKeyPEM:  key,
+	})
+
 	srv, err := NewServer(log, wh)
 	require.NoError(t, err)
 
@@ -915,14 +923,6 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	if httpClientTransport != nil {
 		srv.httpClient.Transport = httpClientTransport
 	}
-
-	cert, key, err := getSelfSignedTLSCredentials()
-	require.NoError(t, err, "cannot get TLS credentials")
-
-	cleanup := utils.SetTestConfigs(map[string]any{
-		config.KeyTLSCertPEM: cert,
-		config.KeyTLSKeyPEM:  key,
-	})
 
 	return srv, logBuf, cleanup
 }
@@ -1039,6 +1039,10 @@ func (w mockWebhook) SendWebhook(_ context.Context, data *utils.WebhookRequest) 
 		w.requests <- data
 	}
 	return nil
+}
+
+func (w mockWebhook) SetBaseURL(val string) {
+	// Nop
 }
 
 // Closes a HTTP response body making sure to drain it first

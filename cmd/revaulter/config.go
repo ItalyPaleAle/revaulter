@@ -64,7 +64,6 @@ func getDefaultConfig() map[string]any {
 		config.KeyLogLevel:       "info",
 		config.KeyPort:           8080,
 		config.KeyBind:           "0.0.0.0",
-		config.KeyBaseUrl:        "https://localhost:8080",
 		config.KeySessionTimeout: 5 * time.Minute,
 		config.KeyRequestTimeout: 5 * time.Minute,
 	}

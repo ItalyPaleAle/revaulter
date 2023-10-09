@@ -86,7 +86,7 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 	qs := url.Values{
 		"response_type":         []string{"code"},
 		"client_id":             []string{viper.GetString(config.KeyAzureClientId)},
-		"redirect_uri":          []string{viper.GetString(config.KeyBaseUrl) + "/auth/confirm"},
+		"redirect_uri":          []string{s.getBaseURL() + "/auth/confirm"},
 		"response_mode":         []string{"query"},
 		"state":                 []string{stateToken},
 		"scope":                 []string{"https://vault.azure.net/user_impersonation"},
@@ -162,7 +162,7 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 	}
 
 	// Redirect the user to the main page
-	c.Redirect(http.StatusTemporaryRedirect, viper.GetString(config.KeyBaseUrl))
+	c.Redirect(http.StatusTemporaryRedirect, s.getBaseURL())
 }
 
 func (s *Server) requestAccessToken(ctx context.Context, code, seed string) (*AccessToken, error) {
@@ -170,7 +170,7 @@ func (s *Server) requestAccessToken(ctx context.Context, code, seed string) (*Ac
 	data := url.Values{
 		"code":          []string{code},
 		"client_id":     []string{viper.GetString(config.KeyAzureClientId)},
-		"redirect_uri":  []string{viper.GetString(config.KeyBaseUrl) + "/auth/confirm"},
+		"redirect_uri":  []string{s.getBaseURL() + "/auth/confirm"},
 		"scope":         []string{"https://vault.azure.net/user_impersonation"},
 		"grant_type":    []string{"authorization_code"},
 		"code_verifier": []string{seed}, // For PKCE

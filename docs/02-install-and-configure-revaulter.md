@@ -41,7 +41,7 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
     Value for the Authorization header send with the webhook request. Set this if your webhook requires it.  
     Environmental variable name: `REVAULTER_WEBHOOKKEY`
 - Revaulter application:
-  - **`baseUrl`** (optional but **recommended**, default: `https://localhost:8080`):  
+  - **`baseUrl`** (optional but **recommended**, default: `https://localhost:<port>` if TLS is enabled, or `http://localhost:<port>` otherwise):  
     The URL your application can be reached at. This is used in the links that are sent in webhook notifications.  
     Environmental variable name: `REVAULTER_BASEURL`
   - **`port`** (optional, default: `8080`):  
@@ -53,7 +53,6 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
   - **`tlsPath`**: (optional, defaults to the same folder as the `config.yaml` file):  
     Path where to load TLS certificates from. Within the folder, the files must be named `tls-cert.pem` and `tls-key.pem`. Revaulter watches for changes in this folder and automatically reloads the TLS certificates when they're updated.  
     If empty, certificates are loaded from the same folder where the loaded `config.yaml` is located.  
-    Note that while this value is optional, a TLS certificate is **required** (even if self-signed).  
     Environmental variable name: `REVAULTER_TLSPATH`
   - **`tlsCertPEM`** (optional):  
     Full, PEM-encoded TLS certificate. Using `tlsCertPEM` and `tlsKeyPEM` is an alternative method of passing TLS certificates than using `tlsPath`.  
@@ -104,7 +103,7 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
 
 ## Generating a TLS certificate and key
 
-Using Revaulter requires TLS, for security and performance reasons (to be able to use HTTP/2 for the long-lived requests).
+Unless you are exposing Revaulter behind a reverse proxy (such as Traefik, Caddy, Nginx, etc) which performs TLS termination, you should configure Revaulter to use TLS, for both security and performance reasons (to be able to use HTTP/2 for the long-lived requests).
 
 Using a self-signed certificate is an acceptable option if running Revaulter in the same server as your app. You can generate a self-signed TLS certificate using OpenSSL, for example:
 

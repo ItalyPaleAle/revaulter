@@ -18,6 +18,8 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
@@ -44,7 +46,9 @@ type Server struct {
 	appSrv     *http.Server
 	metricsSrv *http.Server
 	// Method that forces a reload of TLS certificates from disk
-	tlsCertWatchFn  tlsCertWatchFn
+	tlsCertWatchFn tlsCertWatchFn
+	// TLS configuration for the app server
+	tlsConfig       *tls.Config
 	running         atomic.Bool
 	appSrvRunningCh chan struct{}
 
@@ -98,7 +102,16 @@ func (s *Server) init() error {
 	return nil
 }
 
-func (s *Server) initAppServer() error {
+func (s *Server) initAppServer() (err error) {
+	// Load the TLS configuration
+	s.tlsConfig, s.tlsCertWatchFn, err = s.loadTLSConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load TLS configuration: %w", err)
+	}
+
+	// Set the baseURL in the webhook
+	s.webhook.SetBaseURL(s.getBaseURL())
+
 	// Create the Gin router and add various middlewares
 	s.appRouter = gin.New()
 	s.appRouter.Use(gin.Recovery())
@@ -130,7 +143,7 @@ func (s *Server) initAppServer() error {
 	originsStr := viper.GetString(config.KeyOrigins)
 	if originsStr == "" {
 		// Default is baseUrl
-		originsStr = viper.GetString(config.KeyBaseUrl)
+		originsStr = s.getBaseURL()
 	}
 	if originsStr == "*" {
 		corsConfig.AllowAllOrigins = true
@@ -183,6 +196,26 @@ func (s *Server) initAppServer() error {
 	s.appRouter.NoRoute(s.serveClient())
 
 	return nil
+}
+
+func (s *Server) getBaseURL() string {
+	// If there's an explicit value in the configuration, use that
+	baseURL := viper.GetString(config.KeyBaseUrl)
+	if baseURL != "" {
+		return baseURL
+	}
+
+	// Build our own
+	bindPort := viper.GetInt(config.KeyPort)
+	if bindPort < 1 {
+		bindPort = 8080
+	}
+
+	if s.tlsConfig != nil {
+		return "https://localhost:" + strconv.Itoa(bindPort)
+	} else {
+		return "http://localhost:" + strconv.Itoa(bindPort)
+	}
 }
 
 // Run the web server
@@ -239,42 +272,53 @@ func (s *Server) startAppServer() error {
 		bindPort = 8080
 	}
 
-	// Create the HTTPS server
-	tlsConfig, tlsCertReloadFn, err := s.loadTLSConfig()
-	if err != nil {
-		return err
-	}
+	// Create the HTTP(S) server
 	s.appSrv = &http.Server{
 		Addr:              net.JoinHostPort(bindAddr, strconv.Itoa(bindPort)),
-		Handler:           s.appRouter,
 		MaxHeaderBytes:    1 << 20,
 		ReadHeaderTimeout: 10 * time.Second,
-		TLSConfig:         tlsConfig,
 	}
-	s.tlsCertWatchFn = tlsCertReloadFn
+	if s.tlsConfig != nil {
+		// Using TLS
+		s.appSrv.Handler = s.appRouter
+		s.appSrv.TLSConfig = s.tlsConfig
+	} else {
+		// Not using TLS
+		// Here we also need to enable HTTP/2 Cleartext
+		s.log.Raw().Warn().Msg("Starting app server without HTTPS - this is not recommended unless Revaulter is exposed through a proxy that offers TLS termination")
+		h2s := &http2.Server{}
+		s.appSrv.Handler = h2c.NewHandler(s.appRouter, h2s)
+	}
 
 	// Create the listener if we don't have one already
 	if s.appListener == nil {
+		var err error
 		s.appListener, err = net.Listen("tcp", s.appSrv.Addr)
 		if err != nil {
 			return fmt.Errorf("failed to create TCP listener: %w", err)
 		}
 	}
 
-	// Start the HTTPS server in a background goroutine
+	// Start the HTTP(S) server in a background goroutine
 	s.log.Raw().Info().
 		Str("bind", bindAddr).
 		Int("port", bindPort).
-		Str("url", viper.GetString(config.KeyBaseUrl)).
+		Bool("tls", s.tlsConfig != nil).
+		Str("url", s.getBaseURL()).
 		Msg("App server started")
 	go func() {
 		defer s.appListener.Close()
 		defer close(s.appSrvRunningCh)
 
 		// Next call blocks until the server is shut down
-		err := s.appSrv.ServeTLS(s.appListener, "", "")
-		if err != http.ErrServerClosed {
-			s.log.Raw().Fatal().Msgf("Error starting app server: %v", err)
+		var srvErr error
+		if s.tlsConfig != nil {
+			srvErr = s.appSrv.ServeTLS(s.appListener, "", "")
+		} else {
+			srvErr = s.appSrv.Serve(s.appListener)
+		}
+		if srvErr != http.ErrServerClosed {
+			s.log.Raw().Fatal().Msgf("Error starting app server: %v", srvErr)
 		}
 	}()
 
@@ -475,6 +519,11 @@ func (s *Server) loadTLSConfig() (tlsConfig *tls.Config, watchFn tlsCertWatchFn,
 			return nil, nil, fmt.Errorf("failed to load TLS certificates from path '%s': %w", tlsPath, err)
 		}
 
+		// If newTLSCertProvider returns nil, there are no TLS certificates, so disable TLS
+		if provider == nil {
+			return nil, nil, nil
+		}
+
 		s.log.Raw().Debug().
 			Str("path", tlsPath).
 			Msg("Loaded TLS certificates from disk")
@@ -485,11 +534,9 @@ func (s *Server) loadTLSConfig() (tlsConfig *tls.Config, watchFn tlsCertWatchFn,
 	}
 
 	// Assume the values from the config file are PEM-encoded certs and key
-	if tlsCert == "" {
-		return nil, nil, errors.New("missing TLS certificate")
-	}
-	if tlsKey == "" {
-		return nil, nil, errors.New("missing TLS key")
+	if tlsCert == "" || tlsKey == "" {
+		// If tlsCert and/or tlsKey is empty, do not use TLS
+		return nil, nil, nil
 	}
 
 	cert, err := tls.X509KeyPair([]byte(tlsCert), []byte(tlsKey))

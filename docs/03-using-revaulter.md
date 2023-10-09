@@ -312,7 +312,7 @@ Example request, using curl:
 ```sh
 STATE_ID="4a74e043-cd7a-47dc-958a-33b39a9dfaa2"
 curl "https://10.20.30.40:8080/request/result/${STATE_ID}" \
-  --insecure
+  --http2 --insecure
 ```
 
 Example responses:
@@ -398,7 +398,7 @@ Example request, using curl:
 ```sh
 STATE_ID="4a74e043-cd7a-47dc-958a-33b39a9dfaa2"
 curl "https://10.20.30.40:8080/request/result/${STATE_ID}?raw=1" \
-  --insecure
+  --http2 --insecure
 ```
 
 A successful response contains the data, as a binary (not base64-encoded). For *verify* operations, a successful response is either the string `true` or `false`.
@@ -438,6 +438,8 @@ curl https://10.20.30.40:8080/request/wrapkey \
 
 > Note: in all the examples we're using the `--insecure` flag to tell curl to accept self-signed TLS certificates. If you are using a TLS certificate signed by a Certification Authority, you can (and should) omit that flag.
 
+> Note: If using curl, consider adding the `--http2` flag to instruct curl to use HTTP/2 (including HTTP/2 Cleartext) by default.
+
 The response will be a JSON object similar to this, where `state` is the ID of the request.
 
 ```json
@@ -453,7 +455,7 @@ Your application can obtain the key by making a GET request to the `/request/res
 
 ```sh
 STATE_ID="4336d140-2ba1-4d7a-af84-a83d564e384b"
-curl --insecure https://10.20.30.40:8080/request/result/${STATE_ID}
+curl --http2 --insecure https://10.20.30.40:8080/request/result/${STATE_ID}
 ```
 
 > You can automatically set the value of the `STATE_ID` variable from the `/request/wrapkey` request using jq:
@@ -488,7 +490,7 @@ The `/request/result/[state]` endpoint accepts an optional `?raw=1` parameter th
 
 ```sh
 STATE_ID="4336d140-2ba1-4d7a-af84-a83d564e384b"
-curl --insecure "https://10.20.30.40:8080/request/result/${STATE_ID}?raw=1"
+curl --http2 --insecure "https://10.20.30.40:8080/request/result/${STATE_ID}?raw=1"
 # A successful response will contain binary data
 ```
 
@@ -544,7 +546,7 @@ The administrator will receive another notification through the webhook configur
 Just as when wrapping a key, your application can invoke the `/request/result/[state]` method to check the status of the request. This will block until the operation is complete, and the result will contain the unwrapped key (base64-encoded):
 
 ```sh
-curl --insecure https://10.20.30.40:8080/request/result/${STATE_ID}
+curl --http2 --insecure https://10.20.30.40:8080/request/result/${STATE_ID}
 ```
 
 A **successful**, final response will contain a JSON body similar to:
@@ -566,7 +568,7 @@ Just as before, note that requests to `/request/result/[state]` may time out bec
 Using curl and jq, you can retrieve the raw (decoded) key to pipe it directly to an application that needs to consume it with:
 
 ```sh
-curl --insecure https://10.20.30.40:8080/request/result/${STATE_ID} \
+curl --http2 --insecure https://10.20.30.40:8080/request/result/${STATE_ID} \
   | jq -r .value \
   | base64 --decode
 ```
@@ -576,6 +578,6 @@ The command above will print the unwrapped key (in our case `helloworld`), in pl
 Alternatively, the `/request/result/[state]` endpoint accepts an optional `?raw=1` parameter that makes the response contain the unwrapped key only, as binary data. For example:
 
 ```sh
-curl --insecure "https://10.20.30.40:8080/request/result/${STATE_ID}?raw=1"
+curl --http2 --insecure "https://10.20.30.40:8080/request/result/${STATE_ID}?raw=1"
 # A successful response will contain binary data; in our example that would be "helloworld"
 ```

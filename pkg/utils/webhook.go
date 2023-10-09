@@ -23,12 +23,15 @@ const webhookTimeout = 20 * time.Second
 type Webhook interface {
 	// SendWebhook sends the notification
 	SendWebhook(ctx context.Context, data *WebhookRequest) error
+	// SetBaseURL sets the baseURL in the object
+	SetBaseURL(val string)
 }
 
 // Webhook client
 type webhookClient struct {
 	httpClient *http.Client
 	log        *AppLogger
+	baseURL    string
 	clock      kclock.Clock
 }
 
@@ -54,6 +57,11 @@ func (w *webhookClient) Init(log *AppLogger) {
 	w.httpClient = &http.Client{
 		Timeout: webhookTimeout,
 	}
+}
+
+// SetBaseURL sets the baseURL in the object
+func (w *webhookClient) SetBaseURL(val string) {
+	w.baseURL = val
 }
 
 // SendWebhook sends the notification
@@ -163,6 +171,9 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 }
 
 func (w *webhookClient) getLink(data *WebhookRequest) string {
+	if w.baseURL != "" {
+		return w.baseURL
+	}
 	return viper.GetString(config.KeyBaseUrl)
 }
 
