@@ -19,19 +19,28 @@ Revaulter uses delegated permissions to access Azure Key Vault. It uses the acce
 
 In some cases, waiting for the user to visit the Revaulter page and authenticate with Azure AD is not possible. In this case, Revaulter can be used with the "headless flow", in which an access token with permissions to perform operations in the Azure Key Vault is passed directly in the request; this is an advanced scenario that is indicated in a limited number of cases.
 
-If you already have an access token with permissions to access Azure Key Vault and perform operations there, you can pass it to the `POST /request/[operation]` endpoints in the `Authorization` header, as a Bearer token. For example:
+If you already have an access token with permissions to access Azure Key Vault and perform operations there, you can pass it to the `POST /api/confirm` endpoint in the `Authorization` header, as a Bearer token. For example:
 
 ```sh
-curl https://10.20.30.40:8080/request/encrypt \
+STATE_ID="..."
+AZURE_AD_TOKEN="eyJhbG..."
+curl https://10.20.30.40:8080/api/confirm \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer eyJhbG..." \
-  --data '...'
+  -H "Authorization: Bearer $AZURE_AD_TOKEN" \
+  --data "{\"state\":\"$STATE_ID\",\"confirm\":true}" \
+  --insecure
 ```
 
 In this case, the flow does not require an admin's intervention:
 
-1. The application that requires the operation makes an API call to a `POST /request/[operation]` endpoint (for example, `POST /request/wrapkey`), with the data (such as the key to wrap) in the body and the access token in the `Authorization` header, as a Bearer token. The response contains a `state` ID.
-2. The application invokes `GET /request/result/[state]` with the state ID to retrieve the result. This value can only be retrieved once.
+1. The application that requires the operation makes an API call to a `POST /request/[operation]` endpoint (for example, `POST /request/wrapkey`), with the data (such as the key to wrap) in the body as in the regular flow. The response contains a `state` ID.
+2. The application invokes `POST /api/confirm` with the body containing a JSON object that includes:
+
+   - `state`: the state ID, retrieved from the previous request
+   - `confirm`: a boolean set to `true`
+
+   The request must include the access token issued by Azure AD in the `Authorization` header, as a Bearer token.
+3. The application invokes `GET /request/result/[state]` with the state ID to retrieve the result. This value can only be retrieved once.
 
 Obtaining is the access token for the "headless flow" is outside of the scope of Revaulter. Your application can obtain that in any way supported by Azure AD, including using the [client credentials flow](https://learn.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-client-creds-grant-flow).
 
