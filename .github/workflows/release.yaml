@@ -269,8 +269,12 @@ jobs:
         if: env.BUILD_VERSION != 'edge'
         shell: bash
         run: |
-          echo -e "TAGS=ghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BUILD_VERSION}}\nghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BRANCH}}" \
-            >> ${GITHUB_ENV}
+          {
+            echo 'TAGS<<EOF'
+            echo "ghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BUILD_VERSION}}"
+            echo "ghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BRANCH}}"
+            echo EOF
+          } >> "$GITHUB_ENV"
 
       - name: Docker build and push to GHCR
         uses: docker/build-push-action@v4
