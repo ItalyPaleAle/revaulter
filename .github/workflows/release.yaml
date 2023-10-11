@@ -235,82 +235,21 @@ jobs:
 
       # Create release and upload assets
       - name: Create release
-        id: create_release
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@c9b46fe7aad9f02afd89b12450b780f52dacfb2d # v1
         if: env.BUILD_VERSION != 'edge'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          name: ${{ github.ref }}
           tag_name: ${{ github.ref }}
-          release_name: ${{ github.ref }}
           draft: true
           prerelease: ${{ env.PRERELEASE != '' }}
-
-      - name: Upload release asset revaulter-linux-amd64
-        uses: actions/upload-release-asset@v1
-        if: env.BUILD_VERSION != 'edge'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: .out/revaulter-${{ env.BUILD_ID }}-linux-amd64.tar.gz
-          asset_name: revaulter-${{ env.BUILD_ID }}-linux-amd64.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload release asset revaulter-linux-386
-        uses: actions/upload-release-asset@v1
-        if: env.BUILD_VERSION != 'edge'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: .out/revaulter-${{ env.BUILD_ID }}-linux-386.tar.gz
-          asset_name: revaulter-${{ env.BUILD_ID }}-linux-386.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload release asset revaulter-linux-arm64
-        uses: actions/upload-release-asset@v1
-        if: env.BUILD_VERSION != 'edge'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: .out/revaulter-${{ env.BUILD_ID }}-linux-arm64.tar.gz
-          asset_name: revaulter-${{ env.BUILD_ID }}-linux-arm64.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload release asset revaulter-linux-armv7
-        uses: actions/upload-release-asset@v1
-        if: env.BUILD_VERSION != 'edge'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: .out/revaulter-${{ env.BUILD_ID }}-linux-armv7.tar.gz
-          asset_name: revaulter-${{ env.BUILD_ID }}-linux-armv7.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload release asset revaulter-macos-x64
-        uses: actions/upload-release-asset@v1
-        if: env.BUILD_VERSION != 'edge'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: .out/revaulter-${{ env.BUILD_ID }}-macos-x64.tar.gz
-          asset_name: revaulter-${{ env.BUILD_ID }}-macos-x64.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload release asset revaulter-macos-arm64
-        uses: actions/upload-release-asset@v1
-        if: env.BUILD_VERSION != 'edge'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: .out/revaulter-${{ env.BUILD_ID }}-macos-arm64.tar.gz
-          asset_name: revaulter-${{ env.BUILD_ID }}-macos-arm64.tar.gz
-          asset_content_type: application/gzip
+          generate_release_notes: true
+          files: |
+            .out/revaulter-${{ env.BUILD_ID }}-linux-amd64.tar.gz
+            .out/revaulter-${{ env.BUILD_ID }}-linux-386.tar.gz
+            .out/revaulter-${{ env.BUILD_ID }}-linux-arm64.tar.gz
+            .out/revaulter-${{ env.BUILD_ID }}-linux-armv7.tar.gz
+            .out/revaulter-${{ env.BUILD_ID }}-macos-x64.tar.gz
+            .out/revaulter-${{ env.BUILD_ID }}-macos-arm64.tar.gz
 
       - name: Set variable REPO_OWNER
         shell: bash
