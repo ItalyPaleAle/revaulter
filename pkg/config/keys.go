@@ -11,6 +11,7 @@ const (
 	KeyLogLevel               = "logLevel"
 	KeyMetricsBind            = "metricsBind"
 	KeyMetricsPort            = "metricsPort"
+	KeyOmitHealthCheckLogs    = "omitHealthCheckLogs"
 	KeyOrigins                = "origins"
 	KeyPort                   = "port"
 	KeyRequestTimeout         = "requestTimeout"

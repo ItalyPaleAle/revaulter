@@ -86,6 +86,9 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
   - **`metricsBind`** (optional, default: `0.0.0.0`):  
     Address/interface for the metrics server to bind to.  
     Environmental variable name: `REVAULTER_METRICSBIND`
+  - **`omitHealthCheckLogs`** (optional, default: `false`):  
+    If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
+    Environmental variable name: `REVAULTER_OMITHEALTHCHECKLOGS`
   - **`tokenSigningKey`** (optional, will be randomly generated at startup if empty):  
     String used as key to sign state tokens. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).  
     Environmental variable name: `REVAULTER_TOKENSIGNINGKEY`

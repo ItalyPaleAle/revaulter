@@ -7,6 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
+	"github.com/spf13/viper"
+
+	"github.com/italypaleale/revaulter/pkg/config"
 )
 
 // AppLogger is used to write custom logs
@@ -70,7 +73,6 @@ func (a *AppLogger) LoggerMiddleware(c *gin.Context) {
 
 	// Do not log OPTIONS requests
 	if method == "OPTIONS" {
-		c.Next()
 		return
 	}
 
@@ -79,6 +81,11 @@ func (a *AppLogger) LoggerMiddleware(c *gin.Context) {
 	path := c.Request.URL.Path
 	if c.Request.URL.RawQuery != "" {
 		path = path + "?" + c.Request.URL.RawQuery
+	}
+
+	// Omit logging /healthz calls if set
+	if path == "/healthz" && viper.GetBool(config.KeyOmitHealthCheckLogs) {
+		return
 	}
 
 	// Process request

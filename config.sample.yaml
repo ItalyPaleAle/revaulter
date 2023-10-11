@@ -75,6 +75,9 @@ metricsPort: 2112
 # Default: "0.0.0.0" to listen on every interface
 metricsBind: "0.0.0.0"
 
+# If true, calls to the healthcheck endpoint (/healthz) are not included in the logs
+omitHealthCheckLogs: false
+
 # String used as key to sign state tokens
 # If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
 tokenSigningKey: ""
