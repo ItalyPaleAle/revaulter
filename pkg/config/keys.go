@@ -14,6 +14,7 @@ const (
 	KeyOrigins                = "origins"
 	KeyPort                   = "port"
 	KeyRequestTimeout         = "requestTimeout"
+	KeyRequestKey             = "requestKey"
 	KeySessionTimeout         = "sessionTimeout"
 	KeyTLSPath                = "tlsPath"
 	KeyTLSCertPEM             = "tlsCertPEM"

@@ -37,10 +37,16 @@ tlsPath: ""
 tlsCertPEM: ""
 tlsKeyPEM: ""
 
-# Comma-separated list of IPs (and IP ranges in CIDR notation) that are allowed to invoke the /wrap, /unwrap and /result methods
-# If empty, all requests are allowed
-# This doesn't apply to the endpoints used by admins to confirm requests
+# Comma-separated list of IPs (and IP ranges in CIDR notation) that are allowed to invoke the /request endpoints.
+# If empty, all requests are allowed.
+# This doesn't apply to the endpoints used by admins to confirm requests.
 allowedIps: ""
+
+# Setting a request key enforces all clients calling the /request endpoints to include this value in the Auhtorization header.
+# This is optional, and if empty all clients are allowed to call the /request endpoints to perform operations.
+# This doesn't apply to the endpoints used by admins to confirm requests.
+# Tip: you can generate a random request key with OpenSSL: `openssl rand -base64 18`
+requestKey: ""
 
 # Comma-separated lists of origins for CORS
 # Example: "https://url1,https://url2"

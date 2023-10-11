@@ -64,6 +64,10 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
     If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.  
     Note that this value is used to restrict connections to the `/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.  
     Environmental variable name: `REVAULTER_ALLOWEDIPS`
+  - **`requestKey`** (optional):  
+    If set, clients need to provide this shared key in calls made to the `/request` endpoints, in the `Authorization` header.  
+    Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.  
+    Environmental variable name: `REVAULTER_REQUESTKEY`
   - **`origins`** (optional, default is equal to the value of `baseUrl`):  
     Comma-separated lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).  
     Environmental variable name: `REVAULTER_ORIGINS`

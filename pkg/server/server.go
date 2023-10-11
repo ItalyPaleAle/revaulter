@@ -167,7 +167,7 @@ func (s *Server) initAppServer() (err error) {
 	s.appRouter.GET("/healthz", gin.WrapF(s.RouteHealthzHandler))
 
 	// Requests - these share the /request prefix and all use the allow IP middleware
-	requestRouteGroup := s.appRouter.Group("/request", allowIpMw)
+	requestRouteGroup := s.appRouter.Group("/request", allowIpMw, s.RequestKeyMiddleware())
 	requestRouteGroup.GET("/result/:state", s.RouteRequestResult)
 	requestRouteGroup.POST("/encrypt", s.RouteRequestOperations(OperationEncrypt))
 	requestRouteGroup.POST("/decrypt", s.RouteRequestOperations(OperationDecrypt))
