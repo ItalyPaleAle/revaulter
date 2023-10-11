@@ -305,22 +305,20 @@ jobs:
         run: |
           # We need to lowercase the value of REPO_OWNER
           REPO_OWNER=${{ github.repository_owner }}
-          echo "REPO_OWNER=${REPO_OWNER,,}" >>${GITHUB_ENV}
+          echo "REPO_OWNER=${REPO_OWNER,,}" >> ${GITHUB_ENV}
 
       - name: Set variable TAGS (edge)
         if: env.BUILD_VERSION == 'edge'
         shell: bash
         run: |
-          echo "ghcr.io/${{ env.REPO_OWNER }}/revaulter:edge" \
-            >>${GITHUB_ENV}
+          echo "ghcr.io/${{ env.REPO_OWNER }}/revaulter:edge" >>${GITHUB_ENV}
 
       - name: Set variable TAGS (release)
         if: env.BUILD_VERSION != 'edge'
         shell: bash
         run: |
           echo "ghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BUILD_VERSION}}
-          ghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BRANCH}}" \
-            >>${GITHUB_ENV}
+          ghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BRANCH}}" >> ${GITHUB_ENV}
 
       - name: Docker build and push to GHCR
         uses: docker/build-push-action@v4
