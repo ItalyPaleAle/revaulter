@@ -24,6 +24,7 @@ jobs:
 
     env:
       CGO_ENABLED: "0"
+      GOLANGCI_LINT_VERSION: "v1.55.0"
 
     steps:
 
@@ -117,7 +118,7 @@ jobs:
       - name: Run golangci-Lint
         uses: golangci/golangci-lint-action@v3
         with:
-          version: v1.52.2
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           skip-cache: true
 
       - name: Run tests
