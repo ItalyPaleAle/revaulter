@@ -58,7 +58,7 @@ func WatchFolder(ctx context.Context, folder string, logger *zerolog.Logger) (<-
 				// Log errors only
 				if logger != nil {
 					logger.Warn().
-						AnErr("error", watchErr).
+						Err(watchErr).
 						Str("folder", folder).
 						Msg("Error while watching for changes to files on disk")
 				}

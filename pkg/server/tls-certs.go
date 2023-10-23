@@ -104,7 +104,7 @@ func (p *tlsCertProvider) Watch(ctx context.Context, logger *zerolog.Logger) err
 				if reloadErr != nil {
 					// Log errors only
 					logger.Error().
-						AnErr("error", reloadErr).
+						Err(reloadErr).
 						Msg("Failed to load updated TLS certificates from disk")
 					continue
 				}

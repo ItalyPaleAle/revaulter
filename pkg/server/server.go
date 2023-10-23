@@ -332,7 +332,7 @@ func (s *Server) stopAppServer() error {
 	if err != nil {
 		// Log the error only (could be context canceled)
 		s.log.Raw().Warn().
-			AnErr("error", err).
+			Err(err).
 			Msg("App server shutdown error")
 		return err
 	}
@@ -400,7 +400,7 @@ func (s *Server) stopMetricsServer() error {
 	if err != nil {
 		// Log the error only (could be context canceled)
 		s.log.Raw().Warn().
-			AnErr("error", err).
+			Err(err).
 			Msg("Metrics server shutdown error")
 		return err
 	}

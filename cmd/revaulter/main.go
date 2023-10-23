@@ -30,7 +30,7 @@ func main() {
 			lce.LogFatal()
 		} else {
 			appLogger.Raw().Fatal().
-				AnErr("error", err).
+				Err(err).
 				Msg("Failed to load configuration")
 		}
 	}
@@ -42,7 +42,7 @@ func main() {
 	srv, err := server.NewServer(appLogger, webhook)
 	if err != nil {
 		appLogger.Raw().Fatal().
-			AnErr("error", err).
+			Err(err).
 			Msg("Cannot initialize the server")
 		return
 	}
@@ -66,7 +66,7 @@ func main() {
 	err = srv.Run(ctx)
 	if err != nil {
 		appLogger.Raw().Fatal().
-			AnErr("error", err).
+			Err(err).
 			Msg("Cannot start the server")
 		return
 	}
