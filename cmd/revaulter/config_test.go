@@ -114,7 +114,7 @@ func TestEnsureTokenSigningKey(t *testing.T) {
 
 		err := ensureTokenSigningKey()
 		require.NoError(t, err)
-		require.Len(t, viper.GetString(config.KeyInternalTokenSigningKey), 21)
+		require.Len(t, viper.GetString(config.KeyInternalTokenSigningKey), 24)
 
 		logsMsg := logs.String()
 		require.Contains(t, logsMsg, "No 'tokenSigningKey' found in the configuration")

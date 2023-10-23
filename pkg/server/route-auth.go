@@ -3,18 +3,19 @@ package server
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	nanoid "github.com/matoous/go-nanoid/v2"
 	"github.com/spf13/viper"
 	"golang.org/x/text/unicode/norm"
 
@@ -50,12 +51,14 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 	seed, ttl, err := getSecureCookie(c, authStateCookieName)
 	if err != nil || seed == "" || ttl < (authStateCookieMaxAge-time.Minute) {
 		// Generate a random seed
-		seed, err = nanoid.New(21)
+		b := make([]byte, 12)
+		_, err = io.ReadFull(rand.Reader, b)
 		if err != nil {
 			_ = c.Error(fmt.Errorf("failed to generate random seed: %w", err))
 			c.JSON(http.StatusInternalServerError, InternalServerError)
 			return
 		}
+		seed = base64.RawURLEncoding.EncodeToString(b)
 	}
 
 	// Build the state object

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/jwx/v2/jwk"
-	nanoid "github.com/matoous/go-nanoid/v2"
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 
@@ -64,6 +63,8 @@ func getDefaultConfig() map[string]any {
 		config.KeyLogLevel:       "info",
 		config.KeyPort:           8080,
 		config.KeyBind:           "0.0.0.0",
+		config.KeyMetricsPort:    2112,
+		config.KeyMetricsBind:    "0.0.0.0",
 		config.KeySessionTimeout: 5 * time.Minute,
 		config.KeyRequestTimeout: 5 * time.Minute,
 	}
@@ -148,10 +149,13 @@ func ensureTokenSigningKey() (err error) {
 	if tokenSigningKey == "" {
 		appLogger.Raw().Debug().Msg("No 'tokenSigningKey' found in the configuration: a random one will be generated")
 
-		tokenSigningKey, err = nanoid.New(21)
+		b := make([]byte, 18)
+		_, err = io.ReadFull(rand.Reader, b)
 		if err != nil {
 			return newLoadConfigError(err, "Failed to generate random tokenSigningKey")
 		}
+
+		tokenSigningKey = base64.RawURLEncoding.EncodeToString(b)
 	}
 	viper.Set(config.KeyInternalTokenSigningKey, tokenSigningKey)
 

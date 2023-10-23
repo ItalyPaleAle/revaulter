@@ -10,7 +10,6 @@ require (
 	github.com/gin-gonic/gin v1.9.1
 	github.com/google/uuid v1.3.1
 	github.com/lestrrat-go/jwx/v2 v2.0.13
-	github.com/matoous/go-nanoid/v2 v2.0.0
 	github.com/prometheus/client_golang v1.17.0
 	github.com/rs/zerolog v1.31.0
 	github.com/spf13/cast v1.5.1
