@@ -900,7 +900,7 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	t.Helper()
 
 	logBuf := &bytes.Buffer{}
-	logDest := io.MultiWriter(os.Stderr, logBuf)
+	logDest := io.MultiWriter(os.Stdout, logBuf)
 
 	log := utils.NewAppLogger("test", zerolog.SyncWriter(logDest))
 	if wh == nil {

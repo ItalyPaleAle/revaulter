@@ -20,7 +20,7 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 
 	// Init the app logger object
-	appLogger = utils.NewAppLogger("revaulter", os.Stderr)
+	appLogger = utils.NewAppLogger("revaulter", os.Stdout)
 
 	// Load config
 	err := loadConfig()

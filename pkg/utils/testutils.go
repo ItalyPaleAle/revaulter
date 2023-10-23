@@ -19,7 +19,7 @@ func SetAppLogger(appLogger **AppLogger, dest io.Writer) func() {
 	prevAppLogger := *appLogger
 
 	if dest == nil {
-		dest = os.Stderr
+		dest = os.Stdout
 	}
 	*appLogger = NewAppLogger("test", dest)
 	(*appLogger).SetLogLevel(zerolog.DebugLevel)
