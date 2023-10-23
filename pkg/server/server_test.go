@@ -104,9 +104,10 @@ func TestServerLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			defer closeBody(res)
 
+			assert.Equal(t, http.StatusNoContent, res.StatusCode)
 			healthzRes, err := io.ReadAll(res.Body)
 			require.NoError(t, err)
-			require.NotEmpty(t, healthzRes)
+			assert.Empty(t, healthzRes)
 
 			// Make a request to the /healthz endpoint in the metrics server
 			if metricsEnabled {
@@ -120,9 +121,10 @@ func TestServerLifecycle(t *testing.T) {
 				require.NoError(t, err)
 				defer closeBody(res)
 
-				resBody, err := io.ReadAll(res.Body)
+				assert.Equal(t, http.StatusNoContent, res.StatusCode)
+				healthzRes, err = io.ReadAll(res.Body)
 				require.NoError(t, err)
-				require.Equal(t, healthzRes, resBody)
+				assert.Empty(t, healthzRes)
 			}
 		}
 	}
@@ -171,13 +173,10 @@ func TestServerAppRoutes(t *testing.T) {
 		defer closeBody(res)
 
 		// Check the response
-		require.Equal(t, "application/json", res.Header.Get("content-type"))
-
-		body := map[string]any{}
-		err = json.NewDecoder(res.Body).Decode(&body)
+		require.Equal(t, http.StatusNoContent, res.StatusCode)
+		body, err := io.ReadAll(res.Body)
 		require.NoError(t, err)
-		require.NotEmpty(t, body)
-		require.Equal(t, "ok", body["status"])
+		assert.Empty(t, body)
 
 		// Reset the log buffer
 		logBuf.Reset()

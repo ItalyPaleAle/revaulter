@@ -48,15 +48,14 @@ type Server struct {
 	// Method that forces a reload of TLS certificates from disk
 	tlsCertWatchFn tlsCertWatchFn
 	// TLS configuration for the app server
-	tlsConfig       *tls.Config
-	running         atomic.Bool
-	appSrvRunningCh chan struct{}
+	tlsConfig *tls.Config
+	running   atomic.Bool
+	wg        sync.WaitGroup
 
 	// Listeners for the app and metrics servers
 	// These can be used for testing without having to start an actual TCP listener
-	appListener         net.Listener
-	metricsListener     net.Listener
-	metricsSrvRunningCh chan struct{}
+	appListener     net.Listener
+	metricsListener net.Listener
 
 	// Factory for keyvault.Client objects
 	// This is defined as a property to allow for mocking
@@ -225,24 +224,49 @@ func (s *Server) Run(ctx context.Context) error {
 		return errors.New("server is already running")
 	}
 	defer s.running.Store(false)
+	defer s.wg.Wait()
 
 	// App server
+	s.wg.Add(1)
 	err := s.startAppServer()
 	if err != nil {
 		return fmt.Errorf("failed to start app server: %w", err)
 	}
-	//nolint:errcheck
-	defer s.stopAppServer()
+	defer func() {
+		// Handle graceful shutdown
+		defer s.wg.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := s.appSrv.Shutdown(shutdownCtx)
+		shutdownCancel()
+		if err != nil {
+			// Log the error only (could be context canceled)
+			s.log.Raw().Warn().
+				Err(err).
+				Msg("App server shutdown error")
+		}
+	}()
 	defer s.pubsub.Shutdown()
 
 	// Metrics server
 	if viper.GetBool(config.KeyEnableMetrics) {
+		s.wg.Add(1)
 		err = s.startMetricsServer()
 		if err != nil {
 			return fmt.Errorf("failed to start metrics server: %w", err)
 		}
-		//nolint:errcheck
-		defer s.stopMetricsServer()
+		defer func() {
+			// Handle graceful shutdown
+			defer s.wg.Done()
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			err := s.metricsSrv.Shutdown(shutdownCtx)
+			shutdownCancel()
+			if err != nil {
+				// Log the error only (could be context canceled)
+				s.log.Raw().Warn().
+					Err(err).
+					Msg("Metrics server shutdown error")
+			}
+		}()
 	}
 
 	// If we have a tlsCertWatchFn, invoke that
@@ -261,8 +285,6 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) startAppServer() error {
-	s.appSrvRunningCh = make(chan struct{})
-
 	bindAddr := viper.GetString(config.KeyBind)
 	if bindAddr == "" {
 		bindAddr = "0.0.0.0"
@@ -308,7 +330,6 @@ func (s *Server) startAppServer() error {
 		Msg("App server started")
 	go func() {
 		defer s.appListener.Close()
-		defer close(s.appSrvRunningCh)
 
 		// Next call blocks until the server is shut down
 		var srvErr error
@@ -327,24 +348,7 @@ func (s *Server) startAppServer() error {
 	return nil
 }
 
-func (s *Server) stopAppServer() error {
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	err := s.appSrv.Shutdown(shutdownCtx)
-	shutdownCancel()
-	if err != nil {
-		// Log the error only (could be context canceled)
-		s.log.Raw().Warn().
-			Err(err).
-			Msg("App server shutdown error")
-		return err
-	}
-	<-s.appSrvRunningCh
-	return nil
-}
-
 func (s *Server) startMetricsServer() error {
-	s.metricsSrvRunningCh = make(chan struct{})
-
 	bindAddr := viper.GetString(config.KeyMetricsBind)
 	if bindAddr == "" {
 		bindAddr = "0.0.0.0"
@@ -383,7 +387,6 @@ func (s *Server) startMetricsServer() error {
 		Msg("Metrics server started")
 	go func() {
 		defer s.metricsListener.Close()
-		defer close(s.metricsSrvRunningCh)
 
 		// Next call blocks until the server is shut down
 		err := s.metricsSrv.Serve(s.metricsListener)
@@ -394,21 +397,6 @@ func (s *Server) startMetricsServer() error {
 		}
 	}()
 
-	return nil
-}
-
-func (s *Server) stopMetricsServer() error {
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	err := s.metricsSrv.Shutdown(shutdownCtx)
-	shutdownCancel()
-	if err != nil {
-		// Log the error only (could be context canceled)
-		s.log.Raw().Warn().
-			Err(err).
-			Msg("Metrics server shutdown error")
-		return err
-	}
-	<-s.metricsSrvRunningCh
 	return nil
 }
 

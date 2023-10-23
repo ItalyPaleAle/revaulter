@@ -3,7 +3,7 @@ test:
 	go test -tags unit ./...
 
 .PHONY: test-race
-test:
+test-race:
 	go test -race -tags unit ./...
 
 .PHONY: lint
