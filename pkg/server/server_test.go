@@ -29,6 +29,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 	"github.com/gin-gonic/gin"
 	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -901,7 +902,7 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	logBuf := &bytes.Buffer{}
 	logDest := io.MultiWriter(os.Stderr, logBuf)
 
-	log := utils.NewAppLogger("test", logDest)
+	log := utils.NewAppLogger("test", zerolog.SyncWriter(logDest))
 	if wh == nil {
 		wh = &mockWebhook{}
 	}

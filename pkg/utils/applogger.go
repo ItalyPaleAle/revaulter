@@ -2,6 +2,7 @@ package utils
 
 import (
 	"io"
+	"net/http"
 	"regexp"
 	"time"
 
@@ -30,11 +31,6 @@ func NewAppLogger(app string, out io.Writer) *AppLogger {
 	}
 	a.InitWithWriter(out)
 	return a
-}
-
-// Init the object with the default writer for gin
-func (a *AppLogger) Init() {
-	a.InitWithWriter(gin.DefaultWriter)
 }
 
 // InitWithWriter inits the object with a specified output writer
@@ -72,7 +68,7 @@ func (a *AppLogger) LoggerMiddleware(c *gin.Context) {
 	method := c.Request.Method
 
 	// Do not log OPTIONS requests
-	if method == "OPTIONS" {
+	if method == http.MethodOptions {
 		return
 	}
 
@@ -111,7 +107,7 @@ func (a *AppLogger) LoggerMiddleware(c *gin.Context) {
 	// Check if we have an error
 	if len(c.Errors) > 0 {
 		// We'll pick the last error only
-		event = event.Str("error", c.Errors.Last().Error())
+		event = event.Err(c.Errors.Last().Err)
 	}
 
 	// Check if we have a message
