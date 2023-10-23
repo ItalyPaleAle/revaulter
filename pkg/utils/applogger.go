@@ -72,16 +72,16 @@ func (a *AppLogger) LoggerMiddleware(c *gin.Context) {
 		return
 	}
 
+	// Omit logging /healthz calls if set
+	if c.Request.URL.Path == "/healthz" && viper.GetBool(config.KeyOmitHealthCheckLogs) {
+		return
+	}
+
 	// Start time to measure latency (request duration)
 	start := time.Now()
 	path := c.Request.URL.Path
 	if c.Request.URL.RawQuery != "" {
 		path = path + "?" + c.Request.URL.RawQuery
-	}
-
-	// Omit logging /healthz calls if set
-	if path == "/healthz" && viper.GetBool(config.KeyOmitHealthCheckLogs) {
-		return
 	}
 
 	// Process request

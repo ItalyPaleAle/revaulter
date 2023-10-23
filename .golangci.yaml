@@ -164,7 +164,6 @@ linters:
     - musttag
     - nakedret
     - nestif
-    - nilerr
     - nilnil
     - nlreturn
     - noctx
@@ -173,7 +172,6 @@ linters:
     - nosnakecase
     - nosprintfhostport
     - paralleltest
-    - prealloc
     - predeclared
     - promlinter
     - reassign
