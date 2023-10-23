@@ -228,7 +228,7 @@ func TestServerAppRoutes(t *testing.T) {
 			require.Equal(t, "/auth", cookies[0].Path)
 			require.NoError(t, cookies[0].Valid())
 			require.NotEmpty(t, cookies[0].Value)
-			require.Greater(t, cookies[0].MaxAge, 1)
+			require.Greater(t, cookies[0].MaxAge, 1) //nolint:testifylint
 			authStateCookie = cookies[0]
 		})
 

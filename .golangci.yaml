@@ -119,6 +119,7 @@ linters:
     - cyclop
     - deadcode
     - decorder
+    - depguard
     - dogsled
     - dupl
     - dupword
@@ -185,6 +186,7 @@ linters:
     - scopelint
     - structcheck
     - stylecheck
+    - tagalign
     - tagliatelle
     - tenv
     - testableexamples

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	clocktesting "k8s.io/utils/clock/testing"
 
@@ -54,7 +53,7 @@ func TestWebhook(t *testing.T) {
 			rtt.SetReqCh(reqCh)
 
 			err := wh.SendWebhook(context.Background(), getWebhookRequest())
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			r := <-reqCh
 			if r != nil {
@@ -127,8 +126,8 @@ func TestWebhook(t *testing.T) {
 		}()
 
 		err := wh.SendWebhook(context.Background(), getWebhookRequest())
-		assert.Error(t, err)
-		assert.ErrorContains(t, err, "invalid response status code: 403")
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid response status code: 403")
 
 		r := <-reqCh
 		r.Body.Close()
@@ -150,10 +149,10 @@ func TestWebhook(t *testing.T) {
 		doneCh := assertRetries(ctx, clock, reqCh, 3, 30*time.Second)
 
 		err := wh.SendWebhook(ctx, getWebhookRequest())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// This will receive an error after 3 requests have come in, or the context timed out
-		assert.NoError(t, <-doneCh)
+		require.NoError(t, <-doneCh)
 	})
 
 	t.Run("retry on 429 status codes respects Retry-After header", func(t *testing.T) {
@@ -180,10 +179,10 @@ func TestWebhook(t *testing.T) {
 		doneCh := assertRetries(ctx, clock, reqCh, 3, 5*time.Second)
 
 		err := wh.SendWebhook(ctx, getWebhookRequest())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// This will receive an error after 3 requests have come in, or the context timed out
-		assert.NoError(t, <-doneCh)
+		require.NoError(t, <-doneCh)
 	})
 
 	t.Run("retry on 5xx status codes", func(t *testing.T) {
@@ -201,10 +200,10 @@ func TestWebhook(t *testing.T) {
 		doneCh := assertRetries(ctx, clock, reqCh, 2, 30*time.Second)
 
 		err := wh.SendWebhook(ctx, getWebhookRequest())
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// This will receive an error after 3 requests have come in, or the context timed out
-		assert.NoError(t, <-doneCh)
+		require.NoError(t, <-doneCh)
 	})
 
 	t.Run("too many failed attempts with 429 status codes", func(t *testing.T) {
@@ -224,11 +223,11 @@ func TestWebhook(t *testing.T) {
 		doneCh := assertRetries(ctx, clock, reqCh, 3, 30*time.Second)
 
 		err := wh.SendWebhook(ctx, getWebhookRequest())
-		assert.Error(t, err)
-		assert.ErrorContains(t, err, "invalid response status code: 429")
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid response status code: 429")
 
 		// This will receive an error after 3 requests have come in, or the context timed out
-		assert.NoError(t, <-doneCh)
+		require.NoError(t, <-doneCh)
 	})
 
 	t.Run("too many failed attempts with 5xx status codes", func(t *testing.T) {
@@ -248,11 +247,11 @@ func TestWebhook(t *testing.T) {
 		doneCh := assertRetries(ctx, clock, reqCh, 3, 30*time.Second)
 
 		err := wh.SendWebhook(ctx, getWebhookRequest())
-		assert.Error(t, err)
-		assert.ErrorContains(t, err, "invalid response status code: 502")
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid response status code: 502")
 
 		// This will receive an error after 3 requests have come in, or the context timed out
-		assert.NoError(t, <-doneCh)
+		require.NoError(t, <-doneCh)
 	})
 
 	t.Run("webhookUrl is invalid", func(t *testing.T) {
@@ -261,8 +260,8 @@ func TestWebhook(t *testing.T) {
 		})()
 
 		err := wh.SendWebhook(context.Background(), getWebhookRequest())
-		assert.Error(t, err)
-		assert.ErrorContains(t, err, "failed to create request")
+		require.Error(t, err)
+		require.ErrorContains(t, err, "failed to create request")
 	})
 }
 
