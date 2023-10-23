@@ -5,23 +5,23 @@ go 1.20
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.8.0
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys v1.0.1
-	github.com/fsnotify/fsnotify v1.6.0
+	github.com/fsnotify/fsnotify v1.7.0
 	github.com/gin-contrib/cors v1.4.0
 	github.com/gin-gonic/gin v1.9.1
 	github.com/google/uuid v1.3.1
-	github.com/lestrrat-go/jwx/v2 v2.0.13
+	github.com/lestrrat-go/jwx/v2 v2.0.15
 	github.com/prometheus/client_golang v1.17.0
 	github.com/rs/zerolog v1.31.0
 	github.com/spf13/cast v1.5.1
 	github.com/spf13/viper v1.17.0
 	github.com/stretchr/testify v1.8.4
-	golang.org/x/net v0.16.0
+	golang.org/x/net v0.17.0
 	golang.org/x/text v0.13.0
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b
 )
 
 require (
-	github.com/Azure/azure-sdk-for-go/sdk/internal v1.3.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.4.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/internal v1.0.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/sonic v1.9.1 // indirect
