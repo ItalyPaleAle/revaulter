@@ -229,7 +229,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// App server
 	err := s.startAppServer()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to start app server: %w", err)
 	}
 	//nolint:errcheck
 	defer s.stopAppServer()
@@ -239,7 +239,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if viper.GetBool(config.KeyEnableMetrics) {
 		err = s.startMetricsServer()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to start metrics server: %w", err)
 		}
 		//nolint:errcheck
 		defer s.stopMetricsServer()
@@ -318,7 +318,9 @@ func (s *Server) startAppServer() error {
 			srvErr = s.appSrv.Serve(s.appListener)
 		}
 		if srvErr != http.ErrServerClosed {
-			s.log.Raw().Fatal().Msgf("Error starting app server: %v", srvErr)
+			s.log.Raw().Fatal().
+				Err(srvErr).
+				Msgf("Error starting app server")
 		}
 	}()
 
@@ -386,7 +388,9 @@ func (s *Server) startMetricsServer() error {
 		// Next call blocks until the server is shut down
 		err := s.metricsSrv.Serve(s.metricsListener)
 		if err != http.ErrServerClosed {
-			s.log.Raw().Fatal().Msgf("Error starting metrics server: %v", err)
+			s.log.Raw().Fatal().
+				Err(err).
+				Msgf("Error starting metrics server")
 		}
 	}()
 

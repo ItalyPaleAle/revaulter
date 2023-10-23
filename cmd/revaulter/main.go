@@ -1,11 +1,8 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/gin-gonic/gin"
 
@@ -47,27 +44,16 @@ func main() {
 		return
 	}
 
-	// Listen for SIGTERM and SIGINT in background to stop the context
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+	// Get a context that is canceled when the application receives a termination signal
+	ctx := utils.SignalContext(appLogger)
 
-		<-ch
-		appLogger.Raw().Info().Msg("Received interrupt signal. Shutting down…")
-		cancel()
-
-		// If we get another interrupt signal while we're shutting down, terminate immediately
-		<-ch
-		appLogger.Raw().Fatal().Msg("Received a second interrupt signal. Forcing a shutdown…")
-	}()
-
-	// Start the server in background and block until the server is shut down (gracefully)
-	err = srv.Run(ctx)
+	// Run the service
+	runner := utils.NewServiceRunner(srv.Run)
+	err = runner.Run(ctx)
 	if err != nil {
 		appLogger.Raw().Fatal().
 			Err(err).
-			Msg("Cannot start the server")
+			Msg("Failed to run service")
 		return
 	}
 }
