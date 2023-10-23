@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/server"
 	"github.com/italypaleale/revaulter/pkg/utils"
 )
@@ -18,6 +19,11 @@ func main() {
 
 	// Init the app logger object
 	appLogger = utils.NewAppLogger("revaulter", os.Stdout)
+
+	appLogger.Raw().Info().
+		Str("version", buildinfo.AppVersion).
+		Str("build", buildinfo.BuildDescription).
+		Msg("Starting Revaulter")
 
 	// Load config
 	err := loadConfig()

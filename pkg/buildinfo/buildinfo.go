@@ -1,6 +1,10 @@
 package buildinfo
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/italypaleale/revaulter/pkg/utils"
+)
 
 // These variables will be set at build time
 var (
@@ -19,5 +23,9 @@ func init() {
 		BuildDescription = fmt.Sprintf("%s, %s (%s)", BuildId, BuildDate, CommitHash)
 	} else {
 		BuildDescription = "null"
+	}
+
+	if !utils.IsTruthy(Production) {
+		BuildDescription += " (non-production)"
 	}
 }
