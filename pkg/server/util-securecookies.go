@@ -121,7 +121,7 @@ func setSecureCookie(c *gin.Context, name string, plaintextValue string, expirat
 	}
 
 	// Set the cookie
-	c.SetCookie(name, string(cookieValue), int(expiration.Seconds()), path, c.Request.URL.Host, secureCookie, true)
+	c.SetCookie(name, string(cookieValue), int(expiration.Seconds()), path, c.Request.URL.Host, secureCookie, httpOnly)
 
 	return nil
 }

@@ -35,20 +35,20 @@ func (s *Server) serveClient() func(c *gin.Context) {
 			// Serve the request from the embedded FS
 			serveStaticFiles(c, c.Request.URL.Path, client.StaticFS)
 		}
-	} else {
-		u, err := url.Parse(clientProxyServer)
-		if err != nil {
-			panic(fmt.Sprintf("Failed to parse value for 'dev.clientProxyServer': %v", err))
-		}
-		proxy := proxyStaticFilesFunc(u)
-		return func(c *gin.Context) {
-			if !prepareStaticResponse(c) {
-				return
-			}
+	}
 
-			// Serve the request from the proxy
-			proxy.ServeHTTP(c.Writer, c.Request)
+	u, err := url.Parse(clientProxyServer)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to parse value for 'dev.clientProxyServer': %v", err))
+	}
+	proxy := proxyStaticFilesFunc(u)
+	return func(c *gin.Context) {
+		if !prepareStaticResponse(c) {
+			return
 		}
+
+		// Serve the request from the proxy
+		proxy.ServeHTTP(c.Writer, c.Request)
 	}
 }
 

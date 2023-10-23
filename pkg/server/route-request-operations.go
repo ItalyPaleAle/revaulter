@@ -205,14 +205,15 @@ func (req *operationRequest) Parse(op requestOperation) (err error) {
 	// If it's just a number, interpret it as seconds
 	// Otherwise, parse it as a Go duration
 	timeoutStr := cast.ToString(req.Timeout)
-	if timeoutStr == "" {
+	switch {
+	case timeoutStr == "":
 		req.timeoutDuration = viper.GetDuration(config.KeyRequestTimeout)
-	} else if durationNumber.MatchString(timeoutStr) {
+	case durationNumber.MatchString(timeoutStr):
 		timeout, _ := strconv.Atoi(timeoutStr)
 		if timeout > 0 {
 			req.timeoutDuration = time.Duration(timeout) * time.Second
 		}
-	} else {
+	default:
 		var timeout time.Duration
 		timeout, err = time.ParseDuration(timeoutStr)
 		if err != nil {

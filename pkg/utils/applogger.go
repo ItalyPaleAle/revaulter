@@ -96,11 +96,12 @@ func (a *AppLogger) LoggerMiddleware(c *gin.Context) {
 
 	// Get the logger and the appropriate error level
 	var event *zerolog.Event
-	if statusCode >= 200 && statusCode <= 399 {
+	switch {
+	case statusCode >= 200 && statusCode <= 399:
 		event = a.log.Info() //nolint:zerologlint
-	} else if statusCode >= 400 && statusCode <= 499 {
+	case statusCode >= 400 && statusCode <= 499:
 		event = a.log.Warn() //nolint:zerologlint
-	} else {
+	default:
 		event = a.log.Error() //nolint:zerologlint
 	}
 

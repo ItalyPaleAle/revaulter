@@ -104,7 +104,6 @@ output:
   # Sort results by: filepath, line and column.
   #sort-results: false
 
-
 linters:
   # Enable all available linters.
   # Default: false
@@ -131,7 +130,6 @@ linters:
     - exhaustruct
     - exportloopref
     - forbidigo
-    - forcetypeassert
     - funlen
     - gci
     - ginkgolinter
@@ -140,14 +138,12 @@ linters:
     - gochecknoinits
     - gocognit
     - goconst
-    - gocritic
     - gocyclo
     - godot
     - godox
     - goerr113
     - gofmt
     - goheader
-    - goimports
     - golint
     - gomnd
     - gomoddirectives
@@ -181,14 +177,12 @@ linters:
     - predeclared
     - promlinter
     - reassign
-    - revive
     - rowserrcheck
     - scopelint
     - structcheck
     - stylecheck
     - tagalign
     - tagliatelle
-    - tenv
     - testableexamples
     - testpackage
     - thelper
@@ -201,3 +195,14 @@ linters:
     - whitespace
     - wrapcheck
     - wsl
+
+linters-settings:
+  revive:
+    rules:
+      - name: var-naming
+        severity: warning
+        disabled: false
+        arguments:
+          - [ "API", "ID", "IP", "URL", "UUID" ] # AllowList
+          - [ "VM" ] # DenyList
+          - [ upperCaseConst: true ]

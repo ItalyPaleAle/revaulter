@@ -222,7 +222,7 @@ func createStateToken(c *gin.Context, seed string) (stateToken string, err error
 	}
 
 	// Base string to hash
-	baseStr := stateTokenBaseParts(c)
+	baseStr := stateTokenBaseParts(c, seed)
 
 	// Calculate the HMAC
 	h := hmac.New(sha256.New224, []byte(tokenSigningKey))
@@ -247,7 +247,7 @@ func validateStateToken(c *gin.Context, stateToken string, seed string) bool {
 	}
 
 	// Base string to hash
-	baseStr := stateTokenBaseParts(c)
+	baseStr := stateTokenBaseParts(c, seed)
 
 	// Calculate the HMAC
 	h := hmac.New(sha256.New224, []byte(tokenSigningKey))
@@ -258,10 +258,11 @@ func validateStateToken(c *gin.Context, stateToken string, seed string) bool {
 	return hmac.Equal(res, stateTokenRaw)
 }
 
-func stateTokenBaseParts(c *gin.Context) string {
+func stateTokenBaseParts(c *gin.Context, seed string) string {
 	return strings.Join([]string{
 		strings.ToLower(norm.NFKD.String(c.GetHeader("user-agent"))),
 		strings.ToLower(norm.NFKD.String(c.GetHeader("accept-language"))),
 		strings.ToLower(norm.NFKD.String(c.GetHeader("dnt"))),
+		seed,
 	}, "|")
 }

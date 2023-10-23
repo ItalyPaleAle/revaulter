@@ -27,7 +27,7 @@ func TestWebhook(t *testing.T) {
 	logger := NewAppLogger("test", io.Discard)
 
 	clock := clocktesting.NewFakeClock(time.Now())
-	wh := newWebhookWithClock(logger, clock).(*webhookClient)
+	wh := newWebhookWithClock(logger, clock).(*webhookClient) //nolint:forcetypeassert
 
 	// Create a roundtripper that captures the requests
 	rtt := &RoundTripperTest{}

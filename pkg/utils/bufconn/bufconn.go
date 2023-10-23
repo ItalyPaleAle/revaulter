@@ -267,8 +267,8 @@ type conn struct {
 }
 
 func (c *conn) Close() error {
-	err1 := c.Reader.(*pipe).Close()
-	err2 := c.Writer.(*pipe).closeWrite()
+	err1 := c.Reader.(*pipe).Close()      //nolint:forcetypeassert
+	err2 := c.Writer.(*pipe).closeWrite() //nolint:forcetypeassert
 	if err1 != nil {
 		return err1
 	}
@@ -282,7 +282,7 @@ func (c *conn) SetDeadline(t time.Time) error {
 }
 
 func (c *conn) SetReadDeadline(t time.Time) error {
-	p := c.Reader.(*pipe)
+	p := c.Reader.(*pipe) //nolint:forcetypeassert
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.rtimer.Stop()
@@ -299,7 +299,7 @@ func (c *conn) SetReadDeadline(t time.Time) error {
 }
 
 func (c *conn) SetWriteDeadline(t time.Time) error {
-	p := c.Writer.(*pipe)
+	p := c.Writer.(*pipe) //nolint:forcetypeassert
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.wtimer.Stop()

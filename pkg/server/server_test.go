@@ -56,7 +56,7 @@ func TestMain(m *testing.M) {
 	csk, _ := jwk.FromRaw(keysBase)
 	cek, _ := jwk.FromRaw(keysBase[0:16])
 
-	defer utils.SetTestConfigs(map[string]any{
+	_ = utils.SetTestConfigs(map[string]any{
 		config.KeyLogLevel:                    "info",
 		config.KeyPort:                        testServerPort,
 		config.KeyBind:                        "127.0.0.1",
@@ -71,7 +71,7 @@ func TestMain(m *testing.M) {
 		config.KeyInternalTokenSigningKey:     "hello-world",
 		config.KeyInternalCookieSigningKey:    csk,
 		config.KeyInternalCookieEncryptionKey: cek,
-	})()
+	})
 
 	gin.SetMode(gin.ReleaseMode)
 
@@ -484,14 +484,16 @@ func TestServerAppRoutes(t *testing.T) {
 				defer closeBody(res)
 
 				dec := json.NewDecoder(res.Body)
+			L:
 				for {
 					var val requestStatePublic
 					decErr := dec.Decode(&val)
-					if decErr == nil {
+					switch {
+					case decErr == nil:
 						listSubscribeCh <- &val
-					} else if errors.Is(decErr, io.EOF) || errors.Is(decErr, context.Canceled) {
-						break
-					} else {
+					case errors.Is(decErr, io.EOF) || errors.Is(decErr, context.Canceled):
+						break L
+					default:
 						panic("Unexpected error from list API stream: " + decErr.Error())
 					}
 				}
@@ -959,9 +961,8 @@ func startTestServer(t *testing.T, srv *Server) func(t *testing.T) {
 }
 
 func clientForListener(ln net.Listener) *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	//nolint:gosec
-	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	transport := http.DefaultTransport.(*http.Transport).Clone()      //nolint:forcetypeassert
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 	transport.DialContext = func(ctx context.Context, _ string, _ string) (net.Conn, error) {
 		bl, ok := ln.(*bufconn.Listener)
 		if !ok {
