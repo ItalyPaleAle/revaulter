@@ -1,4 +1,4 @@
-# 🔐 Revaulter v1.0
+# 🔐 Revaulter
 
 Revaulter lets you perform cryptographic operations with keys stored on [Azure Key Vault](https://learn.microsoft.com/en-us/azure/key-vault/general/overview), securely after getting consent from an admin. You can use Revaulter for:
 
