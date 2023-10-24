@@ -77,8 +77,8 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
   - **`requestTimeout`** (optional, default: `5m`):  
     Default timeout for wrap and unwrap requests, as a Go duration. This is the default value, and can be overridden in each request.  
     Environmental variable name: `REVAULTER_REQUESTTIMEOUT`
-  - **`enableMetrics`** (optional, default: `false`):
-    Enable the metrics server which exposes a Prometheus-compatible endpoint `/metrics`.
+  - **`enableMetrics`** (optional, default: `false`):  
+    Enable the metrics server which exposes a Prometheus-compatible endpoint `/metrics`.  
     Environmental variable name: `REVAULTER_ENABLEMETRICS`
   - **`metricsPort`** (optional, default: `2112`):  
     Port for the metrics server to bind to.  
