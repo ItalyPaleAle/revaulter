@@ -123,7 +123,9 @@ There are two ways to pass the TLS certificate and key to Revaulter:
 1. Write them to files named `tls-cert.pem` and `tls-key.pem` and place them in a folder (for example, `/etc/revaulter`). Then, set `tlsPath` in the configuration to the path where the TLS certificate and key are set. In this case, Revaulter automatically reloads the certificate and key if they change on disk.
 2. Directly embed the PEM-encoded certificate and key in the configuration file using the options `tlsCertPEM` and `tlsKeyPEM`.
 
-## Start with Docker
+## Using a container
+
+### Start with Docker
 
 You can run Revaulter as a Docker container. Docker container images are available for Linux and support amd64, arm64, and armv7/armhf.
 
@@ -135,15 +137,99 @@ You can then start Revaulter with:
 docker run \
   -d \
   -p 8080:8080 \
-  -v $HOME/.revaulter:/etc/revaulter \
+  --read-only \
+  --user daemon:daemon \
+  -v $HOME/.revaulter:/etc/revaulter:ro \
   ghcr.io/italypaleale/revaulter:1
 ```
 
 > Revaulter follows semver for versioning. The command above uses the latest version in the 1.x branch. We do not publish a container image tagged "latest".
 
-### Start as standalone app
+#### Using Docker Compose
 
-If you don't want to (or can't) use Docker, you can download the latest version of Revaulter from the [Releases](https://github.com/italypaleale/revaulter/releases) page. Fetch the correct archive for your system and architecture, then extract the files and copy the `revaulter` binary to `/usr/local/bin` or another folder.
+This is an example of a `docker-compose.yaml` for running Revaulter:
+
+```yaml
+version: "3.6"
+
+services:
+  revaulter:
+    image: "ghcr.io/italypaleale/revaulter:1"
+    volumes:
+      # Set the path on the host OS
+      - "/path/to/revaulter:/etc/revaulter:ro"
+    ports:
+      - "8080:8080"
+    user: "daemon:daemon"
+    restart: "unless-stopped"
+    read_only: true
+    logging:
+      driver: "json-file"
+      options:
+        max-file: "5"
+        max-size: "20m"
+```
+
+### Start with Podman
+
+Podman allows running containers with a command very similar to Docker. It is supported on Linux on amd64, arm64, and armv7/armhf.
+
+First, create a folder where you will store the configuration file `config.yaml` and the TLS certificate and key (`tls-cert.pem` and `tls-key.pem`), for example `$HOME/.revaulter`.
+
+You can then start Revaulter with:
+
+```sh
+podman run \
+  -d \
+  -p 8080:8080 \
+  --user daemon:daemon \
+  --read-only \
+  --network private \
+  -v $HOME/.revaulter:/etc/revaulter:ro \
+  ghcr.io/italypaleale/revaulter:1
+```
+
+#### Quadlet unit for systemd
+
+Podman includes [Quadlet](https://www.redhat.com/sysadmin/quadlet-podman), which allows managing containers as systemd services. This can be convenient to make other services depend on Revaulter.
+
+To start, create a file named `/etc/containers/systemd/revaulter.container` (note the path is not the standard one for systemd units):
+
+```conf
+[Unit]
+Description=Revaulter service
+Requires=network-online.target local-fs.target
+After=network-online.target local-fs.target
+
+[Container]
+Image=ghcr.io/italypaleale/revaulter:1
+# AutoUpdate requires Podman 4.7+
+AutoUpdate=registry
+User=daemon
+Group=daemon
+Network=private
+PublishPort=8080:8080
+# Set the path on the host OS
+Volume=/path/to/revaulter:/etc/revaulter:ro
+ReadOnly=true
+
+[Install]
+# Setting these targets makes the container start automatically at boot
+WantedBy=multi-user.target default.target
+```
+
+Next, execute these commands to start the container:
+
+```sh
+systemctl daemon-reload
+systemctl start revaulter.service
+```
+
+> Note that `systemctl enable` does not work with Quadlet units. These units are automatically enabled for starting at boot if `WantedBy` includes targets such as `default.target`
+
+## Start as standalone app
+
+If you don't want to (or can't) use Docker/Podman, you can download the latest version of Revaulter from the [Releases](https://github.com/italypaleale/revaulter/releases) page. Fetch the correct archive for your system and architecture, then extract the files and copy the `revaulter` binary to `/usr/local/bin` or another folder.
 
 Place the configuration for Revaulter in the `/etc/revaulter` folder, including the `config.yaml` file and the TLS certificate and key (`tls-cert.pem` and `tls-key.pem`).
 
