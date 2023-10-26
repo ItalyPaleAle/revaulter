@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
 
 	"github.com/italypaleale/revaulter/client"
 	"github.com/italypaleale/revaulter/pkg/config"
@@ -24,7 +23,7 @@ const staticBaseDir = "dist"
 
 func (s *Server) serveClient() func(c *gin.Context) {
 	// Option used during development to proxy to another server (such as a dev server)
-	clientProxyServer := viper.GetString(config.KeyDevClientProxyServer)
+	clientProxyServer := config.Get().Dev.ClientProxyServer
 
 	if clientProxyServer == "" {
 		return func(c *gin.Context) {

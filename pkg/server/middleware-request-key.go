@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 )
@@ -15,7 +14,7 @@ import (
 // RequestKeyMiddleware is a middleware that asserts that the Authorization header contains the shared requestKey
 func (s *Server) RequestKeyMiddleware() gin.HandlerFunc {
 	// Get the requestKey
-	conf := viper.GetString(config.KeyRequestKey)
+	conf := config.Get().RequestKey
 	if conf == "" {
 		// No key, so allow everything
 		return func(c *gin.Context) {}

@@ -6,7 +6,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/spf13/viper"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 )
@@ -14,7 +13,7 @@ import (
 // RequestIdMiddleware is a middleware that generates a unique request ID for each request
 func (s *Server) RequestIdMiddleware(c *gin.Context) {
 	// Check if we have a trusted request ID header and it has a value
-	headerName := viper.GetString(config.KeyTrustedRequestIdHeader)
+	headerName := config.Get().TrustedRequestIdHeader
 	if headerName != "" {
 		v := c.GetHeader(headerName)
 		if v != "" {

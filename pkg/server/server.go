@@ -10,14 +10,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
@@ -139,16 +137,15 @@ func (s *Server) initAppServer() (err error) {
 	}
 
 	// Check if we are restricting the origins for CORS
-	originsStr := viper.GetString(config.KeyOrigins)
-	if originsStr == "" {
+	origins := config.Get().Origins
+	if len(origins) == 0 || (len(origins) == 1 && origins[0] == "") {
 		// Default is baseUrl
-		originsStr = s.getBaseURL()
-	}
-	if originsStr == "*" {
+		corsConfig.AllowOrigins = []string{s.getBaseURL()}
+	} else if len(origins) == 1 && origins[0] == "*" {
 		corsConfig.AllowAllOrigins = true
 	} else {
 		corsConfig.AllowAllOrigins = false
-		corsConfig.AllowOrigins = strings.Split(originsStr, ",")
+		corsConfig.AllowOrigins = origins
 	}
 	s.appRouter.Use(cors.New(corsConfig))
 
@@ -198,22 +195,18 @@ func (s *Server) initAppServer() (err error) {
 }
 
 func (s *Server) getBaseURL() string {
+	cfg := config.Get()
+
 	// If there's an explicit value in the configuration, use that
-	baseURL := viper.GetString(config.KeyBaseUrl)
-	if baseURL != "" {
-		return baseURL
+	if cfg.BaseUrl != "" {
+		return cfg.BaseUrl
 	}
 
 	// Build our own
-	bindPort := viper.GetInt(config.KeyPort)
-	if bindPort < 1 {
-		bindPort = 8080
-	}
-
 	if s.tlsConfig != nil {
-		return "https://localhost:" + strconv.Itoa(bindPort)
+		return "https://localhost:" + strconv.Itoa(cfg.Port)
 	} else {
-		return "http://localhost:" + strconv.Itoa(bindPort)
+		return "http://localhost:" + strconv.Itoa(cfg.Port)
 	}
 }
 
@@ -225,6 +218,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	defer s.running.Store(false)
 	defer s.wg.Wait()
+
+	cfg := config.Get()
 
 	// App server
 	s.wg.Add(1)
@@ -248,7 +243,7 @@ func (s *Server) Run(ctx context.Context) error {
 	defer s.pubsub.Shutdown()
 
 	// Metrics server
-	if viper.GetBool(config.KeyEnableMetrics) {
+	if cfg.EnableMetrics {
 		s.wg.Add(1)
 		err = s.startMetricsServer()
 		if err != nil {
@@ -285,18 +280,11 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) startAppServer() error {
-	bindAddr := viper.GetString(config.KeyBind)
-	if bindAddr == "" {
-		bindAddr = "0.0.0.0"
-	}
-	bindPort := viper.GetInt(config.KeyPort)
-	if bindPort < 1 {
-		bindPort = 8080
-	}
+	cfg := config.Get()
 
 	// Create the HTTP(S) server
 	s.appSrv = &http.Server{
-		Addr:              net.JoinHostPort(bindAddr, strconv.Itoa(bindPort)),
+		Addr:              net.JoinHostPort(cfg.Bind, strconv.Itoa(cfg.Port)),
 		MaxHeaderBytes:    1 << 20,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -307,7 +295,7 @@ func (s *Server) startAppServer() error {
 	} else {
 		// Not using TLS
 		// Here we also need to enable HTTP/2 Cleartext
-		s.log.Raw().Warn().Msg("Starting app server without HTTPS - this is not recommended unless Revaulter is exposed through a proxy that offers TLS termination")
+		s.log.Raw().Warn().Msg("Starting app server without TLS - this is not recommended unless Revaulter is exposed through a proxy that offers TLS termination")
 		h2s := &http2.Server{}
 		s.appSrv.Handler = h2c.NewHandler(s.appRouter, h2s)
 	}
@@ -323,8 +311,8 @@ func (s *Server) startAppServer() error {
 
 	// Start the HTTP(S) server in a background goroutine
 	s.log.Raw().Info().
-		Str("bind", bindAddr).
-		Int("port", bindPort).
+		Str("bind", cfg.Bind).
+		Int("port", cfg.Port).
 		Bool("tls", s.tlsConfig != nil).
 		Str("url", s.getBaseURL()).
 		Msg("App server started")
@@ -349,14 +337,7 @@ func (s *Server) startAppServer() error {
 }
 
 func (s *Server) startMetricsServer() error {
-	bindAddr := viper.GetString(config.KeyMetricsBind)
-	if bindAddr == "" {
-		bindAddr = "0.0.0.0"
-	}
-	bindPort := viper.GetInt(config.KeyMetricsPort)
-	if bindPort < 1 {
-		bindPort = 2112
-	}
+	cfg := config.Get()
 
 	// Handler
 	mux := http.NewServeMux()
@@ -365,7 +346,7 @@ func (s *Server) startMetricsServer() error {
 
 	// Create the HTTP server
 	s.metricsSrv = &http.Server{
-		Addr:              net.JoinHostPort(bindAddr, strconv.Itoa(bindPort)),
+		Addr:              net.JoinHostPort(cfg.MetricsBind, strconv.Itoa(cfg.MetricsPort)),
 		Handler:           mux,
 		MaxHeaderBytes:    1 << 20,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -382,8 +363,8 @@ func (s *Server) startMetricsServer() error {
 
 	// Start the HTTPS server in a background goroutine
 	s.log.Raw().Info().
-		Str("bind", bindAddr).
-		Int("port", bindPort).
+		Str("bind", cfg.MetricsBind).
+		Int("port", cfg.MetricsPort).
 		Msg("Metrics server started")
 	go func() {
 		defer s.metricsListener.Close()
@@ -488,21 +469,30 @@ func (s *Server) expireRequest(stateId string, validity time.Duration) {
 
 // Loads the TLS configuration
 func (s *Server) loadTLSConfig() (tlsConfig *tls.Config, watchFn tlsCertWatchFn, err error) {
+	cfg := config.Get()
+
 	tlsConfig = &tls.Config{
 		MinVersion: minTLSVersion,
 	}
 
 	// First, check if we have actual keys
-	tlsCert := viper.GetString(config.KeyTLSCertPEM)
-	tlsKey := viper.GetString(config.KeyTLSKeyPEM)
+	tlsCert := cfg.TLSCertPEM
+	tlsKey := cfg.TLSKeyPEM
 
 	// If we don't have actual keys, then we need to load from file and reload when the files change
 	if tlsCert == "" && tlsKey == "" {
 		// If "tlsPath" is empty, use the folder where the config file is located
-		tlsPath := viper.GetString(config.KeyTLSPath)
+		tlsPath := cfg.TLSPath
 		if tlsPath == "" {
-			file := viper.ConfigFileUsed()
-			tlsPath = filepath.Dir(file)
+			file := cfg.GetLoadedConfigPath()
+			if file != "" {
+				tlsPath = filepath.Dir(file)
+			}
+		}
+
+		if tlsPath == "" {
+			// No config file loaded, so don't attempt to load TLS certs
+			return nil, nil, nil
 		}
 
 		var provider *tlsCertProvider

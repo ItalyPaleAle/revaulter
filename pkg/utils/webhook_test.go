@@ -17,12 +17,12 @@ import (
 
 func TestWebhook(t *testing.T) {
 	// Set configurations
-	defer SetTestConfigs(map[string]any{
-		config.KeyWebhookUrl:    "http://test.local/endpoint",
-		config.KeyBaseUrl:       "http://test.local/app",
-		config.KeyWebhookKey:    "",
-		config.KeyWebhookFormat: "",
-	})()
+	t.Cleanup(config.SetTestConfig(map[string]any{
+		"webhookUrl":    "http://test.local/endpoint",
+		"baseUrl":       "http://test.local/app",
+		"webhookKey":    "",
+		"webhookFormat": "",
+	}))
 
 	logger := NewAppLogger("test", io.Discard)
 
@@ -46,7 +46,7 @@ func TestWebhook(t *testing.T) {
 	basicTestFn := func(configs map[string]any, assertFn func(t *testing.T, r *http.Request)) func(*testing.T) {
 		return func(t *testing.T) {
 			if len(configs) > 0 {
-				defer SetTestConfigs(configs)()
+				t.Cleanup(config.SetTestConfig(configs))
 			}
 
 			reqCh := make(chan *http.Request, 1)
@@ -64,51 +64,51 @@ func TestWebhook(t *testing.T) {
 	}
 
 	t.Run("format plain", basicTestFn(map[string]any{
-		config.KeyWebhookFormat: "plain",
+		"webhookFormat": "plain",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint", r.URL.String())
 		requireBodyEqual(t, r.Body, "Received a request to wrap a key using key **mykey** in vault **myvault**.\n\nConfirm request: http://test.local/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
 	}))
 
 	t.Run("empty format, fallback to plain", basicTestFn(map[string]any{
-		config.KeyWebhookFormat: "",
+		"webhookFormat": "",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint", r.URL.String())
 		requireBodyEqual(t, r.Body, "Received a request to wrap a key using key **mykey** in vault **myvault**.\n\nConfirm request: http://test.local/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
 	}))
 
 	t.Run("format slack", basicTestFn(map[string]any{
-		config.KeyWebhookFormat: "slack",
+		"webhookFormat": "slack",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint", r.URL.String())
 		requireBodyEqual(t, r.Body, `{"text":"Received a request to wrap a key using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("format discord appends /slack", basicTestFn(map[string]any{
-		config.KeyWebhookFormat: "discord",
+		"webhookFormat": "discord",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint/slack", r.URL.String())
 		requireBodyEqual(t, r.Body, `{"text":"Received a request to wrap a key using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("format discord with /slack already appended", basicTestFn(map[string]any{
-		config.KeyWebhookUrl:    "http://my.local/endpoint/slack",
-		config.KeyWebhookFormat: "discord",
+		"webhookUrl":    "http://my.local/endpoint/slack",
+		"webhookFormat": "discord",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://my.local/endpoint/slack", r.URL.String())
 		requireBodyEqual(t, r.Body, `{"text":"Received a request to wrap a key using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("plain request with authorization", basicTestFn(map[string]any{
-		config.KeyWebhookKey: "mykey",
+		"webhookKey": "mykey",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint", r.URL.String())
 		require.Equal(t, "mykey", r.Header.Get("authorization"))
 	}))
 
 	t.Run("slack request with authorization", basicTestFn(map[string]any{
-		config.KeyWebhookKey:    "mykey",
-		config.KeyWebhookFormat: "slack",
+		"webhookKey":    "mykey",
+		"webhookFormat": "slack",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint", r.URL.String())
 		require.Equal(t, "mykey", r.Header.Get("authorization"))
@@ -255,8 +255,8 @@ func TestWebhook(t *testing.T) {
 	})
 
 	t.Run("webhookUrl is invalid", func(t *testing.T) {
-		defer SetTestConfigs(map[string]any{
-			config.KeyWebhookUrl: "\nnotanurl",
+		defer config.SetTestConfig(map[string]any{
+			"webhookUrl": "\nnotanurl",
 		})()
 
 		err := wh.SendWebhook(context.Background(), getWebhookRequest())

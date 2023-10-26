@@ -9,9 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwe"
-	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jwt"
-	"github.com/spf13/viper"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 )
@@ -19,14 +17,7 @@ import (
 const jwtIssuer = "revaulter"
 
 func getSecureCookie(c *gin.Context, name string) (plaintextValue string, ttl time.Duration, err error) {
-	cek, ok := viper.Get(config.KeyInternalCookieEncryptionKey).(jwk.Key)
-	if !ok || cek == nil {
-		return "", 0, errors.New("empty or invalid cookieEncryptionKey in the configuration")
-	}
-	csk, ok := viper.Get(config.KeyInternalCookieSigningKey).(jwk.Key)
-	if !ok || csk == nil {
-		return "", 0, errors.New("empty or invalid cookie signing key in the configuration")
-	}
+	cfg := config.Get()
 
 	// Get the cookie
 	cookieValue, err := c.Cookie(name)
@@ -42,7 +33,7 @@ func getSecureCookie(c *gin.Context, name string) (plaintextValue string, ttl ti
 
 	// Decrypt the encrypted JWE
 	dec, err := jwe.Decrypt([]byte(cookieValue),
-		jwe.WithKey(jwa.A128KW, cek),
+		jwe.WithKey(jwa.A128KW, cfg.GetCookieEncryptionKey()),
 	)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to decrypt token in cookie: %w", err)
@@ -52,8 +43,8 @@ func getSecureCookie(c *gin.Context, name string) (plaintextValue string, ttl ti
 	token, err := jwt.Parse(dec,
 		jwt.WithAcceptableSkew(30*time.Second),
 		jwt.WithIssuer(jwtIssuer),
-		jwt.WithAudience(viper.GetString(config.KeyAzureClientId)),
-		jwt.WithKey(jwa.HS256, csk),
+		jwt.WithAudience(cfg.AzureClientId),
+		jwt.WithKey(jwa.HS256, cfg.GetCookieSigningKey()),
 	)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to parse JWT: %w", err)
@@ -81,14 +72,8 @@ func setSecureCookie(c *gin.Context, name string, plaintextValue string, expirat
 	if expiration < 1 {
 		return errors.New("invalid expiration value: must be greater than 0")
 	}
-	cek, ok := viper.Get(config.KeyInternalCookieEncryptionKey).(jwk.Key)
-	if !ok || cek == nil {
-		return errors.New("empty or invalid cookieEncryptionKey in the configuration")
-	}
-	csk, ok := viper.Get(config.KeyInternalCookieSigningKey).(jwk.Key)
-	if !ok || csk == nil {
-		return errors.New("empty or invalid cookie signing key in the configuration")
-	}
+
+	cfg := config.Get()
 
 	// Claims for the JWT
 	now := time.Now()
@@ -96,7 +81,7 @@ func setSecureCookie(c *gin.Context, name string, plaintextValue string, expirat
 		Issuer(jwtIssuer).
 		Audience([]string{
 			// Use the Azure client ID as our audience too
-			viper.GetString(config.KeyAzureClientId),
+			cfg.AzureClientId,
 		}).
 		IssuedAt(now).
 		// Add 1 extra second to synchronize with cookie expiry
@@ -110,9 +95,9 @@ func setSecureCookie(c *gin.Context, name string, plaintextValue string, expirat
 
 	// Generate and encrypt the JWT
 	cookieValue, err := jwt.NewSerializer().
-		Sign(jwt.WithKey(jwa.HS256, csk)).
+		Sign(jwt.WithKey(jwa.HS256, cfg.GetCookieSigningKey())).
 		Encrypt(
-			jwt.WithKey(jwa.A128KW, cek),
+			jwt.WithKey(jwa.A128KW, cfg.GetCookieEncryptionKey()),
 			jwt.WithEncryptOption(jwe.WithContentEncryption(jwa.A128GCM)),
 		).
 		Serialize(token)

@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/italypaleale/revaulter/pkg/config"
@@ -46,6 +45,8 @@ type AccessToken struct {
 // RouteAuthSignin is the handler for the GET /auth/signin request
 // This redirects the user to the page where they can sign in
 func (s *Server) RouteAuthSignin(c *gin.Context) {
+	cfg := config.Get()
+
 	// Check if we already have a state cookie that was issued recently
 	// It can happen that clients are redirected to the auth page more than once at the same time
 	seed, ttl, err := getSecureCookie(c, authStateCookieName)
@@ -85,10 +86,10 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 	codeChallenge := sha256.Sum256([]byte(seed))
 
 	// Build the redirect URL
-	tenantId := viper.GetString(config.KeyAzureTenantId)
+	tenantId := cfg.AzureTenantId
 	qs := url.Values{
 		"response_type":         []string{"code"},
-		"client_id":             []string{viper.GetString(config.KeyAzureClientId)},
+		"client_id":             []string{cfg.AzureClientId},
 		"redirect_uri":          []string{s.getBaseURL() + "/auth/confirm"},
 		"response_mode":         []string{"query"},
 		"state":                 []string{stateToken},
@@ -151,7 +152,7 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 	}
 
 	// Expiration is the minimum of the session timeout set in the config, and the token's expiration
-	expiration := viper.GetDuration(config.KeySessionTimeout)
+	expiration := config.Get().SessionTimeout
 	if accessToken.ExpiresIn > 0 && int(expiration.Seconds()) > accessToken.ExpiresIn {
 		expiration = time.Duration(accessToken.ExpiresIn) * time.Second
 	}
@@ -169,10 +170,12 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 }
 
 func (s *Server) requestAccessToken(ctx context.Context, code, seed string) (*AccessToken, error) {
+	cfg := config.Get()
+
 	// Build the request
 	data := url.Values{
 		"code":          []string{code},
-		"client_id":     []string{viper.GetString(config.KeyAzureClientId)},
+		"client_id":     []string{cfg.AzureClientId},
 		"redirect_uri":  []string{s.getBaseURL() + "/auth/confirm"},
 		"scope":         []string{"https://vault.azure.net/user_impersonation"},
 		"grant_type":    []string{"authorization_code"},
@@ -180,7 +183,7 @@ func (s *Server) requestAccessToken(ctx context.Context, code, seed string) (*Ac
 	}
 	body := strings.NewReader(data.Encode())
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://login.microsoftonline.com/"+viper.GetString(config.KeyAzureTenantId)+"/oauth2/v2.0/token", body)
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://login.microsoftonline.com/"+cfg.AzureTenantId+"/oauth2/v2.0/token", body)
 	if err != nil {
 		return nil, err
 	}
@@ -215,8 +218,8 @@ func (s *Server) requestAccessToken(ctx context.Context, code, seed string) (*Ac
 }
 
 func createStateToken(c *gin.Context, seed string) (stateToken string, err error) {
-	tokenSigningKey := viper.GetString(config.KeyInternalTokenSigningKey)
-	if tokenSigningKey == "" {
+	tokenSigningKey := config.Get().GetTokenSigningKey()
+	if len(tokenSigningKey) == 0 {
 		// Should never happen
 		return "", errors.New("tokenSigningKey is empty in the configuration")
 	}
@@ -234,8 +237,8 @@ func createStateToken(c *gin.Context, seed string) (stateToken string, err error
 }
 
 func validateStateToken(c *gin.Context, stateToken string, seed string) bool {
-	tokenSigningKey := viper.GetString(config.KeyInternalTokenSigningKey)
-	if tokenSigningKey == "" {
+	tokenSigningKey := config.Get().GetTokenSigningKey()
+	if len(tokenSigningKey) == 0 {
 		// Should never happen
 		return false
 	}

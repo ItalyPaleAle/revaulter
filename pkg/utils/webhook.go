@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spf13/viper"
 	kclock "k8s.io/utils/clock"
 
 	"github.com/italypaleale/revaulter/pkg/config"
@@ -66,14 +65,16 @@ func (w *webhookClient) SetBaseURL(val string) {
 
 // SendWebhook sends the notification
 func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (err error) {
-	webhookUrl := viper.GetString(config.KeyWebhookUrl)
+	cfg := config.Get()
+
+	webhookUrl := cfg.WebhookUrl
 
 	// Retry up to 3 times
 	const attempts = 3
 	for i := 0; i < attempts; i++ {
 		var req *http.Request
 		reqCtx, reqCancel := context.WithTimeout(ctx, webhookTimeout)
-		switch viper.GetString(config.KeyWebhookFormat) {
+		switch cfg.WebhookFormat {
 		case "slack":
 			req, err = w.prepareSlackRequest(reqCtx, webhookUrl, data)
 		case "discord":
@@ -174,7 +175,7 @@ func (w *webhookClient) getLink(data *WebhookRequest) string {
 	if w.baseURL != "" {
 		return w.baseURL
 	}
-	return viper.GetString(config.KeyBaseUrl)
+	return config.Get().BaseUrl
 }
 
 func (w *webhookClient) preparePlainRequest(ctx context.Context, webhookUrl string, data *WebhookRequest) (req *http.Request, err error) {
@@ -200,7 +201,7 @@ Confirm request: %s
 	}
 	req.Header.Set("Content-Type", "text/plain")
 
-	webhookKey := viper.GetString(config.KeyWebhookKey)
+	webhookKey := config.Get().WebhookKey
 	if webhookKey != "" {
 		req.Header.Set("Authorization", webhookKey)
 	}
@@ -243,7 +244,7 @@ func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl stri
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	webhookKey := viper.GetString(config.KeyWebhookKey)
+	webhookKey := config.Get().WebhookKey
 	if webhookKey != "" {
 		req.Header.Set("Authorization", webhookKey)
 	}

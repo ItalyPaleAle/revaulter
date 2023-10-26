@@ -13,7 +13,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/spf13/cast"
-	"github.com/spf13/viper"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
@@ -207,7 +206,7 @@ func (req *operationRequest) Parse(op requestOperation) (err error) {
 	timeoutStr := cast.ToString(req.Timeout)
 	switch {
 	case timeoutStr == "":
-		req.timeoutDuration = viper.GetDuration(config.KeyRequestTimeout)
+		req.timeoutDuration = config.Get().RequestTimeout
 	case durationNumber.MatchString(timeoutStr):
 		timeout, _ := strconv.Atoi(timeoutStr)
 		if timeout > 0 {

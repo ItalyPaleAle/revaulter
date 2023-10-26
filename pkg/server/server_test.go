@@ -10,7 +10,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -28,9 +27,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 	"github.com/gin-gonic/gin"
-	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/rs/zerolog"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -52,25 +49,20 @@ const (
 )
 
 func TestMain(m *testing.M) {
-	keysBase, _ := hex.DecodeString("93df391229720f4b8e6567de9acc34f12614c3929497836a28e37878897c13fa")
-	csk, _ := jwk.FromRaw(keysBase)
-	cek, _ := jwk.FromRaw(keysBase[0:16])
-
-	_ = utils.SetTestConfigs(map[string]any{
-		config.KeyLogLevel:                    "info",
-		config.KeyPort:                        testServerPort,
-		config.KeyBind:                        "127.0.0.1",
-		config.KeySessionTimeout:              5 * time.Minute,
-		config.KeyRequestTimeout:              5 * time.Minute,
-		config.KeyWebhookUrl:                  "http://test.local",
-		config.KeyEnableMetrics:               false,
-		config.KeyMetricsBind:                 "127.0.0.1",
-		config.KeyMetricsPort:                 testMetricsPort,
-		config.KeyAzureClientId:               "azure-client-id",
-		config.KeyAzureTenantId:               "azure-tenant-id",
-		config.KeyInternalTokenSigningKey:     "hello-world",
-		config.KeyInternalCookieSigningKey:    csk,
-		config.KeyInternalCookieEncryptionKey: cek,
+	_ = config.SetTestConfig(map[string]any{
+		"logLevel":            "info",
+		"port":                testServerPort,
+		"bind":                "127.0.0.1",
+		"sessionTimeout":      5 * time.Minute,
+		"requestTimeout":      5 * time.Minute,
+		"webhookUrl":          "http://test.local",
+		"enableMetrics":       false,
+		"metricsBind":         "127.0.0.1",
+		"metricsPort":         testMetricsPort,
+		"azureClientId":       "azure-client-id",
+		"azureTenantId":       "azure-tenant-id",
+		"cookieEncryptionKey": "hello-world",
+		"tokenSigningKey":     "hello-world",
 	})
 
 	gin.SetMode(gin.ReleaseMode)
@@ -81,15 +73,15 @@ func TestMain(m *testing.M) {
 func TestServerLifecycle(t *testing.T) {
 	testFn := func(metricsEnabled bool) func(t *testing.T) {
 		return func(t *testing.T) {
-			defer utils.SetTestConfigs(map[string]any{
-				config.KeyEnableMetrics: metricsEnabled,
-			})()
+			t.Cleanup(config.SetTestConfig(map[string]any{
+				"enableMetrics": metricsEnabled,
+			}))
 
 			// Create the server
 			// This will create in-memory listeners with bufconn too
 			srv, _, cleanup := newTestServer(t, nil, nil)
 			require.NotNil(t, srv)
-			defer cleanup()
+			t.Cleanup(cleanup)
 			stopServerFn := startTestServer(t, srv)
 			defer stopServerFn(t)
 
@@ -356,7 +348,7 @@ func TestServerAppRoutes(t *testing.T) {
 					case "_at":
 						require.NoError(t, cookie.Valid())
 						require.NotEmpty(t, cookie.Value)
-						require.Equal(t, int(viper.GetDuration(config.KeySessionTimeout).Seconds()), cookie.MaxAge)
+						require.Equal(t, int(config.Get().SessionTimeout.Seconds()), cookie.MaxAge)
 						require.Equal(t, "/", cookie.Path)
 						accessTokenCookie = cookie
 					case "_auth_state":
@@ -559,7 +551,7 @@ func TestServerAppRoutes(t *testing.T) {
 					assert.Greater(t, item.Date, now-5)
 
 					// Item should have the correct expiration date
-					expectTimeoutSeconds := int64(viper.GetDuration(config.KeyRequestTimeout).Seconds())
+					expectTimeoutSeconds := int64(config.Get().RequestTimeout.Seconds())
 					if timeout, ok := reqData.Timeout.(string); ok && timeout != "" {
 						dur, err := time.ParseDuration(timeout)
 						require.NoError(t, err)
@@ -911,9 +903,9 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	cert, key, err := getSelfSignedTLSCredentials()
 	require.NoError(t, err, "cannot get TLS credentials")
 
-	cleanup := utils.SetTestConfigs(map[string]any{
-		config.KeyTLSCertPEM: cert,
-		config.KeyTLSKeyPEM:  key,
+	cleanup := config.SetTestConfig(map[string]any{
+		"tLSCertPEM": cert,
+		"tLSKeyPEM":  key,
 	})
 
 	srv, err := NewServer(log, wh)

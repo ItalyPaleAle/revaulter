@@ -8,7 +8,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
-	"github.com/spf13/viper"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 )
@@ -73,7 +72,7 @@ func (a *AppLogger) LoggerMiddleware(c *gin.Context) {
 	}
 
 	// Omit logging /healthz calls if set
-	if c.Request.URL.Path == "/healthz" && viper.GetBool(config.KeyOmitHealthCheckLogs) {
+	if c.Request.URL.Path == "/healthz" && config.Get().OmitHealthCheckLogs {
 		return
 	}
 
