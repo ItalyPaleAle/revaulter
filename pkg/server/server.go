@@ -138,12 +138,13 @@ func (s *Server) initAppServer() (err error) {
 
 	// Check if we are restricting the origins for CORS
 	origins := config.Get().Origins
-	if len(origins) == 0 || (len(origins) == 1 && origins[0] == "") {
+	switch {
+	case len(origins) == 0 || (len(origins) == 1 && origins[0] == ""):
 		// Default is baseUrl
 		corsConfig.AllowOrigins = []string{s.getBaseURL()}
-	} else if len(origins) == 1 && origins[0] == "*" {
+	case len(origins) == 1 && origins[0] == "*":
 		corsConfig.AllowAllOrigins = true
-	} else {
+	default:
 		corsConfig.AllowAllOrigins = false
 		corsConfig.AllowOrigins = origins
 	}
