@@ -33,8 +33,10 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
-	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/testutils"
+	"github.com/italypaleale/revaulter/pkg/utils/applogger"
 	"github.com/italypaleale/revaulter/pkg/utils/bufconn"
+	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
 const (
@@ -130,10 +132,10 @@ func TestServerAppRoutes(t *testing.T) {
 	var accessTokenCookie *http.Cookie
 
 	// Create a roundtripper that captures the requests
-	rtt := &utils.RoundTripperTest{}
+	rtt := &testutils.RoundTripperTest{}
 
 	// Create a mock webhook
-	webhookRequests := make(chan *utils.WebhookRequest, 1)
+	webhookRequests := make(chan *webhook.WebhookRequest, 1)
 
 	// Create the server
 	// This will create in-memory listeners with bufconn too
@@ -895,7 +897,7 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	logBuf := &bytes.Buffer{}
 	logDest := io.MultiWriter(os.Stdout, logBuf)
 
-	log := utils.NewAppLogger("test", zerolog.SyncWriter(logDest))
+	log := applogger.NewLogger("test", zerolog.SyncWriter(logDest))
 	if wh == nil {
 		wh = &mockWebhook{}
 	}
@@ -1024,10 +1026,10 @@ func assertResponseError(t *testing.T, res *http.Response, expectStatusCode int,
 
 // mockWebhook implements the Webhook interface
 type mockWebhook struct {
-	requests chan *utils.WebhookRequest
+	requests chan *webhook.WebhookRequest
 }
 
-func (w mockWebhook) SendWebhook(_ context.Context, data *utils.WebhookRequest) error {
+func (w mockWebhook) SendWebhook(_ context.Context, data *webhook.WebhookRequest) error {
 	if w.requests != nil {
 		w.requests <- data
 	}

@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/italypaleale/revaulter/pkg/utils/applogger"
 )
 
 /*
@@ -18,7 +20,7 @@ var onlyOneSignalHandler = make(chan struct{})
 
 // SignalContext returns a context that is canceled when the application receives an interrupt signal.
 // A second signal forces an immediate shutdown.
-func SignalContext(appLogger *AppLogger) context.Context {
+func SignalContext(appLogger *applogger.Logger) context.Context {
 	close(onlyOneSignalHandler) // Panics when called twice
 
 	ctx, cancel := context.WithCancel(context.Background())

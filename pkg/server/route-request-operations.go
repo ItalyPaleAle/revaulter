@@ -17,6 +17,7 @@ import (
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
 	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
 // RouteRequestOperations is the handler for the routes that perform operations:
@@ -63,7 +64,7 @@ func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 		// Invoke the webhook and send a message with the URL to unlock, in background
 		go func() {
 			// Use a background context so it's not tied to the incoming request
-			webhookErr := s.webhook.SendWebhook(context.Background(), &utils.WebhookRequest{
+			webhookErr := s.webhook.SendWebhook(context.Background(), &webhook.WebhookRequest{
 				OperationName: op.String(),
 				KeyId:         state.KeyId,
 				Vault:         state.Vault,

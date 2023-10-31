@@ -2,25 +2,26 @@
 
 // This file is only built when the "unit" tag is set
 
-package utils
+package testutils
 
 import (
 	"io"
 	"net/http"
 	"os"
 
+	"github.com/italypaleale/revaulter/pkg/utils/applogger"
 	"github.com/rs/zerolog"
 )
 
 // Sets appLogger, optionally with a custom buffer as destination
 // Returns a function that should be called with "defer" to restore the previous appLogger
-func SetAppLogger(appLogger **AppLogger, dest io.Writer) func() {
+func SetAppLogger(appLogger **applogger.Logger, dest io.Writer) func() {
 	prevAppLogger := *appLogger
 
 	if dest == nil {
 		dest = os.Stdout
 	}
-	*appLogger = NewAppLogger("test", dest)
+	*appLogger = applogger.NewLogger("test", dest)
 	(*appLogger).SetLogLevel(zerolog.DebugLevel)
 
 	return func() {

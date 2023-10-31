@@ -1,4 +1,4 @@
-package utils
+package applogger
 
 import (
 	"io"
@@ -12,17 +12,17 @@ import (
 	"github.com/italypaleale/revaulter/pkg/config"
 )
 
-// AppLogger is used to write custom logs
-type AppLogger struct {
+// Logger is used to write custom logs
+type Logger struct {
 	// Optional "app" field to add
 	App string
 
 	log zerolog.Logger
 }
 
-// NewAppLogger returns a new AppLogger object
-func NewAppLogger(app string, out io.Writer) *AppLogger {
-	a := &AppLogger{
+// NewLogger returns a new Logger object
+func NewLogger(app string, out io.Writer) *Logger {
+	a := &Logger{
 		App: app,
 	}
 	if out == nil {
@@ -33,7 +33,7 @@ func NewAppLogger(app string, out io.Writer) *AppLogger {
 }
 
 // InitWithWriter inits the object with a specified output writer
-func (a *AppLogger) InitWithWriter(out io.Writer) {
+func (a *Logger) InitWithWriter(out io.Writer) {
 	lctx := zerolog.New(out).With().Timestamp()
 	if a.App != "" {
 		lctx = lctx.Str("app", a.App)
@@ -42,12 +42,12 @@ func (a *AppLogger) InitWithWriter(out io.Writer) {
 }
 
 // SetLogLevel updates the logger to set
-func (a *AppLogger) SetLogLevel(level zerolog.Level) {
+func (a *Logger) SetLogLevel(level zerolog.Level) {
 	a.log = a.log.Level(level)
 }
 
 // Log returns a zerolog.Logger with data to append for custom logging
-func (a *AppLogger) Log(c *gin.Context) *zerolog.Logger {
+func (a *Logger) Log(c *gin.Context) *zerolog.Logger {
 	// Add parameters
 	lctx := a.log.With().
 		Str("reqId", c.GetString("request-id"))
@@ -58,12 +58,12 @@ func (a *AppLogger) Log(c *gin.Context) *zerolog.Logger {
 }
 
 // Raw returns the raw zerolog.Logger instances
-func (a *AppLogger) Raw() *zerolog.Logger {
+func (a *Logger) Raw() *zerolog.Logger {
 	return &a.log
 }
 
 // LoggerMiddleware is a Gin middleware that uses zerlog for logging
-func (a *AppLogger) LoggerMiddleware(c *gin.Context) {
+func (a *Logger) LoggerMiddleware(c *gin.Context) {
 	method := c.Request.Method
 
 	// Do not log OPTIONS requests
@@ -135,7 +135,7 @@ func (a *AppLogger) LoggerMiddleware(c *gin.Context) {
 }
 
 // LoggerMaskMiddleware returns a Gin middleware that adds the "log-mask" to mask the path using a regular expression
-func (a *AppLogger) LoggerMaskMiddleware(exp *regexp.Regexp, replace string) gin.HandlerFunc {
+func (a *Logger) LoggerMaskMiddleware(exp *regexp.Regexp, replace string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Set("log-mask", func(path string) string {
 			return exp.ReplaceAllString(path, replace)

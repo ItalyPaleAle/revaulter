@@ -9,16 +9,18 @@ import (
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/server"
 	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/applogger"
+	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
-var appLogger *utils.AppLogger
+var appLogger *applogger.Logger
 
 func main() {
 	// Set Gin to Release mode
 	gin.SetMode(gin.ReleaseMode)
 
 	// Init the app logger object
-	appLogger = utils.NewAppLogger("revaulter", os.Stdout)
+	appLogger = applogger.NewLogger("revaulter", os.Stdout)
 
 	appLogger.Raw().Info().
 		Str("version", buildinfo.AppVersion).
@@ -39,7 +41,7 @@ func main() {
 	}
 
 	// Init the webhook object
-	webhook := utils.NewWebhook(appLogger)
+	webhook := webhook.NewWebhook(appLogger)
 
 	// Create the Server object
 	srv, err := server.NewServer(appLogger, webhook)

@@ -22,20 +22,22 @@ import (
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
 	"github.com/italypaleale/revaulter/pkg/metrics"
-	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/applogger"
+	"github.com/italypaleale/revaulter/pkg/utils/broker"
+	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
 // Server is the server based on Gin
 type Server struct {
 	appRouter  *gin.Engine
 	httpClient *http.Client
-	log        *utils.AppLogger
+	log        *applogger.Logger
 	states     map[string]*requestState
 	lock       sync.RWMutex
-	webhook    utils.Webhook
+	webhook    webhook.Webhook
 	metrics    metrics.RevaulterMetrics
 	// Subscribers that receive public events
-	pubsub *utils.Broker[*requestStatePublic]
+	pubsub *broker.Broker[*requestStatePublic]
 	// Subscriptions to watch for state changes
 	// Each state can only have one subscription
 	// If another call tries to subscribe to the same state, it will evict the first call
@@ -61,12 +63,12 @@ type Server struct {
 }
 
 // NewServer creates a new Server object and initializes it
-func NewServer(log *utils.AppLogger, webhook utils.Webhook) (*Server, error) {
+func NewServer(log *applogger.Logger, webhook webhook.Webhook) (*Server, error) {
 	s := &Server{
 		log:     log,
 		states:  map[string]*requestState{},
 		subs:    map[string]chan *requestState{},
-		pubsub:  utils.NewBroker[*requestStatePublic](),
+		pubsub:  broker.NewBroker[*requestStatePublic](),
 		webhook: webhook,
 
 		httpClient: &http.Client{

@@ -1,4 +1,4 @@
-package utils
+package webhook
 
 import (
 	"bytes"
@@ -14,6 +14,7 @@ import (
 	kclock "k8s.io/utils/clock"
 
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/utils/applogger"
 )
 
 const webhookTimeout = 20 * time.Second
@@ -29,18 +30,18 @@ type Webhook interface {
 // Webhook client
 type webhookClient struct {
 	httpClient *http.Client
-	log        *AppLogger
+	log        *applogger.Logger
 	baseURL    string
 	clock      kclock.Clock
 }
 
 // NewWebhook creates a new Webhook
-func NewWebhook(log *AppLogger) Webhook {
+func NewWebhook(log *applogger.Logger) Webhook {
 	return newWebhookWithClock(log, kclock.RealClock{})
 }
 
 // newWebhookWithClock creates a new Webhook with the given clock
-func newWebhookWithClock(log *AppLogger, clock kclock.Clock) Webhook {
+func newWebhookWithClock(log *applogger.Logger, clock kclock.Clock) Webhook {
 	w := &webhookClient{
 		clock: clock,
 	}
@@ -49,7 +50,7 @@ func newWebhookWithClock(log *AppLogger, clock kclock.Clock) Webhook {
 }
 
 // Init the object
-func (w *webhookClient) Init(log *AppLogger) {
+func (w *webhookClient) Init(log *applogger.Logger) {
 	w.log = log
 
 	// Init a HTTP client
