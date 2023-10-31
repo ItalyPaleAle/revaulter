@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/rs/zerolog"
+
+	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/fsnotify"
 )
 
 const (
@@ -87,7 +89,7 @@ func (p *tlsCertProvider) SetTLSCert(tlsCert *tls.Certificate) {
 
 // Watch starts watching (in background) for changes to the TLS certificate and key on disk, and triggers a reload when that happens.
 func (p *tlsCertProvider) Watch(ctx context.Context, logger *zerolog.Logger) error {
-	watcher, err := utils.WatchFolder(ctx, p.path, logger)
+	watcher, err := fsnotify.WatchFolder(ctx, p.path, logger)
 	if err != nil {
 		return fmt.Errorf("failed to start watching for changes on disk: %w", err)
 	}

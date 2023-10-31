@@ -10,6 +10,7 @@ import (
 	"github.com/italypaleale/revaulter/pkg/server"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/applogger"
+	"github.com/italypaleale/revaulter/pkg/utils/signals"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
@@ -53,7 +54,7 @@ func main() {
 	}
 
 	// Get a context that is canceled when the application receives a termination signal
-	ctx := utils.SignalContext(appLogger)
+	ctx := signals.SignalContext(appLogger)
 
 	// Run the service
 	runner := utils.NewServiceRunner(srv.Run)

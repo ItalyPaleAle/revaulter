@@ -82,6 +82,11 @@ func (c Config) GetLoadedConfigPath() string {
 	return c.internal.configFileLoaded
 }
 
+// SetLoadedConfigPath sets the path to the config file that was loaded
+func (c *Config) SetLoadedConfigPath(filePath string) {
+	c.internal.configFileLoaded = filePath
+}
+
 // Validates the configuration and performs some sanitization
 func (c *Config) Validate() error {
 	// Check required variables

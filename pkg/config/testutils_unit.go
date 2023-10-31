@@ -6,6 +6,8 @@ package config
 
 import (
 	"github.com/jinzhu/copier"
+
+	"github.com/italypaleale/revaulter/pkg/utils/configloader"
 )
 
 // Updates the configuration in the global config object for the test
@@ -26,7 +28,7 @@ func SetTestConfig(values map[string]any) func() {
 	}
 
 	// Set the new values
-	err = config.loadFromMap(values)
+	err = configloader.LoadFromMap(config, values)
 	if err != nil {
 		panic(err)
 	}

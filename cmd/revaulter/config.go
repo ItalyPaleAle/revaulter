@@ -11,6 +11,7 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/configloader"
 )
 
 func loadConfig() error {
@@ -36,10 +37,15 @@ func loadConfig() error {
 	// Load the configuration
 	// Note that configFile can be empty, if none was found (we can still use env vars)
 	cfg := config.Get()
-	err := cfg.Load(configFile, envPrefix, true)
+	err := configloader.Load(cfg, configloader.LoadOptions{
+		FilePath:                 configFile,
+		EnvPrefix:                envPrefix,
+		IgnoreZeroValuesInConfig: true,
+	})
 	if err != nil {
 		return newLoadConfigError(err, "Error loading config file")
 	}
+	cfg.SetLoadedConfigPath(configFile)
 
 	// Process the configuration
 	return processConfig(cfg)
