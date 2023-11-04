@@ -6,7 +6,7 @@ import (
 	"os"
 	"reflect"
 
-	env "github.com/caarlos0/env/v9"
+	env "github.com/caarlos0/env/v10"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/mitchellh/mapstructure"
 	yaml "gopkg.in/yaml.v3"
@@ -23,7 +23,8 @@ type LoadOptions struct {
 }
 
 // Load the configuration from a file and from the environment.
-// "dst" must be a pointer to a struct
+// "dst" must be a pointer to a struct.
+// Note: this method currently does not work correctly with properties of the struct that are pointers.
 func Load(dst any, opts LoadOptions) error {
 	// First, load the config from the YAML into a map (if we have a file)
 	if opts.FilePath != "" {
