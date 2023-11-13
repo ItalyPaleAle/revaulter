@@ -97,8 +97,6 @@ func TestEnsureTokenSigningKey(t *testing.T) {
 	t.Run("tokenSigningKey present", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
 			"tokenSigningKey": "hello-world",
-			// This will allow resetting it at the end of the test
-			"internalTokenSigningKey": "",
 		}))
 
 		err := config.SetTokenSigningKey(&logger)
@@ -109,8 +107,6 @@ func TestEnsureTokenSigningKey(t *testing.T) {
 	t.Run("tokenSigningKey not present", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
 			"tokenSigningKey": "",
-			// This will allow resetting it at the end of the test
-			"internalTokenSigningKey": "",
 		}))
 
 		err := config.SetTokenSigningKey(&logger)
@@ -129,9 +125,6 @@ func TestSetCookieKeys(t *testing.T) {
 	t.Run("cookieEncryptionKey present", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
 			"cookieEncryptionKey": "some-key",
-			// This will allow resetting the values at the end of the test
-			"internalCookieEncryptionKey": "",
-			"internalCookieSigningKey":    "",
 		}))
 
 		err := config.SetCookieKeys(&logger)
@@ -158,9 +151,6 @@ func TestSetCookieKeys(t *testing.T) {
 	t.Run("cookieEncryptionKey no present", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
 			"cookieEncryptionKey": "",
-			// This will allow resetting the values at the end of the test
-			"internalCookieEncryptionKey": "",
-			"internalCookieSigningKey":    "",
 		}))
 
 		err := config.SetCookieKeys(&logger)

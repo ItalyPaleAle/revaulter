@@ -8,4 +8,4 @@ test-race:
 
 .PHONY: lint
 lint:
-	golangci-lint run
+	golangci-lint run -c .golangci.yaml
