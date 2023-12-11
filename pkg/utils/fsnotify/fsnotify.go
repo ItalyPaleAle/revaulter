@@ -9,7 +9,9 @@ import (
 )
 
 // WatchFolder returns a channel that receives a notification when a file is changed in a folder.
-func WatchFolder(ctx context.Context, folder string, logger *zerolog.Logger) (<-chan struct{}, error) {
+func WatchFolder(ctx context.Context, folder string) (<-chan struct{}, error) {
+	log := zerolog.Ctx(ctx)
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
@@ -56,12 +58,10 @@ func WatchFolder(ctx context.Context, folder string, logger *zerolog.Logger) (<-
 
 			case watchErr := <-watcher.Errors:
 				// Log errors only
-				if logger != nil {
-					logger.Warn().
-						Err(watchErr).
-						Str("folder", folder).
-						Msg("Error while watching for changes to files on disk")
-				}
+				log.Warn().
+					Err(watchErr).
+					Str("folder", folder).
+					Msg("Error while watching for changes to files on disk")
 			}
 		}
 	}()

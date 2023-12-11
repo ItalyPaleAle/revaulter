@@ -14,16 +14,16 @@ import (
 	"github.com/italypaleale/revaulter/pkg/utils/configloader"
 )
 
-func loadConfig() error {
-	const envPrefix = "REVAULTER_"
+const configEnvPrefix = "REVAULTER_"
 
+func loadConfig(log *zerolog.Logger) error {
 	// Get the path to the config.yaml
 	// First, try with the REVAULTER_CONFIG env var
-	configFile := os.Getenv(envPrefix + "CONFIG")
+	configFile := os.Getenv(configEnvPrefix + "CONFIG")
 	if configFile != "" {
 		exists, _ := utils.FileExists(configFile)
 		if !exists {
-			return newLoadConfigError("Environmental variable "+envPrefix+"CONFIG points to a file that does not exist", "Error loading config file")
+			return newLoadConfigError("Environmental variable "+configEnvPrefix+"CONFIG points to a file that does not exist", "Error loading config file")
 		}
 	} else {
 		// Look in the default paths
@@ -39,7 +39,7 @@ func loadConfig() error {
 	cfg := config.Get()
 	err := configloader.Load(cfg, configloader.LoadOptions{
 		FilePath:                 configFile,
-		EnvPrefix:                envPrefix,
+		EnvPrefix:                configEnvPrefix,
 		IgnoreZeroValuesInConfig: true,
 	})
 	if err != nil {
@@ -48,7 +48,7 @@ func loadConfig() error {
 	cfg.SetLoadedConfigPath(configFile)
 
 	// Process the configuration
-	return processConfig(cfg)
+	return processConfig(log, cfg)
 }
 
 func findConfigFile(fileName string, searchPaths ...string) string {
@@ -73,7 +73,7 @@ func findConfigFile(fileName string, searchPaths ...string) string {
 }
 
 // Processes the configuration
-func processConfig(cfg *config.Config) (err error) {
+func processConfig(log *zerolog.Logger, cfg *config.Config) (err error) {
 	// Log level
 	err = setLogLevel(cfg)
 	if err != nil {
@@ -87,13 +87,13 @@ func processConfig(cfg *config.Config) (err error) {
 	}
 
 	// Ensures the token signing key is present
-	err = cfg.SetTokenSigningKey(appLogger.Raw())
+	err = cfg.SetTokenSigningKey(log)
 	if err != nil {
 		return err
 	}
 
 	// Set the cookie keys
-	err = cfg.SetCookieKeys(appLogger.Raw())
+	err = cfg.SetCookieKeys(log)
 	if err != nil {
 		return err
 	}
@@ -105,13 +105,13 @@ func processConfig(cfg *config.Config) (err error) {
 func setLogLevel(cfg *config.Config) error {
 	switch strings.ToLower(cfg.LogLevel) {
 	case "debug":
-		appLogger.SetLogLevel(zerolog.DebugLevel)
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	case "", "info": // Also default log level
-		appLogger.SetLogLevel(zerolog.InfoLevel)
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	case "warn":
-		appLogger.SetLogLevel(zerolog.WarnLevel)
+		zerolog.SetGlobalLevel(zerolog.WarnLevel)
 	case "error":
-		appLogger.SetLogLevel(zerolog.ErrorLevel)
+		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 	default:
 		return newLoadConfigError("Invalid value for 'logLevel'", "Invalid configuration")
 	}
@@ -139,8 +139,8 @@ func (e loadConfigError) Error() string {
 }
 
 // LogFatal causes a fatal log
-func (e loadConfigError) LogFatal() {
-	appLogger.Raw().Fatal().
+func (e loadConfigError) LogFatal(log *zerolog.Logger) {
+	log.Fatal().
 		Str("error", e.err).
 		Msg(e.msg)
 }

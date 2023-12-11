@@ -34,7 +34,6 @@ import (
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
 	"github.com/italypaleale/revaulter/pkg/testutils"
-	"github.com/italypaleale/revaulter/pkg/utils/applogger"
 	"github.com/italypaleale/revaulter/pkg/utils/bufconn"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
@@ -897,7 +896,10 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	logBuf := &bytes.Buffer{}
 	logDest := io.MultiWriter(os.Stdout, logBuf)
 
-	log := applogger.NewLogger("test", zerolog.SyncWriter(logDest))
+	log := zerolog.New(zerolog.SyncWriter(logDest)).
+		With().
+		Str("app", "test").
+		Logger()
 	if wh == nil {
 		wh = &mockWebhook{}
 	}
@@ -910,7 +912,7 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 		"tLSKeyPEM":  key,
 	})
 
-	srv, err := NewServer(log, wh)
+	srv, err := NewServer(&log, wh)
 	require.NoError(t, err)
 
 	srv.appListener = bufconn.Listen(bufconnBufSize)

@@ -14,10 +14,13 @@ import (
 	kclock "k8s.io/utils/clock"
 
 	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/utils/applogger"
+	"github.com/rs/zerolog"
 )
 
-const webhookTimeout = 20 * time.Second
+const (
+	webhookTimeout       = 20 * time.Second
+	retryIntervalSeconds = 20
+)
 
 // Interface for webhook clients
 type Webhook interface {
@@ -30,32 +33,22 @@ type Webhook interface {
 // Webhook client
 type webhookClient struct {
 	httpClient *http.Client
-	log        *applogger.Logger
 	baseURL    string
 	clock      kclock.Clock
 }
 
 // NewWebhook creates a new Webhook
-func NewWebhook(log *applogger.Logger) Webhook {
-	return newWebhookWithClock(log, kclock.RealClock{})
+func NewWebhook() Webhook {
+	return newWebhookWithClock(kclock.RealClock{})
 }
 
 // newWebhookWithClock creates a new Webhook with the given clock
-func newWebhookWithClock(log *applogger.Logger, clock kclock.Clock) Webhook {
-	w := &webhookClient{
+func newWebhookWithClock(clock kclock.Clock) Webhook {
+	return &webhookClient{
 		clock: clock,
-	}
-	w.Init(log)
-	return w
-}
-
-// Init the object
-func (w *webhookClient) Init(log *applogger.Logger) {
-	w.log = log
-
-	// Init a HTTP client
-	w.httpClient = &http.Client{
-		Timeout: webhookTimeout,
+		httpClient: &http.Client{
+			Timeout: webhookTimeout,
+		},
 	}
 }
 
@@ -100,7 +93,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 		if err != nil {
 			// Retry after 15 seconds on network failures, if we have more attempts
 			if i < (attempts - 1) {
-				w.log.Raw().Warn().
+				zerolog.Ctx(ctx).Warn().
 					Err(err).
 					Msg("Network error sending webhook; will retry after 15 seconds")
 				select {
@@ -126,11 +119,10 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 			// Handle throttling on 429 responses and on 5xx errors
 			if res.StatusCode == http.StatusTooManyRequests {
 				retryAfter, _ := strconv.Atoi(res.Header.Get("Retry-After"))
-				if retryAfter < 1 || retryAfter > 30 {
-					retryAfter = 30
+				if retryAfter < 1 || retryAfter > retryIntervalSeconds {
+					retryAfter = retryIntervalSeconds
 				}
-				w.log.Raw().Warn().
-					Msgf("Webhook throttled; will retry after %d seconds", retryAfter)
+				zerolog.Ctx(ctx).Warn().Msgf("Webhook throttled; will retry after %d seconds", retryAfter)
 				select {
 				case <-w.clock.After(time.Duration(retryAfter) * time.Second):
 					// Nop
@@ -143,10 +135,9 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 
 			// Retry after a delay on 5xx errors, which indicate a problem with the server
 			if res.StatusCode >= 500 && res.StatusCode < 600 {
-				w.log.Raw().Warn().
-					Msgf("Webhook returned an error response: %d; will retry after 30 seconds", res.StatusCode)
+				zerolog.Ctx(ctx).Warn().Msgf("Webhook returned an error response: %d; will retry after %d seconds", res.StatusCode, retryIntervalSeconds)
 				select {
-				case <-w.clock.After(30 * time.Second):
+				case <-w.clock.After(retryIntervalSeconds * time.Second):
 					// Nop
 				case <-ctx.Done():
 					err = ctx.Err()

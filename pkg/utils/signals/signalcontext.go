@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/italypaleale/revaulter/pkg/utils/applogger"
+	"github.com/rs/zerolog"
 )
 
 /*
@@ -20,20 +20,21 @@ var onlyOneSignalHandler = make(chan struct{})
 
 // SignalContext returns a context that is canceled when the application receives an interrupt signal.
 // A second signal forces an immediate shutdown.
-func SignalContext(appLogger *applogger.Logger) context.Context {
+func SignalContext(parentCtx context.Context) context.Context {
 	close(onlyOneSignalHandler) // Panics when called twice
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parentCtx)
 
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		appLogger.Raw().Info().Msg("Received interrupt signal. Shutting down…")
+		log := zerolog.Ctx(ctx)
+		log.Info().Msg("Received interrupt signal. Shutting down…")
 		cancel()
 
 		<-sigCh
-		appLogger.Raw().Fatal().Msg("Received a second interrupt signal. Forcing an immediate shutdown.")
+		log.Fatal().Msg("Received a second interrupt signal. Forcing an immediate shutdown.")
 	}()
 
 	return ctx

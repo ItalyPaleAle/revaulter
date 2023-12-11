@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/testutils"
-	"github.com/italypaleale/revaulter/pkg/utils/applogger"
 )
 
 func TestWebhook(t *testing.T) {
@@ -26,10 +26,10 @@ func TestWebhook(t *testing.T) {
 		"webhookFormat": "",
 	}))
 
-	logger := applogger.NewLogger("test", io.Discard)
+	ctx := zerolog.New(io.Discard).WithContext(context.Background())
 
 	clock := clocktesting.NewFakeClock(time.Now())
-	wh := newWebhookWithClock(logger, clock).(*webhookClient) //nolint:forcetypeassert
+	wh := newWebhookWithClock(clock).(*webhookClient) //nolint:forcetypeassert
 
 	// Create a roundtripper that captures the requests
 	rtt := &testutils.RoundTripperTest{}
@@ -54,7 +54,7 @@ func TestWebhook(t *testing.T) {
 			reqCh := make(chan *http.Request, 1)
 			rtt.SetReqCh(reqCh)
 
-			err := wh.SendWebhook(context.Background(), getWebhookRequest())
+			err := wh.SendWebhook(ctx, getWebhookRequest())
 			require.NoError(t, err)
 
 			r := <-reqCh
@@ -150,7 +150,7 @@ func TestWebhook(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		doneCh := assertRetries(ctx, clock, reqCh, 3, 30*time.Second)
+		doneCh := assertRetries(ctx, clock, reqCh, 3, retryIntervalSeconds*time.Second)
 
 		err := wh.SendWebhook(ctx, getWebhookRequest())
 		require.NoError(t, err)
@@ -203,7 +203,7 @@ func TestWebhook(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		doneCh := assertRetries(ctx, clock, reqCh, 2, 30*time.Second)
+		doneCh := assertRetries(ctx, clock, reqCh, 2, retryIntervalSeconds*time.Second)
 
 		err := wh.SendWebhook(ctx, getWebhookRequest())
 		require.NoError(t, err)
@@ -227,7 +227,7 @@ func TestWebhook(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		doneCh := assertRetries(ctx, clock, reqCh, 3, 30*time.Second)
+		doneCh := assertRetries(ctx, clock, reqCh, 3, retryIntervalSeconds*time.Second)
 
 		err := wh.SendWebhook(ctx, getWebhookRequest())
 		require.Error(t, err)
@@ -252,7 +252,7 @@ func TestWebhook(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		doneCh := assertRetries(ctx, clock, reqCh, 3, 30*time.Second)
+		doneCh := assertRetries(ctx, clock, reqCh, 3, retryIntervalSeconds*time.Second)
 
 		err := wh.SendWebhook(ctx, getWebhookRequest())
 		require.Error(t, err)

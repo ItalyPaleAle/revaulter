@@ -16,13 +16,13 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
 	"github.com/italypaleale/revaulter/pkg/metrics"
-	"github.com/italypaleale/revaulter/pkg/utils/applogger"
 	"github.com/italypaleale/revaulter/pkg/utils/broker"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
@@ -31,7 +31,6 @@ import (
 type Server struct {
 	appRouter  *gin.Engine
 	httpClient *http.Client
-	log        *applogger.Logger
 	states     map[string]*requestState
 	lock       sync.RWMutex
 	webhook    webhook.Webhook
@@ -63,9 +62,8 @@ type Server struct {
 }
 
 // NewServer creates a new Server object and initializes it
-func NewServer(log *applogger.Logger, webhook webhook.Webhook) (*Server, error) {
+func NewServer(log *zerolog.Logger, webhook webhook.Webhook) (*Server, error) {
 	s := &Server{
-		log:     log,
 		states:  map[string]*requestState{},
 		subs:    map[string]chan *requestState{},
 		pubsub:  broker.NewBroker[*requestStatePublic](),
@@ -79,7 +77,7 @@ func NewServer(log *applogger.Logger, webhook webhook.Webhook) (*Server, error) 
 	}
 
 	// Init the object
-	err := s.init()
+	err := s.init(log)
 	if err != nil {
 		return nil, err
 	}
@@ -88,12 +86,12 @@ func NewServer(log *applogger.Logger, webhook webhook.Webhook) (*Server, error) 
 }
 
 // Init the Server object and create a Gin server
-func (s *Server) init() error {
+func (s *Server) init(log *zerolog.Logger) error {
 	// Init the Prometheus metrics
 	s.metrics.Init()
 
 	// Init the app server
-	err := s.initAppServer()
+	err := s.initAppServer(log)
 	if err != nil {
 		return err
 	}
@@ -101,9 +99,9 @@ func (s *Server) init() error {
 	return nil
 }
 
-func (s *Server) initAppServer() (err error) {
+func (s *Server) initAppServer(log *zerolog.Logger) (err error) {
 	// Load the TLS configuration
-	s.tlsConfig, s.tlsCertWatchFn, err = s.loadTLSConfig()
+	s.tlsConfig, s.tlsCertWatchFn, err = s.loadTLSConfig(log)
 	if err != nil {
 		return fmt.Errorf("failed to load TLS configuration: %w", err)
 	}
@@ -115,7 +113,7 @@ func (s *Server) initAppServer() (err error) {
 	s.appRouter = gin.New()
 	s.appRouter.Use(gin.Recovery())
 	s.appRouter.Use(s.RequestIdMiddleware)
-	s.appRouter.Use(s.log.LoggerMiddleware)
+	s.appRouter.Use(s.LoggerMiddleware(log))
 
 	// CORS configuration
 	corsConfig := cors.Config{
@@ -153,7 +151,7 @@ func (s *Server) initAppServer() (err error) {
 	s.appRouter.Use(cors.New(corsConfig))
 
 	// Logger middleware that removes the auth code from the URL
-	codeFilterLogMw := s.log.LoggerMaskMiddleware(regexp.MustCompile(`(\?|&)(code|state|session_state)=([^&]*)`), "$1$2***")
+	codeFilterLogMw := s.LoggerMaskMiddleware(regexp.MustCompile(`(\?|&)(code|state|session_state)=([^&]*)`), "$1$2***")
 
 	// Middleware to allow certain IPs
 	allowIpMw, err := s.AllowIpMiddleware()
@@ -226,7 +224,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// App server
 	s.wg.Add(1)
-	err := s.startAppServer()
+	err := s.startAppServer(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start app server: %w", err)
 	}
@@ -238,7 +236,7 @@ func (s *Server) Run(ctx context.Context) error {
 		shutdownCancel()
 		if err != nil {
 			// Log the error only (could be context canceled)
-			s.log.Raw().Warn().
+			zerolog.Ctx(ctx).Warn().
 				Err(err).
 				Msg("App server shutdown error")
 		}
@@ -248,7 +246,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Metrics server
 	if cfg.EnableMetrics {
 		s.wg.Add(1)
-		err = s.startMetricsServer()
+		err = s.startMetricsServer(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to start metrics server: %w", err)
 		}
@@ -260,7 +258,7 @@ func (s *Server) Run(ctx context.Context) error {
 			shutdownCancel()
 			if err != nil {
 				// Log the error only (could be context canceled)
-				s.log.Raw().Warn().
+				zerolog.Ctx(ctx).Warn().
 					Err(err).
 					Msg("Metrics server shutdown error")
 			}
@@ -269,7 +267,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// If we have a tlsCertWatchFn, invoke that
 	if s.tlsCertWatchFn != nil {
-		err = s.tlsCertWatchFn(ctx, s.log.Raw())
+		err = s.tlsCertWatchFn(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to watch for TLS certificates: %w", err)
 		}
@@ -282,8 +280,9 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) startAppServer() error {
+func (s *Server) startAppServer(ctx context.Context) error {
 	cfg := config.Get()
+	log := zerolog.Ctx(ctx)
 
 	// Create the HTTP(S) server
 	s.appSrv = &http.Server{
@@ -298,7 +297,7 @@ func (s *Server) startAppServer() error {
 	} else {
 		// Not using TLS
 		// Here we also need to enable HTTP/2 Cleartext
-		s.log.Raw().Warn().Msg("Starting app server without TLS - this is not recommended unless Revaulter is exposed through a proxy that offers TLS termination")
+		log.Warn().Msg("Starting app server without TLS - this is not recommended unless Revaulter is exposed through a proxy that offers TLS termination")
 		h2s := &http2.Server{}
 		s.appSrv.Handler = h2c.NewHandler(s.appRouter, h2s)
 	}
@@ -313,7 +312,7 @@ func (s *Server) startAppServer() error {
 	}
 
 	// Start the HTTP(S) server in a background goroutine
-	s.log.Raw().Info().
+	log.Info().
 		Str("bind", cfg.Bind).
 		Int("port", cfg.Port).
 		Bool("tls", s.tlsConfig != nil).
@@ -330,17 +329,16 @@ func (s *Server) startAppServer() error {
 			srvErr = s.appSrv.Serve(s.appListener)
 		}
 		if srvErr != http.ErrServerClosed {
-			s.log.Raw().Fatal().
-				Err(srvErr).
-				Msgf("Error starting app server")
+			log.Fatal().Err(srvErr).Msgf("Error starting app server")
 		}
 	}()
 
 	return nil
 }
 
-func (s *Server) startMetricsServer() error {
+func (s *Server) startMetricsServer(ctx context.Context) error {
 	cfg := config.Get()
+	log := zerolog.Ctx(ctx)
 
 	// Handler
 	mux := http.NewServeMux()
@@ -365,7 +363,7 @@ func (s *Server) startMetricsServer() error {
 	}
 
 	// Start the HTTPS server in a background goroutine
-	s.log.Raw().Info().
+	log.Info().
 		Str("bind", cfg.MetricsBind).
 		Int("port", cfg.MetricsPort).
 		Msg("Metrics server started")
@@ -373,11 +371,9 @@ func (s *Server) startMetricsServer() error {
 		defer s.metricsListener.Close()
 
 		// Next call blocks until the server is shut down
-		err := s.metricsSrv.Serve(s.metricsListener)
-		if err != http.ErrServerClosed {
-			s.log.Raw().Fatal().
-				Err(err).
-				Msgf("Error starting metrics server")
+		srvErr := s.metricsSrv.Serve(s.metricsListener)
+		if srvErr != http.ErrServerClosed {
+			log.Fatal().Err(srvErr).Msgf("Error starting metrics server")
 		}
 	}()
 
@@ -429,7 +425,7 @@ func (s *Server) notifySubscriber(stateId string, state *requestState) {
 
 // This method makes a pending request expire after the given time interval
 // It should be invoked in a background goroutine
-func (s *Server) expireRequest(stateId string, validity time.Duration) {
+func (s *Server) expireRequest(ctx context.Context, stateId string, validity time.Duration) {
 	// Wait until the request is expired
 	time.Sleep(validity)
 
@@ -442,7 +438,7 @@ func (s *Server) expireRequest(stateId string, validity time.Duration) {
 	if req == nil {
 		return
 	}
-	s.log.Raw().Info().Msg("Removing expired operation " + stateId)
+	zerolog.Ctx(ctx).Info().Msg("Removing expired operation " + stateId)
 
 	// Set the request as canceled
 	req.Status = StatusCanceled
@@ -471,7 +467,7 @@ func (s *Server) expireRequest(stateId string, validity time.Duration) {
 }
 
 // Loads the TLS configuration
-func (s *Server) loadTLSConfig() (tlsConfig *tls.Config, watchFn tlsCertWatchFn, err error) {
+func (s *Server) loadTLSConfig(log *zerolog.Logger) (tlsConfig *tls.Config, watchFn tlsCertWatchFn, err error) {
 	cfg := config.Get()
 
 	tlsConfig = &tls.Config{
@@ -509,7 +505,7 @@ func (s *Server) loadTLSConfig() (tlsConfig *tls.Config, watchFn tlsCertWatchFn,
 			return nil, nil, nil
 		}
 
-		s.log.Raw().Debug().
+		log.Debug().
 			Str("path", tlsPath).
 			Msg("Loaded TLS certificates from disk")
 
@@ -530,7 +526,7 @@ func (s *Server) loadTLSConfig() (tlsConfig *tls.Config, watchFn tlsCertWatchFn,
 	}
 	tlsConfig.Certificates = []tls.Certificate{cert}
 
-	s.log.Raw().Debug().Msg("Loaded TLS certificates from PEM values")
+	log.Debug().Msg("Loaded TLS certificates from PEM values")
 
 	return tlsConfig, nil, nil
 }

@@ -19,7 +19,7 @@ const (
 	minTLSVersion = tls.VersionTLS12
 )
 
-type tlsCertWatchFn = func(ctx context.Context, logger *zerolog.Logger) error
+type tlsCertWatchFn = func(ctx context.Context) error
 
 type tlsCertProvider struct {
 	lock    sync.RWMutex
@@ -88,8 +88,10 @@ func (p *tlsCertProvider) SetTLSCert(tlsCert *tls.Certificate) {
 }
 
 // Watch starts watching (in background) for changes to the TLS certificate and key on disk, and triggers a reload when that happens.
-func (p *tlsCertProvider) Watch(ctx context.Context, logger *zerolog.Logger) error {
-	watcher, err := fsnotify.WatchFolder(ctx, p.path, logger)
+func (p *tlsCertProvider) Watch(ctx context.Context) error {
+	log := zerolog.Ctx(ctx)
+
+	watcher, err := fsnotify.WatchFolder(ctx, p.path)
 	if err != nil {
 		return fmt.Errorf("failed to start watching for changes on disk: %w", err)
 	}
@@ -101,16 +103,16 @@ func (p *tlsCertProvider) Watch(ctx context.Context, logger *zerolog.Logger) err
 			select {
 			case <-watcher:
 				// Reload
-				logger.Info().Msg("Found changes in folder containing TLS certificates; will reload certificates")
+				log.Info().Msg("Found changes in folder containing TLS certificates; will reload certificates")
 				reloadErr = p.Reload()
 				if reloadErr != nil {
 					// Log errors only
-					logger.Error().
+					log.Error().
 						Err(reloadErr).
 						Msg("Failed to load updated TLS certificates from disk")
 					continue
 				}
-				logger.Info().Msg("TLS certificates have been reloaded")
+				log.Info().Msg("TLS certificates have been reloaded")
 
 			case <-ctx.Done():
 				// Stop on context cancellation

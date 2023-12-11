@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"github.com/spf13/cast"
 
 	"github.com/italypaleale/revaulter/pkg/config"
@@ -63,6 +64,8 @@ func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 
 		// Invoke the webhook and send a message with the URL to unlock, in background
 		go func() {
+			log := zerolog.Ctx(c.Request.Context())
+
 			// Use a background context so it's not tied to the incoming request
 			webhookErr := s.webhook.SendWebhook(context.Background(), &webhook.WebhookRequest{
 				OperationName: op.String(),
@@ -73,14 +76,16 @@ func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 				Note:          state.Note,
 			})
 			if webhookErr != nil {
-				s.log.Raw().Error().
+				log.Error().
 					Err(webhookErr).
 					Msg("Error sending webhook")
+				return
 			}
+			log.Debug().Msg("Sent webhook notification")
 		}()
 
 		// Make the request expire in background
-		go s.expireRequest(stateId, req.timeoutDuration)
+		go s.expireRequest(c.Request.Context(), stateId, req.timeoutDuration)
 
 		// Respond with the state ID
 		c.JSON(http.StatusAccepted, operationResponse{

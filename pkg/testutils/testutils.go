@@ -5,29 +5,8 @@
 package testutils
 
 import (
-	"io"
 	"net/http"
-	"os"
-
-	"github.com/italypaleale/revaulter/pkg/utils/applogger"
-	"github.com/rs/zerolog"
 )
-
-// Sets appLogger, optionally with a custom buffer as destination
-// Returns a function that should be called with "defer" to restore the previous appLogger
-func SetAppLogger(appLogger **applogger.Logger, dest io.Writer) func() {
-	prevAppLogger := *appLogger
-
-	if dest == nil {
-		dest = os.Stdout
-	}
-	*appLogger = applogger.NewLogger("test", dest)
-	(*appLogger).SetLogLevel(zerolog.DebugLevel)
-
-	return func() {
-		*appLogger = prevAppLogger
-	}
-}
 
 // RoundTripperTest is a http.RoundTripper that captures the requests and returns the given response.
 type RoundTripperTest struct {
