@@ -133,8 +133,8 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 				continue
 			}
 
-			// Retry after a delay on 5xx errors, which indicate a problem with the server
-			if res.StatusCode >= 500 && res.StatusCode < 600 {
+			// Retry after a delay on 408 (Request Timeout) and 5xx errors, which indicate a problem with the server
+			if res.StatusCode == http.StatusRequestTimeout || (res.StatusCode >= 500 && res.StatusCode < 600) {
 				zerolog.Ctx(ctx).Warn().Msgf("Webhook returned an error response: %d; will retry after %d seconds", res.StatusCode, retryIntervalSeconds)
 				select {
 				case <-w.clock.After(retryIntervalSeconds * time.Second):
