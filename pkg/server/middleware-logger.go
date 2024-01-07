@@ -48,6 +48,10 @@ func (s *Server) LoggerMiddleware(parentLog *zerolog.Logger) func(c *gin.Context
 		clientIP := c.ClientIP()
 		statusCode := c.Writer.Status()
 		respSize := c.Writer.Size()
+		if respSize < 0 {
+			// If no data was written, respSize could be -1
+			respSize = 0
+		}
 
 		// Get the logger and the appropriate error level
 		var event *zerolog.Event
