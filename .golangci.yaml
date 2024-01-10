@@ -111,7 +111,6 @@ linters:
   # Disable specific linter
   # https://golangci-lint.run/usage/linters/#disabled-by-default
   disable:
-    - asasalint
     - asciicheck
     - bidichk
     - contextcheck
@@ -129,7 +128,6 @@ linters:
     - exhaustivestruct
     - exhaustruct
     - exportloopref
-    - forbidigo
     - funlen
     - gci
     - ginkgolinter
@@ -142,7 +140,6 @@ linters:
     - godot
     - godox
     - goerr113
-    - gofmt
     - goheader
     - golint
     - gomnd
