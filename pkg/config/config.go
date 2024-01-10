@@ -129,7 +129,7 @@ func (c *Config) SetTokenSigningKey(logger *zerolog.Logger) (err error) {
 
 	// Compute a HMAC to ensure the key is 256-bit long
 	h := hmac.New(crypto.SHA256.New, b)
-	h.Write([]byte("revaulter-token-signing-jey"))
+	h.Write([]byte("revaulter-token-signing-key"))
 	c.internal.tokenSigningKeyParsed = h.Sum(nil)
 
 	return nil
