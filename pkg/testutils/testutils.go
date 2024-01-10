@@ -28,7 +28,7 @@ func (rtt *RoundTripperTest) RoundTrip(r *http.Request) (*http.Response, error) 
 	}()
 
 	// If there's a response to send in the channel, use that
-	// Otherwise create a default one wth the 200 status code
+	// Otherwise create a default one with the 200 status code
 	var resp *http.Response
 	select {
 	case resp = <-rtt.responses:
