@@ -120,11 +120,12 @@ func (c *Config) SetTokenSigningKey(logger *zerolog.Logger) (err error) {
 			logger.Debug().Msg("No 'tokenSigningKey' found in the configuration: a random one will be generated")
 		}
 
-		b := make([]byte, 18)
-		_, err = io.ReadFull(rand.Reader, b)
+		c.internal.tokenSigningKeyParsed = make([]byte, 32)
+		_, err = io.ReadFull(rand.Reader, c.internal.tokenSigningKeyParsed)
 		if err != nil {
 			return fmt.Errorf("failed to generate random bytes: %w", err)
 		}
+		return nil
 	}
 
 	// Compute a HMAC to ensure the key is 256-bit long

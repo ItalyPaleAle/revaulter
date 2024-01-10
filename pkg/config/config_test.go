@@ -3,10 +3,12 @@ package config
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,7 +92,7 @@ func TestValidateConfig(t *testing.T) {
 	})
 }
 
-func TestEnsureTokenSigningKey(t *testing.T) {
+func TestSetTokenSigningKey(t *testing.T) {
 	logs := &bytes.Buffer{}
 	logger := zerolog.New(logs)
 
@@ -101,7 +103,7 @@ func TestEnsureTokenSigningKey(t *testing.T) {
 
 		err := config.SetTokenSigningKey(&logger)
 		require.NoError(t, err)
-		require.Len(t, config.GetTokenSigningKey(), 32)
+		assert.Equal(t, "b8cf67b06159c291d6cc1e27b10cddeab93f48f444995f4b0fb886e3ea75d422", hex.EncodeToString(config.GetTokenSigningKey()))
 	})
 
 	t.Run("tokenSigningKey not present", func(t *testing.T) {
@@ -111,10 +113,16 @@ func TestEnsureTokenSigningKey(t *testing.T) {
 
 		err := config.SetTokenSigningKey(&logger)
 		require.NoError(t, err)
-		require.Len(t, config.GetTokenSigningKey(), 32)
+		val := config.GetTokenSigningKey()
+		require.Len(t, val, 32)
 
 		logsMsg := logs.String()
 		require.Contains(t, logsMsg, "No 'tokenSigningKey' found in the configuration")
+
+		// Should be different every time
+		err = config.SetTokenSigningKey(&logger)
+		require.NoError(t, err)
+		assert.NotEqual(t, val, config.GetTokenSigningKey())
 	})
 }
 
