@@ -1,98 +1,160 @@
-# Configuration for the Azure AD application used to authenticate (see setup instructions in README)
-# (Required)
-azureClientId: ""
-azureTenantId: ""
+## azureClientId (string)
+## Description:
+##   Client ID of the Azure AD application
+## Required
+azureClientId:
 
-# URL of the webhook to send notifications to
-# Will send the notification in the POST body as text/plain
-# (Required)
-webhookUrl: ""
+## azureTenantId (string)
+## Description:
+##   Tenant ID of the Azure AD application.
+## Required
+azureTenantId:
 
-# Format for the webhook request
-# Supported values: "plain" (default), "slack", "discord"
-webhookFormat: "plain"
+## webhookUrl (string)
+## Description:
+##   Endpoint of the webhook, where notifications are sent to.
+## Required
+webhookUrl:
 
-# Optional key to authenticate with the webhook URL
-# If present, will be passed as value for the "Authorization" header in requests to the webhook
-webhookKey: ""
+## webhookFormat (string)
+## Description:
+##   The format for the webhook.
+##   Currently, these values are supported:
+##
+##   - `plain`: sends a webhook with content type `text/plain`, where the request's body is the entire message
+##   - `slack`: for usage with Slack or Slack-compatible endpoints
+##   - `discord`: for usage with Discord (sends Slack-compatible messages)
+## Default: "plain"
+#webhookFormat: 
 
-# Base URL where the application is deployed, used for authentication callbacks and in notifications
-# This URL must be routable by clients (administrators), but doesn't need to be public
-# Default: "https://localhost:<port>" if TLS is enabled, or "http://localhost:<port>" otherwise
-baseUrl: ""
+## webhookKey (string)
+## Description:
+##   Value for the Authorization header send with the webhook request. Set this if your webhook requires it.
+#webhookKey: 
 
-# Port to listen on
-# Default: 8080
-port: 8080
+## baseUrl (string)
+## Description:
+##   The URL your application can be reached at. This is used in the links that are sent in webhook notifications.
+##   This is optional, but recommended.
+## Default: `https://localhost:<port>` if TLS is enabled, or `http://localhost:<port>` otherwise
+#baseUrl: 
 
-# Address to listen on
-# Default: "0.0.0.0" to listen on every interface
-bind: "0.0.0.0"
+## port (number)
+## Description:
+##   Port to bind to.
+## Default: 8080
+#port: 
 
-# Configuration for TLS certificates and keys. It can be one of two options:
-# 1. Use "tlsPath" to set a path to a folder on disk where the TLS certificate ("tls-cert.pem") and key ("tls-key.pem") exist.
-# 2. Alternatively, use both "tlsCertPEM" and "tlsKeyPEM", which are the PEM-encoded certificate and key respectively.
-# If neither "tlsPath" and the "tlsCertPEM"/"tlsKeyPEM" pair are provided, Revaulter uses the folder where this config file is located to look for the certificate and key in files named "tls-cert.pem" and "tls-key.pem" respectively.
-tlsPath: ""
-tlsCertPEM: ""
-tlsKeyPEM: ""
+## bind (string)
+## Description:
+##   Address/interface to bind to.
+## Default: "0.0.0.0"
+#bind: 
 
-# Comma-separated list of IPs (and IP ranges in CIDR notation) that are allowed to invoke the /request endpoints.
-# If empty, all requests are allowed.
-# This doesn't apply to the endpoints used by admins to confirm requests.
-allowedIps: ""
+## tlsPath (string)
+## Description:
+##   Path where to load TLS certificates from. Within the folder, the files must be named `tls-cert.pem` and `tls-key.pem`. Revaulter watches for changes in this folder and automatically reloads the TLS certificates when they're updated.
+##   If empty, certificates are loaded from the same folder where the loaded `config.yaml` is located.
+## Default: the same folder as the `config.yaml` file
+#tlsPath: 
 
-# Setting a request key enforces all clients calling the /request endpoints to include this value in the Auhtorization header.
-# This is optional, and if empty all clients are allowed to call the /request endpoints to perform operations.
-# This doesn't apply to the endpoints used by admins to confirm requests.
-# Tip: you can generate a random request key with OpenSSL: `openssl rand -base64 18`
-requestKey: ""
+## tlsCertPEM (string)
+## Description:
+##   Full, PEM-encoded TLS certificate. Using `tlsCertPEM` and `tlsKeyPEM` is an alternative method of passing TLS certificates than using `tlsPath`.
+#tlsCertPEM: 
 
-# Comma-separated lists of origins for CORS
-# Example: "https://url1,https://url2"
-# If empty or unset, will the same as baseUrl
-# To allow any origin, set value to "*"
-origins: ""
+## tlsKeyPEM (string)
+## Description:
+##   Full, PEM-encoded TLS key. Using `tlsCertPEM` and `tlsKeyPEM` is an alternative method of passing TLS certificates than using `tlsPath`.
+#tlsKeyPEM: 
 
-# Timeout for sessions before having to authenticate again. This cannot be more than 1 hour.
-# Default: "5m"
-sessionTimeout: "5m"
+## allowedIps (list of strings)
+## Description:
+##   If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.
+##   Note that this value is used to restrict connections to the `/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
+#allowedIps: 
 
-# Default timeout for wrap and unwrap requests.
-# Default "5m"
-# Can be overridden in each request
-requestTimeout: "5m"
+## requestKey (string)
+## Description:
+##   If set, clients need to provide this shared key in calls made to the `/request` endpoints, in the `Authorization` header.
+##   Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
+#requestKey: 
 
-# Enable the metrics server which exposes a Prometheus-compatible endpoint `/metrics`
-# Default: false
-enableMetrics: false
+## origins (list of strings)
+## Description:
+##   Lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
+## Default: equal to the value of `baseUrl`
+#origins: 
 
-# Port for the metrics server to listen on
-# Default: 2112
-metricsPort: 2112
+## sessionTimeout (duration)
+## Description:
+##   Timeout for sessions before having to authenticate again, as a Go duration. This cannot be more than 1 hour.
+## Default: 5m
+#sessionTimeout: 
 
-# Address for the metrics server to listen on
-# Default: "0.0.0.0" to listen on every interface
-metricsBind: "0.0.0.0"
+## requestTimeout (duration)
+## Description:
+##   Default timeout for wrap and unwrap requests, as a Go duration. This is the default value, and can be overridden in each request.
+## Default: 5m
+#requestTimeout: 
 
-# If true, calls to the healthcheck endpoint (/healthz) are not included in the logs
-omitHealthCheckLogs: false
+## enableMetrics (boolean)
+## Description:
+##   Enable the metrics server which exposes a Prometheus-compatible endpoint `/metrics`.
+## Default: false
+#enableMetrics: 
 
-# String used as key to sign state tokens
-# If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
-tokenSigningKey: ""
+## metricsPort (number)
+## Description:
+##   Port for the metrics server to bind to.
+## Default: 2112
+#metricsPort: 
 
-# String used as key to encrypt cookies
-# If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
-cookieEncryptionKey: ""
+## metricsBind (string)
+## Description:
+##   Address/interface for the metrics server to bind to.
+## Default: "0.0.0.0"
+#metricsBind: 
 
-# String with the name of a header to trust as ID of each request. The ID is included in logs and in responses as "X-Request-ID" header.
-# Common values can include:
-# - "X-Request-ID": a de-facto standard that's vendor agnostic: https://http.dev/x-request-id 
-# - "CF-Ray": when the application is served by a Cloudflare CDN: https://developers.cloudflare.com/fundamentals/get-started/reference/cloudflare-ray-id/
-# If this option is empty, or if it contains the name of a header that is not found in an incoming request, a random UUID is generated as request ID.
-trustedRequestIdHeader: ""
+## omitHealthCheckLogs (boolean)
+## Description:
+##   If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
+## Default: false
+#omitHealthCheckLogs: 
 
-# Log level.
-# Supported values: "debug", "info" (default), "warn", "error"
-logLevel: "info"
+## tokenSigningKey (string)
+## Description:
+##   String used as key to sign state tokens. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
+## Default: randomly-generated when the application starts
+#tokenSigningKey: 
+
+## cookieEncryptionKey (string)
+## Description:
+##   String used as key to encrypt cookies. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
+## Default: randomly-generated when the application starts
+#cookieEncryptionKey: 
+
+## trustedRequestIdHeader (string)
+## Description:
+##   String with the name of a header to trust as ID of each request. The ID is included in logs and in responses as `X-Request-ID` header.
+##   Common values can include:
+##
+##   - `X-Request-ID`: a [de-facto standard](https://http.dev/x-request-id ) that's vendor agnostic
+##   - `CF-Ray`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/get-started/reference/cloudflare-ray-id/)
+##
+##   If this option is empty, or if it contains the name of a header that is not found in an incoming request, a random UUID is generated as request ID.
+#trustedRequestIdHeader: 
+
+## forceSecureCookies (boolean)
+## Description:
+##   If true, forces all cookies to be set with the "secure" option, so they are only sent by clients on HTTPS requests.
+##   When false (the default), cookies are set as "secure" only if the current request being served is using HTTPS.
+##   When Revaulter is running behind a proxy that performs TLS termination, this option should normally be set to true.
+## Default: false
+#forceSecureCookies: 
+
+## logLevel (string)
+## Description:
+##   Controls log level and verbosity. Supported values: `debug`, `info` (default), `warn`, `error`.
+## Default: "info"
+#logLevel: 

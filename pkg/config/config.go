@@ -73,7 +73,7 @@ type Config struct {
 	// Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
 	RequestKey string `env:"REQUESTKEY" yaml:"requestKey"`
 
-	// Comma-separated lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
+	// Lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
 	// +default equal to the value of `baseUrl`
 	Origins []string `env:"ORIGINS" yaml:"origins"`
 
