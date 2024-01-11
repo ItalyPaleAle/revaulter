@@ -14,7 +14,7 @@ import (
 // AllowIpMiddleware is a middleware that allows requests from certain IPs only
 func (s *Server) AllowIpMiddleware() (gin.HandlerFunc, error) {
 	// Get the list of IPs and ranges that are allowed
-	conf := config.Get().AllowedIps
+	conf := config.Get().AllowedIPs
 	if len(conf) == 0 || (len(conf) == 1 && conf[0] == "") {
 		// Allow all IPs, so do nothing
 		return func(c *gin.Context) {}, nil

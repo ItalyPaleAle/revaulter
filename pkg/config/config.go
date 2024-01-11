@@ -17,30 +17,116 @@ import (
 
 // Config is the struct containing configuration
 type Config struct {
-	AllowedIps             []string      `env:"ALLOWEDIPS" yaml:"allowedIps"`
-	AzureClientId          string        `env:"AZURECLIENTID" yaml:"azureClientId"`
-	AzureTenantId          string        `env:"AZURETENANTID" yaml:"azureTenantId"`
-	BaseUrl                string        `env:"BASEURL" yaml:"baseUrl"`
-	Bind                   string        `env:"BIND" yaml:"bind"`
-	CookieEncryptionKey    string        `env:"COOKIEENCRYPTIONKEY" yaml:"cookieEncryptionKey"`
-	EnableMetrics          bool          `env:"ENABLEMETRICS" yaml:"enableMetrics"`
-	LogLevel               string        `env:"LOGLEVEL" yaml:"logLevel"`
-	MetricsBind            string        `env:"METRICSBIND" yaml:"metricsBind"`
-	MetricsPort            int           `env:"METRICSPORT" yaml:"metricsPort"`
-	OmitHealthCheckLogs    bool          `env:"OMITHEALTHCHECKLOGS" yaml:"omitHealthCheckLogs"`
-	Origins                []string      `env:"ORIGINS" yaml:"origins"`
-	Port                   int           `env:"PORT" yaml:"port"`
-	RequestTimeout         time.Duration `env:"REQUESTTIMEOUT" yaml:"requestTimeout"`
-	RequestKey             string        `env:"REQUESTKEY" yaml:"requestKey"`
-	SessionTimeout         time.Duration `env:"SESSIONTIMEOUT" yaml:"sessionTimeout"`
-	TLSPath                string        `env:"TLSPATH" yaml:"tlsPath"`
-	TLSCertPEM             string        `env:"TLSCERTPEM" yaml:"tlsCertPEM"`
-	TLSKeyPEM              string        `env:"TLSKEYPEM" yaml:"tlsKeyPEM"`
-	TokenSigningKey        string        `env:"TOKENSIGNINGKEY" yaml:"tokenSigningKey"`
-	TrustedRequestIdHeader string        `env:"TRUSTEDREQUESTIDHEADER" yaml:"trustedRequestIdHeader"`
-	WebhookFormat          string        `env:"WEBHOOKFORMAT" yaml:"webhookFormat"`
-	WebhookKey             string        `env:"WEBHOOKKEY" yaml:"webhookKey"`
-	WebhookUrl             string        `env:"WEBHOOKURL" yaml:"webhookUrl"`
+	// Client ID of the Azure AD application
+	// +required
+	AzureClientId string `env:"AZURECLIENTID" yaml:"azureClientId"`
+
+	// Tenant ID of the Azure AD application.
+	// +required
+	AzureTenantId string `env:"AZURETENANTID" yaml:"azureTenantId"`
+
+	// Endpoint of the webhook, where notifications are sent to.
+	// +required
+	WebhookUrl string `env:"WEBHOOKURL" yaml:"webhookUrl"`
+
+	// The format for the webhook.
+	// Currently, these values are supported:
+	//
+	// - `plain`: sends a webhook with content type `text/plain`, where the request's body is the entire message
+	// - `slack`: for usage with Slack or Slack-compatible endpoints
+	// - `discord`: for usage with Discord (sends Slack-compatible messages)
+	// +default "plain"
+	WebhookFormat string `env:"WEBHOOKFORMAT" yaml:"webhookFormat"`
+
+	// Value for the Authorization header send with the webhook request. Set this if your webhook requires it.
+	WebhookKey string `env:"WEBHOOKKEY" yaml:"webhookKey"`
+
+	// The URL your application can be reached at. This is used in the links that are sent in webhook notifications.
+	// This is optional, but recommended.
+	// +default `https://localhost:<port>` if TLS is enabled, or `http://localhost:<port>` otherwise
+	BaseUrl string `env:"BASEURL" yaml:"baseUrl"`
+
+	// Port to bind to.
+	// +default 8080
+	Port int `env:"PORT" yaml:"port"`
+
+	// Address/interface to bind to.
+	// +default "0.0.0.0"
+	Bind string `env:"BIND" yaml:"bind"`
+
+	// Path where to load TLS certificates from. Within the folder, the files must be named `tls-cert.pem` and `tls-key.pem`. Revaulter watches for changes in this folder and automatically reloads the TLS certificates when they're updated.
+	// If empty, certificates are loaded from the same folder where the loaded `config.yaml` is located.
+	// +default the same folder as the `config.yaml` file
+	TLSPath string `env:"TLSPATH" yaml:"tlsPath"`
+
+	// Full, PEM-encoded TLS certificate. Using `tlsCertPEM` and `tlsKeyPEM` is an alternative method of passing TLS certificates than using `tlsPath`.
+	TLSCertPEM string `env:"TLSCERTPEM" yaml:"tlsCertPEM"`
+
+	// Full, PEM-encoded TLS key. Using `tlsCertPEM` and `tlsKeyPEM` is an alternative method of passing TLS certificates than using `tlsPath`.
+	TLSKeyPEM string `env:"TLSKEYPEM" yaml:"tlsKeyPEM"`
+
+	// If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.
+	// Note that this value is used to restrict connections to the `/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
+	AllowedIPs []string `env:"ALLOWEDIPS" yaml:"allowedIps"`
+
+	// If set, clients need to provide this shared key in calls made to the `/request` endpoints, in the `Authorization` header.
+	// Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
+	RequestKey string `env:"REQUESTKEY" yaml:"requestKey"`
+
+	// Comma-separated lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
+	// +default equal to the value of `baseUrl`
+	Origins []string `env:"ORIGINS" yaml:"origins"`
+
+	// Timeout for sessions before having to authenticate again, as a Go duration. This cannot be more than 1 hour.
+	// +default 5m
+	SessionTimeout time.Duration `env:"SESSIONTIMEOUT" yaml:"sessionTimeout"`
+
+	// Default timeout for wrap and unwrap requests, as a Go duration. This is the default value, and can be overridden in each request.
+	// +default 5m
+	RequestTimeout time.Duration `env:"REQUESTTIMEOUT" yaml:"requestTimeout"`
+
+	// Enable the metrics server which exposes a Prometheus-compatible endpoint `/metrics`.
+	// +default false
+	EnableMetrics bool `env:"ENABLEMETRICS" yaml:"enableMetrics"`
+
+	// Port for the metrics server to bind to.
+	// +default 2112
+	MetricsPort int `env:"METRICSPORT" yaml:"metricsPort"`
+
+	// Address/interface for the metrics server to bind to.
+	// +default "0.0.0.0"
+	MetricsBind string `env:"METRICSBIND" yaml:"metricsBind"`
+
+	// If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
+	// +default false
+	OmitHealthCheckLogs bool `env:"OMITHEALTHCHECKLOGS" yaml:"omitHealthCheckLogs"`
+
+	// String used as key to sign state tokens. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
+	// +default randomly-generated when the application starts
+	TokenSigningKey string `env:"TOKENSIGNINGKEY" yaml:"tokenSigningKey"`
+
+	// String used as key to encrypt cookies. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
+	// +default randomly-generated when the application starts
+	CookieEncryptionKey string `env:"COOKIEENCRYPTIONKEY" yaml:"cookieEncryptionKey"`
+
+	// String with the name of a header to trust as ID of each request. The ID is included in logs and in responses as `X-Request-ID` header.
+	// Common values can include:
+	//
+	// - `X-Request-ID`: a [de-facto standard](https://http.dev/x-request-id ) that's vendor agnostic
+	// - `CF-Ray`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/get-started/reference/cloudflare-ray-id/)
+	//
+	// If this option is empty, or if it contains the name of a header that is not found in an incoming request, a random UUID is generated as request ID.
+	TrustedRequestIdHeader string `env:"TRUSTEDREQUESTIDHEADER" yaml:"trustedRequestIdHeader"`
+
+	// If true, forces all cookies to be set with the "secure" option, so they are only sent by clients on HTTPS requests.
+	// When false (the default), cookies are set as "secure" only if the current request being served is using HTTPS.
+	// When Revaulter is running behind a proxy that performs TLS termination, this option should normally be set to true.
+	// +default false
+	ForceSecureCookies bool `env:"FORCESECURECOOKIES" yaml:"forceSecureCookies"`
+
+	// Controls log level and verbosity. Supported values: `debug`, `info` (default), `warn`, `error`.
+	// +default "info"
+	LogLevel string `env:"LOGLEVEL" yaml:"logLevel"`
 
 	// Dev is meant for development only; it's undocumented
 	Dev Dev `yaml:"-"`

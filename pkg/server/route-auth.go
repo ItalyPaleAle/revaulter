@@ -72,7 +72,7 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 
 	// Set the auth state as a secure cookie
 	// This may reset the existing cookie
-	secureCookie := c.Request.URL.Scheme == "https:"
+	secureCookie := cfg.ForceSecureCookies || c.Request.URL.Scheme == "https:"
 	err = setSecureCookie(c, authStateCookieName, seed, authStateCookieMaxAge, "/auth", c.Request.URL.Host, secureCookie, true)
 	if err != nil {
 		_ = c.Error(fmt.Errorf("failed to set access token secure cookie: %w", err))
@@ -106,6 +106,8 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 // RouteAuthConfirm is the handler for the GET /auth/confirm request
 // This exchanges an authorization code for an access token
 func (s *Server) RouteAuthConfirm(c *gin.Context) {
+	cfg := config.Get()
+
 	// Ensure we have the required params in the query string
 	code := c.Query("code")
 	if code == "" {
@@ -133,7 +135,7 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 	}
 
 	// Unset the auth state cookie
-	secureCookie := c.Request.URL.Scheme == "https:"
+	secureCookie := cfg.ForceSecureCookies || c.Request.URL.Scheme == "https:"
 	c.SetCookie(authStateCookieName, "", -1, "/auth", c.Request.URL.Host, secureCookie, true)
 
 	// Validate the state token
@@ -152,7 +154,7 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 	}
 
 	// Expiration is the minimum of the session timeout set in the config, and the token's expiration
-	expiration := config.Get().SessionTimeout
+	expiration := cfg.SessionTimeout
 	if accessToken.ExpiresIn > 0 && int(expiration.Seconds()) > accessToken.ExpiresIn {
 		expiration = time.Duration(accessToken.ExpiresIn) * time.Second
 	}

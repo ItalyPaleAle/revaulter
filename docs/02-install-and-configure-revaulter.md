@@ -104,6 +104,11 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
 
     If this option is empty, or if it contains the name of a header that is not found in an incoming request, a random UUID is generated as request ID.
     Environmental variable name: `REVAULTER_TRUSTEDREQUESTIDHEADER`
+  - **`forceSecureCookies`** (optional, default: `false`):  
+    If true, forces all cookies to be set with the "secure" option, so they are only sent by clients on HTTPS requests.  
+    When false (the default), cookies are set as "secure" only if the current request being served is using HTTPS.  
+    When Revaulter is running behind a proxy that performs TLS termination, this option should normally be set to true.  
+    Environmental variable name: `REVAULTER_FORCESECURECOOKIES`
   - **`logLevel`** (optional, default: `info`):  
     Controls log level and verbosity. Supported values: `debug`, `info` (default), `warn`, `error`.
     Environmental variable name: `REVAULTER_LOGLEVEL`
