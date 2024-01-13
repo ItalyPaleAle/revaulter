@@ -4,7 +4,7 @@ test:
 
 .PHONY: test-race
 test-race:
-	go test -race -tags unit ./...
+	CGO_ENABLED=1 go test -race -tags unit ./...
 
 .PHONY: lint
 lint:
