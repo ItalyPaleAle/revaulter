@@ -38,7 +38,15 @@ func (m *RevaulterMetrics) Init() {
 }
 
 func (m *RevaulterMetrics) HTTPHandler() http.Handler {
-	return promhttp.InstrumentMetricHandler(m.registry, promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{}))
+	return promhttp.InstrumentMetricHandler(
+		m.registry, promhttp.HandlerFor(
+			prometheus.Gatherers{
+				m.registry,
+				prometheus.DefaultGatherer,
+			},
+			promhttp.HandlerOpts{},
+		),
+	)
 }
 
 func (m *RevaulterMetrics) RecordRequest(operation string, key string) {
