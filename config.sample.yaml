@@ -119,7 +119,7 @@ webhookUrl:
 ## omitHealthCheckLogs (boolean)
 ## Description:
 ##   If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
-## Default: false
+## Default: true
 #omitHealthCheckLogs: 
 
 ## tokenSigningKey (string)

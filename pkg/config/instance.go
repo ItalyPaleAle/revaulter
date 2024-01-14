@@ -19,12 +19,13 @@ func Get() *Config {
 // GetDefaultConfig returns the default configuration.
 func GetDefaultConfig() *Config {
 	return &Config{
-		LogLevel:       "info",
-		Port:           8080,
-		Bind:           "0.0.0.0",
-		MetricsPort:    2112,
-		MetricsBind:    "0.0.0.0",
-		SessionTimeout: 5 * time.Minute,
-		RequestTimeout: 5 * time.Minute,
+		LogLevel:            "info",
+		Port:                8080,
+		Bind:                "0.0.0.0",
+		MetricsPort:         2112,
+		MetricsBind:         "0.0.0.0",
+		SessionTimeout:      5 * time.Minute,
+		RequestTimeout:      5 * time.Minute,
+		OmitHealthCheckLogs: true,
 	}
 }
