@@ -196,7 +196,7 @@ func TestServerAppRoutes(t *testing.T) {
 			// Ensure the redirect is present
 			require.Equal(t, http.StatusTemporaryRedirect, res.StatusCode)
 
-			loc := res.Header.Get("location")
+			loc := res.Header.Get("Location")
 			require.NotEmpty(t, loc)
 
 			locURL, err := url.Parse(loc)
@@ -334,7 +334,7 @@ func TestServerAppRoutes(t *testing.T) {
 				// Ensure the redirect is present
 				require.Equal(t, http.StatusTemporaryRedirect, res.StatusCode)
 
-				loc := res.Header.Get("location")
+				loc := res.Header.Get("Location")
 				require.Equal(t, fmt.Sprintf("https://localhost:%d", testServerPort), loc)
 
 				// Ensure the cookies are present
@@ -415,7 +415,7 @@ func TestServerAppRoutes(t *testing.T) {
 		}))
 
 		t.Run("successful auth with header", authTestFn(true, "auth-header", func(req *http.Request) {
-			req.Header.Set("authorization", "Bearer "+accessTokenCookie.Value)
+			req.Header.Set("Authorization", "Bearer "+accessTokenCookie.Value)
 		}))
 
 		t.Run("successful auth with cookie when header is allowed too", authTestFn(true, "auth-header", func(req *http.Request) {
@@ -425,11 +425,11 @@ func TestServerAppRoutes(t *testing.T) {
 		t.Run("missing access token", authTestFn(false, "auth", nil))
 
 		t.Run("access token in header not allowed by route", authTestFn(false, "auth", func(req *http.Request) {
-			req.Header.Set("authorization", "Bearer "+accessTokenCookie.Value)
+			req.Header.Set("Authorization", "Bearer "+accessTokenCookie.Value)
 		}))
 
 		t.Run("missing Bearer prefix in header", authTestFn(false, "auth-header", func(req *http.Request) {
-			req.Header.Set("authorization", accessTokenCookie.Value)
+			req.Header.Set("Authorization", accessTokenCookie.Value)
 		}))
 	})
 
@@ -448,7 +448,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 			// Response should be an empty JSON array
 			require.Equal(t, http.StatusOK, res.StatusCode)
-			require.Equal(t, jsonContentType, res.Header.Get("content-type"))
+			require.Equal(t, jsonContentType, res.Header.Get("Content-Type"))
 
 			body, err := io.ReadAll(res.Body)
 			require.NoError(t, err)
@@ -462,7 +462,7 @@ func TestServerAppRoutes(t *testing.T) {
 			req, err := http.NewRequestWithContext(listSubscribeCtx, http.MethodGet,
 				fmt.Sprintf("https://localhost:%d/api/list", testServerPort), nil)
 			require.NoError(t, err)
-			req.Header.Set("accept", ndJSONContentType)
+			req.Header.Set("Accept", ndJSONContentType)
 			req.AddCookie(accessTokenCookie)
 
 			// Do not call defer closeBody(res) here because we want to continue reading from the stream after the test is done
@@ -471,7 +471,7 @@ func TestServerAppRoutes(t *testing.T) {
 			require.NoError(t, err)
 
 			require.Equal(t, http.StatusOK, res.StatusCode)
-			require.Equal(t, ndJSONContentType, res.Header.Get("content-type"))
+			require.Equal(t, ndJSONContentType, res.Header.Get("Content-Type"))
 
 			go func() {
 				defer closeBody(res)
@@ -516,7 +516,7 @@ func TestServerAppRoutes(t *testing.T) {
 					bytes.NewReader(reqBody),
 				)
 				require.NoError(t, err)
-				req.Header.Set("content-type", jsonContentType)
+				req.Header.Set("Content-Type", jsonContentType)
 
 				res, err := appClient.Do(req)
 				require.NoError(t, err)
@@ -524,7 +524,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 				// Response should contain the operation ID
 				require.Equal(t, http.StatusAccepted, res.StatusCode)
-				require.Equal(t, jsonContentType, res.Header.Get("content-type"))
+				require.Equal(t, jsonContentType, res.Header.Get("Content-Type"))
 
 				resData := operationResponse{}
 				err = json.NewDecoder(res.Body).Decode(&resData)
@@ -584,7 +584,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 		var stateIDs [6]string
 		t.Run("Create 5 requests", func(t *testing.T) {
-			for i := 0; i < 5; i++ {
+			for i := range 5 {
 				t.Run("request "+strconv.Itoa(i), createRequestFn(nil, func(stateID string) {
 					stateIDs[i] = stateID
 				}))
@@ -613,7 +613,7 @@ func TestServerAppRoutes(t *testing.T) {
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
 				fmt.Sprintf("https://localhost:%d/request/result/%s", testServerPort, stateIDs[stateID]), nil)
 			require.NoError(t, err)
-			req.Header.Set("content-type", jsonContentType)
+			req.Header.Set("Content-Type", jsonContentType)
 
 			if responsesChs[stateID] == nil {
 				responsesChs[stateID] = make(chan *struct {
@@ -737,7 +737,7 @@ func TestServerAppRoutes(t *testing.T) {
 				)
 				require.NoError(t, err)
 				req.AddCookie(accessTokenCookie)
-				req.Header.Set("content-type", jsonContentType)
+				req.Header.Set("Content-Type", jsonContentType)
 
 				res, err := appClient.Do(req)
 				require.NoError(t, err)
@@ -801,7 +801,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 				// Response should be a JSON object indicating cancellation
 				require.Equal(t, http.StatusOK, res.StatusCode)
-				require.Equal(t, jsonContentType, res.Header.Get("content-type"))
+				require.Equal(t, jsonContentType, res.Header.Get("Content-Type"))
 
 				body, err := io.ReadAll(res.Body)
 				require.NoError(t, err)
@@ -842,7 +842,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 				// Response should be a JSON object indicating confirmation
 				require.Equal(t, http.StatusOK, res.StatusCode)
-				require.Equal(t, jsonContentType, res.Header.Get("content-type"))
+				require.Equal(t, jsonContentType, res.Header.Get("Content-Type"))
 
 				body, err := io.ReadAll(res.Body)
 				require.NoError(t, err)
@@ -1015,7 +1015,7 @@ func assertResponseError(t *testing.T, res *http.Response, expectStatusCode int,
 	t.Helper()
 
 	require.Equal(t, expectStatusCode, res.StatusCode, "Response has an unexpected status code")
-	require.Equal(t, jsonContentType, res.Header.Get("content-type"), "Content-Type header is invalid")
+	require.Equal(t, jsonContentType, res.Header.Get("Content-Type"), "Content-Type header is invalid")
 
 	data := struct {
 		Error string `json:"error"`

@@ -105,7 +105,7 @@ func TestWebhook(t *testing.T) {
 		"webhookKey": "mykey",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint", r.URL.String())
-		require.Equal(t, "mykey", r.Header.Get("authorization"))
+		require.Equal(t, "mykey", r.Header.Get("Authorization"))
 	}))
 
 	t.Run("slack request with authorization", basicTestFn(map[string]any{
@@ -113,7 +113,7 @@ func TestWebhook(t *testing.T) {
 		"webhookFormat": "slack",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint", r.URL.String())
-		require.Equal(t, "mykey", r.Header.Get("authorization"))
+		require.Equal(t, "mykey", r.Header.Get("Authorization"))
 	}))
 
 	t.Run("fail on 4xx status codes", func(t *testing.T) {
@@ -169,7 +169,7 @@ func TestWebhook(t *testing.T) {
 				StatusCode: http.StatusTooManyRequests,
 				Header:     make(http.Header),
 			}
-			res.Header.Set("retry-after", "5")
+			res.Header.Set("Retry-After", "5")
 			return res
 		}
 		// Send a 429 status code twice but with a Retry-After header
@@ -293,7 +293,7 @@ func assertRetries(
 	// Perform the waiting in background
 	go func() {
 		// Expect this to receive expectRequests requests
-		for i := 0; i < expectRequests; i++ {
+		for i := range expectRequests {
 			select {
 			case r := <-reqCh:
 				r.Body.Close()
@@ -305,7 +305,7 @@ func assertRetries(
 			if i < (expectRequests - 1) {
 				// Sleep until we have a goroutine waiting or we wait too much (1s)
 				// This is not ideal as we're depending on a wall clock but it's probably enough for now
-				for i := 0; i < 20; i++ {
+				for range 20 {
 					if !clock.HasWaiters() {
 						time.Sleep(50 * time.Millisecond)
 					}

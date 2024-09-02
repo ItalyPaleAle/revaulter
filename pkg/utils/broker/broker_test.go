@@ -78,7 +78,7 @@ func TestBroker(t *testing.T) {
 	broker.Shutdown()
 
 	// Assert all subscriptions are closed
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		assertChanClosed(t, subs[i])
 	}
 

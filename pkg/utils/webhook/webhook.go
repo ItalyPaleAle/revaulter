@@ -66,7 +66,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 	// Retry up to 3 times
 	const attempts = 3
 	var i int
-	for i = 0; i < attempts; i++ {
+	for i = range attempts {
 		var req *http.Request
 		reqCtx, reqCancel := context.WithTimeout(ctx, webhookTimeout)
 		switch cfg.WebhookFormat {
