@@ -105,16 +105,15 @@ jobs:
 
       - name: Run tests
         run: |
-          go test -v \
-            -tags unit \
-            ./... 
+          CGO_ENABLED=1 \
+            go test -v \
+              -race \
+              -tags unit \
+              ./... 
 
       - name: Build for all platforms
         run: |
           mkdir -p .bin .out
-
-          echo -e "\n###\nDownload Go dependencies\n"
-          go mod download
 
           echo -e "\n###\nBuilding linux/amd64\n"
           mkdir .bin/revaulter-v${{ env.BUILD_ID }}-linux-amd64
