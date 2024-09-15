@@ -10,102 +10,84 @@ on:
       # Push to tags matching v*
       - 'v*'
 
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
 jobs:
 
   build:
     name: Build and release
-    runs-on: ubuntu-22.04
-
-    permissions:
-      contents: write
-      packages: write
-      # This is used to complete the identity challenge with sigstore/fulcio when running outside of PRs.
-      id-token: write
+    runs-on: ubuntu-latest
 
     env:
-      CGO_ENABLED: "0"
-      GOLANGCI_LINT_VERSION: "v1.60.1"
+      GOLANGCI_LINT_VERSION: "v1.60.3"
 
     steps:
 
       - name: Check out code
         uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
 
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           node-version-file: 'client/.nvmrc'
 
-      # Install the cosign tool
-      # https://github.com/sigstore/cosign-installer
-      - name: Install cosign
-        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20 #v3.5.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Lowercase REPO_OWNER which is required for containers
+      - name: Set lowercase REPO_OWNER
+        run: |
+          REPO_OWNER=${{ github.repository_owner }}
+          echo "REPO_OWNER=${REPO_OWNER,,}" >>${GITHUB_ENV}
+
+      - name: Generate Docker tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          cosign-release: 'v2.2.4'
+          images: ghcr.io/${{ env.REPO_OWNER }}/revaulter
+          tags: |
+            type=edge,branch=main
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
 
       - name: Set variables
         run: |
-          mkdir -p .bin
-          # Fetch semver: https://github.com/fsaintjacques/semver-tool
-          curl https://raw.githubusercontent.com/fsaintjacques/semver-tool/3.4.0/src/semver > .bin/semver
-          chmod +x .bin/semver
-
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            BUILD_ID="edge"
-            BUILD_VERSION="edge"
-            BRANCH=""
-            PRERELEASE=""
-          else
-            # Trim the first 10 characters, which are "refs/tags/"
-            BUILD_ID="${GITHUB_REF:10}"
-            # Just like BUILD_ID, but without the "v" at the beginning
-            BUILD_VERSION="${GITHUB_REF:11}"
-
-            # Branch
-            MAJOR_VERSION=$(.bin/semver get major $BUILD_VERSION)
-            MINOR_VERSION=$(.bin/semver get minor $BUILD_VERSION)
-            PRERELEASE=$(.bin/semver get prerel $BUILD_VERSION)
-            BRANCH=""
-            if [ "$MAJOR_VERSION" = "0" ]; then
-              BRANCH="$MAJOR_VERSION.$MINOR_VERSION"
-            else
-              BRANCH="$MAJOR_VERSION"
-            fi
-            if [ "$PRERELEASE" != "" ]; then
-              BRANCH="${BRANCH}-pre"
-            fi
-          fi
-
-          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%S')
-          COMMIT_HASH=$(echo $GITHUB_SHA | head -c 7)
+          BUILD_ID=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+          BUILD_VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+          BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          COMMIT_HASH=$(echo "${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.revision'] }}" | head -c 7)
 
           echo "BUILD_ID=$BUILD_ID" >> $GITHUB_ENV
           echo "BUILD_VERSION=$BUILD_VERSION" >> $GITHUB_ENV
           echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
           echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
-          echo "BRANCH=$BRANCH" >> $GITHUB_ENV
-          echo "PRERELEASE=$PRERELEASE" >> $GITHUB_ENV
+
+          echo "BUILD_ID: '$BUILD_ID'"
+          echo "BUILD_VERSION: '$BUILD_VERSION'"
+          echo "BUILD_DATE: '$BUILD_DATE'"
+          echo "COMMIT_HASH: '$COMMIT_HASH'"
+
+          BUILDINFO_PKG="github.com/italypaleale/revaulter/pkg/buildinfo"
+          BUILD_LDFLAGS="-X ${BUILDINFO_PKG}.Production=1 -X ${BUILDINFO_PKG}.AppVersion=${BUILD_VERSION} -X ${BUILDINFO_PKG}.BuildId=${BUILD_ID} -X ${BUILDINFO_PKG}.BuildDate=${BUILD_DATE} -X ${BUILDINFO_PKG}.CommitHash=${COMMIT_HASH} -buildid=${BUILD_ID}"
+
+          echo "BUILD_LDFLAGS=$BUILD_LDFLAGS" >> $GITHUB_ENV
+
+          echo "BUILD_LDFLAGS: '$BUILD_LDFLAGS'"
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3.0.0
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3.0.0
-        with:
-          platforms: 'arm64,arm'
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.0.0
-        with:
-          version: latest
-          install: true
 
       - name: Run go-generate
         run: |
@@ -131,169 +113,134 @@ jobs:
         run: |
           mkdir -p .bin .out
 
-          echo -e "\n###\nSetting BUILD_LDFLAGS\n"
-          BUILDINFO_PKG="github.com/italypaleale/revaulter/pkg/buildinfo"
-          BUILD_LDFLAGS="-X ${BUILDINFO_PKG}.Production=1 -X ${BUILDINFO_PKG}.AppVersion=${{env.BUILD_VERSION}} -X ${BUILDINFO_PKG}.BuildId=${{env.BUILD_ID}} -X ${BUILDINFO_PKG}.BuildDate=${{env.BUILD_DATE}} -X ${BUILDINFO_PKG}.CommitHash=${{env.COMMIT_HASH}} -buildid=${{env.BUILD_ID}}"
-          echo "BUILD_LDFLAGS=${BUILD_LDFLAGS}"
+          echo -e "\n###\nDownload Go dependencies\n"
+          go mod download
 
           echo -e "\n###\nBuilding linux/amd64\n"
-          mkdir .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64
+          mkdir .bin/revaulter-v${{ env.BUILD_ID }}-linux-amd64
           GOOS=linux \
           GOARCH=amd64 \
+          CGO_ENABLED=0 \
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64/revaulter \
+              -o .bin/revaulter-v${{ env.BUILD_ID }}-linux-amd64/revaulter \
               -trimpath \
               ./cmd/revaulter
-          cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64
-          cp README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64
-          (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-linux-amd64.tar.gz revaulter-${{ env.BUILD_ID }}-linux-amd64)
+          cp LICENSE.md .bin/revaulter-v${{ env.BUILD_ID }}-linux-amd64
+          cp README.md .bin/revaulter-v${{ env.BUILD_ID }}-linux-amd64
+          (cd .bin && tar -czvf ../.out/revaulter-v${{ env.BUILD_ID }}-linux-amd64.tar.gz revaulter-v${{ env.BUILD_ID }}-linux-amd64)
 
           echo -e "\n###\nBuilding linux/386\n"
-          mkdir .bin/revaulter-${{ env.BUILD_ID }}-linux-386
+          mkdir .bin/revaulter-v${{ env.BUILD_ID }}-linux-386
           GOOS=linux \
           GOARCH=386 \
+          CGO_ENABLED=0 \
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-${{ env.BUILD_ID }}-linux-386/revaulter \
+              -o .bin/revaulter-v${{ env.BUILD_ID }}-linux-386/revaulter \
               -trimpath \
               ./cmd/revaulter
-          cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-386
-          cp README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-386
-          (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-linux-386.tar.gz revaulter-${{ env.BUILD_ID }}-linux-386)
+          cp LICENSE.md .bin/revaulter-v${{ env.BUILD_ID }}-linux-386
+          cp README.md .bin/revaulter-v${{ env.BUILD_ID }}-linux-386
+          (cd .bin && tar -czvf ../.out/revaulter-v${{ env.BUILD_ID }}-linux-386.tar.gz revaulter-v${{ env.BUILD_ID }}-linux-386)
 
           echo -e "\n###\nBuilding linux/arm64\n"
-          mkdir .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64
+          mkdir .bin/revaulter-v${{ env.BUILD_ID }}-linux-arm64
           GOOS=linux \
           GOARCH=arm64 \
+          CGO_ENABLED=0 \
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64/revaulter \
+              -o .bin/revaulter-v${{ env.BUILD_ID }}-linux-arm64/revaulter \
               -trimpath \
               ./cmd/revaulter
-          cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64
-          cp README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64
-          (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-linux-arm64.tar.gz revaulter-${{ env.BUILD_ID }}-linux-arm64)
+          cp LICENSE.md .bin/revaulter-v${{ env.BUILD_ID }}-linux-arm64
+          cp README.md .bin/revaulter-v${{ env.BUILD_ID }}-linux-arm64
+          (cd .bin && tar -czvf ../.out/revaulter-v${{ env.BUILD_ID }}-linux-arm64.tar.gz revaulter-v${{ env.BUILD_ID }}-linux-arm64)
 
           echo -e "\n###\nBuilding linux/armv7\n"
-          mkdir .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7
+          mkdir .bin/revaulter-v${{ env.BUILD_ID }}-linux-armv7
           GOOS=linux \
           GOARCH=arm \
           GOARM=7 \
+          CGO_ENABLED=0 \
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7/revaulter \
+              -o .bin/revaulter-v${{ env.BUILD_ID }}-linux-armv7/revaulter \
               -trimpath \
               ./cmd/revaulter
-          cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7
-          cp README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7
-          (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-linux-armv7.tar.gz revaulter-${{ env.BUILD_ID }}-linux-armv7)
+          cp LICENSE.md .bin/revaulter-v${{ env.BUILD_ID }}-linux-armv7
+          cp README.md .bin/revaulter-v${{ env.BUILD_ID }}-linux-armv7
+          (cd .bin && tar -czvf ../.out/revaulter-v${{ env.BUILD_ID }}-linux-armv7.tar.gz revaulter-v${{ env.BUILD_ID }}-linux-armv7)
 
           echo -e "\n###\nBuilding darwin/amd64\n"
-          mkdir .bin/revaulter-${{ env.BUILD_ID }}-macos
+          mkdir .bin/revaulter-v${{ env.BUILD_ID }}-macos
           GOOS=darwin \
           GOARCH=amd64 \
+          CGO_ENABLED=0 \
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-${{ env.BUILD_ID }}-macos-x64/revaulter \
+              -o .bin/revaulter-v${{ env.BUILD_ID }}-macos-x64/revaulter \
               -trimpath \
               ./cmd/revaulter
-          cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-macos-x64
-          cp README.md .bin/revaulter-${{ env.BUILD_ID }}-macos-x64
-          (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-macos-x64.tar.gz revaulter-${{ env.BUILD_ID }}-macos-x64)
+          cp LICENSE.md .bin/revaulter-v${{ env.BUILD_ID }}-macos-x64
+          cp README.md .bin/revaulter-v${{ env.BUILD_ID }}-macos-x64
+          (cd .bin && tar -czvf ../.out/revaulter-v${{ env.BUILD_ID }}-macos-x64.tar.gz revaulter-v${{ env.BUILD_ID }}-macos-x64)
 
           echo -e "\n###\nBuilding darwin/arm64\n"
-          mkdir .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64
+          mkdir .bin/revaulter-v${{ env.BUILD_ID }}-macos-arm64
           GOOS=darwin \
           GOARCH=arm64 \
+          CGO_ENABLED=0 \
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64/revaulter \
+              -o .bin/revaulter-v${{ env.BUILD_ID }}-macos-arm64/revaulter \
               -trimpath \
               ./cmd/revaulter
-          cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64
-          cp README.md .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64
-          (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-macos-arm64.tar.gz revaulter-${{ env.BUILD_ID }}-macos-arm64)
+          cp LICENSE.md .bin/revaulter-v${{ env.BUILD_ID }}-macos-arm64
+          cp README.md .bin/revaulter-v${{ env.BUILD_ID }}-macos-arm64
+          (cd .bin && tar -czvf ../.out/revaulter-v${{ env.BUILD_ID }}-macos-arm64.tar.gz revaulter-v${{ env.BUILD_ID }}-macos-arm64)
 
           echo -e "\n###\nLinks for Docker buildx\n"
           (
             cd .bin && \
-            ln -v -s revaulter-${{ env.BUILD_ID }}-linux-amd64 linux-amd64 && \
-            ln -v -s revaulter-${{ env.BUILD_ID }}-linux-arm64 linux-arm64 && \
-            ln -v -s revaulter-${{ env.BUILD_ID }}-linux-armv7 linux-arm \
+            ln -v -s revaulter-v${{ env.BUILD_ID }}-linux-amd64 linux-amd64 && \
+            ln -v -s revaulter-v${{ env.BUILD_ID }}-linux-arm64 linux-arm64 && \
+            ln -v -s revaulter-v${{ env.BUILD_ID }}-linux-armv7 linux-arm \
           )
 
           echo -e "\n###\nCompilation done\n"
+          echo ".bin:"
           ls -al .bin
+          echo ".out:"
           ls -al .out
 
-      # Publish artifacts
-      - name: Publish binaries as artifacts
+      - name: Publish binaries as Actions Artifacts
         uses: actions/upload-artifact@v3
         with:
           name: artifacts
-          path: .out
+          path: .out/*
 
-      # Create release and upload assets
-      - name: Create release
-        uses: softprops/action-gh-release@c9b46fe7aad9f02afd89b12450b780f52dacfb2d # v1
-        if: env.BUILD_VERSION != 'edge'
-        with:
-          name: ${{ github.ref }}
-          tag_name: ${{ github.ref }}
-          draft: true
-          prerelease: ${{ env.PRERELEASE != '' }}
-          generate_release_notes: true
-          files: |
-            .out/revaulter-${{ env.BUILD_ID }}-linux-amd64.tar.gz
-            .out/revaulter-${{ env.BUILD_ID }}-linux-386.tar.gz
-            .out/revaulter-${{ env.BUILD_ID }}-linux-arm64.tar.gz
-            .out/revaulter-${{ env.BUILD_ID }}-linux-armv7.tar.gz
-            .out/revaulter-${{ env.BUILD_ID }}-macos-x64.tar.gz
-            .out/revaulter-${{ env.BUILD_ID }}-macos-arm64.tar.gz
-
-      - name: Set variable REPO_OWNER
-        shell: bash
-        run: |
-          # We need to lowercase the value of REPO_OWNER
-          REPO_OWNER=${{ github.repository_owner }}
-          echo "REPO_OWNER=${REPO_OWNER,,}" >> ${GITHUB_ENV}
-
-      - name: Set variable TAGS (edge)
-        if: env.BUILD_VERSION == 'edge'
-        shell: bash
-        run: |
-          echo "TAGS=ghcr.io/${{ env.REPO_OWNER }}/revaulter:edge" \
-            >> ${GITHUB_ENV}
-
-      - name: Set variable TAGS (release)
-        if: env.BUILD_VERSION != 'edge'
-        shell: bash
-        run: |
-          {
-            echo 'TAGS<<EOF'
-            echo "ghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BUILD_VERSION}}"
-            echo "ghcr.io/${{ env.REPO_OWNER }}/revaulter:${{env.BRANCH}}"
-            echo EOF
-          } >> "$GITHUB_ENV"
-
-      - name: Docker build and push to GHCR
-        uses: docker/build-push-action@v4
+      - name: Build and push Docker images
+        uses: docker/build-push-action@v6
         id: docker-build-push
         with:
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64/v8,linux/arm/v7
           context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          tags: ${{ env.TAGS }}
           push: true
 
-      # Sign the resulting Docker images digests.
-      # This will only write to the public Rekor transparency log when the Docker repository is public to avoid leaking data. 
-      # https://github.com/sigstore/cosign
-      - name: Sign the published Docker images
-        env:
-          # https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-an-intermediate-environment-variable
-          DIGEST: ${{ steps.docker-build-push.outputs.digest }}
-        # This step uses the identity token to provision an ephemeral certificate against the sigstore community Fulcio instance.
-        run: |
-          echo "${{env.TAGS}}" | xargs -I {} cosign sign --yes {}@${DIGEST}
+      - name: Binaries attestation
+        uses: actions/attest-build-provenance@v1
+        #if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          subject-path: '.bin/revaulter-*/revaulter'
+
+      - name: Container image attestation
+        uses: actions/attest-build-provenance@v1
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          subject-name: 'ghcr.io/${{ env.REPO_OWNER }}/revaulter'
+          subject-digest: ${{ steps.docker-build-push.outputs.digest }}
+          push-to-registry: true
