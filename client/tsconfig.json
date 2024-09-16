@@ -7,8 +7,10 @@
             "DOM"
         ],
         "strict": true,
-        "target": "es2019",
+        "target": "ES2022",
+        "module": "ES2022",
         "allowJs": true,
+        "checkJs": true,
         "noImplicitAny": true,
         "noImplicitReturns": true,
         "outDir": "dist",

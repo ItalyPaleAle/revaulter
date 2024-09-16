@@ -28,6 +28,7 @@ module.exports = {
     resolve: {
         mainFields: ['svelte', 'browser', 'style', 'module', 'main'],
         extensions: ['.ts', '.mjs', '.js', '.svelte'],
+        conditionNames: ['svelte', 'browser', 'require', 'node'],
     },
     output: {
         path: path.resolve(__dirname, 'dist/'),
