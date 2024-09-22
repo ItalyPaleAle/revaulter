@@ -4,8 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"time"
-
-	"github.com/italypaleale/revaulter/pkg/utils"
 )
 
 // Adds a subscription to a state by key
@@ -53,7 +51,7 @@ func (s *Server) notifySubscriber(stateId string, state *requestState) {
 
 // This method makes a pending request expire after the given time interval
 // It should be invoked in a background goroutine
-func (s *Server) expireRequest(ctx context.Context, stateId string, validity time.Duration) {
+func (s *Server) expireRequest(stateId string, validity time.Duration, log *slog.Logger) {
 	// Wait until the request is expired
 	time.Sleep(validity)
 
@@ -66,8 +64,7 @@ func (s *Server) expireRequest(ctx context.Context, stateId string, validity tim
 	if req == nil {
 		return
 	}
-	log := utils.LogFromContext(ctx)
-	log.InfoContext(ctx, "Removing expired operation", slog.String("stateId", stateId))
+	log.InfoContext(context.Background(), "Removing expired operation", slog.String("stateId", stateId))
 
 	// Set the request as canceled
 	req.Status = StatusCanceled

@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	azTracing "github.com/Azure/azure-sdk-for-go/sdk/azcore/tracing"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
+	"github.com/Azure/azure-sdk-for-go/sdk/tracing/azotel"
+	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // Client is a client for Azure Key Vault
@@ -27,18 +30,33 @@ type Client interface {
 	Verify(ctx context.Context, vault, keyName, keyVersion string, params azkeys.VerifyParameters) (*KeyVaultVerifyResponse, error)
 }
 
+type ClientOptions struct {
+	AccessToken string
+	Expiration  time.Time
+	Tracer      *sdkTrace.TracerProvider
+}
+
 // ClientFactory is the type for the NewClient function
-type ClientFactory func(accessToken string, expiration time.Time) Client
+type ClientFactory func(opts ClientOptions) Client
 
 // NewClient returns a new Client object
-func NewClient(accessToken string, expiration time.Time) Client {
-	return &client{
-		cred: newTokenProvider(accessToken, expiration),
+func NewClient(opts ClientOptions) Client {
+	c := &client{
+		cred: newTokenProvider(opts.AccessToken, opts.Expiration),
 	}
+
+	if opts.Tracer != nil {
+		c.tracer = azotel.NewTracingProvider(opts.Tracer, nil)
+	}
+
+	return c
 }
 
 type client struct {
 	cred tokenProvider
+
+	// The default value is a no-op provider
+	tracer azTracing.Provider
 }
 
 // Encrypt a message using a key stored in the Key Vault
@@ -222,6 +240,7 @@ func (c *client) getClient(vault string) (*azkeys.Client, error) {
 			Telemetry: policy.TelemetryOptions{
 				Disabled: true,
 			},
+			TracingProvider: c.tracer,
 		},
 	})
 }

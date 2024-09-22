@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/spf13/cast"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
@@ -30,6 +31,9 @@ import (
 // - POST /request/unwrapkey
 func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		log := utils.LogFromContext(c.Request.Context())
+		span := trace.SpanFromContext(c.Request.Context())
+
 		// Get the fields from the body
 		req := &operationRequest{}
 		err := c.Bind(req)
@@ -62,10 +66,9 @@ func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 
 		// Invoke the webhook and send a message with the URL to unlock, in background
 		go func() {
-			log := utils.LogFromContext(c.Request.Context())
-
 			// Use a background context so it's not tied to the incoming request
-			webhookErr := s.webhook.SendWebhook(context.Background(), &webhook.WebhookRequest{
+			webhookCtx := trace.ContextWithSpan(context.Background(), span)
+			webhookErr := s.webhook.SendWebhook(webhookCtx, &webhook.WebhookRequest{
 				OperationName: op.String(),
 				KeyId:         state.KeyId,
 				Vault:         state.Vault,
@@ -74,14 +77,14 @@ func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 				Note:          state.Note,
 			})
 			if webhookErr != nil {
-				log.ErrorContext(c.Request.Context(), "Error sending webhook", slog.Any("error", webhookErr))
+				log.ErrorContext(webhookCtx, "Error sending webhook", slog.Any("error", webhookErr))
 				return
 			}
-			log.ErrorContext(c.Request.Context(), "Sent webhook notification")
+			log.InfoContext(webhookCtx, "Sent webhook notification")
 		}()
 
 		// Make the request expire in background
-		go s.expireRequest(c.Request.Context(), stateId, req.timeoutDuration)
+		go s.expireRequest(stateId, req.timeoutDuration, log)
 
 		// Respond with the state ID
 		c.JSON(http.StatusAccepted, operationResponse{

@@ -154,7 +154,7 @@ func TestServerAppRoutes(t *testing.T) {
 	appClient := clientForListener(srv.appListener)
 
 	// Mock the Key Vault client
-	srv.kvClientFactory = func(accessToken string, expiration time.Time) keyvault.Client {
+	srv.kvClientFactory = func(opts keyvault.ClientOptions) keyvault.Client {
 		return &mockKVClient{}
 	}
 
