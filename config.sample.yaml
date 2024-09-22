@@ -80,6 +80,16 @@ webhookUrl:
 ##   Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
 #requestKey: 
 
+## allowedVaults (list of strings)
+## Description:
+##   If set, allows requests targeting only the Azure Key Vaults named in the list.
+##   Values can be formatted as:
+##
+##   - The address of the vault, such as "https://<name>.vault.azure.net" (could be a different format if using different clouds or private endpoints)
+##   - The FQDN of the vault, such as "<name>.vault.azure.net" (or another domain if using different clouds or private endpoints)
+##   - Only the name of the vault, which will be formatted for "vault.azure.net"
+#allowedVaults: 
+
 ## origins (list of strings)
 ## Description:
 ##   Lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).

@@ -68,6 +68,15 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
     If set, clients need to provide this shared key in calls made to the `/request` endpoints, in the `Authorization` header.  
     Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.  
     Environmental variable name: `REVAULTER_REQUESTKEY`
+  - **`allowedVaults`** (optional):  
+    If set, allows requests targeting only the Azure Key Vaults named in the list.  
+    Values can be formatted as:
+
+    - The address of the vault, such as `https://<name>.vault.azure.net` (could be a different format if using different clouds or private endpoints)
+    - The FQDN of the vault, such as `<name>.vault.azure.net` (or another domain if using different clouds or private endpoints)
+    - Only the name of the vault, which will be formatted for `vault.azure.net`
+
+    Environmental variable name: `REVAULTER_ALLOWEDVAULTS`
   - **`origins`** (optional, default is equal to the value of `baseUrl`):  
     Comma-separated lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).  
     Environmental variable name: `REVAtrustedForwardedIPHeaderULTER_ORIGINS`

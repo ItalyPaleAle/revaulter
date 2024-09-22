@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/italypaleale/revaulter/pkg/keyvault"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 )
 
@@ -73,6 +74,14 @@ type Config struct {
 	// If set, clients need to provide this shared key in calls made to the `/request` endpoints, in the `Authorization` header.
 	// Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
 	RequestKey string `env:"REQUESTKEY" yaml:"requestKey"`
+
+	// If set, allows requests targeting only the Azure Key Vaults named in the list.
+	// Values can be formatted as:
+	//
+	// - The address of the vault, such as "https://<name>.vault.azure.net" (could be a different format if using different clouds or private endpoints)
+	// - The FQDN of the vault, such as "<name>.vault.azure.net" (or another domain if using different clouds or private endpoints)
+	// - Only the name of the vault, which will be formatted for "vault.azure.net"
+	AllowedVaults []string `env:"ALLOWEDVAULTS" yaml:"allowedVaults"`
 
 	// Lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
 	// +default equal to the value of `baseUrl`
@@ -248,6 +257,11 @@ func (c *Config) Validate() error {
 	}
 	if c.RequestTimeout < time.Second {
 		return errors.New("config entry key 'requestTimeout' is invalid: must be greater than 1s")
+	}
+
+	// Format URLs in the Key Vault allowlist
+	for i := range c.AllowedVaults {
+		c.AllowedVaults[i] = keyvault.VaultUrl(c.AllowedVaults[i])
 	}
 
 	return nil

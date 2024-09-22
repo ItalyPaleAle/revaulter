@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -130,9 +131,17 @@ var (
 
 // Parse and validate the request object
 func (req *operationRequest) Parse(op requestOperation) (err error) {
+	conf := config.Get()
+
+	// Azure Key Vault name: get the FQDN and check if it's allowed per the allowlist
 	if req.Vault == "" {
 		return errors.New("missing parameter 'vault'")
 	}
+	req.Vault = keyvault.VaultUrl(req.Vault)
+	if len(conf.AllowedVaults) > 0 && !slices.Contains(conf.AllowedVaults, req.Vault) {
+		return errors.New("the requested vault is not allowed")
+	}
+
 	if req.KeyId == "" {
 		return errors.New("missing parameter 'keyId'")
 	}
@@ -211,7 +220,7 @@ func (req *operationRequest) Parse(op requestOperation) (err error) {
 	timeoutStr := cast.ToString(req.Timeout)
 	switch {
 	case timeoutStr == "":
-		req.timeoutDuration = config.Get().RequestTimeout
+		req.timeoutDuration = conf.RequestTimeout
 	case durationNumber.MatchString(timeoutStr):
 		timeout, _ := strconv.Atoi(timeoutStr)
 		if timeout > 0 {

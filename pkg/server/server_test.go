@@ -554,7 +554,7 @@ func TestServerAppRoutes(t *testing.T) {
 					require.Equal(t, resData.State, item.State)
 					assert.Equal(t, "pending", item.Status)
 					assert.Equal(t, "encrypt", item.Operation)
-					assert.Equal(t, "testvault", item.VaultName)
+					assert.Equal(t, "https://testvault.vault.azure.net", item.VaultName)
 					assert.Equal(t, "testkey", item.KeyId)
 
 					// Request date should be approximately now or a few seconds ago
@@ -585,7 +585,7 @@ func TestServerAppRoutes(t *testing.T) {
 					assert.Equal(t, resData.State, msg.StateId)
 					assert.Equal(t, "encrypt", msg.OperationName)
 					assert.Equal(t, reqData.Note, msg.Note)
-					assert.Equal(t, "testvault", msg.Vault)
+					assert.Equal(t, "https://testvault.vault.azure.net", msg.Vault)
 					assert.Equal(t, "testkey", msg.KeyId)
 					// IP of caller is always 1.2.3.4 in bufconn
 					assert.Equal(t, "1.2.3.4", msg.Requestor)

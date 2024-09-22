@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -219,29 +218,10 @@ func (c *client) Verify(ctx context.Context, vault, keyName, keyVersion string, 
 	}, nil
 }
 
-// vaultUrl returns the URL for the Azure Key Vault
-// Parameter vault can be one of:
-// - The address of the vault, such as "https://<name>.vault.azure.net" (could be a different format if using different clouds or private endpoints)
-// - The FQDN of the vault, such as "<name>.vault.azure.net" (or another domain if using different clouds or private endpoints)
-// - Only the name of the vault, which will be formatted for "vault.azure.net"
-func (c client) vaultUrl(vault string) string {
-	// If there's a dot, assume it's either a full URL or a FQDN
-	if strings.ContainsRune(vault, '.') {
-		if !strings.HasPrefix(vault, "https://") {
-			vault = "https://" + vault
-		}
-		return vault
-	}
-
-	return "https://" + vault + ".vault.azure.net"
-}
-
 // getClientForVault returns the azkeys.Client object for the given vault
 func (c *client) getClientForVault(ctx context.Context, vault string) *azkeys.Client {
-	vaultUrl := c.vaultUrl(vault)
-
-	client, _ := c.clients.GetOrCompute(vaultUrl, func() *azkeys.Client {
-		client, err := azkeys.NewClient(vaultUrl, c.cred, &azkeys.ClientOptions{
+	client, _ := c.clients.GetOrCompute(vault, func() *azkeys.Client {
+		client, err := azkeys.NewClient(vault, c.cred, &azkeys.ClientOptions{
 			ClientOptions: policy.ClientOptions{
 				Telemetry: policy.TelemetryOptions{
 					Disabled: true,
