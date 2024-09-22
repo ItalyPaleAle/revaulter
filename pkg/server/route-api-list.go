@@ -13,8 +13,6 @@ import (
 
 type apiListResponse []requestStatePublic
 
-const ndJSONContentType = "application/x-ndjson"
-
 // RouteApiListGet is the handler for the GET /api/list request
 // This returns the list of all pending requests
 // If the Accept header is `application/x-ndjson`, then this sends a stream of records, updated as soon as they come in, using the NDJSON format (https://github.com/ndjson/ndjson-spec)

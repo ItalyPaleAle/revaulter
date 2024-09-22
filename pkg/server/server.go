@@ -35,6 +35,11 @@ import (
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
+const (
+	ndJSONContentType = "application/x-ndjson"
+	jsonContentType   = "application/json; charset=utf-8"
+)
+
 // Server is the server based on Gin
 type Server struct {
 	appRouter  *gin.Engine

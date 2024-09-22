@@ -125,6 +125,10 @@ func (m *RevaulterMetrics) HTTPHandler() http.Handler {
 
 // RecordServerRequest records a request processed by the server.
 func (m *RevaulterMetrics) RecordServerRequest(route string, status int, duration time.Duration) {
+	if m == nil {
+		return
+	}
+
 	m.serverRequests.Record(
 		context.Background(),
 		float64(duration.Microseconds())/1000,
@@ -138,6 +142,10 @@ func (m *RevaulterMetrics) RecordServerRequest(route string, status int, duratio
 }
 
 func (m *RevaulterMetrics) RecordRequest(operation string, key string) {
+	if m == nil {
+		return
+	}
+
 	m.requests.Add(
 		context.Background(),
 		1,
@@ -151,6 +159,10 @@ func (m *RevaulterMetrics) RecordRequest(operation string, key string) {
 }
 
 func (m *RevaulterMetrics) RecordResult(status string) {
+	if m == nil {
+		return
+	}
+
 	m.results.Add(
 		context.Background(),
 		1,
@@ -163,6 +175,10 @@ func (m *RevaulterMetrics) RecordResult(status string) {
 }
 
 func (m *RevaulterMetrics) RecordLatency(vault string, latency time.Duration) {
+	if m == nil {
+		return
+	}
+
 	m.latency.Record(
 		context.Background(),
 		float64(latency.Microseconds())/1000,

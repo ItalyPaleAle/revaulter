@@ -82,7 +82,7 @@ func AbortWithErrorJSON(c *gin.Context, err error) {
 	}
 
 	// Send the response
-	c.Header("Content-Type", "application/json")
+	c.Header("Content-Type", jsonContentType)
 	c.Status(errRes.Code)
 	_ = enc.Encode(errRes)
 }

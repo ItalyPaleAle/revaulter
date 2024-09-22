@@ -46,8 +46,6 @@ const (
 
 	// Size for the in-memory buffer for bufconn
 	bufconnBufSize = 1 << 20 // 1MB
-
-	jsonContentType = "application/json"
 )
 
 func TestMain(m *testing.M) {
@@ -283,7 +281,10 @@ func TestServerAppRoutes(t *testing.T) {
 				assertResponseError(t, res, http.StatusBadRequest, "Parameter state is missing in the request")
 
 				// Ensure that the logs do not contain the code and state
-				assert.Contains(t, logBuf.String(), `"status":400,"method":"GET","path":"/auth/confirm?code***",`)
+				logStr := logBuf.String()
+				assert.Contains(t, logStr, `path=/auth/confirm?code***`)
+				assert.Contains(t, logStr, `status=400`)
+				assert.Contains(t, logStr, `method=GET`)
 			})
 
 			t.Run("Missing auth state cookie", func(t *testing.T) {
