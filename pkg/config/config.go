@@ -94,7 +94,9 @@ type Config struct {
 	// - `CF-Connecting-IP`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/reference/http-request-headers/#cf-connecting-ip)
 	TrustedForwardedIPHeader string `env:"TRUSTEDFORWARDEDIPHEADER" yaml:"trustedForwardedIPHeader"`
 
-	// Enable the metrics server, which exposes a Prometheus-compatible endpoint `/metrics`.
+	// Enable metrics collection.
+	// Metrics can then be exposed via a Prometheus-compatible endpoint by enabling `metricsServerEnabled`.
+	// Alternatively, metrics can be sent to an OpenTelemetry Collector; see `metricsOtelCollectorEndpoint`.
 	// +default false
 	EnableMetrics bool `env:"ENABLEMETRICS" yaml:"enableMetrics"`
 
@@ -147,31 +149,33 @@ type Config struct {
 	// +default "info"
 	LogLevel string `env:"LOGLEVEL" yaml:"logLevel"`
 
-	// If true, emits logs formatted as JSON, otherwise uses a text-based structured log format
-	// +default false if a TTY is attached (e.g. in development); true otherwise
+	// If true, emits logs formatted as JSON, otherwise uses a text-based structured log format.
+	// +default false if a TTY is attached (e.g. in development); true otherwise.
 	LogAsJSON bool `env:"LOGASJSON" yaml:"logAsJson"`
 
-	// OpenTelemetry Collector endpoint for sending logs, for example: `<http(s)>://<otel-collector-address>:<otel-collector-port>/v1/logs`
-	// If configured,logs are sent to the collector at the given address
-	// This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/logs" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc")
+	// OpenTelemetry Collector endpoint for sending logs, for example: `<http(s)>://<otel-collector-address>:<otel-collector-port>/v1/logs`.
+	// If configured,logs are sent to the collector at the given address.
+	// This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/logs" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc").
 	LogsOtelCollectorEndpoint string `env:"LOGSOTELCOLLECTORENDPOINT" yaml:"logsOtelCollectorEndpoint"`
 
-	// If true, enables tracing with OpenTelemetry
+	// If true, enables tracing with OpenTelemetry.
+	// Traces can be sent to an OpenTelemetry Collector or Zipkin server.
+	// If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.
 	// +default false
 	EnableTracing bool `env:"ENABLETRACING" yaml:"enableTracing"`
 
-	// Sampling rate for traces
-	// The default value is 1, sampling all requests
+	// Sampling rate for traces, as a float.
+	// The default value is 1, sampling all requests.
 	// +default 1
 	TracingSampling float64 `env:"TRACINGSAMPLING" yaml:"tracingSampling"`
 
-	// OpenTelemetry Collector endpoint for sending traces, for example: `<http(s)-or-grpc(s)>://<otel-collector-address>:<otel-collector-port>/v1/traces`
-	// If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required
-	// This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/traces" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc")
+	// OpenTelemetry Collector endpoint for sending traces, for example: `<http(s)-or-grpc(s)>://<otel-collector-address>:<otel-collector-port>/v1/traces`.
+	// If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.
+	// This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/traces" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc").
 	TracingOtelCollectorEndpoint string `env:"TRACINGOTELCOLLECTORENDPOINT" yaml:"tracingOtelCollectorEndpoint"`
 
-	// Zipkin endpoint for sending traces, for example: `http://<zipkin-address>:<zipkin-port>/api/v2/spans`
-	// If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required
+	// Zipkin endpoint for sending traces, for example: `http://<zipkin-address>:<zipkin-port>/api/v2/spans`.
+	// If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.
 	TracingZipkinEndpoint string `env:"TRACINGZIPKINENDPOINT" yaml:"tracingZipkinEndpoint"`
 
 	// Dev is meant for development only; it's undocumented
