@@ -49,7 +49,7 @@ func (s *Server) AccessTokenMiddleware(opts AccessTokenMiddlewareOpts) func(c *g
 				_ = c.Error(fmt.Errorf("cookie error: %w", err))
 			}
 			if opts.Required {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorResponse("User is not authenticated or there's no access token in the cookies"))
+				AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User is not authenticated or there's no access token in the cookies"))
 			}
 			return
 		}

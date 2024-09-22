@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/rs/zerolog"
 	"github.com/spf13/cast"
 
 	"github.com/italypaleale/revaulter/pkg/config"
@@ -34,13 +34,12 @@ func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 		req := &operationRequest{}
 		err := c.Bind(req)
 		if err != nil {
-			_ = c.Error(err)
-			c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("Invalid request body"))
+			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid request body: %v", err))
 			return
 		}
 		err = req.Parse(op)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("Invalid request: "+err.Error()))
+			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid request: %v", err))
 			return
 		}
 
@@ -48,8 +47,7 @@ func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 		// First, store the request in the states map
 		stateUuid, err := uuid.NewRandom()
 		if err != nil {
-			_ = c.Error(fmt.Errorf("failed to generate UUID: %w", err))
-			c.AbortWithStatusJSON(http.StatusInternalServerError, InternalServerError)
+			AbortWithErrorJSON(c, fmt.Errorf("failed to generate UUID: %w", err))
 			return
 		}
 		stateId := stateUuid.String()
@@ -64,7 +62,7 @@ func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 
 		// Invoke the webhook and send a message with the URL to unlock, in background
 		go func() {
-			log := zerolog.Ctx(c.Request.Context())
+			log := utils.LogFromContext(c.Request.Context())
 
 			// Use a background context so it's not tied to the incoming request
 			webhookErr := s.webhook.SendWebhook(context.Background(), &webhook.WebhookRequest{
@@ -76,12 +74,10 @@ func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 				Note:          state.Note,
 			})
 			if webhookErr != nil {
-				log.Error().
-					Err(webhookErr).
-					Msg("Error sending webhook")
+				log.ErrorContext(c.Request.Context(), "Error sending webhook", slog.Any("error", webhookErr))
 				return
 			}
-			log.Debug().Msg("Sent webhook notification")
+			log.ErrorContext(c.Request.Context(), "Sent webhook notification")
 		}()
 
 		// Make the request expire in background

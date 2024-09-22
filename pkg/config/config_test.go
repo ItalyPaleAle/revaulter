@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"log/slog"
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -94,14 +94,14 @@ func TestValidateConfig(t *testing.T) {
 
 func TestSetTokenSigningKey(t *testing.T) {
 	logs := &bytes.Buffer{}
-	logger := zerolog.New(logs)
+	logger := slog.New(slog.NewTextHandler(logs, nil))
 
 	t.Run("tokenSigningKey present", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
 			"tokenSigningKey": "hello-world",
 		}))
 
-		err := config.SetTokenSigningKey(&logger)
+		err := config.SetTokenSigningKey(logger)
 		require.NoError(t, err)
 		assert.Equal(t, "b8cf67b06159c291d6cc1e27b10cddeab93f48f444995f4b0fb886e3ea75d422", hex.EncodeToString(config.GetTokenSigningKey()))
 	})
@@ -111,7 +111,7 @@ func TestSetTokenSigningKey(t *testing.T) {
 			"tokenSigningKey": "",
 		}))
 
-		err := config.SetTokenSigningKey(&logger)
+		err := config.SetTokenSigningKey(logger)
 		require.NoError(t, err)
 		val := config.GetTokenSigningKey()
 		require.Len(t, val, 32)
@@ -120,22 +120,19 @@ func TestSetTokenSigningKey(t *testing.T) {
 		require.Contains(t, logsMsg, "No 'tokenSigningKey' found in the configuration")
 
 		// Should be different every time
-		err = config.SetTokenSigningKey(&logger)
+		err = config.SetTokenSigningKey(logger)
 		require.NoError(t, err)
 		assert.NotEqual(t, val, config.GetTokenSigningKey())
 	})
 }
 
 func TestSetCookieKeys(t *testing.T) {
-	logs := &bytes.Buffer{}
-	logger := zerolog.New(logs)
-
 	t.Run("cookieEncryptionKey present", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
 			"cookieEncryptionKey": "some-key",
 		}))
 
-		err := config.SetCookieKeys(&logger)
+		err := config.SetCookieKeys(nil)
 		require.NoError(t, err)
 
 		cek := config.GetCookieEncryptionKey()
@@ -161,7 +158,7 @@ func TestSetCookieKeys(t *testing.T) {
 			"cookieEncryptionKey": "",
 		}))
 
-		err := config.SetCookieKeys(&logger)
+		err := config.SetCookieKeys(nil)
 		require.NoError(t, err)
 
 		cek := config.GetCookieEncryptionKey()

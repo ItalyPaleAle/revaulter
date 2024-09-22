@@ -1,35 +1,33 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/rs/zerolog"
-
-	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/utils"
 )
 
-// LoggerMiddleware is a Gin middleware that uses zerlog for logging
-func (s *Server) LoggerMiddleware(parentLog *zerolog.Logger) func(c *gin.Context) {
+// MiddlewareMaxBodySize is a middleware that limits the size of the request body
+func (s *Server) MiddlewareMaxBodySize(c *gin.Context) {
+	// Limit to 20KB
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 20<<10)
+}
+
+// MiddlewareLogger is a Gin middleware that uses slog for logging
+func (s *Server) MiddlewareLogger(parentLog *slog.Logger) func(c *gin.Context) {
 	return func(c *gin.Context) {
 		method := c.Request.Method
 
 		// Ensure the logger in the context has a request ID, then store it in the context
 		reqId := c.GetString("request-id")
-		log := parentLog.With().
-			Str("reqId", reqId).
-			Logger()
-		c.Request = c.Request.WithContext(log.WithContext(c.Request.Context()))
+		log := parentLog.With(slog.String("id", reqId))
+		c.Request = c.Request.WithContext(utils.LogToContext(c.Request.Context(), log))
 
 		// Do not log OPTIONS requests
 		if method == http.MethodOptions {
-			return
-		}
-
-		// Omit logging /healthz calls if set
-		if c.Request.URL.Path == "/healthz" && config.Get().OmitHealthCheckLogs {
 			return
 		}
 
@@ -54,24 +52,30 @@ func (s *Server) LoggerMiddleware(parentLog *zerolog.Logger) func(c *gin.Context
 		}
 
 		// Get the logger and the appropriate error level
-		var event *zerolog.Event
+		var level slog.Level
 		switch {
 		case statusCode >= 200 && statusCode <= 399:
-			event = log.Info() //nolint:zerologlint
+			level = slog.LevelInfo
 		case statusCode >= 400 && statusCode <= 499:
-			event = log.Warn() //nolint:zerologlint
+			level = slog.LevelWarn
 		default:
-			event = log.Error() //nolint:zerologlint
-		}
-
-		// Check if we have an error
-		if len(c.Errors) > 0 {
-			// We'll pick the last error only
-			event = event.Err(c.Errors.Last().Err)
+			level = slog.LevelError
 		}
 
 		// Check if we have a message
 		msg := c.GetString("log-message")
+		if msg == "" {
+			msg = "HTTP Request"
+		}
+
+		// Check if we have an error
+		if lastErr := c.Errors.Last(); lastErr != nil {
+			// We'll pick the last error only
+			log = log.With(slog.Any("error", lastErr.Err))
+
+			// Set the message as request failed
+			msg = "Failed request"
+		}
 
 		// Check if we want to mask something in the URL
 		mask, ok := c.Get("log-mask")
@@ -82,20 +86,39 @@ func (s *Server) LoggerMiddleware(parentLog *zerolog.Logger) func(c *gin.Context
 			}
 		}
 
-		// Set parameters
-		event.
-			Int("status", statusCode).
-			Str("method", method).
-			Str("path", path).
-			Str("clientIp", clientIP).
-			Dur("duration", duration).
-			Int("respSize", respSize).
-			Msg(msg)
+		// Emit the log
+		log.LogAttrs(c.Request.Context(), level, msg,
+			slog.Int("status", statusCode),
+			slog.String("method", method),
+			slog.String("path", path),
+			slog.String("client", clientIP),
+			slog.Float64("duration", float64(duration.Microseconds())/1000),
+			slog.Int("size", respSize),
+		)
 	}
 }
 
-// LoggerMaskMiddleware returns a Gin middleware that adds the "log-mask" to mask the path using a regular expression
-func (s *Server) LoggerMaskMiddleware(exp *regexp.Regexp, replace string) gin.HandlerFunc {
+// MiddlewareCountMetrics is a Gin middleware that records requests served by the server
+func (s *Server) MiddlewareCountMetrics(c *gin.Context) {
+	if s.metrics == nil {
+		// Process the request and do nothing
+		c.Next()
+		return
+	}
+
+	// Route name is "<method> <path>", where "path" is the path defined in the router
+	route := c.Request.Method + " " + c.FullPath()
+	start := time.Now()
+
+	// Process the route
+	c.Next()
+
+	// Emit the metric
+	s.metrics.RecordServerRequest(route, c.Writer.Status(), time.Since(start))
+}
+
+// MiddlewareLoggerMask returns a Gin middleware that adds the "log-mask" to mask the path using a regular expression
+func (s *Server) MiddlewareLoggerMask(exp *regexp.Regexp, replace string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Set("log-mask", func(path string) string {
 			return exp.ReplaceAllString(path, replace)

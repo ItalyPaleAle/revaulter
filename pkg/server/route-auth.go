@@ -55,8 +55,7 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 		b := make([]byte, 12)
 		_, err = io.ReadFull(rand.Reader, b)
 		if err != nil {
-			_ = c.Error(fmt.Errorf("failed to generate random seed: %w", err))
-			c.JSON(http.StatusInternalServerError, InternalServerError)
+			AbortWithErrorJSON(c, fmt.Errorf("failed to generate random seed: %w", err))
 			return
 		}
 		seed = base64.RawURLEncoding.EncodeToString(b)
@@ -65,8 +64,7 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 	// Build the state object
 	stateToken, err := createStateToken(c, seed)
 	if err != nil {
-		_ = c.Error(fmt.Errorf("failed to create state token: %w", err))
-		c.JSON(http.StatusInternalServerError, InternalServerError)
+		AbortWithErrorJSON(c, fmt.Errorf("failed to create state token: %w", err))
 		return
 	}
 
@@ -75,8 +73,7 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 	secureCookie := cfg.ForceSecureCookies || c.Request.URL.Scheme == "https:"
 	err = setSecureCookie(c, authStateCookieName, seed, authStateCookieMaxAge, "/auth", c.Request.URL.Host, secureCookie, true)
 	if err != nil {
-		_ = c.Error(fmt.Errorf("failed to set access token secure cookie: %w", err))
-		c.AbortWithStatusJSON(http.StatusInternalServerError, InternalServerError)
+		AbortWithErrorJSON(c, fmt.Errorf("failed to set access token secure cookie: %w", err))
 		return
 	}
 
@@ -111,15 +108,13 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 	// Ensure we have the required params in the query string
 	code := c.Query("code")
 	if code == "" {
-		_ = c.Error(errors.New("Parameter code is missing in the request"))
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("Parameter code is missing in the request"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Parameter code is missing in the request"))
 		return
 	}
 	// Note that this is the auth state token, not the state of the operation
 	stateToken := c.Query("state")
 	if stateToken == "" {
-		_ = c.Error(errors.New("Parameter state is missing in the request"))
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("Parameter state is missing in the request"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Parameter state is missing in the request"))
 		return
 	}
 
@@ -130,7 +125,7 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 	}
 	if err != nil {
 		_ = c.Error(fmt.Errorf("failed to retrieve auth state cookie: %w", err))
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("Auth state cookie is missing or invalid"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Auth state cookie is missing or invalid"))
 		return
 	}
 
@@ -140,16 +135,14 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 
 	// Validate the state token
 	if !validateStateToken(c, stateToken, seed) {
-		_ = c.Error(errors.New("state token could not be validated"))
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("The state token could not be validated"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "The state token could not be validated"))
 		return
 	}
 
 	// Exchange the code for an access token
 	accessToken, err := s.requestAccessToken(c.Request.Context(), code, seed)
 	if err != nil {
-		_ = c.Error(fmt.Errorf("failed to obtain access token: %w", err))
-		c.AbortWithStatusJSON(http.StatusInternalServerError, ErrorResponse("Error obtaining access token"))
+		AbortWithErrorJSON(c, fmt.Errorf("failed to obtain access token: %w", err))
 		return
 	}
 
@@ -162,8 +155,7 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 	// Set the access token in a cookie
 	err = setSecureCookie(c, atCookieName, accessToken.AccessToken, expiration, "/", c.Request.URL.Host, secureCookie, true)
 	if err != nil {
-		_ = c.Error(fmt.Errorf("failed to set access token secure cookie: %w", err))
-		c.AbortWithStatusJSON(http.StatusInternalServerError, InternalServerError)
+		AbortWithErrorJSON(c, fmt.Errorf("failed to set access token secure cookie: %w", err))
 		return
 	}
 

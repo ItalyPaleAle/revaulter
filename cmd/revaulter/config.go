@@ -1,29 +1,36 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/lmittmann/tint"
+	"github.com/mattn/go-isatty"
 	"github.com/mitchellh/go-homedir"
-	"github.com/rs/zerolog"
+	"go.opentelemetry.io/contrib/bridges/otelslog"
+	logGlobal "go.opentelemetry.io/otel/log/global"
+	logSdk "go.opentelemetry.io/otel/sdk/log"
 
+	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/configloader"
 )
 
-const configEnvPrefix = "REVAULTER_"
-
-func loadConfig(log *zerolog.Logger) error {
+func loadConfig() error {
 	// Get the path to the config.yaml
 	// First, try with the REVAULTER_CONFIG env var
-	configFile := os.Getenv(configEnvPrefix + "CONFIG")
+	configFile := os.Getenv(buildinfo.ConfigEnvPrefix + "CONFIG")
 	if configFile != "" {
 		exists, _ := utils.FileExists(configFile)
 		if !exists {
-			return newLoadConfigError("Environmental variable "+configEnvPrefix+"CONFIG points to a file that does not exist", "Error loading config file")
+			return newLoadConfigError("Environmental variable "+buildinfo.ConfigEnvPrefix+"CONFIG points to a file that does not exist", "Error loading config file")
 		}
 	} else {
 		// Look in the default paths
@@ -39,7 +46,7 @@ func loadConfig(log *zerolog.Logger) error {
 	cfg := config.Get()
 	err := configloader.Load(cfg, configloader.LoadOptions{
 		FilePath:                 configFile,
-		EnvPrefix:                configEnvPrefix,
+		EnvPrefix:                buildinfo.ConfigEnvPrefix,
 		IgnoreZeroValuesInConfig: true,
 	})
 	if err != nil {
@@ -47,8 +54,77 @@ func loadConfig(log *zerolog.Logger) error {
 	}
 	cfg.SetLoadedConfigPath(configFile)
 
-	// Process the configuration
-	return processConfig(log, cfg)
+	return nil
+}
+
+func getLogger(cfg *config.Config) (log *slog.Logger, shutdownFn func(ctx context.Context) error, err error) {
+	// Get the level
+	level, err := getLogLevel(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Check if we are sending logs to an OTel collector
+	// We pass a background context here as the main context for the app isn't ready yet
+	exp, expLogFn, err := cfg.GetLogsExporter(context.Background())
+	if err != nil {
+		// We don't use newLoadConfigError as this is not a loading error
+		return nil, nil, fmt.Errorf("failed to get logger: %w", err)
+	}
+
+	// Create the handler
+	var handler slog.Handler
+	switch {
+	case cfg.LogAsJSON:
+		// Log as JSON if configured
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: level,
+		})
+	case isatty.IsTerminal(os.Stdout.Fd()):
+		// Enable colors if we have a TTY
+		handler = tint.NewHandler(os.Stdout, &tint.Options{
+			Level:      slog.LevelDebug,
+			TimeFormat: time.StampMilli,
+		})
+	default:
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: level,
+		})
+	}
+
+	// If we have an OpenTelemetry exporter, we need to create a handler that sends logs to OTel too
+	// We wrap the handler in a "fanout" handler that sends logs to both
+	if exp != nil {
+		// Create the logger provider
+		provider := logSdk.NewLoggerProvider(
+			logSdk.WithProcessor(
+				logSdk.NewBatchProcessor(exp),
+			),
+			logSdk.WithResource(cfg.GetOtelResource(buildinfo.AppName)),
+		)
+
+		// Set the logger provider globally
+		logGlobal.SetLoggerProvider(provider)
+
+		// Wrap the handler in a "fanout" one
+		handler = utils.LogFanoutHandler{
+			handler,
+			otelslog.NewHandler(buildinfo.AppName, otelslog.WithLoggerProvider(provider)),
+		}
+
+		// Return a function to invoke during shutdown
+		shutdownFn = provider.Shutdown
+	}
+
+	log = slog.New(handler).
+		With(slog.String("app", buildinfo.AppName)).
+		With(slog.String("version", buildinfo.AppVersion))
+
+	// If we have a function to emit a log from the exporter, invoke that now
+	if exp != nil && expLogFn != nil {
+		expLogFn(log)
+	}
+	return log, shutdownFn, nil
 }
 
 func findConfigFile(fileName string, searchPaths ...string) string {
@@ -73,13 +149,7 @@ func findConfigFile(fileName string, searchPaths ...string) string {
 }
 
 // Processes the configuration
-func processConfig(log *zerolog.Logger, cfg *config.Config) (err error) {
-	// Log level
-	err = setLogLevel(cfg)
-	if err != nil {
-		return err
-	}
-
+func processConfig(log *slog.Logger, cfg *config.Config) (err error) {
 	// Check required variables
 	err = cfg.Validate()
 	if err != nil {
@@ -101,21 +171,19 @@ func processConfig(log *zerolog.Logger, cfg *config.Config) (err error) {
 	return nil
 }
 
-// Sets the log level based on the configuration
-func setLogLevel(cfg *config.Config) error {
+func getLogLevel(cfg *config.Config) (slog.Level, error) {
 	switch strings.ToLower(cfg.LogLevel) {
 	case "debug":
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+		return slog.LevelDebug, nil
 	case "", "info": // Also default log level
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+		return slog.LevelInfo, nil
 	case "warn":
-		zerolog.SetGlobalLevel(zerolog.WarnLevel)
+		return slog.LevelWarn, nil
 	case "error":
-		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+		return slog.LevelError, nil
 	default:
-		return newLoadConfigError("Invalid value for 'logLevel'", "Invalid configuration")
+		return 0, newLoadConfigError("Invalid value for 'logLevel'", "Invalid configuration")
 	}
-	return nil
 }
 
 // Error returned by loadConfig
@@ -139,8 +207,6 @@ func (e loadConfigError) Error() string {
 }
 
 // LogFatal causes a fatal log
-func (e loadConfigError) LogFatal(log *zerolog.Logger) {
-	log.Fatal().
-		Str("error", e.err).
-		Msg(e.msg)
+func (e loadConfigError) LogFatal(log *slog.Logger) {
+	utils.FatalError(log, e.msg, errors.New(e.err))
 }

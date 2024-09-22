@@ -5,24 +5,32 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/rs/zerolog"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
 	"github.com/italypaleale/revaulter/pkg/metrics"
+	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/broker"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
@@ -34,22 +42,28 @@ type Server struct {
 	states     map[string]*requestState
 	lock       sync.RWMutex
 	webhook    webhook.Webhook
-	metrics    metrics.RevaulterMetrics
+	metrics    *metrics.RevaulterMetrics
+
 	// Subscribers that receive public events
 	pubsub *broker.Broker[*requestStatePublic]
 	// Subscriptions to watch for state changes
 	// Each state can only have one subscription
 	// If another call tries to subscribe to the same state, it will evict the first call
 	subs map[string]chan *requestState
+
 	// Servers
 	appSrv     *http.Server
 	metricsSrv *http.Server
+
 	// Method that forces a reload of TLS certificates from disk
 	tlsCertWatchFn tlsCertWatchFn
+
 	// TLS configuration for the app server
 	tlsConfig *tls.Config
-	running   atomic.Bool
-	wg        sync.WaitGroup
+
+	tracer  *sdkTrace.TracerProvider
+	running atomic.Bool
+	wg      sync.WaitGroup
 
 	// Listeners for the app and metrics servers
 	// These can be used for testing without having to start an actual TCP listener
@@ -59,25 +73,48 @@ type Server struct {
 	// Factory for keyvault.Client objects
 	// This is defined as a property to allow for mocking
 	kvClientFactory keyvault.ClientFactory
+
+	// Optional function to add test routes
+	// This is used in testing
+	addTestRoutes func(s *Server, r gin.IRouter)
+}
+
+// NewServerOpts contains options for the NewServer method
+type NewServerOpts struct {
+	Log           *slog.Logger
+	Webhook       webhook.Webhook
+	Metrics       *metrics.RevaulterMetrics
+	TraceExporter sdkTrace.SpanExporter
+
+	// Optional function to add test routes
+	// This is used in testing
+	addTestRoutes func(s *Server, r gin.IRouter)
 }
 
 // NewServer creates a new Server object and initializes it
-func NewServer(log *zerolog.Logger, webhook webhook.Webhook) (*Server, error) {
+func NewServer(opts NewServerOpts) (*Server, error) {
+	// Create the HTTP client
+	// Update its transport to include tracing information
+	httpClient := &http.Client{
+		Timeout: 15 * time.Second,
+	}
+	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
+
 	s := &Server{
 		states:  map[string]*requestState{},
 		subs:    map[string]chan *requestState{},
 		pubsub:  broker.NewBroker[*requestStatePublic](),
-		webhook: webhook,
+		webhook: opts.Webhook,
+		metrics: opts.Metrics,
 
-		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
-		},
-
+		httpClient:      httpClient,
 		kvClientFactory: keyvault.NewClient,
+
+		addTestRoutes: opts.addTestRoutes,
 	}
 
 	// Init the object
-	err := s.init(log)
+	err := s.init(opts.Log, opts.TraceExporter)
 	if err != nil {
 		return nil, err
 	}
@@ -86,12 +123,15 @@ func NewServer(log *zerolog.Logger, webhook webhook.Webhook) (*Server, error) {
 }
 
 // Init the Server object and create a Gin server
-func (s *Server) init(log *zerolog.Logger) error {
-	// Init the Prometheus metrics
-	s.metrics.Init()
+func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (err error) {
+	// Init tracer
+	err = s.initTracer(traceExporter)
+	if err != nil {
+		return err
+	}
 
 	// Init the app server
-	err := s.initAppServer(log)
+	err = s.initAppServer(log)
 	if err != nil {
 		return err
 	}
@@ -99,7 +139,31 @@ func (s *Server) init(log *zerolog.Logger) error {
 	return nil
 }
 
-func (s *Server) initAppServer(log *zerolog.Logger) (err error) {
+func (s *Server) initTracer(exporter sdkTrace.SpanExporter) error {
+	cfg := config.Get()
+
+	// If tracing is disabled, this is a no-op
+	if !cfg.EnableTracing || exporter == nil {
+		return nil
+	}
+
+	// Init the trace provider
+	s.tracer = sdkTrace.NewTracerProvider(
+		sdkTrace.WithResource(cfg.GetOtelResource(buildinfo.AppName)),
+		sdkTrace.WithSampler(sdkTrace.ParentBased(sdkTrace.AlwaysSample())),
+		sdkTrace.WithBatcher(exporter),
+	)
+	otel.SetTracerProvider(s.tracer)
+	otel.SetTextMapPropagator(
+		propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}),
+	)
+
+	return nil
+}
+
+func (s *Server) initAppServer(log *slog.Logger) (err error) {
+	cfg := config.Get()
+
 	// Load the TLS configuration
 	s.tlsConfig, s.tlsCertWatchFn, err = s.loadTLSConfig(log)
 	if err != nil {
@@ -112,10 +176,85 @@ func (s *Server) initAppServer(log *zerolog.Logger) (err error) {
 	// Create the Gin router and add various middlewares
 	s.appRouter = gin.New()
 	s.appRouter.Use(gin.Recovery())
-	s.appRouter.Use(s.RequestIdMiddleware)
-	s.appRouter.Use(s.LoggerMiddleware(log))
+	s.appRouter.Use(s.MiddlewareMaxBodySize)
 
-	// CORS configuration
+	// Configure the trusted IP header and proxies
+	s.configureTrustedProxies()
+
+	loggerMw := s.MiddlewareLogger(log)
+	corsMw := cors.New(s.getCorsConfig())
+	addStandardMiddlewares := func(r gin.IRoutes) {
+		r.Use(corsMw)
+		if s.tracer != nil {
+			r.Use(otelgin.Middleware(buildinfo.AppName, otelgin.WithTracerProvider(s.tracer)))
+		}
+		r.Use(s.MiddlewareRequestId)
+		if s.metrics != nil {
+			r.Use(s.MiddlewareCountMetrics)
+		}
+		r.Use(loggerMw)
+		r.Use(s.MiddlewareMaxBodySize)
+	}
+
+	// Add routes
+	// Start with the healthz route
+	// This has less middlewares
+	healthzGroup := s.appRouter.Group("")
+	if s.metrics != nil {
+		healthzGroup.Use(s.MiddlewareCountMetrics)
+	}
+	if !cfg.OmitHealthCheckLogs {
+		healthzGroup.Use(loggerMw)
+	}
+	healthzGroup.GET("/healthz", gin.WrapF(s.RouteHealthzHandler))
+
+	// Logger middleware that removes the auth code from the URL
+	codeFilterLogMw := s.MiddlewareLoggerMask(regexp.MustCompile(`(\?|&)(code|state|session_state)=([^&]*)`), "$1$2***")
+
+	// Middleware to allow certain IPs
+	allowIpMw, err := s.AllowIpMiddleware()
+	if err != nil {
+		return err
+	}
+
+	// Requests - these share the /request prefix and all use the allow IP middleware
+	requestRouteGroup := s.appRouter.Group("/request")
+	addStandardMiddlewares(requestRouteGroup)
+	requestRouteGroup.Use(allowIpMw, s.RequestKeyMiddleware())
+	requestRouteGroup.GET("/result/:state", s.RouteRequestResult)
+	requestRouteGroup.POST("/encrypt", s.RouteRequestOperations(OperationEncrypt))
+	requestRouteGroup.POST("/decrypt", s.RouteRequestOperations(OperationDecrypt))
+	requestRouteGroup.POST("/sign", s.RouteRequestOperations(OperationSign))
+	requestRouteGroup.POST("/verify", s.RouteRequestOperations(OperationVerify))
+	requestRouteGroup.POST("/wrapkey", s.RouteRequestOperations(OperationWrapKey))
+	requestRouteGroup.POST("/unwrapkey", s.RouteRequestOperations(OperationUnwrapKey))
+
+	// API routes - these share the /api prefix
+	apiRouteGroup := s.appRouter.Group("/api")
+	addStandardMiddlewares(apiRouteGroup)
+	apiRouteGroup.GET("/list",
+		s.AccessTokenMiddleware(AccessTokenMiddlewareOpts{Required: true}),
+		s.RouteApiListGet,
+	)
+	apiRouteGroup.POST("/confirm",
+		s.AccessTokenMiddleware(AccessTokenMiddlewareOpts{Required: true, AllowAccessTokenInHeader: true}),
+		s.RouteApiConfirmPost,
+	)
+
+	// Auth routes - these share the /auth prefix
+	authRouteGroup := s.appRouter.Group("/auth")
+	addStandardMiddlewares(authRouteGroup)
+	authRouteGroup.GET("/signin", s.RouteAuthSignin)
+	authRouteGroup.GET("/confirm", codeFilterLogMw, s.RouteAuthConfirm)
+
+	// Static files as fallback
+	// This doesn't include most middlewares
+	s.appRouter.NoRoute(s.serveClient())
+
+	return nil
+}
+
+func (s *Server) getCorsConfig() cors.Config {
 	corsConfig := cors.Config{
 		AllowMethods: []string{
 			http.MethodGet,
@@ -148,51 +287,21 @@ func (s *Server) initAppServer(log *zerolog.Logger) (err error) {
 		corsConfig.AllowAllOrigins = false
 		corsConfig.AllowOrigins = origins
 	}
-	s.appRouter.Use(cors.New(corsConfig))
 
-	// Logger middleware that removes the auth code from the URL
-	codeFilterLogMw := s.LoggerMaskMiddleware(regexp.MustCompile(`(\?|&)(code|state|session_state)=([^&]*)`), "$1$2***")
+	return corsConfig
+}
 
-	// Middleware to allow certain IPs
-	allowIpMw, err := s.AllowIpMiddleware()
-	if err != nil {
-		return err
+func (s *Server) configureTrustedProxies() {
+	// Configure the trusted IP header
+	trustedIPHeader := config.Get().TrustedForwardedIPHeader
+	if trustedIPHeader != "" {
+		// If there's a trusted IP header, the app is behind a proxy, so we trust all addresses for the proxy
+		_ = s.appRouter.SetTrustedProxies([]string{"0.0.0.0/0", "::/0"})
+		s.appRouter.RemoteIPHeaders = strings.Split(trustedIPHeader, ",")
+	} else {
+		// Set Gin to not trust any proxy
+		_ = s.appRouter.SetTrustedProxies(nil)
 	}
-
-	// Add routes
-	// Start with the healthz route
-	s.appRouter.GET("/healthz", gin.WrapF(s.RouteHealthzHandler))
-
-	// Requests - these share the /request prefix and all use the allow IP middleware
-	requestRouteGroup := s.appRouter.Group("/request", allowIpMw, s.RequestKeyMiddleware())
-	requestRouteGroup.GET("/result/:state", s.RouteRequestResult)
-	requestRouteGroup.POST("/encrypt", s.RouteRequestOperations(OperationEncrypt))
-	requestRouteGroup.POST("/decrypt", s.RouteRequestOperations(OperationDecrypt))
-	requestRouteGroup.POST("/sign", s.RouteRequestOperations(OperationSign))
-	requestRouteGroup.POST("/verify", s.RouteRequestOperations(OperationVerify))
-	requestRouteGroup.POST("/wrapkey", s.RouteRequestOperations(OperationWrapKey))
-	requestRouteGroup.POST("/unwrapkey", s.RouteRequestOperations(OperationUnwrapKey))
-
-	// API routes - these share the /api prefix
-	apiRouteGroup := s.appRouter.Group("/api")
-	apiRouteGroup.GET("/list",
-		s.AccessTokenMiddleware(AccessTokenMiddlewareOpts{Required: true}),
-		s.RouteApiListGet,
-	)
-	apiRouteGroup.POST("/confirm",
-		s.AccessTokenMiddleware(AccessTokenMiddlewareOpts{Required: true, AllowAccessTokenInHeader: true}),
-		s.RouteApiConfirmPost,
-	)
-
-	// Auth routes - these share the /auth prefix
-	authRouteGroup := s.appRouter.Group("/auth")
-	authRouteGroup.GET("/signin", s.RouteAuthSignin)
-	authRouteGroup.GET("/confirm", codeFilterLogMw, s.RouteAuthConfirm)
-
-	// Static files as fallback
-	s.appRouter.NoRoute(s.serveClient())
-
-	return nil
 }
 
 func (s *Server) getBaseURL() string {
@@ -236,15 +345,16 @@ func (s *Server) Run(ctx context.Context) error {
 		shutdownCancel()
 		if err != nil {
 			// Log the error only (could be context canceled)
-			zerolog.Ctx(ctx).Warn().
-				Err(err).
-				Msg("App server shutdown error")
+			utils.LogFromContext(ctx).WarnContext(ctx,
+				"App server shutdown error",
+				slog.Any("error", err),
+			)
 		}
 	}()
 	defer s.pubsub.Shutdown()
 
 	// Metrics server
-	if cfg.EnableMetrics {
+	if cfg.MetricsServerEnabled && s.metrics != nil {
 		s.wg.Add(1)
 		err = s.startMetricsServer(ctx)
 		if err != nil {
@@ -258,9 +368,27 @@ func (s *Server) Run(ctx context.Context) error {
 			shutdownCancel()
 			if err != nil {
 				// Log the error only (could be context canceled)
-				zerolog.Ctx(ctx).Warn().
-					Err(err).
-					Msg("Metrics server shutdown error")
+				utils.LogFromContext(ctx).WarnContext(ctx,
+					"Metrics server shutdown error",
+					slog.Any("error", err),
+				)
+			}
+		}()
+	}
+
+	// Tracer shutdown
+	if s.tracer != nil {
+		defer func() {
+			// Use a background context here as the parent context is done
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
+			err = s.tracer.Shutdown(shutdownCtx)
+			shutdownCancel()
+			if err != nil {
+				// Log the error only (could be context canceled)
+				utils.LogFromContext(ctx).WarnContext(ctx,
+					"Trace provider shutdown error",
+					slog.Any("error", err),
+				)
 			}
 		}()
 	}
@@ -282,7 +410,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 func (s *Server) startAppServer(ctx context.Context) error {
 	cfg := config.Get()
-	log := zerolog.Ctx(ctx)
+	log := utils.LogFromContext(ctx)
 
 	// Create the HTTP(S) server
 	s.appSrv = &http.Server{
@@ -297,7 +425,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 	} else {
 		// Not using TLS
 		// Here we also need to enable HTTP/2 Cleartext
-		log.Warn().Msg("Starting app server without TLS - this is not recommended unless Revaulter is exposed through a proxy that offers TLS termination")
+		log.WarnContext(ctx, "Starting app server without TLS - this is not recommended unless Revaulter is exposed through a proxy that offers TLS termination")
 		h2s := &http2.Server{}
 		s.appSrv.Handler = h2c.NewHandler(s.appRouter, h2s)
 	}
@@ -312,12 +440,12 @@ func (s *Server) startAppServer(ctx context.Context) error {
 	}
 
 	// Start the HTTP(S) server in a background goroutine
-	log.Info().
-		Str("bind", cfg.Bind).
-		Int("port", cfg.Port).
-		Bool("tls", s.tlsConfig != nil).
-		Str("url", s.getBaseURL()).
-		Msg("App server started")
+	log.InfoContext(ctx, "App server started",
+		slog.String("bind", cfg.Bind),
+		slog.Int("port", cfg.Port),
+		slog.Bool("tls", s.tlsConfig != nil),
+		slog.String("url", s.getBaseURL()),
+	)
 	go func() {
 		defer s.appListener.Close()
 
@@ -329,7 +457,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 			srvErr = s.appSrv.Serve(s.appListener)
 		}
 		if srvErr != http.ErrServerClosed {
-			log.Fatal().Err(srvErr).Msgf("Error starting app server")
+			utils.FatalError(log, "Error starting app server", srvErr)
 		}
 	}()
 
@@ -338,7 +466,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 
 func (s *Server) startMetricsServer(ctx context.Context) error {
 	cfg := config.Get()
-	log := zerolog.Ctx(ctx)
+	log := utils.LogFromContext(ctx)
 
 	// Handler
 	mux := http.NewServeMux()
@@ -347,7 +475,7 @@ func (s *Server) startMetricsServer(ctx context.Context) error {
 
 	// Create the HTTP server
 	s.metricsSrv = &http.Server{
-		Addr:              net.JoinHostPort(cfg.MetricsBind, strconv.Itoa(cfg.MetricsPort)),
+		Addr:              net.JoinHostPort(cfg.MetricsServerBind, strconv.Itoa(cfg.MetricsServerPort)),
 		Handler:           mux,
 		MaxHeaderBytes:    1 << 20,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -363,111 +491,25 @@ func (s *Server) startMetricsServer(ctx context.Context) error {
 	}
 
 	// Start the HTTPS server in a background goroutine
-	log.Info().
-		Str("bind", cfg.MetricsBind).
-		Int("port", cfg.MetricsPort).
-		Msg("Metrics server started")
+	log.InfoContext(ctx, "Metrics server started",
+		slog.String("bind", cfg.MetricsServerBind),
+		slog.Int("port", cfg.MetricsServerPort),
+	)
 	go func() {
 		defer s.metricsListener.Close()
 
 		// Next call blocks until the server is shut down
 		srvErr := s.metricsSrv.Serve(s.metricsListener)
 		if srvErr != http.ErrServerClosed {
-			log.Fatal().Err(srvErr).Msgf("Error starting metrics server")
+			utils.FatalError(log, "Error starting metrics server", srvErr)
 		}
 	}()
 
 	return nil
 }
 
-// Adds a subscription to a state by key
-// If another subscription to the same key exists, evicts that first
-// Important: invocations must be wrapped in s.lock being locked
-func (s *Server) subscribeToState(stateId string) chan *requestState {
-	ch := s.subs[stateId]
-	if ch != nil {
-		// Close the previous subscription
-		close(ch)
-	}
-
-	// Create a new subscription
-	ch = make(chan *requestState, 1)
-	s.subs[stateId] = ch
-	return ch
-}
-
-// Removes a subscription to a state by key, only if the channel matches the given one
-// Important: invocations must be wrapped in s.lock being locked
-func (s *Server) unsubscribeToState(stateId string, watch chan *requestState) {
-	ch := s.subs[stateId]
-	if ch != nil && ch == watch {
-		close(ch)
-		delete(s.subs, stateId)
-	}
-}
-
-// Sends a notification to a state subscriber, if any
-// The channel is then closed right after
-// Important: invocations must be wrapped in s.lock being locked
-func (s *Server) notifySubscriber(stateId string, state *requestState) {
-	ch := s.subs[stateId]
-	if ch == nil {
-		return
-	}
-
-	// Send the notification
-	ch <- state
-
-	// Close the channel and remove it from the subscribers
-	close(ch)
-	delete(s.subs, stateId)
-}
-
-// This method makes a pending request expire after the given time interval
-// It should be invoked in a background goroutine
-func (s *Server) expireRequest(ctx context.Context, stateId string, validity time.Duration) {
-	// Wait until the request is expired
-	time.Sleep(validity)
-
-	// Acquire a lock to ensure consistency
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	// Check if the request still exists
-	req := s.states[stateId]
-	if req == nil {
-		return
-	}
-	zerolog.Ctx(ctx).Info().Msg("Removing expired operation " + stateId)
-
-	// Set the request as canceled
-	req.Status = StatusCanceled
-
-	// If there's a subscription, send a notification
-	ch, ok := s.subs[stateId]
-	if ok {
-		if ch != nil {
-			ch <- req
-			close(ch)
-		}
-		delete(s.subs, stateId)
-	}
-
-	// Delete the state object
-	delete(s.states, stateId)
-
-	// Publish a message that the request has been removed
-	go s.pubsub.Publish(&requestStatePublic{
-		State:  stateId,
-		Status: StatusRemoved.String(),
-	})
-
-	// Record the result
-	s.metrics.RecordResult("expired")
-}
-
 // Loads the TLS configuration
-func (s *Server) loadTLSConfig(log *zerolog.Logger) (tlsConfig *tls.Config, watchFn tlsCertWatchFn, err error) {
+func (s *Server) loadTLSConfig(log *slog.Logger) (tlsConfig *tls.Config, watchFn tlsCertWatchFn, err error) {
 	cfg := config.Get()
 
 	tlsConfig = &tls.Config{
@@ -505,9 +547,7 @@ func (s *Server) loadTLSConfig(log *zerolog.Logger) (tlsConfig *tls.Config, watc
 			return nil, nil, nil
 		}
 
-		log.Debug().
-			Str("path", tlsPath).
-			Msg("Loaded TLS certificates from disk")
+		log.Debug("Loaded TLS certificates from disk", "path", tlsPath)
 
 		tlsConfig.GetCertificate = provider.GetCertificateFn()
 
@@ -526,7 +566,7 @@ func (s *Server) loadTLSConfig(log *zerolog.Logger) (tlsConfig *tls.Config, watc
 	}
 	tlsConfig.Certificates = []tls.Certificate{cert}
 
-	log.Debug().Msg("Loaded TLS certificates from PEM values")
+	log.Debug("Loaded TLS certificates from PEM values")
 
 	return tlsConfig, nil, nil
 }

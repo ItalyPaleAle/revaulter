@@ -2,19 +2,87 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
 )
 
-// ErrorResponse is used to send JSON responses with an error
-type ErrorResponse string
+// Message returned to users for Internal Server Error errors
+const internalServerErrorMessage = "An internal error occurred"
+
+// ResponseError is used to send JSON responses with an error
+type ResponseError struct {
+	// Error message
+	Message string
+	// Status code
+	Code int
+}
+
+// NewResponseError creates a new ErrorResponse with the code and message
+func NewResponseError(code int, message string) ResponseError {
+	return ResponseError{
+		Message: message,
+		Code:    code,
+	}
+}
+
+// NewResponseErrorf creates a new ErrorResponse with the code and formatted message
+func NewResponseErrorf(code int, messageFmt string, args ...any) ResponseError {
+	return ResponseError{
+		Message: fmt.Sprintf(messageFmt, args...),
+		Code:    code,
+	}
+}
 
 // MarshalJSON implements a JSON marshaller that returns an object with the error key
-func (e ErrorResponse) MarshalJSON() ([]byte, error) {
+func (e ResponseError) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Error string `json:"error"`
 	}{
-		Error: string(e),
+		Error: e.Message,
 	})
 }
 
-// InternalServerError is an ErrorResponse for Internal Server Error messages
-const InternalServerError ErrorResponse = "An internal error occurred"
+// Error implements the error interface
+func (e ResponseError) Error() string {
+	return e.Message
+}
+
+// AbortWithErrorJSON aborts a Gin context and sends a response with a JSON error message.
+// Pass an ErrorResponse object to be able to customize the status code; it defaults to 500 otherwise.
+// If the status code is >= 500, the message is not sent to users directly.
+func AbortWithErrorJSON(c *gin.Context, err error) {
+	enc := json.NewEncoder(c.Writer)
+	enc.SetEscapeHTML(false)
+
+	// If there's no error in the Gin context, add it
+	if len(c.Errors) == 0 {
+		_ = c.Error(err)
+	}
+
+	// Abort the Gin context to stop processing handlers
+	c.Abort()
+
+	var errRes ResponseError
+	switch {
+	case errors.As(err, &errRes):
+		// Error is of type ErrorResponse
+		// If the error is >= 500, we must not show the actual error to the user
+		if errRes.Code >= 500 {
+			errRes.Message = internalServerErrorMessage
+		}
+
+	default:
+		// Any other error
+		// Assume this is an Internal Server Error
+		errRes.Code = http.StatusInternalServerError
+		errRes.Message = internalServerErrorMessage
+	}
+
+	// Send the response
+	c.Header("Content-Type", "application/json")
+	c.Status(errRes.Code)
+	_ = enc.Encode(errRes)
+}
