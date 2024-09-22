@@ -70,25 +70,13 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
     Environmental variable name: `REVAULTER_REQUESTKEY`
   - **`origins`** (optional, default is equal to the value of `baseUrl`):  
     Comma-separated lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).  
-    Environmental variable name: `REVAULTER_ORIGINS`
+    Environmental variable name: `REVAtrustedForwardedIPHeaderULTER_ORIGINS`
   - **`sessionTimeout`** (optional, default: `5m`)  
     Timeout for sessions before having to authenticate again, as a Go duration. This cannot be more than 1 hour.  
     Environmental variable name: `REVAULTER_SESSIONTIMEOUT`
   - **`requestTimeout`** (optional, default: `5m`):  
     Default timeout for wrap and unwrap requests, as a Go duration. This is the default value, and can be overridden in each request.  
     Environmental variable name: `REVAULTER_REQUESTTIMEOUT`
-  - **`enableMetrics`** (optional, default: `false`):  
-    Enable the metrics server which exposes a Prometheus-compatible endpoint `/metrics`.  
-    Environmental variable name: `REVAULTER_ENABLEMETRICS`
-  - **`metricsPort`** (optional, default: `2112`):  
-    Port for the metrics server to bind to.  
-    Environmental variable name: `REVAULTER_METRICSPORT`
-  - **`metricsBind`** (optional, default: `0.0.0.0`):  
-    Address/interface for the metrics server to bind to.  
-    Environmental variable name: `REVAULTER_METRICSBIND`
-  - **`omitHealthCheckLogs`** (optional, default: `true`):  
-    If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
-    Environmental variable name: `REVAULTER_OMITHEALTHCHECKLOGS`
   - **`tokenSigningKey`** (optional, will be randomly generated at startup if empty):  
     String used as key to sign state tokens. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).  
     Environmental variable name: `REVAULTER_TOKENSIGNINGKEY`
@@ -104,14 +92,44 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
 
     If this option is empty, or if it contains the name of a header that is not found in an incoming request, a random UUID is generated as request ID.
     Environmental variable name: `REVAULTER_TRUSTEDREQUESTIDHEADER`
+  - **`trustedForwardedIPHeader`** (optional):  
+    String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Vault is served through a proxy service and/or CDN.  
+    This option should not be set if the application is exposed directly, without a proxy or CDN.  
+    Common values can include:
+
+    - `X-Forwarded-For,X-Real-Ip`: `X-Forwarded-For` is the [de-facto standard](https://http.dev/x-forwarded-for) set by proxies; some set `X-Real-Ip`
+    - `CF-Connecting-IP`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/reference/http-request-headers/#cf-connecting-ip)
+
+    Environmental variable name: `REVAULTER_TRUSTEDFORWARDEDIPHEADER`
   - **`forceSecureCookies`** (optional, default: `false`):  
     If true, forces all cookies to be set with the "secure" option, so they are only sent by clients on HTTPS requests.  
     When false (the default), cookies are set as "secure" only if the current request being served is using HTTPS.  
     When Revaulter is running behind a proxy that performs TLS termination, this option should normally be set to true.  
     Environmental variable name: `REVAULTER_FORCESECURECOOKIES`
+- Revaulter application observability:
   - **`logLevel`** (optional, default: `info`):  
-    Controls log level and verbosity. Supported values: `debug`, `info` (default), `warn`, `error`.
+    Controls log level and verbosity. Supported values: `debug`, `info` (default), `warn`, `error`.  
     Environmental variable name: `REVAULTER_LOGLEVEL`
+  - **`logAsJson`** (optional)  
+    If true, emits logs formatted as JSON. When false, logs are emitted as text strings and colored if the terminal supports it.
+    Defaults to false if a TTY is attached (e.g. when running the application in the terminal directly); true otherwise.  
+    Environmental variable name: `REVAULTER_LOGASJSON`
+  - **`omitHealthCheckLogs`** (optional, default: `true`):  
+    If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.  
+    Environmental variable name: `REVAULTER_OMITHEALTHCHECKLOGS`
+  - **`enableMetrics`** (optional, default: `false`):  
+    Enable the metrics server which exposes a Prometheus-compatible endpoint `/metrics`.  
+    Environmental variable name: `REVAULTER_ENABLEMETRICS`
+  - **`metricsServerEnabled`** (optional, default: `false`):  
+    Enable the metrics server, which exposes a Prometheus-compatible endpoint `/metrics`.  
+    Metrics must be enabled for this to be effective.  
+    Environmental variable name: `REVAULTER_METRICSSERVERENABLED`
+  - **`metricsServerPort`** (optional, default: `2112`):  
+    Port for the metrics server to bind to.  
+    Environmental variable name: `REVAULTER_METRICSSERVERPORT`
+  - **`metricsServerBind`** (optional, default: `0.0.0.0`):  
+    Address/interface for the metrics server to bind to.  
+    Environmental variable name: `REVAULTER_METRICSSERVERBIND`
 
 ## Generating a TLS certificate and key
 
