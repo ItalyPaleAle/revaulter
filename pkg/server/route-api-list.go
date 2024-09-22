@@ -13,8 +13,6 @@ import (
 
 type apiListResponse []requestStatePublic
 
-const ndJSONContentType = "application/x-ndjson"
-
 // RouteApiListGet is the handler for the GET /api/list request
 // This returns the list of all pending requests
 // If the Accept header is `application/x-ndjson`, then this sends a stream of records, updated as soon as they come in, using the NDJSON format (https://github.com/ndjson/ndjson-spec)
@@ -58,8 +56,7 @@ func (s *Server) routeApiListGetStream(c *gin.Context) {
 		}
 	}
 	if timeout == nil {
-		_ = c.Error(errors.New("request did not contain a valid session expiration in the context"))
-		c.AbortWithStatusJSON(http.StatusInternalServerError, InternalServerError)
+		AbortWithErrorJSON(c, errors.New("request did not contain a valid session expiration in the context"))
 		return
 	}
 	defer timeout.Stop()
@@ -86,8 +83,7 @@ func (s *Server) routeApiListGetStream(c *gin.Context) {
 	// Subscribe to receive new events
 	events, err := s.pubsub.Subscribe()
 	if err != nil {
-		_ = c.Error(fmt.Errorf("error subscribing to events: %w", err))
-		c.AbortWithStatusJSON(http.StatusInternalServerError, InternalServerError)
+		AbortWithErrorJSON(c, fmt.Errorf("error subscribing to events: %w", err))
 		s.lock.Unlock()
 		return
 	}

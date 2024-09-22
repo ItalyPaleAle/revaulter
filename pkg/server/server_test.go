@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -27,12 +28,12 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 	"github.com/gin-gonic/gin"
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
+	"github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/testutils"
 	"github.com/italypaleale/revaulter/pkg/utils/bufconn"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
@@ -45,8 +46,6 @@ const (
 
 	// Size for the in-memory buffer for bufconn
 	bufconnBufSize = 1 << 20 // 1MB
-
-	jsonContentType = "application/json; charset=utf-8"
 )
 
 func TestMain(m *testing.M) {
@@ -75,14 +74,22 @@ func TestServerLifecycle(t *testing.T) {
 	testFn := func(metricsEnabled bool) func(t *testing.T) {
 		return func(t *testing.T) {
 			t.Cleanup(config.SetTestConfig(map[string]any{
-				"enableMetrics": metricsEnabled,
+				"enableMetrics":        metricsEnabled,
+				"metricsServerEnabled": metricsEnabled,
 			}))
 
 			// Create the server
 			// This will create in-memory listeners with bufconn too
-			srv, _, cleanup := newTestServer(t, nil, nil)
+			srv, cleanup := newTestServer(t, nil, nil, nil)
 			require.NotNil(t, srv)
 			t.Cleanup(cleanup)
+
+			if metricsEnabled {
+				var err error
+				srv.metrics, _, err = metrics.NewRevaulterMetrics(context.Background(), nil)
+				require.NoError(t, err)
+			}
+
 			stopServerFn := startTestServer(t, srv)
 			defer stopServerFn(t)
 
@@ -138,7 +145,8 @@ func TestServerAppRoutes(t *testing.T) {
 
 	// Create the server
 	// This will create in-memory listeners with bufconn too
-	srv, logBuf, cleanup := newTestServer(t, &mockWebhook{requests: webhookRequests}, rtt)
+	logBuf := bytes.NewBuffer(make([]byte, 0, 5<<20))
+	srv, cleanup := newTestServer(t, &mockWebhook{requests: webhookRequests}, rtt, logBuf)
 	require.NotNil(t, srv)
 	defer cleanup()
 	stopServerFn := startTestServer(t, srv)
@@ -146,7 +154,7 @@ func TestServerAppRoutes(t *testing.T) {
 	appClient := clientForListener(srv.appListener)
 
 	// Mock the Key Vault client
-	srv.kvClientFactory = func(accessToken string, expiration time.Time) keyvault.Client {
+	srv.kvClientFactory = func(opts keyvault.ClientOptions) keyvault.Client {
 		return &mockKVClient{}
 	}
 
@@ -273,7 +281,10 @@ func TestServerAppRoutes(t *testing.T) {
 				assertResponseError(t, res, http.StatusBadRequest, "Parameter state is missing in the request")
 
 				// Ensure that the logs do not contain the code and state
-				assert.Contains(t, logBuf.String(), `"status":400,"method":"GET","path":"/auth/confirm?code***",`)
+				logStr := logBuf.String()
+				assert.Contains(t, logStr, `path=/auth/confirm?code***`)
+				assert.Contains(t, logStr, `status=400`)
+				assert.Contains(t, logStr, `method=GET`)
 			})
 
 			t.Run("Missing auth state cookie", func(t *testing.T) {
@@ -890,16 +901,16 @@ func TestServerAppRoutes(t *testing.T) {
 	})
 }
 
-func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.RoundTripper) (*Server, *bytes.Buffer, func()) {
+func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.RoundTripper, logDest io.Writer) (*Server, func()) {
 	t.Helper()
 
-	logBuf := &bytes.Buffer{}
-	logDest := io.MultiWriter(os.Stdout, logBuf)
+	if logDest == nil {
+		logDest = io.Discard
+	}
 
-	log := zerolog.New(zerolog.SyncWriter(logDest)).
-		With().
-		Str("app", "test").
-		Logger()
+	log := slog.
+		New(slog.NewTextHandler(io.MultiWriter(os.Stdout, logDest), nil)).
+		With(slog.String("app", "test"))
 	if wh == nil {
 		wh = &mockWebhook{}
 	}
@@ -912,7 +923,10 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 		"tLSKeyPEM":  key,
 	})
 
-	srv, err := NewServer(&log, wh)
+	srv, err := NewServer(NewServerOpts{
+		Log:     log,
+		Webhook: wh,
+	})
 	require.NoError(t, err)
 
 	srv.appListener = bufconn.Listen(bufconnBufSize)
@@ -922,7 +936,7 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 		srv.httpClient.Transport = httpClientTransport
 	}
 
-	return srv, logBuf, cleanup
+	return srv, cleanup
 }
 
 func startTestServer(t *testing.T, srv *Server) func(t *testing.T) {

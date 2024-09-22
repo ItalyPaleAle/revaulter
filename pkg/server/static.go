@@ -55,7 +55,7 @@ func (s *Server) serveClient() func(c *gin.Context) {
 func prepareStaticResponse(c *gin.Context) (ok bool) {
 	// Only respond to GET requests
 	if c.Request.Method != "GET" {
-		c.AbortWithStatusJSON(http.StatusNotFound, ErrorResponse("Not found"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Not found"))
 		return false
 	}
 
@@ -65,7 +65,7 @@ func prepareStaticResponse(c *gin.Context) (ok bool) {
 	if path == "" || path == "index.html" {
 		v, err := c.Cookie(atCookieName)
 		if err != nil || v == "" {
-			c.Header("location", "/auth/signin")
+			c.Header("Location", "/auth/signin")
 			c.Status(http.StatusFound)
 			return false
 		}
@@ -89,14 +89,14 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 				if c.Request.URL.RawQuery != "" {
 					redirect += "?" + c.Request.URL.RawQuery
 				}
-				c.Header("location", redirect)
+				c.Header("Location", redirect)
 				c.Status(http.StatusMovedPermanently)
 				return
 			}
 			serveStaticFiles(c, path.Join(reqPath, "index.html"), filesystem)
 			return
 		}
-		c.AbortWithStatusJSON(http.StatusNotFound, ErrorResponse("Page not found"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Page not found"))
 		return
 	}
 	defer f.Close()
@@ -104,13 +104,13 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 	if err != nil {
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			c.AbortWithStatusJSON(http.StatusNotFound, ErrorResponse("Page not found"))
+			AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Page not found"))
 			return
 		case errors.Is(err, fs.ErrPermission):
-			c.AbortWithStatusJSON(http.StatusForbidden, ErrorResponse("Forbidden"))
+			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Forbidden"))
 			return
 		default:
-			c.AbortWithStatusJSON(http.StatusInternalServerError, InternalServerError)
+			AbortWithErrorJSON(c, err)
 			return
 		}
 	}
@@ -123,7 +123,7 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 			if c.Request.URL.RawQuery != "" {
 				redirect += "?" + c.Request.URL.RawQuery
 			}
-			c.Header("location", redirect)
+			c.Header("Location", redirect)
 			c.Status(http.StatusMovedPermanently)
 			return
 		}
@@ -136,8 +136,7 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 	// File should implement io.Seeker when it's not a directory
 	fseek, ok := f.(io.ReadSeekCloser)
 	if !ok {
-		_ = c.Error(fmt.Errorf("file %s does not implement io.ReadSeekCloser", stat.Name()))
-		c.AbortWithStatusJSON(http.StatusInternalServerError, InternalServerError)
+		AbortWithErrorJSON(c, fmt.Errorf("file %s does not implement io.ReadSeekCloser", stat.Name()))
 		return
 	}
 	http.ServeContent(c.Writer, c.Request, stat.Name(), stat.ModTime(), fseek)

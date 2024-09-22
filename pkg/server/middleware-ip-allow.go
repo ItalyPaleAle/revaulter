@@ -43,8 +43,7 @@ func (s *Server) AllowIpMiddleware() (gin.HandlerFunc, error) {
 		// Get the IP connecting
 		ip := net.ParseIP(c.RemoteIP())
 		if ip == nil {
-			_ = c.Error(errors.New("invalid remote IP address"))
-			c.AbortWithStatusJSON(http.StatusInternalServerError, InternalServerError)
+			AbortWithErrorJSON(c, errors.New("invalid remote IP address"))
 			return
 		}
 
@@ -63,7 +62,6 @@ func (s *Server) AllowIpMiddleware() (gin.HandlerFunc, error) {
 		}
 
 		// If we reach this point, the IP is not in the allow-list
-		_ = c.Error(errors.New("IP not allowed"))
-		c.AbortWithStatusJSON(http.StatusForbidden, ErrorResponse("This client's IP is not allowed to perform this request"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "This client's IP is not allowed to perform this request"))
 	}, nil
 }

@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
+	"log/slog"
+	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/rs/zerolog"
+	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
+	"github.com/italypaleale/revaulter/pkg/config"
+	revaultermetrics "github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/server"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/signals"
@@ -19,47 +22,110 @@ func main() {
 	// Set Gin to Release mode
 	gin.SetMode(gin.ReleaseMode)
 
-	// Init the logger and set it in the context
-	log := zerolog.New(os.Stdout).With().
-		Timestamp().
-		Str("app", "revaulter").
-		Str("version", buildinfo.AppVersion).
-		Logger()
-	ctx := log.WithContext(context.Background())
-
-	log.Info().
-		Str("build", buildinfo.BuildDescription).
-		Msg("Starting Revaulter")
+	// Init a logger used for initialization only, to report initialization errors
+	initLogger := slog.Default().
+		With(slog.String("app", buildinfo.AppName)).
+		With(slog.String("version", buildinfo.AppVersion))
 
 	// Load config
-	err := loadConfig(&log)
+	err := loadConfig()
 	if err != nil {
 		var lce *loadConfigError
 		if errors.As(err, &lce) {
-			lce.LogFatal(&log)
+			lce.LogFatal(initLogger)
 		} else {
-			log.Fatal().Err(err).Msg("Failed to load configuration")
+			utils.FatalError(initLogger, "Failed to load configuration", err)
+			return
 		}
 	}
+	conf := config.Get()
+
+	// Shutdown functions
+	shutdownFns := make([]utils.Service, 0, 3)
+
+	// Get the logger and set it in the context
+	log, shutdownFn, err := getLogger(conf)
+	if err != nil {
+		utils.FatalError(initLogger, "Failed to create logger", err)
+		return
+	}
+	slog.SetDefault(log)
+	if shutdownFn != nil {
+		shutdownFns = append(shutdownFns, shutdownFn)
+	}
+
+	// Validate the configuration
+	err = processConfig(log, conf)
+	if err != nil {
+		utils.FatalError(log, "Invalid configuration", err)
+		return
+	}
+
+	log.Info("Starting Revaulter", "build", buildinfo.BuildDescription)
+
+	// Get a context that is canceled when the application receives a termination signal
+	// We store the logger in the context too
+	ctx := utils.LogToContext(context.Background(), log)
+	ctx = signals.SignalContext(ctx)
 
 	// Init the webhook object
 	webhook := webhook.NewWebhook()
 
+	// Init metrics
+	var metrics *revaultermetrics.RevaulterMetrics
+	if conf.EnableMetrics {
+		metrics, shutdownFn, err = revaultermetrics.NewRevaulterMetrics(ctx, log)
+		if err != nil {
+			utils.FatalError(log, "Failed to init metrics", err)
+			return
+		}
+		if shutdownFn != nil {
+			shutdownFns = append(shutdownFns, shutdownFn)
+		}
+	}
+
+	// Get the trace traceExporter if tracing is enabled
+	var traceExporter sdkTrace.SpanExporter
+	if conf.EnableTracing {
+		traceExporter, err = conf.GetTraceExporter(ctx, log)
+		if err != nil {
+			utils.FatalError(log, "Failed to init trace exporter", err)
+			return
+		}
+
+		shutdownFns = append(shutdownFns, traceExporter.Shutdown)
+	}
+
 	// Create the Server object
-	srv, err := server.NewServer(&log, webhook)
+	srv, err := server.NewServer(server.NewServerOpts{
+		Log:           log,
+		Webhook:       webhook,
+		Metrics:       metrics,
+		TraceExporter: traceExporter,
+	})
 	if err != nil {
-		log.Fatal().Err(err).Msg("Cannot initialize the server")
+		utils.FatalError(log, "Cannot initialize the server", err)
 		return
 	}
 
-	// Get a context that is canceled when the application receives a termination signal
-	ctx = signals.SignalContext(ctx)
-
 	// Run the service
-	runner := utils.NewServiceRunner(srv.Run)
-	err = runner.Run(ctx)
+	// This call blocks until the context is canceled
+	err = utils.
+		NewServiceRunner(srv.Run).
+		Run(ctx)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to run service")
+		utils.FatalError(log, "Failed to run services", err)
 		return
+	}
+
+	// Invoke all shutdown functions
+	// We give these a timeout of 5s
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	err = utils.
+		NewServiceRunner(shutdownFns...).
+		Run(shutdownCtx)
+	if err != nil {
+		log.Error("Error shutting down services", slog.Any("error", err))
 	}
 }

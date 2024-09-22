@@ -70,25 +70,13 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
     Environmental variable name: `REVAULTER_REQUESTKEY`
   - **`origins`** (optional, default is equal to the value of `baseUrl`):  
     Comma-separated lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).  
-    Environmental variable name: `REVAULTER_ORIGINS`
+    Environmental variable name: `REVAtrustedForwardedIPHeaderULTER_ORIGINS`
   - **`sessionTimeout`** (optional, default: `5m`)  
     Timeout for sessions before having to authenticate again, as a Go duration. This cannot be more than 1 hour.  
     Environmental variable name: `REVAULTER_SESSIONTIMEOUT`
   - **`requestTimeout`** (optional, default: `5m`):  
     Default timeout for wrap and unwrap requests, as a Go duration. This is the default value, and can be overridden in each request.  
     Environmental variable name: `REVAULTER_REQUESTTIMEOUT`
-  - **`enableMetrics`** (optional, default: `false`):  
-    Enable the metrics server which exposes a Prometheus-compatible endpoint `/metrics`.  
-    Environmental variable name: `REVAULTER_ENABLEMETRICS`
-  - **`metricsPort`** (optional, default: `2112`):  
-    Port for the metrics server to bind to.  
-    Environmental variable name: `REVAULTER_METRICSPORT`
-  - **`metricsBind`** (optional, default: `0.0.0.0`):  
-    Address/interface for the metrics server to bind to.  
-    Environmental variable name: `REVAULTER_METRICSBIND`
-  - **`omitHealthCheckLogs`** (optional, default: `true`):  
-    If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
-    Environmental variable name: `REVAULTER_OMITHEALTHCHECKLOGS`
   - **`tokenSigningKey`** (optional, will be randomly generated at startup if empty):  
     String used as key to sign state tokens. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).  
     Environmental variable name: `REVAULTER_TOKENSIGNINGKEY`
@@ -104,14 +92,74 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
 
     If this option is empty, or if it contains the name of a header that is not found in an incoming request, a random UUID is generated as request ID.
     Environmental variable name: `REVAULTER_TRUSTEDREQUESTIDHEADER`
+  - **`trustedForwardedIPHeader`** (optional):  
+    String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Vault is served through a proxy service and/or CDN.  
+    This option should not be set if the application is exposed directly, without a proxy or CDN.  
+    Common values can include:
+
+    - `X-Forwarded-For,X-Real-Ip`: `X-Forwarded-For` is the [de-facto standard](https://http.dev/x-forwarded-for) set by proxies; some set `X-Real-Ip`
+    - `CF-Connecting-IP`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/reference/http-request-headers/#cf-connecting-ip)
+
+    Environmental variable name: `REVAULTER_TRUSTEDFORWARDEDIPHEADER`
   - **`forceSecureCookies`** (optional, default: `false`):  
     If true, forces all cookies to be set with the "secure" option, so they are only sent by clients on HTTPS requests.  
     When false (the default), cookies are set as "secure" only if the current request being served is using HTTPS.  
     When Revaulter is running behind a proxy that performs TLS termination, this option should normally be set to true.  
     Environmental variable name: `REVAULTER_FORCESECURECOOKIES`
+- Revaulter application observability:
   - **`logLevel`** (optional, default: `info`):  
-    Controls log level and verbosity. Supported values: `debug`, `info` (default), `warn`, `error`.
+    Controls log level and verbosity. Supported values: `debug`, `info` (default), `warn`, `error`.  
     Environmental variable name: `REVAULTER_LOGLEVEL`
+  - **`logAsJson`** (optional, default: depends on environment)  
+    If true, emits logs formatted as JSON. When false, logs are emitted as text strings and colored if the terminal supports it.
+    Defaults to false if a TTY is attached (e.g. when running the application in the terminal directly); true otherwise.  
+    Environmental variable name: `REVAULTER_LOGASJSON`
+  - **`omitHealthCheckLogs`** (optional, default: `true`):  
+    If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.  
+    Environmental variable name: `REVAULTER_OMITHEALTHCHECKLOGS`
+  - **`enableMetrics`** (optional, default: `false`):  
+    Enable metrics collection.  
+    Metrics can then be exposed via a Prometheus-compatible endpoint by enabling `metricsServerEnabled`.  
+    Alternatively, metrics can be sent to an OpenTelemetry Collector; see `metricsOtelCollectorEndpoint`.  
+    Environmental variable name: `REVAULTER_ENABLEMETRICS`
+  - **`metricsServerEnabled`** (optional, default: `false`):  
+    Enable the metrics server, which exposes a Prometheus-compatible endpoint `/metrics`.  
+    Metrics must be enabled for this to be effective.  
+    Environmental variable name: `REVAULTER_METRICSSERVERENABLED`
+  - **`metricsServerPort`** (optional, default: `2112`):  
+    Port for the metrics server to bind to.  
+    Environmental variable name: `REVAULTER_METRICSSERVERPORT`
+  - **`metricsServerBind`** (optional, default: `0.0.0.0`):  
+    Address/interface for the metrics server to bind to.  
+    Environmental variable name: `REVAULTER_METRICSSERVERBIND`
+  - **`metricsOtelCollectorEndpoint`** (optional):  
+    OpenTelemetry Collector endpoint for sending metrics, for example: `<http(s)-or-grpc(s)>://<otel-collector-address>:<otel-collector-port>/v1/metrics`.  
+    If metrics are enabled and `metricsOtelCollectorEndpoint` is set, metrics are sent to the collector.  
+    This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/metrics" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc").  
+    Environmental variable name: `REVAULTER_METRICSOTELCOLLECTORENDPOINT`
+  - **`logsOtelCollectorEndpoint`** (optional):  
+    OpenTelemetry Collector endpoint for sending logs, for example: `<http(s)>://<otel-collector-address>:<otel-collector-port>/v1/logs`.  
+    If configured,logs are sent to the collector at the given address.  
+    This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/logs" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc").  
+    Environmental variable name: `REVAULTER_LOGSOTELCOLLECTORENDPOINT`
+  - **`enableTracing`** (optional, default: `false`):  
+    If true, enables tracing with OpenTelemetry.  
+    Traces can be sent to an OpenTelemetry Collector or Zipkin server.  
+    If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.  
+    Environmental variable name: `REVAULTER_ENABLETRACING`
+  - **`tracingSampling`** (optional, default: `1`):  
+    Sampling rate for traces, as a float.  
+    The default value is 1, sampling all requests.  
+    Environmental variable name: `REVAULTER_TRACINGSAMPLING`
+  - **`tracingOtelCollectorEndpoint`** (optional):  
+    OpenTelemetry Collector endpoint for sending traces, for example: `<http(s)-or-grpc(s)>://<otel-collector-address>:<otel-collector-port>/v1/traces`.  
+    If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.  
+    This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/traces" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc").  
+    Environmental variable name: `REVAULTER_TRACINGOTELCOLLECTORENDPOINT`
+  - **`tracingZipkinEndpoint`** (optional):  
+    Zipkin endpoint for sending traces, for example: `http://<zipkin-address>:<zipkin-port>/api/v2/spans`.  
+    If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.  
+    Environmental variable name: `REVAULTER_TRACINGZIPKINENDPOINT`
 
 ## Generating a TLS certificate and key
 

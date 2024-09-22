@@ -4,11 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	azTracing "github.com/Azure/azure-sdk-for-go/sdk/azcore/tracing"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
+	"github.com/Azure/azure-sdk-for-go/sdk/tracing/azotel"
+	"github.com/alphadose/haxmap"
+	"github.com/italypaleale/revaulter/pkg/utils"
+	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // Client is a client for Azure Key Vault
@@ -27,26 +33,43 @@ type Client interface {
 	Verify(ctx context.Context, vault, keyName, keyVersion string, params azkeys.VerifyParameters) (*KeyVaultVerifyResponse, error)
 }
 
+type ClientOptions struct {
+	AccessToken string
+	Expiration  time.Time
+	Tracer      *sdkTrace.TracerProvider
+}
+
 // ClientFactory is the type for the NewClient function
-type ClientFactory func(accessToken string, expiration time.Time) Client
+type ClientFactory func(opts ClientOptions) Client
 
 // NewClient returns a new Client object
-func NewClient(accessToken string, expiration time.Time) Client {
-	return &client{
-		cred: newTokenProvider(accessToken, expiration),
+func NewClient(opts ClientOptions) Client {
+	c := &client{
+		cred:    newTokenProvider(opts.AccessToken, opts.Expiration),
+		clients: haxmap.New[string, *azkeys.Client](4),
 	}
+
+	if opts.Tracer != nil {
+		c.tracer = azotel.NewTracingProvider(opts.Tracer, nil)
+	}
+
+	return c
 }
 
 type client struct {
-	cred tokenProvider
+	cred    tokenProvider
+	clients *haxmap.Map[string, *azkeys.Client]
+
+	// The default value is a no-op provider
+	tracer azTracing.Provider
 }
 
 // Encrypt a message using a key stored in the Key Vault
 func (c *client) Encrypt(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*KeyVaultEncryptResponse, error) {
 	// Get the client
-	client, err := c.getClient(vault)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Azure Key Vault client: %w", err)
+	client := c.getClientForVault(ctx, vault)
+	if client == nil {
+		return nil, errors.New("could not get Azure Key Vault client")
 	}
 
 	// Perform the operation
@@ -71,9 +94,9 @@ func (c *client) Encrypt(ctx context.Context, vault, keyName, keyVersion string,
 // Decrypt a message using a key stored in the Key Vault.
 func (c *client) Decrypt(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*KeyVaultDecryptResponse, error) {
 	// Get the client
-	client, err := c.getClient(vault)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Azure Key Vault client: %w", err)
+	client := c.getClientForVault(ctx, vault)
+	if client == nil {
+		return nil, errors.New("could not get Azure Key Vault client")
 	}
 
 	// Perform the operation
@@ -96,9 +119,9 @@ func (c *client) Decrypt(ctx context.Context, vault, keyName, keyVersion string,
 // WrapKey wraps a key using the key-encryption-key stored in the Key Vault
 func (c *client) WrapKey(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*KeyVaultEncryptResponse, error) {
 	// Get the client
-	client, err := c.getClient(vault)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Azure Key Vault client: %w", err)
+	client := c.getClientForVault(ctx, vault)
+	if client == nil {
+		return nil, errors.New("could not get Azure Key Vault client")
 	}
 
 	// Perform the operation
@@ -123,9 +146,9 @@ func (c *client) WrapKey(ctx context.Context, vault, keyName, keyVersion string,
 // UnwrapKey unwrap a wrapped key using the key-encryption-key stored in the Key Vault
 func (c *client) UnwrapKey(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*KeyVaultDecryptResponse, error) {
 	// Get the client
-	client, err := c.getClient(vault)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Azure Key Vault client: %w", err)
+	client := c.getClientForVault(ctx, vault)
+	if client == nil {
+		return nil, errors.New("could not get Azure Key Vault client")
 	}
 
 	// Perform the operation
@@ -148,9 +171,9 @@ func (c *client) UnwrapKey(ctx context.Context, vault, keyName, keyVersion strin
 // Sign a message using a key stored in the Key Vault
 func (c *client) Sign(ctx context.Context, vault, keyName, keyVersion string, params azkeys.SignParameters) (*KeyVaultSignResponse, error) {
 	// Get the client
-	client, err := c.getClient(vault)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Azure Key Vault client: %w", err)
+	client := c.getClientForVault(ctx, vault)
+	if client == nil {
+		return nil, errors.New("could not get Azure Key Vault client")
 	}
 
 	// Perform the operation
@@ -173,9 +196,9 @@ func (c *client) Sign(ctx context.Context, vault, keyName, keyVersion string, pa
 // Verify a signature using a key stored in the Key Vault
 func (c *client) Verify(ctx context.Context, vault, keyName, keyVersion string, params azkeys.VerifyParameters) (*KeyVaultVerifyResponse, error) {
 	// Get the client
-	client, err := c.getClient(vault)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Azure Key Vault client: %w", err)
+	client := c.getClientForVault(ctx, vault)
+	if client == nil {
+		return nil, errors.New("could not get Azure Key Vault client")
 	}
 
 	// Perform the operation
@@ -213,15 +236,26 @@ func (c client) vaultUrl(vault string) string {
 	return "https://" + vault + ".vault.azure.net"
 }
 
-// getClient returns the azkeys.Client object for the given vault
-func (c *client) getClient(vault string) (*azkeys.Client, error) {
+// getClientForVault returns the azkeys.Client object for the given vault
+func (c *client) getClientForVault(ctx context.Context, vault string) *azkeys.Client {
 	vaultUrl := c.vaultUrl(vault)
 
-	return azkeys.NewClient(vaultUrl, c.cred, &azkeys.ClientOptions{
-		ClientOptions: policy.ClientOptions{
-			Telemetry: policy.TelemetryOptions{
-				Disabled: true,
+	client, _ := c.clients.GetOrCompute(vaultUrl, func() *azkeys.Client {
+		client, err := azkeys.NewClient(vaultUrl, c.cred, &azkeys.ClientOptions{
+			ClientOptions: policy.ClientOptions{
+				Telemetry: policy.TelemetryOptions{
+					Disabled: true,
+				},
+				TracingProvider: c.tracer,
 			},
-		},
+		})
+		if err != nil {
+			log := utils.LogFromContext(ctx)
+			log.ErrorContext(ctx, "Failed to create azkeys.Client", slog.Any("error", err))
+			return nil
+		}
+		return client
 	})
+
+	return client
 }

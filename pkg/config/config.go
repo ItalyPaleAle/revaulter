@@ -6,13 +6,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v2/jwk"
-	"github.com/rs/zerolog"
 )
 
 // Config is the struct containing configuration
@@ -85,17 +86,37 @@ type Config struct {
 	// +default 5m
 	RequestTimeout time.Duration `env:"REQUESTTIMEOUT" yaml:"requestTimeout"`
 
-	// Enable the metrics server which exposes a Prometheus-compatible endpoint `/metrics`.
+	// String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Vault is served through a proxy service and/or CDN.
+	// This option should not be set if the application is exposed directly, without a proxy or CDN.
+	// Common values include:
+	//
+	// - `X-Forwarded-For,X-Real-Ip`: `X-Forwarded-For` is the [de-facto standard](https://http.dev/x-forwarded-for) set by proxies; some set `X-Real-Ip`
+	// - `CF-Connecting-IP`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/reference/http-request-headers/#cf-connecting-ip)
+	TrustedForwardedIPHeader string `env:"TRUSTEDFORWARDEDIPHEADER" yaml:"trustedForwardedIPHeader"`
+
+	// Enable metrics collection.
+	// Metrics can then be exposed via a Prometheus-compatible endpoint by enabling `metricsServerEnabled`.
+	// Alternatively, metrics can be sent to an OpenTelemetry Collector; see `metricsOtelCollectorEndpoint`.
 	// +default false
 	EnableMetrics bool `env:"ENABLEMETRICS" yaml:"enableMetrics"`
 
+	// Enable the metrics server, which exposes a Prometheus-compatible endpoint `/metrics`.
+	// Metrics must be enabled for this to be effective
+	// +default false
+	MetricsServerEnabled bool `env:"METRICSSERVERENABLED" yaml:"metricsServerEnabled"`
+
 	// Port for the metrics server to bind to.
 	// +default 2112
-	MetricsPort int `env:"METRICSPORT" yaml:"metricsPort"`
+	MetricsServerPort int `env:"METRICSSERVERPORT" yaml:"metricsServerPort"`
 
 	// Address/interface for the metrics server to bind to.
 	// +default "0.0.0.0"
-	MetricsBind string `env:"METRICSBIND" yaml:"metricsBind"`
+	MetricsServerBind string `env:"METRICSSERVERBIND" yaml:"metricsServerBind"`
+
+	// OpenTelemetry Collector endpoint for sending metrics, for example: `<http(s)-or-grpc(s)>://<otel-collector-address>:<otel-collector-port>/v1/metrics`
+	// If metrics are enabled and `metricsOtelCollectorEndpoint` is set, metrics are sent to the collector
+	// This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/metrics" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc")
+	MetricsOtelCollectorEndpoint string `env:"METRICSOTELCOLLECTORENDPOINT" yaml:"metricsOtelCollectorEndpoint"`
 
 	// If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
 	// +default false
@@ -128,6 +149,35 @@ type Config struct {
 	// +default "info"
 	LogLevel string `env:"LOGLEVEL" yaml:"logLevel"`
 
+	// If true, emits logs formatted as JSON, otherwise uses a text-based structured log format.
+	// +default false if a TTY is attached (e.g. in development); true otherwise.
+	LogAsJSON bool `env:"LOGASJSON" yaml:"logAsJson"`
+
+	// OpenTelemetry Collector endpoint for sending logs, for example: `<http(s)>://<otel-collector-address>:<otel-collector-port>/v1/logs`.
+	// If configured,logs are sent to the collector at the given address.
+	// This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/logs" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc").
+	LogsOtelCollectorEndpoint string `env:"LOGSOTELCOLLECTORENDPOINT" yaml:"logsOtelCollectorEndpoint"`
+
+	// If true, enables tracing with OpenTelemetry.
+	// Traces can be sent to an OpenTelemetry Collector or Zipkin server.
+	// If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.
+	// +default false
+	EnableTracing bool `env:"ENABLETRACING" yaml:"enableTracing"`
+
+	// Sampling rate for traces, as a float.
+	// The default value is 1, sampling all requests.
+	// +default 1
+	TracingSampling float64 `env:"TRACINGSAMPLING" yaml:"tracingSampling"`
+
+	// OpenTelemetry Collector endpoint for sending traces, for example: `<http(s)-or-grpc(s)>://<otel-collector-address>:<otel-collector-port>/v1/traces`.
+	// If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.
+	// This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/traces" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc").
+	TracingOtelCollectorEndpoint string `env:"TRACINGOTELCOLLECTORENDPOINT" yaml:"tracingOtelCollectorEndpoint"`
+
+	// Zipkin endpoint for sending traces, for example: `http://<zipkin-address>:<zipkin-port>/api/v2/spans`.
+	// If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.
+	TracingZipkinEndpoint string `env:"TRACINGZIPKINENDPOINT" yaml:"tracingZipkinEndpoint"`
+
 	// Dev is meant for development only; it's undocumented
 	Dev Dev `yaml:"-"`
 
@@ -142,6 +192,7 @@ type Dev struct {
 
 // Internal properties
 type internal struct {
+	instanceID                string
 	configFileLoaded          string // Path to the config file that was loaded
 	tokenSigningKeyParsed     []byte
 	cookieEncryptionKeyParsed jwk.Key
@@ -173,6 +224,11 @@ func (c *Config) SetLoadedConfigPath(filePath string) {
 	c.internal.configFileLoaded = filePath
 }
 
+// GetInstanceID returns the instance ID.
+func (c Config) GetInstanceID() string {
+	return c.internal.instanceID
+}
+
 // Validates the configuration and performs some sanitization
 func (c *Config) Validate() error {
 	// Check required variables
@@ -199,11 +255,11 @@ func (c *Config) Validate() error {
 
 // SetTokenSigningKey parses the token signing key.
 // If it's empty, will generate a new one.
-func (c *Config) SetTokenSigningKey(logger *zerolog.Logger) (err error) {
+func (c *Config) SetTokenSigningKey(logger *slog.Logger) (err error) {
 	b := []byte(c.TokenSigningKey)
 	if len(b) == 0 {
 		if logger != nil {
-			logger.Debug().Msg("No 'tokenSigningKey' found in the configuration: a random one will be generated")
+			logger.Info("No 'tokenSigningKey' found in the configuration: a random one will be generated")
 		}
 
 		c.internal.tokenSigningKeyParsed = make([]byte, 32)
@@ -223,7 +279,7 @@ func (c *Config) SetTokenSigningKey(logger *zerolog.Logger) (err error) {
 }
 
 // SetCookieKeys sets the cookie encryption and signing keys.
-func (c *Config) SetCookieKeys(logger *zerolog.Logger) (err error) {
+func (c *Config) SetCookieKeys(logger *slog.Logger) (err error) {
 	// If we have cookieEncryptionKey set, derive the keys from that
 	// Otherwise, generate the keys randomly
 	var (
@@ -240,7 +296,7 @@ func (c *Config) SetCookieKeys(logger *zerolog.Logger) (err error) {
 		cskRaw = sum[16:]
 	} else {
 		if logger != nil {
-			logger.Debug().Msg("No 'cookieEncryptionKey' found in the configuration: a random one will be generated")
+			logger.Info("No 'cookieEncryptionKey' found in the configuration: a random one will be generated")
 		}
 
 		cekRaw = make([]byte, 16)
@@ -273,6 +329,13 @@ func (c *Config) SetCookieKeys(logger *zerolog.Logger) (err error) {
 	_ = c.internal.cookieSigningKeyParsed.Set("kid", kid)
 
 	return nil
+}
+
+// String implements fmt.Stringer and is used for debugging
+// Returns the entire configuration as JSON
+func (c Config) String() string {
+	enc, _ := json.Marshal(c)
+	return string(enc)
 }
 
 // Returns the key ID from a key

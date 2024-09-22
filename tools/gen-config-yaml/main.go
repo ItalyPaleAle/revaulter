@@ -63,6 +63,8 @@ func generateYAMLFromStruct(filePath string) error {
 				typ = "duration"
 			case "[]string":
 				typ = "list of strings"
+			case "float64", "float32":
+				typ = "float"
 			default:
 				fmt.Printf("WARN: unknown type for field '%s': %s\n", yamlTag, ft)
 			}

@@ -19,12 +19,11 @@ func (s *Server) RouteApiConfirmPost(c *gin.Context) {
 	req := &confirmRequest{}
 	err := c.Bind(req)
 	if err != nil {
-		_ = c.Error(err)
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("Invalid request body"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
 	if req.StateId == "" {
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("Missing state in request body"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing state in request body"))
 		return
 	}
 
@@ -33,27 +32,23 @@ func (s *Server) RouteApiConfirmPost(c *gin.Context) {
 	state, ok := s.states[req.StateId]
 	switch {
 	case !ok || state == nil:
-		_ = c.Error(errors.New("state object not found or expired"))
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("State not found or expired"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 		s.lock.Unlock()
 		return
 	case state.Expired():
-		_ = c.Error(errors.New("state object is expired"))
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("State not found or expired"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 		s.lock.Unlock()
 		return
 	case state.Status != StatusPending:
-		_ = c.Error(errors.New("request already completed"))
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("Request already completed"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Request already completed"))
 		s.lock.Unlock()
 		return
 	case state.Processing:
-		_ = c.Error(errors.New("request is already being processed"))
-		c.AbortWithStatusJSON(http.StatusConflict, ErrorResponse("Request is already being processed"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request is already being processed"))
 		s.lock.Unlock()
 		return
 	case (req.Confirm && req.Cancel) || (!req.Confirm && !req.Cancel):
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("One and only one of confirm and cancel must be set to true in the body"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "One and only one of confirm and cancel must be set to true in the body"))
 		s.lock.Unlock()
 		return
 	}
@@ -111,7 +106,11 @@ func (s *Server) handleConfirm(c *gin.Context, stateId string, state *requestSta
 	start := time.Now()
 
 	// Init the Key Vault client
-	akv := s.kvClientFactory(at, expiration)
+	akv := s.kvClientFactory(keyvault.ClientOptions{
+		AccessToken: at,
+		Expiration:  expiration,
+		Tracer:      s.tracer,
+	})
 
 	// Make the request
 	var (
@@ -135,16 +134,14 @@ func (s *Server) handleConfirm(c *gin.Context, stateId string, state *requestSta
 		err = fmt.Errorf("invalid operation %s", state.Operation)
 	}
 	if err != nil {
-		_ = c.Error(err)
 		var azErr *azcore.ResponseError
 		if errors.As(err, &azErr) {
 			// If the error comes from Key Vault, we need to cancel the request
 			s.cancelRequest(stateId, state)
-			errStr := fmt.Sprintf("Azure Key Vault returned an error: %s (%s)", azErr.ErrorCode, azErr.RawResponse.Status)
-			c.AbortWithStatusJSON(http.StatusConflict, ErrorResponse(errStr))
+			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusConflict, "Azure Key Vault returned an error: %s (%s)", azErr.ErrorCode, azErr.RawResponse.Status))
 			return
 		}
-		c.AbortWithStatusJSON(http.StatusInternalServerError, InternalServerError)
+		AbortWithErrorJSON(c, err)
 		return
 	}
 
@@ -158,7 +155,7 @@ func (s *Server) handleConfirm(c *gin.Context, stateId string, state *requestSta
 	// Ensure the request hasn't expired in the meanwhile
 	if state.Expired() || state.Status != StatusPending {
 		_ = c.Error(errors.New("state object is expired after receiving response from Key Vault"))
-		c.AbortWithStatusJSON(http.StatusBadRequest, ErrorResponse("State not found or expired"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 		return
 	}
 

@@ -5,16 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/testutils"
+	"github.com/italypaleale/revaulter/pkg/utils"
 )
 
 func TestWebhook(t *testing.T) {
@@ -26,7 +27,7 @@ func TestWebhook(t *testing.T) {
 		"webhookFormat": "",
 	}))
 
-	ctx := zerolog.New(io.Discard).WithContext(context.Background())
+	ctx := utils.LogToContext(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	clock := clocktesting.NewFakeClock(time.Now())
 	wh := newWebhookWithClock(clock).(*webhookClient) //nolint:forcetypeassert

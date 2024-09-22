@@ -8,11 +8,13 @@ import (
 
 // These variables will be set at build time
 var (
-	AppVersion string = "canary"
-	BuildId    string
-	CommitHash string
-	BuildDate  string
-	Production string
+	AppName         string = "revaulter"
+	AppVersion      string = "canary"
+	BuildId         string
+	CommitHash      string
+	BuildDate       string
+	Production      string
+	ConfigEnvPrefix string = "REVAULTER_"
 )
 
 // Set during initialization
