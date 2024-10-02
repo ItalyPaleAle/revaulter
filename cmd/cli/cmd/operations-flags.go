@@ -12,6 +12,7 @@ type operationFlags interface {
 	Validate() error
 	RequestBody() ([]byte, error)
 	GetServer() string
+	GetRequestKey() string
 	GetConnectionOptions() (insecure bool, noh2c bool)
 }
 
@@ -27,8 +28,9 @@ type operationFlagsBase struct {
 
 	Algorithm string
 
-	Timeout durationValue
-	Note    string
+	SecretKey string
+	Timeout   durationValue
+	Note      string
 }
 
 func (f *operationFlagsBase) BindToCommand(cmd *cobra.Command) {
@@ -46,6 +48,7 @@ func (f *operationFlagsBase) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&f.Algorithm, "algorithm", "a", "", "Algorithm identifier")
 	_ = cmd.MarkFlagRequired("algorithm")
 
+	cmd.Flags().StringVarP(&f.SecretKey, "secret-key", "K", "", "Secret key if required by the server to access the /request endpoints")
 	cmd.Flags().VarP(&f.Timeout, "timeout", "t", "Timeout for the operation, as a number of seconds or Go duration")
 	cmd.Flags().StringVarP(&f.Note, "note", "n", "", "Optional message displayed alongside the request (up to 40 characters)")
 }
@@ -58,6 +61,10 @@ func (f *operationFlagsBase) Validate() error {
 
 func (f operationFlagsBase) GetServer() string {
 	return f.Server
+}
+
+func (f operationFlagsBase) GetRequestKey() string {
+	return f.SecretKey
 }
 
 func (f operationFlagsBase) GetConnectionOptions() (insecure bool, noh2c bool) {

@@ -68,9 +68,12 @@ func (s *Server) RequestKeyMiddleware() gin.HandlerFunc {
 	// Return the middleware
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
-		// The "bearer" prefix is optional
-		if len(authHeader) > 7 && strings.ToLower(authHeader[0:7]) == "bearer " {
-			authHeader = authHeader[7:]
+		// The "bearer" or "APIKey" prefixes are optional
+		if len(authHeader) > 7 {
+			prefix := strings.ToLower(authHeader[0:7])
+			if prefix == "bearer " || prefix == "apikey " {
+				authHeader = authHeader[7:]
+			}
 		}
 
 		// Check if the key matches

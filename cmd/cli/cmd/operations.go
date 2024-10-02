@@ -209,6 +209,12 @@ func (o operationCmd) getResult(ctx context.Context, state string) (json.RawMess
 }
 
 func (o operationCmd) doRequest(req *http.Request, resBody any) error {
+	// Add the request key
+	reqKey := o.flags.GetRequestKey()
+	if reqKey != "" {
+		req.Header.Set("Authorization", "APIKey "+reqKey)
+	}
+
 	// Make the request
 	res, err := o.httpClient.Do(req)
 	if err != nil {
