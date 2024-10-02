@@ -30,8 +30,8 @@ import (
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
 	"github.com/italypaleale/revaulter/pkg/metrics"
-	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/broker"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
@@ -350,7 +350,7 @@ func (s *Server) Run(ctx context.Context) error {
 		shutdownCancel()
 		if err != nil {
 			// Log the error only (could be context canceled)
-			utils.LogFromContext(ctx).WarnContext(ctx,
+			logging.LogFromContext(ctx).WarnContext(ctx,
 				"App server shutdown error",
 				slog.Any("error", err),
 			)
@@ -373,7 +373,7 @@ func (s *Server) Run(ctx context.Context) error {
 			shutdownCancel()
 			if err != nil {
 				// Log the error only (could be context canceled)
-				utils.LogFromContext(ctx).WarnContext(ctx,
+				logging.LogFromContext(ctx).WarnContext(ctx,
 					"Metrics server shutdown error",
 					slog.Any("error", err),
 				)
@@ -390,7 +390,7 @@ func (s *Server) Run(ctx context.Context) error {
 			shutdownCancel()
 			if err != nil {
 				// Log the error only (could be context canceled)
-				utils.LogFromContext(ctx).WarnContext(ctx,
+				logging.LogFromContext(ctx).WarnContext(ctx,
 					"Trace provider shutdown error",
 					slog.Any("error", err),
 				)
@@ -415,7 +415,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 func (s *Server) startAppServer(ctx context.Context) error {
 	cfg := config.Get()
-	log := utils.LogFromContext(ctx)
+	log := logging.LogFromContext(ctx)
 
 	// Create the HTTP(S) server
 	s.appSrv = &http.Server{
@@ -462,7 +462,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 			srvErr = s.appSrv.Serve(s.appListener)
 		}
 		if srvErr != http.ErrServerClosed {
-			utils.FatalError(log, "Error starting app server", srvErr)
+			logging.FatalError(log, "Error starting app server", srvErr)
 		}
 	}()
 
@@ -471,7 +471,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 
 func (s *Server) startMetricsServer(ctx context.Context) error {
 	cfg := config.Get()
-	log := utils.LogFromContext(ctx)
+	log := logging.LogFromContext(ctx)
 
 	// Handler
 	mux := http.NewServeMux()
@@ -506,7 +506,7 @@ func (s *Server) startMetricsServer(ctx context.Context) error {
 		// Next call blocks until the server is shut down
 		srvErr := s.metricsSrv.Serve(s.metricsListener)
 		if srvErr != http.ErrServerClosed {
-			utils.FatalError(log, "Error starting metrics server", srvErr)
+			logging.FatalError(log, "Error starting metrics server", srvErr)
 		}
 	}()
 

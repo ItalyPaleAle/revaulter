@@ -12,7 +12,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
 	"github.com/Azure/azure-sdk-for-go/sdk/tracing/azotel"
 	"github.com/alphadose/haxmap"
-	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -230,7 +230,7 @@ func (c *client) getClientForVault(ctx context.Context, vault string) *azkeys.Cl
 			},
 		})
 		if err != nil {
-			log := utils.LogFromContext(ctx)
+			log := logging.LogFromContext(ctx)
 			log.ErrorContext(ctx, "Failed to create azkeys.Client", slog.Any("error", err))
 			return nil
 		}

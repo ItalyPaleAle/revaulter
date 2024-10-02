@@ -10,6 +10,7 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/fsnotify"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
 const (
@@ -88,7 +89,7 @@ func (p *tlsCertProvider) SetTLSCert(tlsCert *tls.Certificate) {
 
 // Watch starts watching (in background) for changes to the TLS certificate and key on disk, and triggers a reload when that happens.
 func (p *tlsCertProvider) Watch(ctx context.Context) error {
-	log := utils.LogFromContext(ctx)
+	log := logging.LogFromContext(ctx)
 
 	watcher, err := fsnotify.WatchFolder(ctx, p.path)
 	if err != nil {

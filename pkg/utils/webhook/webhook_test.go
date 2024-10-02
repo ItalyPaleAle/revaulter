@@ -15,7 +15,7 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/testutils"
-	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
 func TestWebhook(t *testing.T) {
@@ -27,7 +27,7 @@ func TestWebhook(t *testing.T) {
 		"webhookFormat": "",
 	}))
 
-	ctx := utils.LogToContext(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx := logging.LogToContext(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	clock := clocktesting.NewFakeClock(time.Now())
 	wh := newWebhookWithClock(clock).(*webhookClient) //nolint:forcetypeassert

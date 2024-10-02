@@ -8,10 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/lmittmann/tint"
-	"github.com/mattn/go-isatty"
 	"github.com/mitchellh/go-homedir"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	logGlobal "go.opentelemetry.io/otel/log/global"
@@ -21,6 +18,7 @@ import (
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/configloader"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
 func loadConfig() error {
@@ -73,24 +71,7 @@ func getLogger(cfg *config.Config) (log *slog.Logger, shutdownFn func(ctx contex
 	}
 
 	// Create the handler
-	var handler slog.Handler
-	switch {
-	case cfg.LogAsJSON:
-		// Log as JSON if configured
-		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: level,
-		})
-	case isatty.IsTerminal(os.Stdout.Fd()):
-		// Enable colors if we have a TTY
-		handler = tint.NewHandler(os.Stdout, &tint.Options{
-			Level:      slog.LevelDebug,
-			TimeFormat: time.StampMilli,
-		})
-	default:
-		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: level,
-		})
-	}
+	handler := logging.SlogHandler(cfg.LogAsJSON, level, os.Stdout)
 
 	// If we have an OpenTelemetry exporter, we need to create a handler that sends logs to OTel too
 	// We wrap the handler in a "fanout" handler that sends logs to both
@@ -107,7 +88,7 @@ func getLogger(cfg *config.Config) (log *slog.Logger, shutdownFn func(ctx contex
 		logGlobal.SetLoggerProvider(provider)
 
 		// Wrap the handler in a "fanout" one
-		handler = utils.LogFanoutHandler{
+		handler = logging.LogFanoutHandler{
 			handler,
 			otelslog.NewHandler(buildinfo.AppName, otelslog.WithLoggerProvider(provider)),
 		}
@@ -208,5 +189,5 @@ func (e loadConfigError) Error() string {
 
 // LogFatal causes a fatal log
 func (e loadConfigError) LogFatal(log *slog.Logger) {
-	utils.FatalError(log, e.msg, errors.New(e.err))
+	logging.FatalError(log, e.msg, errors.New(e.err))
 }

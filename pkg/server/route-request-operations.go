@@ -20,6 +20,7 @@ import (
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
 	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
@@ -32,8 +33,13 @@ import (
 // - POST /request/unwrapkey
 func (s *Server) RouteRequestOperations(op requestOperation) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		log := utils.LogFromContext(c.Request.Context())
+		log := logging.LogFromContext(c.Request.Context())
 		span := trace.SpanFromContext(c.Request.Context())
+
+		// Default content type to application/json if empty
+		if c.Request.Header.Get("Content-Type") == "" {
+			c.Request.Header.Set("Content-Type", "application/json")
+		}
 
 		// Get the fields from the body
 		req := &operationRequest{}

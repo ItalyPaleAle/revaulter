@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
 /*
@@ -29,7 +29,7 @@ func SignalContext(parentCtx context.Context) context.Context {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log := utils.LogFromContext(ctx)
+		log := logging.LogFromContext(ctx)
 		log.InfoContext(ctx, "Received interrupt signal. Shutting down…")
 		cancel()
 

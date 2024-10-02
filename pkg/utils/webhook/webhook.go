@@ -16,7 +16,7 @@ import (
 	kclock "k8s.io/utils/clock"
 
 	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
 const (
@@ -100,7 +100,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 		if err != nil {
 			// Retry after 15 seconds on network failures, if we have more attempts
 			if i < (attempts - 1) {
-				utils.LogFromContext(ctx).WarnContext(ctx,
+				logging.LogFromContext(ctx).WarnContext(ctx,
 					"Network error sending webhook; will retry after 15 seconds",
 					slog.Any("error", err),
 				)
@@ -130,7 +130,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 				if retryAfter < 1 || retryAfter > retryIntervalSeconds {
 					retryAfter = retryIntervalSeconds
 				}
-				utils.LogFromContext(ctx).WarnContext(ctx,
+				logging.LogFromContext(ctx).WarnContext(ctx,
 					"Webhook throttled; will retry after delay",
 					slog.Int("delaySeconds", retryAfter),
 				)
@@ -146,7 +146,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 
 			// Retry after a delay on 408 (Request Timeout) and 5xx errors, which indicate a problem with the server
 			if res.StatusCode == http.StatusRequestTimeout || (res.StatusCode >= 500 && res.StatusCode < 600) {
-				utils.LogFromContext(ctx).WarnContext(ctx,
+				logging.LogFromContext(ctx).WarnContext(ctx,
 					"Webhook returned an error response; will retry after delay",
 					slog.Int("code", res.StatusCode),
 					slog.Int("delaySeconds", retryIntervalSeconds),

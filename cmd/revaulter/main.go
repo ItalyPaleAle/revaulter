@@ -14,6 +14,7 @@ import (
 	revaultermetrics "github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/server"
 	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/utils/signals"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
@@ -34,7 +35,7 @@ func main() {
 		if errors.As(err, &lce) {
 			lce.LogFatal(initLogger)
 		} else {
-			utils.FatalError(initLogger, "Failed to load configuration", err)
+			logging.FatalError(initLogger, "Failed to load configuration", err)
 			return
 		}
 	}
@@ -46,7 +47,7 @@ func main() {
 	// Get the logger and set it in the context
 	log, shutdownFn, err := getLogger(conf)
 	if err != nil {
-		utils.FatalError(initLogger, "Failed to create logger", err)
+		logging.FatalError(initLogger, "Failed to create logger", err)
 		return
 	}
 	slog.SetDefault(log)
@@ -57,7 +58,7 @@ func main() {
 	// Validate the configuration
 	err = processConfig(log, conf)
 	if err != nil {
-		utils.FatalError(log, "Invalid configuration", err)
+		logging.FatalError(log, "Invalid configuration", err)
 		return
 	}
 
@@ -65,7 +66,7 @@ func main() {
 
 	// Get a context that is canceled when the application receives a termination signal
 	// We store the logger in the context too
-	ctx := utils.LogToContext(context.Background(), log)
+	ctx := logging.LogToContext(context.Background(), log)
 	ctx = signals.SignalContext(ctx)
 
 	// Init the webhook object
@@ -76,7 +77,7 @@ func main() {
 	if conf.EnableMetrics {
 		metrics, shutdownFn, err = revaultermetrics.NewRevaulterMetrics(ctx, log)
 		if err != nil {
-			utils.FatalError(log, "Failed to init metrics", err)
+			logging.FatalError(log, "Failed to init metrics", err)
 			return
 		}
 		if shutdownFn != nil {
@@ -89,7 +90,7 @@ func main() {
 	if conf.EnableTracing {
 		traceExporter, err = conf.GetTraceExporter(ctx, log)
 		if err != nil {
-			utils.FatalError(log, "Failed to init trace exporter", err)
+			logging.FatalError(log, "Failed to init trace exporter", err)
 			return
 		}
 
@@ -104,7 +105,7 @@ func main() {
 		TraceExporter: traceExporter,
 	})
 	if err != nil {
-		utils.FatalError(log, "Cannot initialize the server", err)
+		logging.FatalError(log, "Cannot initialize the server", err)
 		return
 	}
 
@@ -114,7 +115,7 @@ func main() {
 		NewServiceRunner(srv.Run).
 		Run(ctx)
 	if err != nil {
-		utils.FatalError(log, "Failed to run services", err)
+		logging.FatalError(log, "Failed to run services", err)
 		return
 	}
 

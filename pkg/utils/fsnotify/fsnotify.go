@@ -6,12 +6,13 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/italypaleale/revaulter/pkg/utils"
+
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
 // WatchFolder returns a channel that receives a notification when a file is changed in a folder.
 func WatchFolder(ctx context.Context, folder string) (<-chan struct{}, error) {
-	log := utils.LogFromContext(ctx)
+	log := logging.LogFromContext(ctx)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {

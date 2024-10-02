@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
 // MiddlewareMaxBodySize is a middleware that limits the size of the request body
@@ -24,7 +24,7 @@ func (s *Server) MiddlewareLogger(parentLog *slog.Logger) func(c *gin.Context) {
 		// Ensure the logger in the context has a request ID, then store it in the context
 		reqId := c.GetString("request-id")
 		log := parentLog.With(slog.String("id", reqId))
-		c.Request = c.Request.WithContext(utils.LogToContext(c.Request.Context(), log))
+		c.Request = c.Request.WithContext(logging.LogToContext(c.Request.Context(), log))
 
 		// Do not log OPTIONS requests
 		if method == http.MethodOptions {
