@@ -145,7 +145,7 @@ func (o operationCmd) createRequest(parentCtx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get request body: %w", err)
 	}
-	server, _ := o.flags.GetServer()
+	server := o.flags.GetServer()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, server+"/request/"+o.Operation, bytes.NewReader(reqBody))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
@@ -174,7 +174,7 @@ func (o operationCmd) createRequest(parentCtx context.Context) (string, error) {
 
 func (o operationCmd) getResult(ctx context.Context, state string) (json.RawMessage, error) {
 	// Create the request
-	server, _ := o.flags.GetServer()
+	server := o.flags.GetServer()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, server+"/request/result/"+state, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -248,7 +248,9 @@ func (o operationCmd) doRequest(req *http.Request, resBody any) error {
 }
 
 func (o operationCmd) getHTTPClient() (*http.Client, error) {
-	server, insecure := o.flags.GetServer()
+	server := o.flags.GetServer()
+	insecure, noH2c := o.flags.GetConnectionOptions()
+
 	serverUrl, err := url.Parse(server)
 	if err != nil {
 		return nil, fmt.Errorf("invalid server URL: %w", err)
@@ -260,8 +262,8 @@ func (o operationCmd) getHTTPClient() (*http.Client, error) {
 		WriteByteTimeout: 30 * time.Second,
 	}
 
-	// If the server uses http, we need to enable H2C
-	if serverUrl.Scheme == "http" {
+	// If the server uses http, enable H2C with prior knowledge if configured
+	if serverUrl.Scheme == "http" && !noH2c {
 		transport.AllowHTTP = true
 		transport.DialTLSContext = func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
 			return net.Dial(network, addr)

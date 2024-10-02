@@ -11,15 +11,15 @@ type operationFlags interface {
 	BindToCommand(cmd *cobra.Command)
 	Validate() error
 	RequestBody() ([]byte, error)
-	GetServer() (string, bool)
+	GetServer() string
+	GetConnectionOptions() (insecure bool, noh2c bool)
 }
 
 // Flags for the operations commands
 type operationFlagsBase struct {
-	// TODO: Add option to enable HTTP/1 support
-
 	Server   string
 	Insecure bool
+	NoH2C    bool
 
 	Vault      string
 	KeyId      string
@@ -35,6 +35,7 @@ func (f *operationFlagsBase) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&f.Server, "server", "s", "", "Address of the Revaulter server")
 	cmd.MarkFlagRequired("server")
 	cmd.Flags().BoolVar(&f.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
+	cmd.Flags().BoolVar(&f.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 
 	cmd.Flags().StringVarP(&f.Vault, "vault", "v", "", "Name or URL of the Azure Key Vault")
 	cmd.MarkFlagRequired("vault")
@@ -55,8 +56,12 @@ func (f *operationFlagsBase) Validate() error {
 	return nil
 }
 
-func (f operationFlagsBase) GetServer() (string, bool) {
-	return f.Server, f.Insecure
+func (f operationFlagsBase) GetServer() string {
+	return f.Server
+}
+
+func (f operationFlagsBase) GetConnectionOptions() (insecure bool, noh2c bool) {
+	return f.Insecure, f.NoH2C
 }
 
 func (f operationFlagsBase) AddBaseRequestBodyFields(data *operationRequest) {
