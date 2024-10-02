@@ -1,6 +1,6 @@
-# Using Revaulter
+# Using Revaulter REST APIs
 
-Revaulter can be used to perform six different cryptographic operations using keys stored on Azure Key Vault: encrypting and decrypting messages, wrapping and unwrapping keys, and computing and verifying digital signatures.
+Revaulter exposes RESTful APIs that can be used to perform six different cryptographic operations using keys stored on Azure Key Vault: encrypting and decrypting messages, wrapping and unwrapping keys, and computing and verifying digital signatures.
 
 ## Flow
 

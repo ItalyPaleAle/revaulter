@@ -28,4 +28,5 @@ Alternatively, Revaulter can be invoked with a bearer token issued by Azure AD,
 
 1. [Set up](./docs/01-set-up.md) and configure Azure resources
 2. [Install and configure Revaulter](./docs/02-install-and-configure-revaulter.md)
-3. [Using Revaulter](./docs/03-using-revaulter.md)
+3. [Interacting with Revaulter using the CLI](./docs/03-interacting-with-revaulter-cli.md)
+4. [Using Revaulter REST APIs](./docs/04-using-rest-api.md)
