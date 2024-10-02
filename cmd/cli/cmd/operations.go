@@ -161,10 +161,10 @@ func (o operationCmd) createRequest(parentCtx context.Context) (string, error) {
 
 	// Must have a state ID and the operation must be pending
 	if !resBody.Pending {
-		return "", fmt.Errorf("response is not valid: operation is not pending")
+		return "", errors.New("response is not valid: operation is not pending")
 	}
 	if resBody.State == "" {
-		return "", fmt.Errorf("response is not valid: state is missing")
+		return "", errors.New("response is not valid: state is missing")
 	}
 
 	o.log.Debug("Operation is pending", "state", resBody.State)
@@ -274,7 +274,7 @@ func (o operationCmd) getHTTPClient() (*http.Client, error) {
 	if insecure {
 		o.log.Warn("The '--insecure' flag is enabled: skipping TLS certificate validation")
 		transport.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: true, // #nosec G402
 		}
 	}
 

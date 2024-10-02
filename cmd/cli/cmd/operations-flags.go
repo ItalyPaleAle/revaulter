@@ -33,18 +33,18 @@ type operationFlagsBase struct {
 
 func (f *operationFlagsBase) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&f.Server, "server", "s", "", "Address of the Revaulter server")
-	cmd.MarkFlagRequired("server")
+	_ = cmd.MarkFlagRequired("server")
 	cmd.Flags().BoolVar(&f.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
 	cmd.Flags().BoolVar(&f.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 
 	cmd.Flags().StringVarP(&f.Vault, "vault", "v", "", "Name or URL of the Azure Key Vault")
-	cmd.MarkFlagRequired("vault")
+	_ = cmd.MarkFlagRequired("vault")
 	cmd.Flags().StringVarP(&f.KeyId, "key-id", "k", "", "ID of the key stored in the Key Vault")
-	cmd.MarkFlagRequired("key-id")
+	_ = cmd.MarkFlagRequired("key-id")
 	cmd.Flags().StringVar(&f.KeyVersion, "key-version", "", "Version of the key stored in the Key Vault")
 
 	cmd.Flags().StringVarP(&f.Algorithm, "algorithm", "a", "", "Algorithm identifier")
-	cmd.MarkFlagRequired("algorithm")
+	_ = cmd.MarkFlagRequired("algorithm")
 
 	cmd.Flags().VarP(&f.Timeout, "timeout", "t", "Timeout for the operation, as a number of seconds or Go duration")
 	cmd.Flags().StringVarP(&f.Note, "note", "n", "", "Optional message displayed alongside the request (up to 40 characters)")
@@ -85,7 +85,7 @@ func (f *operationFlagsEncrypt) BindToCommand(cmd *cobra.Command) {
 	f.operationFlagsBase.BindToCommand(cmd)
 
 	cmd.Flags().Var(&f.Value, "value", "The message to encrypt (base64-encoded)")
-	cmd.MarkFlagRequired("value")
+	_ = cmd.MarkFlagRequired("value")
 
 	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce (or Initialization Vector) for the encryption operation, if required by the algorithm (base64-encoded)")
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional Authenticated Data, which may not be supported by all algorithms (base64-encoded)")
@@ -115,7 +115,7 @@ func (f *operationFlagsDecrypt) BindToCommand(cmd *cobra.Command) {
 	f.operationFlagsBase.BindToCommand(cmd)
 
 	cmd.Flags().Var(&f.Value, "value", "The message to decrypt (base64-encoded)")
-	cmd.MarkFlagRequired("value")
+	_ = cmd.MarkFlagRequired("value")
 
 	cmd.Flags().Var(&f.Tag, "tag", "Authentication tag for the decryption operation, if required by the algorithm (base64-encoded)")
 	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce (or Initialization Vector) for the decryption operation, if required by the algorithm (base64-encoded)")
@@ -144,7 +144,7 @@ func (f *operationFlagsSign) BindToCommand(cmd *cobra.Command) {
 	f.operationFlagsBase.BindToCommand(cmd)
 
 	cmd.Flags().Var(&f.Digest, "digest", "The digest (hash) of the message to sign (base64-encoded)")
-	cmd.MarkFlagRequired("digest")
+	_ = cmd.MarkFlagRequired("digest")
 }
 
 func (f operationFlagsSign) RequestBody() ([]byte, error) {
@@ -167,9 +167,9 @@ func (f *operationFlagsVerify) BindToCommand(cmd *cobra.Command) {
 	f.operationFlagsBase.BindToCommand(cmd)
 
 	cmd.Flags().Var(&f.Digest, "digest", "The digest (hash) of the message that was signed (base64-encoded)")
-	cmd.MarkFlagRequired("digest")
+	_ = cmd.MarkFlagRequired("digest")
 	cmd.Flags().Var(&f.Signature, "signature", "The signature to verify (base64-encoded)")
-	cmd.MarkFlagRequired("signature")
+	_ = cmd.MarkFlagRequired("signature")
 }
 
 func (f operationFlagsVerify) RequestBody() ([]byte, error) {
@@ -194,7 +194,7 @@ func (f *operationFlagsWrapKey) BindToCommand(cmd *cobra.Command) {
 	f.operationFlagsBase.BindToCommand(cmd)
 
 	cmd.Flags().Var(&f.Value, "value", "The key to wrap (base64-encoded)")
-	cmd.MarkFlagRequired("value")
+	_ = cmd.MarkFlagRequired("value")
 
 	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce (or Initialization Vector) for the wrapping operation, if required by the algorithm (base64-encoded)")
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional Authenticated Data, which may not be supported by all algorithms (base64-encoded)")
@@ -224,7 +224,7 @@ func (f *operationFlagsUnwrapKey) BindToCommand(cmd *cobra.Command) {
 	f.operationFlagsBase.BindToCommand(cmd)
 
 	cmd.Flags().Var(&f.Value, "value", "The key to unwrap (base64-encoded)")
-	cmd.MarkFlagRequired("value")
+	_ = cmd.MarkFlagRequired("value")
 
 	cmd.Flags().Var(&f.Tag, "tag", "Authentication tag for the unwrapping operation, if required by the algorithm (base64-encoded)")
 	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce (or Initialization Vector) for the unwrapping operation, if required by the algorithm (base64-encoded)")

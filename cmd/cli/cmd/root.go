@@ -12,10 +12,11 @@ import (
 
 var (
 	rootCmd = &cobra.Command{
-		Use:          "revaulter-cli",
-		Short:        "A CLI for interacting with Revaulter",
-		Long:         `revaulter-cli helps interacting with Revaulter servers, performing operations on keys stored on Azure Key Vault, including: key wrapping and unwrapping, data encryption and decryption, computing and verifying digital signatures`,
-		SilenceUsage: true,
+		Use:           "revaulter-cli",
+		Short:         "A CLI for interacting with Revaulter",
+		Long:          `revaulter-cli helps interacting with Revaulter servers, performing operations on keys stored on Azure Key Vault, including: key wrapping and unwrapping, data encryption and decryption, computing and verifying digital signatures`,
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			// Enable debug logging if the verbose flag is set
 			if pf.Verbose {
@@ -41,7 +42,7 @@ func init() {
 }
 
 // Run executes the root command
-func Run() error {
+func Run() bool {
 	// Get the logger
 	// Logs are printed to stderr
 	log := slog.New(logging.SlogHandler(false, pf.logLevel, os.Stderr))
@@ -49,5 +50,12 @@ func Run() error {
 	// Create a context with the logger built-in
 	ctx := logging.LogToContext(context.Background(), log)
 
-	return rootCmd.ExecuteContext(ctx)
+	// Run the command
+	err := rootCmd.ExecuteContext(ctx)
+	if err != nil {
+		log.Error(err.Error())
+		return false
+	}
+
+	return true
 }
