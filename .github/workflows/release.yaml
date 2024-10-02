@@ -240,15 +240,15 @@ jobs:
           GOOS=windows GOARCH=amd64 \
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-v${{ env.BUILD_ID }}-windows-x64/revaulter \
+              -o .bin/revaulter-v${{ env.BUILD_ID }}-windows-x64/revaulter.exe \
               -trimpath \
-              ./cmd/revaulter.exe
+              ./cmd/revaulter
           GOOS=windows GOARCH=amd64 \
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-v${{ env.BUILD_ID }}-windows-x64/revaulter-cli \
+              -o .bin/revaulter-v${{ env.BUILD_ID }}-windows-x64/revaulter-cli.exe \
               -trimpath \
-              ./cmd/cli.exe
+              ./cmd/cli
           cp LICENSE.md .bin/revaulter-v${{ env.BUILD_ID }}-windows-x64
           cp README.md .bin/revaulter-v${{ env.BUILD_ID }}-windows-x64
           (cd .bin/revaulter-v${{ env.BUILD_ID }}-windows-x64 && zip -r ../.out/revaulter-v${{ env.BUILD_ID }}-windows-x64.zip .)
@@ -258,15 +258,15 @@ jobs:
           GOOS=windows GOARCH=arm64 \
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-v${{ env.BUILD_ID }}-windows-arm64/revaulter \
+              -o .bin/revaulter-v${{ env.BUILD_ID }}-windows-arm64/revaulter.exe \
               -trimpath \
-              ./cmd/revaulter.exe
+              ./cmd/revaulter
           GOOS=windows GOARCH=arm64 \
             go build \
               -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-v${{ env.BUILD_ID }}-windows-arm64/revaulter-cli \
+              -o .bin/revaulter-v${{ env.BUILD_ID }}-windows-arm64/revaulter-cli.exe \
               -trimpath \
-              ./cmd/cli.exe
+              ./cmd/cli
           cp LICENSE.md .bin/revaulter-v${{ env.BUILD_ID }}-windows-arm64
           cp README.md .bin/revaulter-v${{ env.BUILD_ID }}-windows-arm64
           (cd .bin/revaulter-v${{ env.BUILD_ID }}-windows-arm64 && zip -r ../.out/revaulter-v${{ env.BUILD_ID }}-windows-arm64.zip .)
