@@ -22,12 +22,9 @@ type operationRequest struct {
 
 type operationResponse struct {
 	State    string          `json:"state"`
+	Error    string          `json:"error"`
 	Pending  bool            `json:"pending"`
 	Done     bool            `json:"done"`
 	Failed   bool            `json:"failed"`
 	Response json.RawMessage `json:"response"`
-}
-
-type errorResponse struct {
-	Error string `json:"error"`
 }

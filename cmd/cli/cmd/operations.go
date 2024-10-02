@@ -223,19 +223,22 @@ func (o operationCmd) doRequest(req *http.Request, resBody any) error {
 	if res.StatusCode >= 400 {
 		resContent, _ := io.ReadAll(res.Body)
 		if len(resContent) > 0 {
-			resBody := errorResponse{}
-			err := json.Unmarshal(resContent, &resBody)
-			if err != nil {
-				// We ignore the error from the JSON unmarshaler here
-				o.log.Error("Request failed", "status", res.StatusCode, "error", err.Error(), "response", string(resContent))
-			} else {
+			resBody := operationResponse{}
+			// We ignore the error from the JSON unmarshaler here
+			_ = json.Unmarshal(resContent, &resBody)
+			switch {
+			case resBody.Error != "":
 				o.log.Error("The server returned an error", "status", res.StatusCode, "error", resBody.Error)
+			case resBody.Failed:
+				o.log.Error("The operation failed or was rejected")
+			default:
+				o.log.Error("The server returned an unknown error", "status", res.StatusCode, "response", string(resContent))
 			}
 		} else {
 			o.log.Error("Request failed with no content", "status", res.StatusCode)
 		}
 
-		return fmt.Errorf("invalid response status code: %d", res.StatusCode)
+		return fmt.Errorf("response status code: %d", res.StatusCode)
 	}
 
 	// Read the response
