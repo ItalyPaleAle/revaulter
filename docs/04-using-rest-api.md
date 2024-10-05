@@ -67,7 +67,7 @@ The request body contains the following properties:
 
 - **`value`** (string, base64-encoded): The message to encrypt.
 - **`algorithm`** (string): Algorithm to use to encrypt the message. The string is a constant defined by the JSON Web Encryption (JWE) standard, for example `RSA-OAEP-256`. See the list of supported values in the [Azure Key Vault documentation](https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys-details).
-- **`vault`** (string): The name of the Azure Key Vault instance where the key is stored.
+- **`vault`** (string): The name or URL of the Azure Key Vault instance where the key is stored.
 - **`keyId`** (string): The name of the key stored in the Key Vault.
 - Optional keys:
   - **`nonce`** (string, base64-encoded): Nonce (or Initialization Vector) for the encryption operation. Although this field is optional, it may be required by some algorithms, and omitting that may cause Azure Key Vault to return an error. The length of the nonce depends on the algorithm used.
@@ -107,7 +107,7 @@ The request body contains the following properties:
 
 - **`value`** (string, base64-encoded): The message to decrypt.
 - **`algorithm`** (string): Algorithm to use to decrypt the message. The string is a constant defined by the JSON Web Encryption (JWE) standard, for example `RSA-OAEP-256`. See the list of supported values in the [Azure Key Vault documentation](https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys-details).
-- **`vault`** (string): The name of the Azure Key Vault instance where the key is stored.
+- **`vault`** (string): The name or URL of the Azure Key Vault instance where the key is stored.
 - **`keyId`** (string): The name of the key stored in the Key Vault.
 - Optional keys:
   - **`nonce`** (string, base64-encoded): Nonce (or Initialization Vector) for the decryption operation. Although this field is optional, it may be required by some algorithms, and omitting that may cause Azure Key Vault to return an error. The length of the nonce depends on the algorithm used.
@@ -148,7 +148,7 @@ The request body contains the following properties:
 
 - **`digest`** (string, base64-encoded): The digest (hash) of the message to sign. The length of the digest (and thus the algorithm used to compute it) depends on the algorithm used for the signature; for example, for algorithm `PS256`, the digest should be computed with SHA-256.
 - **`algorithm`** (string): Algorithm to use to sign the message's digest. The string is a constant defined by the JSON Web Signature (JWS) standard, for example `PS256`. See the list of supported values in the [Azure Key Vault documentation](https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys-details).
-- **`vault`** (string): The name of the Azure Key Vault instance where the key is stored.
+- **`vault`** (string): The name or URL of the Azure Key Vault instance where the key is stored.
 - **`keyId`** (string): The name of the key stored in the Key Vault.
 - Optional keys:
   - **`keyVersion`** (string): The version of the key stored in Key Vault to use; if omitted, it defaults to the latest version of the key.
@@ -187,7 +187,7 @@ The request body contains the following properties:
 - **`digest`** (string, base64-encoded): The digest (hash) of the message that was signed. The length of the digest (and thus the algorithm used to compute it) depends on the algorithm used for the signature; for example, for algorithm `PS256`, the digest should be computed with SHA-256.
 - **`signature`** (string, base64-encoded): The signature to verify.
 - **`algorithm`** (string): Algorithm to use to sign the message's digest. The string is a constant defined by the JSON Web Signature (JWS) standard, for example `PS256`. See the list of supported values in the [Azure Key Vault documentation](https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys-details).
-- **`vault`** (string): The name of the Azure Key Vault instance where the key is stored.
+- **`vault`** (string): The name or URL of the Azure Key Vault instance where the key is stored.
 - **`keyId`** (string): The name of the key stored in the Key Vault.
 - Optional keys:
   - **`keyVersion`** (string): The version of the key stored in Key Vault to use; if omitted, it defaults to the latest version of the key.
@@ -225,7 +225,7 @@ The request body contains the following properties:
 
 - **`value`** (string, base64-encoded): The key to wrap.
 - **`algorithm`** (string): Algorithm to use to wrap the key. The string is a constant defined by the JSON Web Encryption (JWE) standard, for example `RSA-OAEP-256`. See the list of supported values in the [Azure Key Vault documentation](https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys-details).
-- **`vault`** (string): The name of the Azure Key Vault instance where the key is stored.
+- **`vault`** (string): The name or URL of the Azure Key Vault instance where the key is stored.
 - **`keyId`** (string): The name of the key stored in the Key Vault.
 - Optional keys:
   - **`nonce`** (string, base64-encoded): Nonce (or Initialization Vector) for the wrapping operation. Although this field is optional, it may be required by some algorithms, and omitting that may cause Azure Key Vault to return an error. The length of the nonce depends on the algorithm used.
@@ -265,7 +265,7 @@ The request body contains the following properties:
 
 - **`value`** (string, base64-encoded): The key to unwrap.
 - **`algorithm`** (string): Algorithm to use to unwrap the key. The string is a constant defined by the JSON Web Encryption (JWE) standard, for example `RSA-OAEP-256`. See the list of supported values in the [Azure Key Vault documentation](https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys-details).
-- **`vault`** (string): The name of the Azure Key Vault instance where the key is stored.
+- **`vault`** (string): The name or URL of the Azure Key Vault instance where the key is stored.
 - **`keyId`** (string): The name of the key stored in the Key Vault.
 - Optional keys:
   - **`nonce`** (string, base64-encoded): Nonce (or Initialization Vector) for the unwrapping operation. Although this field is optional, it may be required by some algorithms, and omitting that may cause Azure Key Vault to return an error. The length of the nonce depends on the algorithm used.
