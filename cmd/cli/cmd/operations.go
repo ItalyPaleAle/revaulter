@@ -134,7 +134,6 @@ func (o *operationCmd) Run(cmd *cobra.Command, args []string) (err error) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", " ")
 	enc.Encode(response)
-	//os.Stdout.Write(response)
 
 	return nil
 }
