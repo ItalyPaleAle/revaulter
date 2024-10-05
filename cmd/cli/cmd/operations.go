@@ -130,8 +130,11 @@ func (o *operationCmd) Run(cmd *cobra.Command, args []string) (err error) {
 		return fmt.Errorf("failed to get response: %w", err)
 	}
 
-	// Print the result to stdout
-	os.Stdout.Write(response)
+	// Print the result to stdout, prettified
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", " ")
+	enc.Encode(response)
+	//os.Stdout.Write(response)
 
 	return nil
 }
