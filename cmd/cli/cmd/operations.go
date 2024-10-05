@@ -133,7 +133,10 @@ func (o *operationCmd) Run(cmd *cobra.Command, args []string) (err error) {
 	// Print the result to stdout, prettified
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", " ")
-	enc.Encode(response)
+	err = enc.Encode(response)
+	if err != nil {
+		return fmt.Errorf("failed to print response: %w", err)
+	}
 
 	return nil
 }
