@@ -271,6 +271,42 @@ jobs:
           cp -r README.md docs .bin/revaulter-${{ env.BUILD_ID }}-windows-arm64
           (cd .bin/revaulter-${{ env.BUILD_ID }}-windows-arm64 && zip -r ../../.out/revaulter-${{ env.BUILD_ID }}-windows-arm64.zip .)
 
+          echo -e "\n###\nBuilding freebsd/amd64\n"
+          mkdir .bin/revaulter-${{ env.BUILD_ID }}-freebsd-amd64
+          GOOS=freebsd GOARCH=amd64 \
+            go build \
+              -ldflags "${BUILD_LDFLAGS}" \
+              -o .bin/revaulter-${{ env.BUILD_ID }}-freebsd-amd64/revaulter \
+              -trimpath \
+              ./cmd/revaulter
+          GOOS=freebsd GOARCH=amd64 \
+            go build \
+              -ldflags "${BUILD_LDFLAGS}" \
+              -o .bin/revaulter-${{ env.BUILD_ID }}-freebsd-amd64/revaulter-cli \
+              -trimpath \
+              ./cmd/cli
+          cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-freebsd-amd64
+          cp -r README.md docs .bin/revaulter-${{ env.BUILD_ID }}-freebsd-amd64
+          (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-freebsd-amd64.tar.gz revaulter-${{ env.BUILD_ID }}-freebsd-amd64)
+
+          echo -e "\n###\nBuilding freebsd/arm64\n"
+          mkdir .bin/revaulter-${{ env.BUILD_ID }}-freebsd-arm64
+          GOOS=freebsd GOARCH=arm64 \
+            go build \
+              -ldflags "${BUILD_LDFLAGS}" \
+              -o .bin/revaulter-${{ env.BUILD_ID }}-freebsd-arm64/revaulter \
+              -trimpath \
+              ./cmd/revaulter
+          GOOS=freebsd GOARCH=arm64 \
+            go build \
+              -ldflags "${BUILD_LDFLAGS}" \
+              -o .bin/revaulter-${{ env.BUILD_ID }}-freebsd-arm64/revaulter-cli \
+              -trimpath \
+              ./cmd/cli
+          cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-freebsd-arm64
+          cp -r README.md docs .bin/revaulter-${{ env.BUILD_ID }}-freebsd-arm64
+          (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-freebsd-arm64.tar.gz revaulter-${{ env.BUILD_ID }}-freebsd-arm64)
+
           echo -e "\n###\nLinks for Docker buildx\n"
           (
             cd .bin && \
@@ -386,6 +422,24 @@ jobs:
           subject-path: |
             .bin/revaulter-*-windows-arm64/revaulter.exe
             .bin/revaulter-*-windows-arm64/revaulter-cli.exe
+
+      - name: Binary attestation freebsd-amd64
+        uses: actions/attest-build-provenance@v1
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          subject-name: freebsd-amd64/revaulter
+          subject-path: |
+            .bin/revaulter-*-freebsd-amd64/revaulter
+            .bin/revaulter-*-freebsd-amd64/revaulter-cli
+
+      - name: Binary attestation freebsd-arm64
+        uses: actions/attest-build-provenance@v1
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          subject-name: freebsd-arm64/revaulter
+          subject-path: |
+            .bin/revaulter-*-freebsd-arm64/revaulter
+            .bin/revaulter-*-freebsd-arm64/revaulter-cli
 
       - name: Container image attestation
         uses: actions/attest-build-provenance@v1
