@@ -32,6 +32,13 @@ type Config struct {
 	// This is optional, but recommended when not using Federated Identity Credentials.
 	AzureClientSecret string `env:"AZURECLIENTSECRET" yaml:"azureClientSecret"`
 
+	// If true, uses an Azure Managed Identity to obtain an assertion for the confidential client, allowing the use of Federated Identity Credentials instead of using client secrets.
+	// This uses a system-assigned managed identity by default; to use a user-assigned managed identity, set the client ID in `azureManagedIdentityClientId`.
+	AzureUseFederatedIdentity bool `env:"AZUREUSEFEDERATEDIDENTITY" yaml:"azureUseFederatedIdentity"`
+
+	// When using Azure Managed Identity for Federated Identity Credentials, set an explicit client ID to use a user-assigned managed identity.
+	AzureFederatedIdentityClientId string `env:"AZUREFEDERATEDIDENTITYCLIENTID" yaml:"azureFederatedIdentityClientId"`
+
 	// Endpoint of the webhook, where notifications are sent to.
 	// +required
 	WebhookUrl string `env:"WEBHOOKURL" yaml:"webhookUrl"`
@@ -263,6 +270,9 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	if c.RequestTimeout < time.Second {
 		return errors.New("config entry key 'requestTimeout' is invalid: must be greater than 1s")
 	}
+	if c.AzureClientSecret != "" && c.AzureUseFederatedIdentity {
+		return errors.New("cannot specify 'azureClientSecret' in config when 'azureUseFederatedIdentity' is true")
+	}
 
 	// Format URLs in the Key Vault allowlist
 	for i := range c.AllowedVaults {
@@ -271,7 +281,7 @@ func (c *Config) Validate(logger *slog.Logger) error {
 
 	// Show warnings if needed
 	if logger != nil {
-		if c.AzureClientSecret == "" {
+		if c.AzureClientSecret == "" && !c.AzureUseFederatedIdentity {
 			logger.Warn(`Revaulter is running without an 'azureClientSecret' in the configuration, which requires using public clients ("mobile and desktop applications"). Configuring the Revaulter Entra ID (Azure AD) application as a confidential client ("web applications") and using either a client secret or Federated Identity Credentials is recommended for security.`)
 		}
 	}

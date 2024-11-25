@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/text/unicode/norm"
 
@@ -177,6 +178,19 @@ func (s *Server) requestAccessToken(ctx context.Context, code, seed string) (*Ac
 	}
 	if cfg.AzureClientSecret != "" {
 		data["client_secret"] = []string{cfg.AzureClientSecret}
+	} else if s.federatedIdentityCredential != nil {
+		// Get the client assertion
+		clientAssertion, err := s.federatedIdentityCredential.GetToken(ctx, policy.TokenRequestOptions{
+			// This is a constant value
+			Scopes: []string{"api://AzureADTokenExchange"},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to obtain client assertion: %w", err)
+		}
+
+		// This is a constant value
+		data["client_assertion_type"] = []string{"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"}
+		data["client_assertion"] = []string{clientAssertion.Token}
 	}
 
 	body := strings.NewReader(data.Encode())
