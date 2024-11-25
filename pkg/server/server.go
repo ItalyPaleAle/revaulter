@@ -338,20 +338,34 @@ func (s *Server) getBaseURL() string {
 func (s *Server) initFederatedIdentity() (err error) {
 	cfg := config.Get()
 
-	// If federated identity is disabled, return
-	if !cfg.AzureUseFederatedIdentity {
+	// Crete the federated identity credential object depending on the kind of federated identity
+	afi := strings.ToLower(cfg.AzureFederatedIdentity)
+	switch {
+	case afi == "":
+		// If federated identity is disabled, return
 		return nil
-	}
-
-	var id azidentity.ManagedIDKind
-	if cfg.AzureFederatedIdentityClientId != "" {
-		id = azidentity.ClientID(cfg.AzureFederatedIdentityClientId)
-	}
-	s.federatedIdentityCredential, err = azidentity.NewManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{
-		ID: id,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create managed identity credential object: %w", err)
+	case strings.HasPrefix(afi, "managedidentity="):
+		// User-assigned managed identity
+		s.federatedIdentityCredential, err = azidentity.NewManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{
+			ID: azidentity.ClientID(afi[len("managedidentity="):]),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create managed identity credential object: %w", err)
+		}
+	case afi == "managedidentity":
+		// System-assigned managed identity
+		s.federatedIdentityCredential, err = azidentity.NewManagedIdentityCredential(nil)
+		if err != nil {
+			return fmt.Errorf("failed to create managed identity credential object: %w", err)
+		}
+	case afi == "workloadidentity":
+		// Workload Identity
+		s.federatedIdentityCredential, err = azidentity.NewWorkloadIdentityCredential(nil)
+		if err != nil {
+			return fmt.Errorf("failed to create workload identity credential object: %w", err)
+		}
+	default:
+		return fmt.Errorf("invalid value for configuration option 'azureFederatedIdentity': '%s'", cfg.AzureFederatedIdentity)
 	}
 
 	return nil
