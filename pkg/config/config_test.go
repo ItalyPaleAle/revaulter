@@ -27,7 +27,7 @@ func TestValidateConfig(t *testing.T) {
 	}))
 
 	t.Run("succeeds with all required vars", func(t *testing.T) {
-		err := config.Validate()
+		err := config.Validate(nil)
 		require.NoError(t, err)
 	})
 
@@ -36,7 +36,7 @@ func TestValidateConfig(t *testing.T) {
 			"azureClientId": "",
 		}))
 
-		err := config.Validate()
+		err := config.Validate(nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "'azureClientId' missing")
 	})
@@ -46,7 +46,7 @@ func TestValidateConfig(t *testing.T) {
 			"azureTenantId": "",
 		}))
 
-		err := config.Validate()
+		err := config.Validate(nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "'azureTenantId' missing")
 	})
@@ -56,7 +56,7 @@ func TestValidateConfig(t *testing.T) {
 			"webhookUrl": "",
 		}))
 
-		err := config.Validate()
+		err := config.Validate(nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "'webhookUrl' missing")
 	})
@@ -66,7 +66,7 @@ func TestValidateConfig(t *testing.T) {
 			"sessionTimeout": 100 * time.Millisecond,
 		}))
 
-		err := config.Validate()
+		err := config.Validate(nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "'sessionTimeout' is invalid")
 	})
@@ -76,7 +76,7 @@ func TestValidateConfig(t *testing.T) {
 			"sessionTimeout": 3 * time.Hour,
 		}))
 
-		err := config.Validate()
+		err := config.Validate(nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "'sessionTimeout' is invalid")
 	})
@@ -86,7 +86,7 @@ func TestValidateConfig(t *testing.T) {
 			"requestTimeout": 100 * time.Millisecond,
 		}))
 
-		err := config.Validate()
+		err := config.Validate(nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "'requestTimeout' is invalid")
 	})
