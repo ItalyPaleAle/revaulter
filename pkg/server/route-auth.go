@@ -175,6 +175,10 @@ func (s *Server) requestAccessToken(ctx context.Context, code, seed string) (*Ac
 		"grant_type":    []string{"authorization_code"},
 		"code_verifier": []string{seed}, // For PKCE
 	}
+	if cfg.AzureClientSecret != "" {
+		data["client_secret"] = []string{cfg.AzureClientSecret}
+	}
+
 	body := strings.NewReader(data.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://login.microsoftonline.com/"+cfg.AzureTenantId+"/oauth2/v2.0/token", body)
