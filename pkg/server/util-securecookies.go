@@ -43,7 +43,7 @@ func getSecureCookie(c *gin.Context, name string) (plaintextValue string, ttl ti
 	token, err := jwt.Parse(dec,
 		jwt.WithAcceptableSkew(30*time.Second),
 		jwt.WithIssuer(jwtIssuer),
-		jwt.WithAudience(cfg.AzureClientId),
+		jwt.WithAudience("revaulter-"+cfg.AzureClientId),
 		jwt.WithKey(jwa.HS256, cfg.GetCookieSigningKey()),
 	)
 	if err != nil {
@@ -81,7 +81,7 @@ func setSecureCookie(c *gin.Context, name string, plaintextValue string, expirat
 		Issuer(jwtIssuer).
 		Audience([]string{
 			// Use the Azure client ID as our audience too
-			cfg.AzureClientId,
+			"revaulter-" + cfg.AzureClientId,
 		}).
 		IssuedAt(now).
 		// Add 1 extra second to synchronize with cookie expiry
