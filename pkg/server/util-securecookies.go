@@ -105,6 +105,29 @@ func setSecureCookie(c *gin.Context, name string, plaintextValue string, expirat
 		return fmt.Errorf("failed to serialize token: %w", err)
 	}
 
+	// Tokens issued by Azure AD could be very long
+	// Most browsers limit the size of cookies to as low as 4KB, and silently reject them
+	// If the cookie is larger than 4KB, we try re-generating it with compression
+	const maxCookieLen = 4 << 10
+	if len(cookieValue) > maxCookieLen {
+		cookieValue, err = jwt.NewSerializer().
+			Sign(jwt.WithKey(jwa.HS256, cfg.GetCookieSigningKey())).
+			Encrypt(
+				jwt.WithKey(jwa.A128KW, cfg.GetCookieEncryptionKey()),
+				jwt.WithEncryptOption(jwe.WithContentEncryption(jwa.A128GCM)),
+				jwt.WithEncryptOption(jwe.WithCompress(jwa.Deflate)),
+			).
+			Serialize(token)
+		if err != nil {
+			return fmt.Errorf("failed to serialize token: %w", err)
+		}
+
+		// If the cookie is still larger than 4KB, return an error
+		if len(cookieValue) > maxCookieLen {
+			return fmt.Errorf("cookie value exceeds the 4KB limit: %d", len(cookieValue))
+		}
+	}
+
 	// Set the cookie
 	c.SetCookie(name, string(cookieValue), int(expiration.Seconds()), path, c.Request.URL.Host, secureCookie, httpOnly)
 
