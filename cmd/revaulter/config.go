@@ -32,11 +32,11 @@ func loadConfig() error {
 		}
 	} else {
 		// Look in the default paths
-		configFile = findConfigFile("config.yaml", ".", "~/.revaulter", "/etc/revaulter")
-		if configFile == "" {
-			// Ok, if you really, really want to use ".yml"....
-			configFile = findConfigFile("config.yml", ".", "~/.revaulter", "/etc/revaulter")
-		}
+		// We'll accept ".yml" and ".json" too (but still load it as a YAML)
+		configFile = findConfigFiles(
+			[]string{"config.yaml", "config.yml", "config.json"},
+			[]string{".", "~/.revaulter", "/etc/revaulter"},
+		)
 	}
 
 	// Load the configuration
@@ -108,7 +108,18 @@ func getLogger(cfg *config.Config) (log *slog.Logger, shutdownFn func(ctx contex
 	return log, shutdownFn, nil
 }
 
-func findConfigFile(fileName string, searchPaths ...string) string {
+func findConfigFiles(fileNames []string, searchPaths []string) string {
+	for _, name := range fileNames {
+		path := findConfigFile(name, searchPaths)
+		if path != "" {
+			return path
+		}
+	}
+
+	return ""
+}
+
+func findConfigFile(fileName string, searchPaths []string) string {
 	for _, path := range searchPaths {
 		if path == "" {
 			continue
