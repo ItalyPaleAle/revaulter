@@ -50,7 +50,7 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 
 	// Check if we already have a state cookie that was issued recently
 	// It can happen that clients are redirected to the auth page more than once at the same time
-	seed, ttl, err := getSecureCookie(c, authStateCookieName)
+	seed, ttl, err := getSecureCookieEncryptedJWT(c, authStateCookieName)
 	if err != nil || seed == "" || ttl < (authStateCookieMaxAge-time.Minute) {
 		// Generate a random seed
 		b := make([]byte, 12)
@@ -120,7 +120,7 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 	}
 
 	// Ensure that the user has the auth state cookie
-	seed, _, err := getSecureCookie(c, authStateCookieName)
+	seed, _, err := getSecureCookieEncryptedJWT(c, authStateCookieName)
 	if err == nil && seed == "" {
 		err = errors.New("auth state cookie is missing")
 	}
@@ -154,7 +154,7 @@ func (s *Server) RouteAuthConfirm(c *gin.Context) {
 	}
 
 	// Set the access token in a cookie
-	err = setSecureCookie(c, atCookieName, accessToken.AccessToken, expiration, "/", c.Request.URL.Host, secureCookie, true, serializeSecureCookieEncryptedJWT)
+	err = setSecureCookie(c, atCookieName, accessToken.AccessToken, expiration, "/", c.Request.URL.Host, secureCookie, true, serializeSecureCookieAzureADAccessToken)
 	if err != nil {
 		AbortWithErrorJSON(c, fmt.Errorf("failed to set access token secure cookie: %w", err))
 		return
