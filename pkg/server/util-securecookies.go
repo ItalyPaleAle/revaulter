@@ -75,7 +75,7 @@ func getSecureCookieEncryptedeAzureADAccessToken(c *gin.Context, name string) (p
 	// The cookie value is the signed message and the encrypted payload, separated by a |
 	signed, encrypted, ok := strings.Cut(cookieValue, "|")
 	if !ok || signed == "" || encrypted == "" {
-		return "", 0, fmt.Errorf("cookie is invalid: not in the expected format")
+		return "", 0, errors.New("cookie is invalid: not in the expected format")
 	}
 
 	// Parse and validate the signed JWT
@@ -95,7 +95,7 @@ func getSecureCookieEncryptedeAzureADAccessToken(c *gin.Context, name string) (p
 	// The access token's header and payload are separated by a newline
 	atHeader, atPayload, ok := bytes.Cut(dec, []byte{'\n'})
 	if !ok || len(atHeader) == 0 || len(atPayload) == 0 {
-		return "", 0, fmt.Errorf("decrypted part is not in the expected format")
+		return "", 0, errors.New("decrypted part is not in the expected format")
 	}
 
 	// Re-construct the access token
