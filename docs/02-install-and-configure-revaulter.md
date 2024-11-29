@@ -27,6 +27,17 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
   - **`azureTenantId`** (**required**):  
     Tenant ID of the Azure AD application.  
     Environmental variable name: `REVAULTER_AZURETENANTID`
+  - **`azureClientSecret`** (optional but **recommended** when not using Federated Identity Credentials):  
+    Client secret of the Azure AD application, for using confidential clients.  
+    Environmental variable name: `REVAULTER_AZURECLIENTSECRET`
+  - **`azureFederatedIdentity`** (optional but **recommended** when using Federated Identity Credentials):  
+    Enables the usage of Federated Identity Credentials to obtain assertions for confidential clients for Azure AD applications.  
+    This is an alternative to using client secrets, when the application is running in Azure in an environment that supports Managed Identity, or in an environment that supports Workload Identity Federation with Azure AD.  
+    Currently, these values are supported:
+    - `ManagedIdentity`: uses a system-assigned managed identity
+    - `ManagedIdentity=client-id`: uses a user-assigned managed identity with client id "client-id" (e.g. `ManagedIdentity=00000000-0000-0000-0000-000000000000`)
+    - `WorkloadIdentity`: uses workload identity, e.g. for Kubernetes
+    Environmental variable name: `REVAULTER_AZUREFEDERATEDIDENTITY`
 - Webhooks:
   - **`webhookUrl`** (**required**):  
     Endpoint of the webhook, where notifications are sent to.  

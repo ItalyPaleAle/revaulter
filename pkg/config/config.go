@@ -38,7 +38,7 @@ type Config struct {
 	//
 	// - `ManagedIdentity`: uses a system-assigned managed identity
 	// - `ManagedIdentity=client-id`: uses a user-assigned managed identity with client id "client-id" (e.g. "ManagedIdentity=00000000-0000-0000-0000-000000000000")
-	// - `WorkloadIdentity`: uses workload identity
+	// - `WorkloadIdentity`: uses workload identity, e.g. for Kubernetes
 	AzureFederatedIdentity string `env:"AZUREFEDERATEDIDENTITY" yaml:"azureFederatedIdentity"`
 
 	// Endpoint of the webhook, where notifications are sent to.

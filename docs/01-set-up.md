@@ -108,19 +108,15 @@ Create an app in Azure AD to access Azure Key Vault with a user's delegated per
 # Friendly name for the application
 APP_NAME="Revaulter"
 
-# Create the app and set the redirect URIs
+# Create the app
 APP_ID=$(az ad app create \
   --display-name $APP_NAME \
   --available-to-other-tenants false \
   --oauth2-allow-implicit-flow false \
-  | jq -r .appId)
-APP_OBJECT_ID=$(az ad app show --id $APP_ID | jq -r .id)
-az rest \
-  --method PATCH \
-  --uri "https://graph.microsoft.com/v1.0/applications/${APP_OBJECT_ID}" \
-  --body "{\"publicClient\":{\"redirectUris\":[\"${APP_URL}/auth/confirm\"]}}"
+  | jq -r '.appId')
 
 # Grant permissions for Azure Key Vault
+# Note the UUIDs below are constants
 az ad app permission add \
   --id $APP_ID \
   --api cfa8b339-82a2-471a-a3c9-0fc0be7a4093 \
@@ -129,7 +125,105 @@ az ad app permission add \
 
 Take note of the output of the last command, which includes the values for the `config.yaml` file:
 
-- `appId` is the value for `azureClientId`
-- `tenant` is the value for `azureTenantId`
+- `appId` is the value for **`azureClientId`**
+- `tenant` is the value for **`azureTenantId`**
 
 > Note that the Azure AD application does not need permissions on the Key Vault. Instead, Revaulter uses delegated permissions, matching whatever access level the authenticated user has.
+
+Lastly, we need to configure the redirect URIs for the application. There are 3 ways to do that:
+
+#### Option 1: Using Federated Identity Credentials
+
+This is the **recommended** approach when:
+
+- The application is running on Azure on a platform that supports [Managed Identity](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview). Both system-assigned and user-assigned identities are supported.
+- The application is running on platforms that support [Workload Identity Federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation), for example on Kubernetes (on any cloud or on-premises) or other clouds.
+
+> Check the documentation for your platform on configuring the managed identity or the workload identity for your application.
+
+To use Federated Identity Credentials, first configure the Azure AD application with a redirect URI for a "web" client:
+
+```sh
+# Ensure these environmental variables are set from the previous steps
+# APP_URL
+# APP_ID
+
+# Set the redirect URI for the "web" (confidential) application
+az ad app update \
+  --id "$APP_ID" \
+  --web-redirect-uris "${APP_URL}/auth/confirm"
+```
+
+Next, configure the federated credential. The steps below show an example for using managed identity; for using workload identity federation, consult the documentation for your platform.
+
+For managed identity, you will need the **object ID** (i.e. "principal ID") of your identity. This can usually be found on the Azure Portal in the "Identity" section of your resource.
+
+```sh
+# Set this to the UUID of your managed identity
+IDENTITY_OBJECT_ID="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# Set the TENANT_ID environmental variable
+TENANT_ID=$(az account show | jq -r '.tenantId')
+
+az ad app federated-credential create \
+  --id "$APP_ID" \
+  --parameters "{\"name\": \"mi-${IDENTITY_OBJECT_ID}\",\"issuer\": \"https://login.microsoftonline.com/${TENANT_ID}/v2.0\",\"subject\": \"${IDENTITY_OBJECT_ID}\",\"description\": \"Federated Identity for Managed Identity ${IDENTITY_OBJECT_ID}\",\"audiences\": [\"api://AzureADTokenExchange\"]}"
+```
+
+Finally, configure Revaulter by setting a value for **`azureFederatedIdentity`**:
+
+- `"ManagedIdentity"` for using a system-assigned managed identity
+- `"ManagedIdentity=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"` for using a user-assigned managed identity (replace the placeholder value with the **client ID** of your managed identity)
+- `"WorkloadIdentity"` for using workload identity
+
+#### Option 2: Using a web client with a client secret
+
+This option can be used when Revaulter is running anywhere, but it requires storing a client secret that is used by Revaulter to obtain an access token.
+
+> Whenever possible, prefer using Federated Identity Credentials, which do not require shared secrets and do not expire, for better security and reliability.
+
+First, configure the Azure AD application with a redirect URI for a "web" client:
+
+```sh
+# Ensure these environmental variables are set from the previous steps
+# APP_URL
+# APP_ID
+
+# Set the redirect URI for the "web" (confidential) application
+az ad app update \
+  --id "$APP_ID" \
+  --web-redirect-uris "${APP_URL}/auth/confirm"
+```
+
+Next, create a new client secret (also called _password_):
+
+```sh
+# In this example, the client secret will be valid for 1 year
+az ad app credential reset \
+  --id "$APP_ID" \
+  --append \
+  --years 1
+```
+
+Take note of the `password` from the output above, which will be the value for the **`azureClientSecret`** property in the configuration for Revaulter.
+
+#### Option 3: Configure a public client (legacy)
+
+In this case, Revaulter is configured as a public client (also called "mobile and desktop app"), and works without a client secret or federated identity.
+
+This option is considered legacy and is **not recommended** for new deployments of Revaulter, as it lacks some additional protections that are possible when Revaulter is configured as a confidential ("web") client. Additionally, Revaulter will show a warning in the logs when it's running as a public client.
+
+In this case, you only need to configure the redirect URI in Revaulter:
+
+```sh
+# Ensure these environmental variables are set from the previous steps
+# APP_URL
+# APP_ID
+
+# Set the redirect URI for the "web" (confidential) application
+az ad app update \
+  --id "$APP_ID" \
+  --public-client-redirect-uris "${APP_URL}/auth/confirm"
+```
+
+There are no other steps needed, and no value that needs to be set in the configuration for Revaulter.
