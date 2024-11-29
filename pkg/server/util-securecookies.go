@@ -1,9 +1,11 @@
 package server
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -164,4 +166,74 @@ func serializeSecureCookieEncryptedJWT(name string, plaintextValue string, expir
 	}
 
 	return string(cookieValue), nil
+}
+
+// Serializes a secure cookie for an Azure AD access token
+// Access tokens issued by Azure AD can be *very* large
+// If we try to put the token in an encrypted JWT, the data would get serialized to base64 multiple times, making the size of the token balloon
+// This is a problem because we save our tokens in cookies, and browsers reject cookies that are larger than 4KB
+// As a solution, we use JWE to encrypt a custom payload so we can avoid some iterations of base64
+func serializeSecureCookieAzureADAccessToken(name string, plaintextValue string, expiration time.Duration) (string, error) {
+	cfg := config.Get()
+
+	// First, split the token to get the 3 parts: header, payload, signature
+	parts := strings.Split(plaintextValue, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("token from Azure AD is not in the correct format: has %d parts instead of 3", len(parts))
+	}
+
+	// Decode from base64 the header and payload
+	header, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", fmt.Errorf("token from Azure AD is not in the correct format: failed to decode header: %w", err)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("token from Azure AD is not in the correct format: failed to decode payload: %w", err)
+	}
+
+	// Claims for the JWT
+	// In here, the value is just the signature of the token
+	now := time.Now()
+	token, err := jwt.NewBuilder().
+		Issuer(jwtIssuer).
+		Audience([]string{
+			// Use the Azure client ID as our audience too
+			"revaulter-" + cfg.AzureClientId,
+		}).
+		IssuedAt(now).
+		// Add 1 extra second to synchronize with cookie expiry
+		Expiration(now.Add(expiration+time.Second)).
+		NotBefore(now).
+		Claim("n", name).
+		Claim("v", parts[2]).
+		Build()
+	if err != nil {
+		return "", fmt.Errorf("failed to build JWT: %w", err)
+	}
+
+	// Generate the JWT
+	signed, err := jwt.NewSerializer().
+		Sign(jwt.WithKey(jwa.HS256, cfg.GetCookieSigningKey())).
+		Serialize(token)
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize signed token: %w", err)
+	}
+
+	// Encrypt the access token's header and payload
+	encMsg := make([]byte, len(header)+len(payload)+1)
+	copy(encMsg, header)
+	encMsg[len(header)] = '.'
+	copy(encMsg[len(header)+1:], payload)
+
+	encrypted, err := jwe.Encrypt(encMsg,
+		jwe.WithKey(jwa.A128KW, cfg.GetCookieEncryptionKey()),
+		jwe.WithContentEncryption(jwa.A128GCM),
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to encrypt access token: %w", err)
+	}
+
+	// The cookie value is the signed token plus the encrypted message
+	return string(signed) + "." + string(encrypted), nil
 }

@@ -74,7 +74,7 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 	secureCookie := cfg.ForceSecureCookies || c.Request.URL.Scheme == "https:"
 	err = setSecureCookie(c, authStateCookieName, seed, authStateCookieMaxAge, "/auth", c.Request.URL.Host, secureCookie, true, serializeSecureCookieEncryptedJWT)
 	if err != nil {
-		AbortWithErrorJSON(c, fmt.Errorf("failed to set access token secure cookie: %w", err))
+		AbortWithErrorJSON(c, fmt.Errorf("failed to set auth state secure cookie: %w", err))
 		return
 	}
 
