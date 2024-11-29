@@ -14,7 +14,10 @@ import (
 	"github.com/italypaleale/revaulter/pkg/config"
 )
 
-const jwtIssuer = "revaulter"
+const (
+	jwtIssuer    = "revaulter"
+	maxCookieLen = 4 << 10 // 4KB is the max size for cookies browsers will accept
+)
 
 func getSecureCookie(c *gin.Context, name string) (plaintextValue string, ttl time.Duration, err error) {
 	cfg := config.Get()
@@ -50,6 +53,18 @@ func getSecureCookie(c *gin.Context, name string) (plaintextValue string, ttl ti
 		return "", 0, fmt.Errorf("failed to parse JWT: %w", err)
 	}
 
+	// Validate that the name claim matches
+	var n string
+	if nI, ok := token.Get("n"); ok {
+		n, ok = nI.(string)
+		if !ok {
+			n = ""
+		}
+	}
+	if n != name {
+		return "", 0, fmt.Errorf("invalid value for 'n' claim: expected '%s' but got '%s'", name, n)
+	}
+
 	// Validate the presence of the "v" claim
 	var v string
 	if vI, ok := token.Get("v"); ok {
@@ -68,11 +83,33 @@ func getSecureCookie(c *gin.Context, name string) (plaintextValue string, ttl ti
 	return v, ttl, nil
 }
 
-func setSecureCookie(c *gin.Context, name string, plaintextValue string, expiration time.Duration, path string, domain string, secureCookie bool, httpOnly bool) error {
+type serializeSecureCookieFn func(name string, plaintextValue string, expiration time.Duration) (string, error)
+
+func setSecureCookie(c *gin.Context, name string, plaintextValue string, expiration time.Duration, path string, domain string, secureCookie bool, httpOnly bool, serializeFn serializeSecureCookieFn) error {
 	if expiration < 1 {
 		return errors.New("invalid expiration value: must be greater than 0")
 	}
 
+	// Serialize the cookie
+	cookieValue, err := serializeFn(name, plaintextValue, expiration)
+	if err != nil {
+		return fmt.Errorf("failed to serialize cookie: %w", err)
+	}
+
+	// Most browsers limit the size of cookies to as low as 4KB, and silently reject them
+	// If the cookie is larger than 4KB, return an error
+	if len(cookieValue) > maxCookieLen {
+		return fmt.Errorf("cookie value exceeds the 4KB limit: %d", len(cookieValue))
+	}
+
+	// Set the cookie
+	c.SetCookie(name, string(cookieValue), int(expiration.Seconds()), path, c.Request.URL.Host, secureCookie, httpOnly)
+
+	return nil
+}
+
+// Serializes a secure cookie using an encrypted JWT
+func serializeSecureCookieEncryptedJWT(name string, plaintextValue string, expiration time.Duration) (string, error) {
 	cfg := config.Get()
 
 	// Claims for the JWT
@@ -87,10 +124,11 @@ func setSecureCookie(c *gin.Context, name string, plaintextValue string, expirat
 		// Add 1 extra second to synchronize with cookie expiry
 		Expiration(now.Add(expiration+time.Second)).
 		NotBefore(now).
+		Claim("n", name).
 		Claim("v", plaintextValue).
 		Build()
 	if err != nil {
-		return fmt.Errorf("failed to build JWT: %w", err)
+		return "", fmt.Errorf("failed to build JWT: %w", err)
 	}
 
 	// Generate and encrypt the JWT
@@ -102,13 +140,10 @@ func setSecureCookie(c *gin.Context, name string, plaintextValue string, expirat
 		).
 		Serialize(token)
 	if err != nil {
-		return fmt.Errorf("failed to serialize token: %w", err)
+		return "", fmt.Errorf("failed to serialize token: %w", err)
 	}
 
-	// Tokens issued by Azure AD could be very long
-	// Most browsers limit the size of cookies to as low as 4KB, and silently reject them
 	// If the cookie is larger than 4KB, we try re-generating it with compression
-	const maxCookieLen = 4 << 10
 	if len(cookieValue) > maxCookieLen {
 		cookieValue, err = jwt.NewSerializer().
 			Sign(jwt.WithKey(jwa.HS256, cfg.GetCookieSigningKey())).
@@ -119,17 +154,14 @@ func setSecureCookie(c *gin.Context, name string, plaintextValue string, expirat
 			).
 			Serialize(token)
 		if err != nil {
-			return fmt.Errorf("failed to serialize token: %w", err)
+			return "", fmt.Errorf("failed to serialize token: %w", err)
 		}
 
 		// If the cookie is still larger than 4KB, return an error
 		if len(cookieValue) > maxCookieLen {
-			return fmt.Errorf("cookie value exceeds the 4KB limit: %d", len(cookieValue))
+			return "", fmt.Errorf("cookie value exceeds the 4KB limit: %d", len(cookieValue))
 		}
 	}
 
-	// Set the cookie
-	c.SetCookie(name, string(cookieValue), int(expiration.Seconds()), path, c.Request.URL.Host, secureCookie, httpOnly)
-
-	return nil
+	return string(cookieValue), nil
 }
