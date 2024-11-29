@@ -13,8 +13,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/italypaleale/revaulter/pkg/keyvault"
 	"github.com/lestrrat-go/jwx/v2/jwk"
+
+	"github.com/italypaleale/revaulter/pkg/keyvault"
 )
 
 // Config is the struct containing configuration
@@ -26,6 +27,19 @@ type Config struct {
 	// Tenant ID of the Azure AD application.
 	// +required
 	AzureTenantId string `env:"AZURETENANTID" yaml:"azureTenantId"`
+
+	// Client secret of the Azure AD application, for using confidential clients.
+	// This is optional, but recommended when not using Federated Identity Credentials.
+	AzureClientSecret string `env:"AZURECLIENTSECRET" yaml:"azureClientSecret"`
+
+	// Enables the usage of Federated Identity Credentials to obtain assertions for confidential clients for Azure AD applications.
+	// This is an alternative to using client secrets, when the application is running in Azure in an environment that supports Managed Identity, or in an environment that supports Workload Identity Federation with Azure AD.
+	// Currently, these values are supported:
+	//
+	// - `ManagedIdentity`: uses a system-assigned managed identity
+	// - `ManagedIdentity=client-id`: uses a user-assigned managed identity with client id "client-id" (e.g. "ManagedIdentity=00000000-0000-0000-0000-000000000000")
+	// - `WorkloadIdentity`: uses workload identity, e.g. for Kubernetes
+	AzureFederatedIdentity string `env:"AZUREFEDERATEDIDENTITY" yaml:"azureFederatedIdentity"`
 
 	// Endpoint of the webhook, where notifications are sent to.
 	// +required
@@ -239,7 +253,7 @@ func (c Config) GetInstanceID() string {
 }
 
 // Validates the configuration and performs some sanitization
-func (c *Config) Validate() error {
+func (c *Config) Validate(logger *slog.Logger) error {
 	// Check required variables
 	if c.AzureClientId == "" {
 		return errors.New("config entry key 'azureClientId' missing")
@@ -258,10 +272,20 @@ func (c *Config) Validate() error {
 	if c.RequestTimeout < time.Second {
 		return errors.New("config entry key 'requestTimeout' is invalid: must be greater than 1s")
 	}
+	if c.AzureClientSecret != "" && c.AzureFederatedIdentity != "" {
+		return errors.New("cannot specify 'azureClientSecret' in config when 'azureFederatedIdentity' is configured")
+	}
 
 	// Format URLs in the Key Vault allowlist
 	for i := range c.AllowedVaults {
 		c.AllowedVaults[i] = keyvault.VaultUrl(c.AllowedVaults[i])
+	}
+
+	// Show warnings if needed
+	if logger != nil {
+		if c.AzureClientSecret == "" && c.AzureFederatedIdentity == "" {
+			logger.Warn(`Revaulter is running without an 'azureClientSecret' in the configuration, which requires using public clients ("mobile and desktop applications"). Configuring the Revaulter Entra ID (Azure AD) application as a confidential client ("web applications") and using either a client secret or Federated Identity is recommended for security.`)
+		}
 	}
 
 	return nil

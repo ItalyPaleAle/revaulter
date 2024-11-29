@@ -132,7 +132,7 @@ func findConfigFile(fileName string, searchPaths ...string) string {
 // Processes the configuration
 func processConfig(log *slog.Logger, cfg *config.Config) (err error) {
 	// Check required variables
-	err = cfg.Validate()
+	err = cfg.Validate(log)
 	if err != nil {
 		return err
 	}

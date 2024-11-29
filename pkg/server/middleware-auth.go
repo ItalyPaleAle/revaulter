@@ -43,7 +43,7 @@ func (s *Server) AccessTokenMiddleware(opts AccessTokenMiddlewareOpts) func(c *g
 		}
 
 		// Get the cookie and parse it
-		at, ttl, err := getSecureCookie(c, atCookieName)
+		at, ttl, err := getSecureCookieEncryptedeAzureADAccessToken(c, atCookieName)
 		if err != nil || at == "" {
 			if err != nil {
 				_ = c.Error(fmt.Errorf("cookie error: %w", err))

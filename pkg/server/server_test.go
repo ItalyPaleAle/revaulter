@@ -322,7 +322,7 @@ func TestServerAppRoutes(t *testing.T) {
 				responsesCh := make(chan *http.Response, 1)
 				responsesCh <- &http.Response{
 					StatusCode: http.StatusForbidden,
-					Body:       io.NopCloser(strings.NewReader(`{"token_type":"Bearer","scope":"https://vault.azure.net/user_impersonation","access_token":"my-access-token","expires_in":3600}`)),
+					Body:       io.NopCloser(strings.NewReader(`{"token_type":"Bearer","scope":"https://vault.azure.net/user_impersonation","access_token":"my.access.token","expires_in":3600}`)),
 				}
 				rtt.SetReqCh(reqCh)
 				rtt.SetResponsesCh(responsesCh)

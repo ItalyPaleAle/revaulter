@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
@@ -48,6 +50,8 @@ type Server struct {
 	lock       sync.RWMutex
 	webhook    webhook.Webhook
 	metrics    *metrics.RevaulterMetrics
+
+	federatedIdentityCredential azcore.TokenCredential
 
 	// Subscribers that receive public events
 	pubsub *broker.Broker[*requestStatePublic]
@@ -129,6 +133,12 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 
 // Init the Server object and create a Gin server
 func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (err error) {
+	// Init the federated identity credential provider if needed
+	err = s.initFederatedIdentity()
+	if err != nil {
+		return fmt.Errorf("failed to initialize the federated identity credential provider: %w", err)
+	}
+
 	// Init tracer
 	err = s.initTracer(traceExporter)
 	if err != nil {
@@ -323,6 +333,42 @@ func (s *Server) getBaseURL() string {
 	} else {
 		return "http://localhost:" + strconv.Itoa(cfg.Port)
 	}
+}
+
+func (s *Server) initFederatedIdentity() (err error) {
+	cfg := config.Get()
+
+	// Crete the federated identity credential object depending on the kind of federated identity
+	afi := strings.ToLower(cfg.AzureFederatedIdentity)
+	switch {
+	case afi == "":
+		// If federated identity is disabled, return
+		return nil
+	case strings.HasPrefix(afi, "managedidentity="):
+		// User-assigned managed identity
+		s.federatedIdentityCredential, err = azidentity.NewManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{
+			ID: azidentity.ClientID(afi[len("managedidentity="):]),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create managed identity credential object: %w", err)
+		}
+	case afi == "managedidentity":
+		// System-assigned managed identity
+		s.federatedIdentityCredential, err = azidentity.NewManagedIdentityCredential(nil)
+		if err != nil {
+			return fmt.Errorf("failed to create managed identity credential object: %w", err)
+		}
+	case afi == "workloadidentity":
+		// Workload Identity
+		s.federatedIdentityCredential, err = azidentity.NewWorkloadIdentityCredential(nil)
+		if err != nil {
+			return fmt.Errorf("failed to create workload identity credential object: %w", err)
+		}
+	default:
+		return fmt.Errorf("invalid value for configuration option 'azureFederatedIdentity': '%s'", cfg.AzureFederatedIdentity)
+	}
+
+	return nil
 }
 
 // Run the web server
