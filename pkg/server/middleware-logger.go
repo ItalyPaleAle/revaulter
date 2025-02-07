@@ -7,14 +7,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
-
-// MiddlewareMaxBodySize is a middleware that limits the size of the request body
-func (s *Server) MiddlewareMaxBodySize(c *gin.Context) {
-	// Limit to 20KB
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 20<<10)
-}
 
 // MiddlewareLogger is a Gin middleware that uses slog for logging
 func (s *Server) MiddlewareLogger(parentLog *slog.Logger) func(c *gin.Context) {

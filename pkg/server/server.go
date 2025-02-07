@@ -191,7 +191,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	// Create the Gin router and add various middlewares
 	s.appRouter = gin.New()
 	s.appRouter.Use(gin.Recovery())
-	s.appRouter.Use(s.MiddlewareMaxBodySize)
+	s.appRouter.Use(s.MiddlewareMaxBodySize(20 << 10)) // 20KB
 
 	// Configure the trusted IP header and proxies
 	s.configureTrustedProxies()
@@ -208,7 +208,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 			r.Use(s.MiddlewareCountMetrics)
 		}
 		r.Use(loggerMw)
-		r.Use(s.MiddlewareMaxBodySize)
 	}
 
 	// Add routes

@@ -15,6 +15,13 @@ import (
 	"github.com/italypaleale/revaulter/pkg/config"
 )
 
+// MiddlewareMaxBodySize is a middleware that limits the size of the request body
+func (s *Server) MiddlewareMaxBodySize(maxSize int64) func(c *gin.Context) {
+	return func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSize)
+	}
+}
+
 // MiddlewareRequestId is a middleware that generates a unique request ID for each request
 func (s *Server) MiddlewareRequestId(c *gin.Context) {
 	// Get the request ID
