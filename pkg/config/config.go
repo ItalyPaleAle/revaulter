@@ -223,22 +223,22 @@ type internal struct {
 }
 
 // GetTokenSigningKey returns the (parsed) token signing key
-func (c Config) GetTokenSigningKey() []byte {
+func (c *Config) GetTokenSigningKey() []byte {
 	return c.internal.tokenSigningKeyParsed
 }
 
 // GetCookieEncryptionKey returns the (parsed) cookie encryption key
-func (c Config) GetCookieEncryptionKey() jwk.Key {
+func (c *Config) GetCookieEncryptionKey() jwk.Key {
 	return c.internal.cookieEncryptionKeyParsed
 }
 
 // GetCookieSigningKey returns the (parsed) cookie signing key
-func (c Config) GetCookieSigningKey() jwk.Key {
+func (c *Config) GetCookieSigningKey() jwk.Key {
 	return c.internal.cookieSigningKeyParsed
 }
 
 // GetLoadedConfigPath returns the path to the config file that was loaded
-func (c Config) GetLoadedConfigPath() string {
+func (c *Config) GetLoadedConfigPath() string {
 	return c.internal.configFileLoaded
 }
 
@@ -248,7 +248,7 @@ func (c *Config) SetLoadedConfigPath(filePath string) {
 }
 
 // GetInstanceID returns the instance ID.
-func (c Config) GetInstanceID() string {
+func (c *Config) GetInstanceID() string {
 	return c.internal.instanceID
 }
 
@@ -371,7 +371,7 @@ func (c *Config) SetCookieKeys(logger *slog.Logger) (err error) {
 
 // String implements fmt.Stringer and is used for debugging
 // Returns the entire configuration as JSON
-func (c Config) String() string {
+func (c *Config) String() string {
 	enc, _ := json.Marshal(c)
 	return string(enc)
 }
