@@ -86,7 +86,7 @@ func TestServerLifecycle(t *testing.T) {
 
 			if metricsEnabled {
 				var err error
-				srv.metrics, _, err = metrics.NewRevaulterMetrics(context.Background(), nil)
+				srv.metrics, _, err = metrics.NewRevaulterMetrics(t.Context(), nil)
 				require.NoError(t, err)
 			}
 
@@ -95,7 +95,7 @@ func TestServerLifecycle(t *testing.T) {
 
 			// Make a request to the /healthz endpoint in the app server
 			appClient := clientForListener(srv.appListener)
-			reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer reqCancel()
 			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
 				fmt.Sprintf("https://localhost:%d/healthz", testServerPort), nil)
@@ -112,7 +112,7 @@ func TestServerLifecycle(t *testing.T) {
 			// Make a request to the /healthz endpoint in the metrics server
 			if metricsEnabled {
 				metricsClient := clientForListener(srv.metricsListener)
-				reqCtx, reqCancel = context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel = context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				req, err = http.NewRequestWithContext(reqCtx, http.MethodGet,
 					fmt.Sprintf("http://localhost:%d/healthz", testMetricsPort), nil)
@@ -164,7 +164,7 @@ func TestServerAppRoutes(t *testing.T) {
 	// Test the healthz endpoints
 	t.Run("healthz", func(t *testing.T) {
 		// Make a request to the /healthz endpoint
-		reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer reqCancel()
 		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
 			fmt.Sprintf("https://localhost:%d/healthz", testServerPort), nil)
@@ -192,7 +192,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 		// Make a request to the /auth/signin endpoint
 		t.Run("signin", func(t *testing.T) {
-			reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer reqCancel()
 			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
 				fmt.Sprintf("https://localhost:%d/auth/signin", testServerPort), nil)
@@ -253,7 +253,7 @@ func TestServerAppRoutes(t *testing.T) {
 			}
 
 			t.Run("Missing code", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
 					fmt.Sprintf("https://localhost:%d/auth/confirm", testServerPort), nil)
@@ -269,7 +269,7 @@ func TestServerAppRoutes(t *testing.T) {
 				// Reset the log buffer before starting
 				logBuf.Reset()
 
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
 					fmt.Sprintf("https://localhost:%d/auth/confirm?code=foo", testServerPort), nil)
@@ -288,7 +288,7 @@ func TestServerAppRoutes(t *testing.T) {
 			})
 
 			t.Run("Missing auth state cookie", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
 					fmt.Sprintf("https://localhost:%d/auth/confirm?code=foo&state=bar", testServerPort), nil)
@@ -301,7 +301,7 @@ func TestServerAppRoutes(t *testing.T) {
 			})
 
 			t.Run("Invalid auth state cookie", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				// The state parameter in the header does not match what's in the cookie
 				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
@@ -331,7 +331,7 @@ func TestServerAppRoutes(t *testing.T) {
 					rtt.SetResponsesCh(nil)
 				}()
 
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
 					fmt.Sprintf("https://localhost:%d/auth/confirm?code=auth-code&state=%s", testServerPort, authState), nil)
@@ -400,7 +400,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 		authTestFn := func(success bool, path string, modifier func(req *http.Request)) func(t *testing.T) {
 			return func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
 					fmt.Sprintf("https://localhost:%d/_test/%s", testServerPort, path), nil)
@@ -446,7 +446,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 	t.Run("Operations and APIs", func(t *testing.T) {
 		t.Run("List API returns no item", func(t *testing.T) {
-			reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer reqCancel()
 			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
 				fmt.Sprintf("https://localhost:%d/api/list", testServerPort), nil)
@@ -459,14 +459,14 @@ func TestServerAppRoutes(t *testing.T) {
 
 			// Response should be an empty JSON array
 			require.Equal(t, http.StatusOK, res.StatusCode)
-			require.Equal(t, jsonContentType, res.Header.Get("Content-Type"))
+			require.Equal(t, jsonContentType, res.Header.Get("Content-Type")) //nolint:testifylint
 
 			body, err := io.ReadAll(res.Body)
 			require.NoError(t, err)
 			require.Equal(t, "[]", string(body))
 		})
 
-		listSubscribeCtx, listSubscribeCancel := context.WithCancel(context.Background())
+		listSubscribeCtx, listSubscribeCancel := context.WithCancel(t.Context())
 		defer listSubscribeCancel()
 		listSubscribeCh := make(chan *requestStatePublic)
 		t.Run("Subscribe to list API stream", func(t *testing.T) {
@@ -482,7 +482,7 @@ func TestServerAppRoutes(t *testing.T) {
 			require.NoError(t, err)
 
 			require.Equal(t, http.StatusOK, res.StatusCode)
-			require.Equal(t, ndJSONContentType, res.Header.Get("Content-Type"))
+			require.Equal(t, ndJSONContentType, res.Header.Get("Content-Type")) //nolint:testifylint
 
 			go func() {
 				defer closeBody(res)
@@ -510,7 +510,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 		createRequestFn := func(reqDataFn func(*operationRequest), resultFn func(stateID string)) func(t *testing.T) {
 			return func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				reqData := &operationRequest{
 					Vault:     "testvault",
@@ -535,7 +535,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 				// Response should contain the operation ID
 				require.Equal(t, http.StatusAccepted, res.StatusCode)
-				require.Equal(t, jsonContentType, res.Header.Get("Content-Type"))
+				require.Equal(t, jsonContentType, res.Header.Get("Content-Type")) //nolint:testifylint
 
 				resData := operationResponse{}
 				err = json.NewDecoder(res.Body).Decode(&resData)
@@ -621,7 +621,7 @@ func TestServerAppRoutes(t *testing.T) {
 			reqID  int
 		}
 		subscribeToResponseFn := func(t *testing.T, stateID int, reqID int) {
-			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
 				fmt.Sprintf("https://localhost:%d/request/result/%s", testServerPort, stateIDs[stateID]), nil)
 			require.NoError(t, err)
 			req.Header.Set("Content-Type", jsonContentType)
@@ -757,7 +757,7 @@ func TestServerAppRoutes(t *testing.T) {
 			}
 
 			t.Run("Cannot have both confirm and cancel", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				// False positive - body is closed
 				//nolint:bodyclose
@@ -772,7 +772,7 @@ func TestServerAppRoutes(t *testing.T) {
 			})
 
 			t.Run("Operation not found", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				// False positive - body is closed
 				//nolint:bodyclose
@@ -786,7 +786,7 @@ func TestServerAppRoutes(t *testing.T) {
 			})
 
 			t.Run("Operation has expired", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				// False positive - body is closed
 				//nolint:bodyclose
@@ -800,7 +800,7 @@ func TestServerAppRoutes(t *testing.T) {
 			})
 
 			t.Run("Cancel operation 0", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				// False positive - body is closed
 				//nolint:bodyclose
@@ -812,7 +812,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 				// Response should be a JSON object indicating cancellation
 				require.Equal(t, http.StatusOK, res.StatusCode)
-				require.Equal(t, jsonContentType, res.Header.Get("Content-Type"))
+				require.Equal(t, jsonContentType, res.Header.Get("Content-Type")) //nolint:testifylint
 
 				body, err := io.ReadAll(res.Body)
 				require.NoError(t, err)
@@ -843,7 +843,7 @@ func TestServerAppRoutes(t *testing.T) {
 			})
 
 			t.Run("Confirm operation 1", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
 				defer reqCancel()
 				res := completeOperationFn(t, reqCtx, &confirmRequest{
 					Confirm: true,
@@ -853,7 +853,7 @@ func TestServerAppRoutes(t *testing.T) {
 
 				// Response should be a JSON object indicating confirmation
 				require.Equal(t, http.StatusOK, res.StatusCode)
-				require.Equal(t, jsonContentType, res.Header.Get("Content-Type"))
+				require.Equal(t, jsonContentType, res.Header.Get("Content-Type")) //nolint:testifylint
 
 				body, err := io.ReadAll(res.Body)
 				require.NoError(t, err)
@@ -943,7 +943,7 @@ func startTestServer(t *testing.T, srv *Server) func(t *testing.T) {
 	t.Helper()
 
 	// Start the server in a background goroutine
-	srvCtx, srvCancel := context.WithCancel(context.Background())
+	srvCtx, srvCancel := context.WithCancel(t.Context())
 	startErrCh := make(chan error, 1)
 	go func() {
 		startErrCh <- srv.Run(srvCtx)
@@ -1029,7 +1029,7 @@ func assertResponseError(t *testing.T, res *http.Response, expectStatusCode int,
 	t.Helper()
 
 	require.Equal(t, expectStatusCode, res.StatusCode, "Response has an unexpected status code")
-	require.Equal(t, jsonContentType, res.Header.Get("Content-Type"), "Content-Type header is invalid")
+	require.Equal(t, jsonContentType, res.Header.Get("Content-Type"), "Content-Type header is invalid") //nolint:testifylint
 
 	data := struct {
 		Error string `json:"error"`

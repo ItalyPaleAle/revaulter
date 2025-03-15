@@ -19,7 +19,7 @@ func (b *keyVaultResponseBase) SetKeyID(kid string) {
 }
 
 // KeyID returns the key ID
-func (b keyVaultResponseBase) KeyID() string {
+func (b *keyVaultResponseBase) KeyID() string {
 	return b.keyID
 }
 

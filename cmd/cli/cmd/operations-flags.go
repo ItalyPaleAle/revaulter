@@ -98,7 +98,7 @@ func (f *operationFlagsEncrypt) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional Authenticated Data, which may not be supported by all algorithms (base64-encoded)")
 }
 
-func (f operationFlagsEncrypt) RequestBody() ([]byte, error) {
+func (f *operationFlagsEncrypt) RequestBody() ([]byte, error) {
 	data := operationRequest{
 		Value:          f.Value.String(),
 		Nonce:          f.Nonce.String(),
@@ -129,7 +129,7 @@ func (f *operationFlagsDecrypt) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional Authenticated Data, which may not be supported by all algorithms (base64-encoded)")
 }
 
-func (f operationFlagsDecrypt) RequestBody() ([]byte, error) {
+func (f *operationFlagsDecrypt) RequestBody() ([]byte, error) {
 	data := operationRequest{
 		Value:          f.Value.String(),
 		Tag:            f.Tag.String(),
@@ -154,7 +154,7 @@ func (f *operationFlagsSign) BindToCommand(cmd *cobra.Command) {
 	_ = cmd.MarkFlagRequired("digest")
 }
 
-func (f operationFlagsSign) RequestBody() ([]byte, error) {
+func (f *operationFlagsSign) RequestBody() ([]byte, error) {
 	data := operationRequest{
 		Digest: f.Digest.String(),
 	}
@@ -179,7 +179,7 @@ func (f *operationFlagsVerify) BindToCommand(cmd *cobra.Command) {
 	_ = cmd.MarkFlagRequired("signature")
 }
 
-func (f operationFlagsVerify) RequestBody() ([]byte, error) {
+func (f *operationFlagsVerify) RequestBody() ([]byte, error) {
 	data := operationRequest{
 		Digest:    f.Digest.String(),
 		Signature: f.Signature.String(),
@@ -207,7 +207,7 @@ func (f *operationFlagsWrapKey) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional Authenticated Data, which may not be supported by all algorithms (base64-encoded)")
 }
 
-func (f operationFlagsWrapKey) RequestBody() ([]byte, error) {
+func (f *operationFlagsWrapKey) RequestBody() ([]byte, error) {
 	data := operationRequest{
 		Value:          f.Value.String(),
 		Nonce:          f.Nonce.String(),
@@ -238,7 +238,7 @@ func (f *operationFlagsUnwrapKey) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional Authenticated Data, which may not be supported by all algorithms (base64-encoded)")
 }
 
-func (f operationFlagsUnwrapKey) RequestBody() ([]byte, error) {
+func (f *operationFlagsUnwrapKey) RequestBody() ([]byte, error) {
 	data := operationRequest{
 		Value:          f.Value.String(),
 		Tag:            f.Tag.String(),

@@ -43,16 +43,16 @@ type Listener struct {
 }
 
 // Implementation of net.Error providing timeout
-type netErrorTimeout struct {
+type netTimeoutError struct {
 	error
 }
 
-func (e netErrorTimeout) Timeout() bool   { return true }
-func (e netErrorTimeout) Temporary() bool { return false }
+func (e netTimeoutError) Timeout() bool   { return true }
+func (e netTimeoutError) Temporary() bool { return false }
 
 var (
 	errClosed            = errors.New("closed")
-	errTimeout net.Error = netErrorTimeout{error: errors.New("i/o timeout")}
+	errTimeout net.Error = netTimeoutError{error: errors.New("i/o timeout")}
 )
 
 // Listen returns a Listener that can only be contacted by its own Dialers and

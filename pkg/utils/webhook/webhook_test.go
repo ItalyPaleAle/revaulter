@@ -27,7 +27,7 @@ func TestWebhook(t *testing.T) {
 		"webhookFormat": "",
 	}))
 
-	ctx := logging.LogToContext(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx := logging.LogToContext(t.Context(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	clock := clocktesting.NewFakeClock(time.Now())
 	wh := newWebhookWithClock(clock).(*webhookClient) //nolint:forcetypeassert
@@ -129,7 +129,7 @@ func TestWebhook(t *testing.T) {
 			resCh = nil
 		}()
 
-		err := wh.SendWebhook(context.Background(), getWebhookRequest())
+		err := wh.SendWebhook(t.Context(), getWebhookRequest())
 		require.Error(t, err)
 		require.ErrorContains(t, err, "invalid response status code: 403")
 
@@ -149,7 +149,7 @@ func TestWebhook(t *testing.T) {
 			resCh = nil
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		doneCh := assertRetries(ctx, clock, reqCh, 3, retryIntervalSeconds*time.Second)
 
@@ -180,7 +180,7 @@ func TestWebhook(t *testing.T) {
 			resCh = nil
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		doneCh := assertRetries(ctx, clock, reqCh, 3, 5*time.Second)
 
@@ -202,7 +202,7 @@ func TestWebhook(t *testing.T) {
 			resCh = nil
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		doneCh := assertRetries(ctx, clock, reqCh, 2, retryIntervalSeconds*time.Second)
 
@@ -226,7 +226,7 @@ func TestWebhook(t *testing.T) {
 			resCh = nil
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		doneCh := assertRetries(ctx, clock, reqCh, 3, retryIntervalSeconds*time.Second)
 
@@ -251,7 +251,7 @@ func TestWebhook(t *testing.T) {
 			resCh = nil
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		doneCh := assertRetries(ctx, clock, reqCh, 3, retryIntervalSeconds*time.Second)
 
@@ -268,7 +268,7 @@ func TestWebhook(t *testing.T) {
 			"webhookUrl": "\nnotanurl",
 		})()
 
-		err := wh.SendWebhook(context.Background(), getWebhookRequest())
+		err := wh.SendWebhook(t.Context(), getWebhookRequest())
 		require.Error(t, err)
 		require.ErrorContains(t, err, "failed to create request")
 	})
