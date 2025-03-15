@@ -621,7 +621,8 @@ func TestServerAppRoutes(t *testing.T) {
 			reqID  int
 		}
 		subscribeToResponseFn := func(t *testing.T, stateID int, reqID int) {
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+			//nolint:usetesting
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
 				fmt.Sprintf("https://localhost:%d/request/result/%s", testServerPort, stateIDs[stateID]), nil)
 			require.NoError(t, err)
 			req.Header.Set("Content-Type", jsonContentType)
