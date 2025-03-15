@@ -78,10 +78,11 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 		return
 	}
 
-	// Use the seed also as code verifier for the PKCE challenge
+	// Use the seed also as base for the code verifier for the PKCE challenge
 	// Compute the SHA-256 hash of that as code_challenge
 	// See: https://datatracker.ietf.org/doc/html/rfc7636
-	codeChallenge := sha256.Sum256([]byte(seed))
+	codeVerifier := getPKCECodeVerifier(seed)
+	codeChallenge := sha256.Sum256([]byte(codeVerifier))
 
 	// Build the redirect URL
 	tenantId := cfg.AzureTenantId
@@ -99,6 +100,12 @@ func (s *Server) RouteAuthSignin(c *gin.Context) {
 
 	// Redirect
 	c.Redirect(http.StatusTemporaryRedirect, "https://login.microsoftonline.com/"+tenantId+"/oauth2/v2.0/authorize?"+qs.Encode())
+}
+
+func getPKCECodeVerifier(seed string) string {
+	h := hmac.New(sha256.New, []byte(seed))
+	h.Write([]byte("revaulter-pkce"))
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 
 // RouteAuthConfirm is the handler for the GET /auth/confirm request
@@ -174,7 +181,7 @@ func (s *Server) requestAccessToken(ctx context.Context, code, seed string) (*Ac
 		"redirect_uri":  []string{s.getBaseURL() + "/auth/confirm"},
 		"scope":         []string{"https://vault.azure.net/user_impersonation"},
 		"grant_type":    []string{"authorization_code"},
-		"code_verifier": []string{seed}, // For PKCE
+		"code_verifier": []string{getPKCECodeVerifier(seed)}, // For PKCE
 	}
 	if cfg.AzureClientSecret != "" {
 		data["client_secret"] = []string{cfg.AzureClientSecret}
