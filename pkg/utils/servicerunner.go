@@ -3,7 +3,6 @@ package utils
 import (
 	"context"
 	"errors"
-	"sync"
 )
 
 // Service is a background service
@@ -11,7 +10,6 @@ type Service func(ctx context.Context) error
 
 // ServiceRunner oversees a number of services running in background
 type ServiceRunner struct {
-	mu       sync.Mutex
 	services []Service
 }
 
@@ -22,13 +20,6 @@ func NewServiceRunner(services ...Service) *ServiceRunner {
 	}
 }
 
-// Add a service
-func (r *ServiceRunner) Add(service ...Service) {
-	r.mu.Lock()
-	r.services = append(r.services, service...)
-	r.mu.Unlock()
-}
-
 // Run all background services
 func (r *ServiceRunner) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
@@ -37,9 +28,6 @@ func (r *ServiceRunner) Run(ctx context.Context) error {
 	errCh := make(chan error)
 	for _, service := range r.services {
 		go func(service Service) {
-			// When a service returns, cancel all other services
-			defer cancel()
-
 			// Run the service
 			rErr := service(ctx)
 
