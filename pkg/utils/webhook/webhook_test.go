@@ -27,7 +27,7 @@ func TestWebhook(t *testing.T) {
 		"webhookFormat": "",
 	}))
 
-	ctx := logging.LogToContext(t.Context(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx := logging.LogToContext(t.Context(), slog.New(slog.DiscardHandler))
 
 	clock := clocktesting.NewFakeClock(time.Now())
 	wh := newWebhookWithClock(clock).(*webhookClient) //nolint:forcetypeassert

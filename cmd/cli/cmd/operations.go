@@ -194,9 +194,11 @@ func (o operationCmd) getResult(ctx context.Context, state string) (json.RawMess
 	}
 
 	if resBody.State != state {
+		//nolint:staticcheck
 		return nil, errors.New("Response state does not match the requested one")
 	}
 
+	//nolint:staticcheck
 	switch {
 	case resBody.Failed:
 		return nil, errors.New("Operation is canceled, denied, or failed")

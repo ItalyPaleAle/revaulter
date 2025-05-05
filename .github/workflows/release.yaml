@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      GOLANGCI_LINT_VERSION: "v1.64.5"
+      GOLANGCI_LINT_VERSION: "v2.1.6"
 
     steps:
 
@@ -109,7 +109,7 @@ jobs:
           go generate -v ./...
 
       - name: Run golangci-Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 

@@ -104,7 +104,7 @@ func (f *operationFlagsEncrypt) RequestBody() ([]byte, error) {
 		Nonce:          f.Nonce.String(),
 		AdditionalData: f.AdditionalData.String(),
 	}
-	f.operationFlagsBase.AddBaseRequestBodyFields(&data)
+	f.AddBaseRequestBodyFields(&data)
 
 	return json.Marshal(data)
 }
@@ -136,7 +136,7 @@ func (f *operationFlagsDecrypt) RequestBody() ([]byte, error) {
 		Nonce:          f.Nonce.String(),
 		AdditionalData: f.AdditionalData.String(),
 	}
-	f.operationFlagsBase.AddBaseRequestBodyFields(&data)
+	f.AddBaseRequestBodyFields(&data)
 
 	return json.Marshal(data)
 }
@@ -158,7 +158,7 @@ func (f *operationFlagsSign) RequestBody() ([]byte, error) {
 	data := operationRequest{
 		Digest: f.Digest.String(),
 	}
-	f.operationFlagsBase.AddBaseRequestBodyFields(&data)
+	f.AddBaseRequestBodyFields(&data)
 
 	return json.Marshal(data)
 }
@@ -184,7 +184,7 @@ func (f *operationFlagsVerify) RequestBody() ([]byte, error) {
 		Digest:    f.Digest.String(),
 		Signature: f.Signature.String(),
 	}
-	f.operationFlagsBase.AddBaseRequestBodyFields(&data)
+	f.AddBaseRequestBodyFields(&data)
 
 	return json.Marshal(data)
 }
@@ -213,7 +213,7 @@ func (f *operationFlagsWrapKey) RequestBody() ([]byte, error) {
 		Nonce:          f.Nonce.String(),
 		AdditionalData: f.AdditionalData.String(),
 	}
-	f.operationFlagsBase.AddBaseRequestBodyFields(&data)
+	f.AddBaseRequestBodyFields(&data)
 
 	return json.Marshal(data)
 }
@@ -245,7 +245,7 @@ func (f *operationFlagsUnwrapKey) RequestBody() ([]byte, error) {
 		Nonce:          f.Nonce.String(),
 		AdditionalData: f.AdditionalData.String(),
 	}
-	f.operationFlagsBase.AddBaseRequestBodyFields(&data)
+	f.AddBaseRequestBodyFields(&data)
 
 	return json.Marshal(data)
 }
