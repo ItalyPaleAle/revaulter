@@ -4,23 +4,21 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
+	"os"
 	"time"
 
-	prom "github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/exporters/autoexport"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/prometheus"
 	api "go.opentelemetry.io/otel/metric"
-	metricSdk "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric"
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
 )
 
-type RevaulterMetrics struct {
-	prometheusRegisterer *prom.Registry
+const prefix = "revaulter"
 
+type RevaulterMetrics struct {
 	serverRequests api.Float64Histogram
 	requests       api.Int64Counter
 	results        api.Int64Counter
@@ -29,98 +27,66 @@ type RevaulterMetrics struct {
 
 func NewRevaulterMetrics(ctx context.Context, log *slog.Logger) (m *RevaulterMetrics, shutdownFn func(ctx context.Context) error, err error) {
 	cfg := config.Get()
-
 	m = &RevaulterMetrics{}
-	providerOpts := make([]metricSdk.Option, 0, 2)
 
-	// If we have an OpenTelemetry Collector for metrics, add that
-	exporter, err := cfg.GetMetricsExporter(ctx, log)
+	resource, err := cfg.GetOtelResource(buildinfo.AppName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to init metrics: %w", err)
-	}
-	if exporter != nil {
-		providerOpts = append(providerOpts,
-			metricSdk.WithReader(metricSdk.NewPeriodicReader(exporter)),
-			metricSdk.WithResource(cfg.GetOtelResource(buildinfo.AppName)),
-		)
+		return nil, nil, fmt.Errorf("failed to get OpenTelemetry resource: %w", err)
 	}
 
-	// If the metrics server is enabled, create a Prometheus exporter
-	if cfg.MetricsServerEnabled {
-		m.prometheusRegisterer = prom.NewRegistry()
-		promExporter, err := prometheus.New(
-			prometheus.WithRegisterer(m.prometheusRegisterer),
-		)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create Prometheus exporter: %w", err)
-		}
-		providerOpts = append(providerOpts, metricSdk.WithReader(promExporter))
+	// Get the metric reader
+	// If the env var OTEL_METRICS_EXPORTER is empty, we set it to "none"
+	if os.Getenv("OTEL_METRICS_EXPORTER") == "" {
+		os.Setenv("OTEL_METRICS_EXPORTER", "none")
+	}
+	mr, err := autoexport.NewMetricReader(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to initialize OpenTelemetry metric reader: %w", err)
 	}
 
-	// If there's no exporter configured, stop here
-	if len(providerOpts) == 0 && log != nil {
-		log.WarnContext(ctx, "Metrics are enabled in the configuration, but no metrics exporter is configured. Make sure to enable the metrics server and/or configure an OpenTelemetry metric collector")
-		return nil, nil, nil
-	}
-
-	provider := metricSdk.NewMeterProvider(providerOpts...)
-	meter := provider.Meter(buildinfo.AppName)
+	mp := metric.NewMeterProvider(
+		metric.WithResource(resource),
+		metric.WithReader(mr),
+	)
+	meter := mp.Meter(prefix)
 
 	m.serverRequests, err = meter.Float64Histogram(
-		"revaulter_server_requests",
+		prefix+"_server_requests",
 		api.WithUnit("ms"),
 		api.WithDescription("Requests processed by the server and duration in milliseconds"),
 		api.WithExplicitBucketBoundaries(1, 2.5, 5, 10, 25, 50, 100, 250, 500),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create revaulter_server_requests meter: %w", err)
+		return nil, nil, fmt.Errorf("failed to create %s_server_requests meter: %w", prefix, err)
 	}
 
 	m.requests, err = meter.Int64Counter(
-		"revaulter_requests",
+		prefix+"_requests",
 		api.WithDescription("The total number of requests per operation per key"),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create revaulter_requests meter: %w", err)
+		return nil, nil, fmt.Errorf("failed to create %s_requests meter: %w", prefix, err)
 	}
 
 	m.results, err = meter.Int64Counter(
-		"revaulter_results",
+		prefix+"_results",
 		api.WithDescription("The total number of results per status"),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create revaulter_results meter: %w", err)
+		return nil, nil, fmt.Errorf("failed to create %s_results meter: %w", prefix, err)
 	}
 
 	m.latency, err = meter.Float64Histogram(
-		"revaulter_keyvault_latency",
+		prefix+"_keyvault_latency",
 		api.WithUnit("ms"),
 		api.WithDescription("The latency of requests to Azure Key Vault"),
-		api.WithExplicitBucketBoundaries(1, 2.5, 5, 10, 25, 50, 100, 250, 500),
+		api.WithExplicitBucketBoundaries(20, 50, 100, 200, 400, 600, 800, 1000, 1500, 2500),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create revaulter_keyvault_latency meter: %w", err)
+		return nil, nil, fmt.Errorf("failed to create %s_keyvault_latency meter: %w", prefix, err)
 	}
 
-	return m, provider.Shutdown, nil
-}
-
-func (m *RevaulterMetrics) HTTPHandler() http.Handler {
-	if m.prometheusRegisterer == nil {
-		// This indicates a development-time error
-		panic("called HTTPHandler when metrics server is disabled")
-	}
-
-	return promhttp.InstrumentMetricHandler(
-		m.prometheusRegisterer,
-		promhttp.HandlerFor(
-			prom.Gatherers{
-				m.prometheusRegisterer,
-				prom.DefaultGatherer,
-			},
-			promhttp.HandlerOpts{},
-		),
-	)
+	return m, mp.Shutdown, nil
 }
 
 // RecordServerRequest records a request processed by the server.

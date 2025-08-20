@@ -33,7 +33,6 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/keyvault"
-	"github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/testutils"
 	"github.com/italypaleale/revaulter/pkg/utils/bufconn"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
@@ -41,8 +40,7 @@ import (
 
 const (
 	// Servers are started on in-memory listeners so these ports aren't actually used for TCP sockets
-	testServerPort  = 5701
-	testMetricsPort = 5702
+	testServerPort = 5701
 
 	// Size for the in-memory buffer for bufconn
 	bufconnBufSize = 1 << 20 // 1MB
@@ -56,9 +54,6 @@ func TestMain(m *testing.M) {
 		"sessionTimeout":      5 * time.Minute,
 		"requestTimeout":      5 * time.Minute,
 		"webhookUrl":          "http://test.local",
-		"enableMetrics":       false,
-		"metricsBind":         "127.0.0.1",
-		"metricsPort":         testMetricsPort,
 		"azureClientId":       "azure-client-id",
 		"azureTenantId":       "azure-tenant-id",
 		"cookieEncryptionKey": "hello-world",
@@ -71,67 +66,30 @@ func TestMain(m *testing.M) {
 }
 
 func TestServerLifecycle(t *testing.T) {
-	testFn := func(metricsEnabled bool) func(t *testing.T) {
-		return func(t *testing.T) {
-			t.Cleanup(config.SetTestConfig(map[string]any{
-				"enableMetrics":        metricsEnabled,
-				"metricsServerEnabled": metricsEnabled,
-			}))
+	// Create the server
+	// This will create in-memory listeners with bufconn too
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	t.Cleanup(cleanup)
 
-			// Create the server
-			// This will create in-memory listeners with bufconn too
-			srv, cleanup := newTestServer(t, nil, nil, nil)
-			require.NotNil(t, srv)
-			t.Cleanup(cleanup)
+	stopServerFn := startTestServer(t, srv)
+	defer stopServerFn(t)
 
-			if metricsEnabled {
-				var err error
-				srv.metrics, _, err = metrics.NewRevaulterMetrics(t.Context(), nil)
-				require.NoError(t, err)
-			}
+	// Make a request to the /healthz endpoint in the app server
+	appClient := clientForListener(srv.appListener)
+	reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer reqCancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
+		fmt.Sprintf("https://localhost:%d/healthz", testServerPort), nil)
+	require.NoError(t, err)
+	res, err := appClient.Do(req)
+	require.NoError(t, err)
+	defer closeBody(res)
 
-			stopServerFn := startTestServer(t, srv)
-			defer stopServerFn(t)
-
-			// Make a request to the /healthz endpoint in the app server
-			appClient := clientForListener(srv.appListener)
-			reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-			defer reqCancel()
-			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-				fmt.Sprintf("https://localhost:%d/healthz", testServerPort), nil)
-			require.NoError(t, err)
-			res, err := appClient.Do(req)
-			require.NoError(t, err)
-			defer closeBody(res)
-
-			assert.Equal(t, http.StatusNoContent, res.StatusCode)
-			healthzRes, err := io.ReadAll(res.Body)
-			require.NoError(t, err)
-			assert.Empty(t, healthzRes)
-
-			// Make a request to the /healthz endpoint in the metrics server
-			if metricsEnabled {
-				metricsClient := clientForListener(srv.metricsListener)
-				reqCtx, reqCancel = context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				req, err = http.NewRequestWithContext(reqCtx, http.MethodGet,
-					fmt.Sprintf("http://localhost:%d/healthz", testMetricsPort), nil)
-				require.NoError(t, err)
-				res, err = metricsClient.Do(req)
-				require.NoError(t, err)
-				defer closeBody(res)
-
-				assert.Equal(t, http.StatusNoContent, res.StatusCode)
-				healthzRes, err = io.ReadAll(res.Body)
-				require.NoError(t, err)
-				assert.Empty(t, healthzRes)
-			}
-		}
-	}
-
-	t.Run("run the server without metrics", testFn(false))
-
-	t.Run("run the server with metrics enabled", testFn(true))
+	assert.Equal(t, http.StatusNoContent, res.StatusCode)
+	healthzRes, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	assert.Empty(t, healthzRes)
 }
 
 func TestServerAppRoutes(t *testing.T) {
@@ -931,7 +889,6 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	require.NoError(t, err)
 
 	srv.appListener = bufconn.Listen(bufconnBufSize)
-	srv.metricsListener = bufconn.Listen(bufconnBufSize)
 
 	if httpClientTransport != nil {
 		srv.httpClient.Transport = httpClientTransport

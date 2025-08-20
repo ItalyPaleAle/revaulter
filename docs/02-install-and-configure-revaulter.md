@@ -137,49 +137,6 @@ Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
   - **`omitHealthCheckLogs`** (optional, default: `true`):  
     If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.  
     Environmental variable name: `REVAULTER_OMITHEALTHCHECKLOGS`
-  - **`enableMetrics`** (optional, default: `false`):  
-    Enable metrics collection.  
-    Metrics can then be exposed via a Prometheus-compatible endpoint by enabling `metricsServerEnabled`.  
-    Alternatively, metrics can be sent to an OpenTelemetry Collector; see `metricsOtelCollectorEndpoint`.  
-    Environmental variable name: `REVAULTER_ENABLEMETRICS`
-  - **`metricsServerEnabled`** (optional, default: `false`):  
-    Enable the metrics server, which exposes a Prometheus-compatible endpoint `/metrics`.  
-    Metrics must be enabled for this to be effective.  
-    Environmental variable name: `REVAULTER_METRICSSERVERENABLED`
-  - **`metricsServerPort`** (optional, default: `2112`):  
-    Port for the metrics server to bind to.  
-    Environmental variable name: `REVAULTER_METRICSSERVERPORT`
-  - **`metricsServerBind`** (optional, default: `0.0.0.0`):  
-    Address/interface for the metrics server to bind to.  
-    Environmental variable name: `REVAULTER_METRICSSERVERBIND`
-  - **`metricsOtelCollectorEndpoint`** (optional):  
-    OpenTelemetry Collector endpoint for sending metrics, for example: `<http(s)-or-grpc(s)>://<otel-collector-address>:<otel-collector-port>/v1/metrics`.  
-    If metrics are enabled and `metricsOtelCollectorEndpoint` is set, metrics are sent to the collector.  
-    This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/metrics" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc").  
-    Environmental variable name: `REVAULTER_METRICSOTELCOLLECTORENDPOINT`
-  - **`logsOtelCollectorEndpoint`** (optional):  
-    OpenTelemetry Collector endpoint for sending logs, for example: `<http(s)>://<otel-collector-address>:<otel-collector-port>/v1/logs`.  
-    If configured,logs are sent to the collector at the given address.  
-    This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/logs" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc").  
-    Environmental variable name: `REVAULTER_LOGSOTELCOLLECTORENDPOINT`
-  - **`enableTracing`** (optional, default: `false`):  
-    If true, enables tracing with OpenTelemetry.  
-    Traces can be sent to an OpenTelemetry Collector or Zipkin server.  
-    If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.  
-    Environmental variable name: `REVAULTER_ENABLETRACING`
-  - **`tracingSampling`** (optional, default: `1`):  
-    Sampling rate for traces, as a float.  
-    The default value is 1, sampling all requests.  
-    Environmental variable name: `REVAULTER_TRACINGSAMPLING`
-  - **`tracingOtelCollectorEndpoint`** (optional):  
-    OpenTelemetry Collector endpoint for sending traces, for example: `<http(s)-or-grpc(s)>://<otel-collector-address>:<otel-collector-port>/v1/traces`.  
-    If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.  
-    This value can also be set using the environmental variables `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` ("/v1/traces" is appended for HTTP), and optionally `OTEL_EXPORTER_OTLP_PROTOCOL` ("http/protobuf", the default, or "grpc").  
-    Environmental variable name: `REVAULTER_TRACINGOTELCOLLECTORENDPOINT`
-  - **`tracingZipkinEndpoint`** (optional):  
-    Zipkin endpoint for sending traces, for example: `http://<zipkin-address>:<zipkin-port>/api/v2/spans`.  
-    If tracing is enabled, one of `tracingOtelCollectorEndpoint` or `tracingZipkinEndpoint` is required.  
-    Environmental variable name: `REVAULTER_TRACINGZIPKINENDPOINT`
 
 ## Generating a TLS certificate and key
 
@@ -337,3 +294,25 @@ sudo systemctl enable --now revaulter
 ```
 
 Using systemd, you can make your own services depend on Revaulter by adding `revaulter.service` as a value for `Wants=` and `After=` in the unit files.
+
+## Observability: Logs, Traces, Metrics
+
+Revaulter offers supprot for observability using OpenTelemetry.
+
+Observability features are configured with the [OpenTelemetry SDK's standard `OTEL_*` environmental variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/). To send logs, metrics, and traces to a collector using the OTLP protocol, you will need to set environmental variables similar to these ([full docs](https://opentelemetry.io/docs/specs/otel/protocol/exporter/)):
+
+```sh
+export OTEL_LOGS_EXPORTER="otlp"
+export OTEL_METRICS_EXPORTER="otlp"
+export OTEL_TRACES_EXPORTER="otlp"
+export OTEL_EXPORTER_OTLP_PROTOCOL="" # "grpc" or "http/protobuf" or "http/json"
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://collector:4318"
+```
+
+Metrics can also be exposed on a Prometheus-compatible endpoint, which can be enabled using environmental variables similar to:
+
+```sh
+export OTEL_METRICS_EXPORTER="prometheus"
+export OTEL_EXPORTER_PROMETHEUS_HOST="0.0.0.0"
+export OTEL_EXPORTER_PROMETHEUS_PORT="9464"
+```

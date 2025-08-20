@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/contrib/exporters/autoexport"
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
@@ -45,7 +46,7 @@ func main() {
 	shutdownFns := make([]utils.Service, 0, 3)
 
 	// Get the logger and set it in the context
-	log, shutdownFn, err := getLogger(conf)
+	log, shutdownFn, err := getLogger(context.Background(), conf)
 	if err != nil {
 		logging.FatalError(initLogger, "Failed to create logger", err)
 		return
@@ -73,29 +74,26 @@ func main() {
 	webhook := webhook.NewWebhook()
 
 	// Init metrics
-	var metrics *revaultermetrics.RevaulterMetrics
-	if conf.EnableMetrics {
-		metrics, shutdownFn, err = revaultermetrics.NewRevaulterMetrics(ctx, log)
-		if err != nil {
-			logging.FatalError(log, "Failed to init metrics", err)
-			return
-		}
-		if shutdownFn != nil {
-			shutdownFns = append(shutdownFns, shutdownFn)
-		}
+	metrics, metricsShutdownFn, err := revaultermetrics.NewRevaulterMetrics(ctx, log)
+	if err != nil {
+		logging.FatalError(log, "Failed to init metrics", err)
+		return
+	}
+	if metricsShutdownFn != nil {
+		shutdownFns = append(shutdownFns, metricsShutdownFn)
 	}
 
-	// Get the trace traceExporter if tracing is enabled
-	var traceExporter sdkTrace.SpanExporter
-	if conf.EnableTracing {
-		traceExporter, err = conf.GetTraceExporter(ctx, log)
-		if err != nil {
-			logging.FatalError(log, "Failed to init trace exporter", err)
-			return
-		}
-
-		shutdownFns = append(shutdownFns, traceExporter.Shutdown)
+	// Get the trace exporter
+	// If the env var OTEL_TRACES_EXPORTER is empty, we set it to "none"
+	if os.Getenv("OTEL_TRACES_EXPORTER") == "" {
+		os.Setenv("OTEL_TRACES_EXPORTER", "none")
 	}
+	traceExporter, err := autoexport.NewSpanExporter(ctx)
+	if err != nil {
+		logging.FatalError(log, "Failed to init trace exporter", err)
+		return
+	}
+	shutdownFns = append(shutdownFns, traceExporter.Shutdown)
 
 	// Create the Server object
 	srv, err := server.NewServer(server.NewServerOpts{
