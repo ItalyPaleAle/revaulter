@@ -537,10 +537,10 @@ func (s *Server) loadTLSConfig(log *slog.Logger) (tlsConfig *tls.Config, watchFn
 }
 
 type operationResponse struct {
+	keyvault.KeyVaultResponse `json:"response,omitempty"`
+
 	State   string `json:"state"`
 	Pending bool   `json:"pending,omitempty"`
 	Done    bool   `json:"done,omitempty"`
 	Failed  bool   `json:"failed,omitempty"`
-
-	keyvault.KeyVaultResponse `json:"response,omitempty"`
 }

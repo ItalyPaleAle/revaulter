@@ -66,6 +66,7 @@ linters:
     - promlinter
     - reassign
     - recvcheck
+    - revive
     - rowserrcheck
     - tagalign
     - tagliatelle
@@ -80,6 +81,7 @@ linters:
     - whitespace
     - wrapcheck
     - wsl
+    - wsl_v5
   settings:
     revive:
       rules:
