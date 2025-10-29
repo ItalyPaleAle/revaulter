@@ -4,7 +4,7 @@ import App from './App.svelte'
 
 // Load the app
 new App({
-    target: document.body
+    target: document.body,
 })
 
 // Register the service worker
@@ -15,10 +15,9 @@ if (PRODUCTION && navigator.serviceWorker !== undefined) {
     window.addEventListener('load', () => {
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
-        navigator.serviceWorker.register('/sw.js')
-            .catch((err: unknown) => {
-                // eslint-disable-next-line no-console
-                console.warn('SW registration failed: ', err)
-            })
+        navigator.serviceWorker.register('/sw.js').catch((err: unknown) => {
+            // eslint-disable-next-line no-console
+            console.warn('SW registration failed: ', err)
+        })
     })
 }

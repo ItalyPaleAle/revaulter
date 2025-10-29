@@ -1,9 +1,9 @@
 const webpack = require('webpack')
 const MiniCssExtractPlugin = require('mini-css-extract-plugin')
-const {CleanWebpackPlugin} = require('clean-webpack-plugin')
+const { CleanWebpackPlugin } = require('clean-webpack-plugin')
 const HtmlWebpackPlugin = require('html-webpack-plugin')
-const {SubresourceIntegrityPlugin} = require('webpack-subresource-integrity')
-const {GenerateSW} = require('workbox-webpack-plugin')
+const { SubresourceIntegrityPlugin } = require('webpack-subresource-integrity')
+const { GenerateSW } = require('workbox-webpack-plugin')
 const path = require('path')
 const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPlugin
 
@@ -20,7 +20,7 @@ const htmlMinifyOptions = {
     html5: true,
     keepClosingSlash: false,
     processConditionalComments: true,
-    removeEmptyAttributes: true
+    removeEmptyAttributes: true,
 }
 
 module.exports = {
@@ -35,7 +35,7 @@ module.exports = {
         publicPath: '/',
         filename: prod ? '[name].[contenthash:8].js' : '[name].js',
         chunkFilename: prod ? '[name].[contenthash:8].js' : '[name].js',
-        crossOriginLoading: 'anonymous'
+        crossOriginLoading: 'anonymous',
     },
     optimization: {
         usedExports: true,
@@ -52,36 +52,36 @@ module.exports = {
                     options: {
                         hotReload: true,
                         dev: !prod,
-                        preprocess: require('svelte-preprocess')({})
-                    }
-                }
+                        preprocess: require('svelte-preprocess')({}),
+                    },
+                },
             },
             {
                 test: /\.ts$/,
                 exclude: /node_modules/,
                 use: {
-                    loader: 'ts-loader'
-                }
+                    loader: 'ts-loader',
+                },
             },
             {
                 test: /\.css$/,
                 use: [
                     prod ? MiniCssExtractPlugin.loader : 'style-loader',
-                    {loader: 'css-loader', options: {importLoaders: 1}},
-                    'postcss-loader'
-                ]
+                    { loader: 'css-loader', options: { importLoaders: 1 } },
+                    'postcss-loader',
+                ],
             },
-        ]
+        ],
     },
     plugins: [
         // Cleanup dist folder
         new CleanWebpackPlugin({
-            cleanOnceBeforeBuildPatterns: ['**/*']
+            cleanOnceBeforeBuildPatterns: ['**/*'],
         }),
 
         // Extract CSS
         new MiniCssExtractPlugin({
-            filename: '[name].[contenthash:8].css'
+            filename: '[name].[contenthash:8].css',
         }),
 
         // Definitions
@@ -101,23 +101,23 @@ module.exports = {
         }),
 
         // Generate a service worker in prod
-        ...(prod ? [
-            new GenerateSW({
-                exclude: [/\.map$/, /^manifest.*\.js$/, /LICENSE\.txt$/],
-                swDest: 'sw.js',
-            })
-        ] : []),
+        ...(prod
+            ? [
+                  new GenerateSW({
+                      exclude: [/\.map$/, /^manifest.*\.js$/, /LICENSE\.txt$/],
+                      swDest: 'sw.js',
+                  }),
+              ]
+            : []),
 
         // Include the bundle analyzer only when mode is "analyze"
-        ...(analyze ? [
-            new BundleAnalyzerPlugin()
-        ] : []),
+        ...(analyze ? [new BundleAnalyzerPlugin()] : []),
     ],
     mode,
     devServer: {
         port: 3000,
         // We can't use websockets over a proxy
-        webSocketServer: false
+        webSocketServer: false,
     },
-    devtool: prod ? false : 'source-map'
+    devtool: prod ? false : 'source-map',
 }

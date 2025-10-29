@@ -14,7 +14,7 @@ export default async function* gen<T>(reader: ReadableStreamDefaultReader): Asyn
     let next = reader.read()
     while (true) {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const {done, value} = await next
+        const { done, value } = await next
 
         if (done) {
             if (buf.length > 0) {
@@ -27,7 +27,7 @@ export default async function* gen<T>(reader: ReadableStreamDefaultReader): Asyn
             continue
         }
 
-        const chunk = decoder.decode(value as BufferSource, {stream: true})
+        const chunk = decoder.decode(value as BufferSource, { stream: true })
         buf += chunk
 
         const parts = buf.split(matcher)
@@ -45,4 +45,3 @@ export default async function* gen<T>(reader: ReadableStreamDefaultReader): Asyn
         next = reader.read()
     }
 }
-

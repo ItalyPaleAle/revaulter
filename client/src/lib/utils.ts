@@ -23,7 +23,7 @@ export function timeoutPromise<T>(promise: Promise<T>, timeout: number, message?
         waitPromise(timeout).then(() => {
             throw new TimeoutError(message || 'Promise has timed out')
         }),
-        promise
+        promise,
     ])
 }
 

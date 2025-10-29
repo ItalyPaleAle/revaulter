@@ -5,6 +5,6 @@ module.exports = {
         'postcss-import': {},
         'postcss-url': {},
         tailwindcss: {},
-        ...(production ? {cssnano: {}} : {})
+        ...(production ? { cssnano: {} } : {}),
     },
 }

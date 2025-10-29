@@ -1,4 +1,4 @@
-import {timeoutPromise, TimeoutError} from './utils'
+import { timeoutPromise, TimeoutError } from './utils'
 
 const requestTimeout = 15000 // 15s
 
@@ -107,7 +107,7 @@ export async function Request<T>(url: string, options?: RequestOptions): Promise
         await ThrowResponseNotOk(response)
 
         // Get the TTL
-        let ttl: number|undefined = undefined
+        let ttl: number | undefined = undefined
         const ttlHeader = response.headers.get('x-session-ttl')
         if (ttlHeader) {
             ttl = parseInt(ttlHeader, 10)
@@ -122,7 +122,7 @@ export async function Request<T>(url: string, options?: RequestOptions): Promise
         // Response
         return {
             data: body,
-            ttl
+            ttl,
         }
     } catch (err) {
         if (err instanceof TimeoutError) {
@@ -141,7 +141,7 @@ export async function ThrowResponseNotOk(response: globalThis.Response) {
     if (!response.ok) {
         const e = new ResponseNotOkError('Invalid response status code')
         e.statusCode = response.status
-        const body = (await response.json()) as {error: string}
+        const body = (await response.json()) as { error: string }
         if (body?.error) {
             // eslint-disable-next-line no-console
             console.error('Invalid response status code')
