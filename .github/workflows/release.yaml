@@ -34,9 +34,15 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: 'client/package.json'
+
       - uses: actions/setup-node@v4
         with:
           node-version-file: 'client/.nvmrc'
+          cache: 'pnpm'
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -103,7 +109,7 @@ jobs:
       - name: Run go-generate
         run: |
           echo -e "\n###\nFetching NPM dependencies\n"
-          (cd client; npm ci)
+          (cd client; pnpm install --frozen-lockfile)
 
           echo -e "\n###\nRunning 'go generate'\n"
           go generate -v ./...

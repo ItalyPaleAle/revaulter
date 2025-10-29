@@ -9,6 +9,7 @@
     "format": "prettier -w -c .prettierrc.json .",
     "svelte-check": "svelte-check"
   },
+  "packageManager": "pnpm@10.13.1",
   "dependencies": {
     "date-fns": "4.1.0",
     "js-cookie": "3.0.5",
