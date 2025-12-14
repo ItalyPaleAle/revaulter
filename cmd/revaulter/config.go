@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	slogkit "github.com/italypaleale/go-kit/slog"
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
 	"github.com/mitchellh/go-homedir"
@@ -22,7 +23,6 @@ import (
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/configloader"
-	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
 func loadConfig() error {
@@ -114,7 +114,7 @@ func getLogger(ctx context.Context, cfg *config.Config) (log *slog.Logger, shutd
 	logGlobal.SetLoggerProvider(provider)
 
 	// Wrap the handler in a "fanout" one
-	handler = logging.LogFanoutHandler{
+	handler = slogkit.LogFanoutHandler{
 		handler,
 		otelslog.NewHandler(buildinfo.AppName, otelslog.WithLoggerProvider(provider)),
 	}
@@ -221,5 +221,5 @@ func (e loadConfigError) Error() string {
 
 // LogFatal causes a fatal log
 func (e loadConfigError) LogFatal(log *slog.Logger) {
-	logging.FatalError(log, e.msg, errors.New(e.err))
+	slogkit.FatalError(log, e.msg, errors.New(e.err))
 }

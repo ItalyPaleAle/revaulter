@@ -20,6 +20,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	slogkit "github.com/italypaleale/go-kit/slog"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -466,7 +467,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 			srvErr = s.appSrv.Serve(s.appListener)
 		}
 		if srvErr != http.ErrServerClosed {
-			logging.FatalError(log, "Error starting app server", srvErr)
+			slogkit.FatalError(log, "Error starting app server", srvErr)
 		}
 	}()
 

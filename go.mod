@@ -1,6 +1,6 @@
 module github.com/italypaleale/revaulter
 
-go 1.25
+go 1.25.4
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.19.1
@@ -9,10 +9,10 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/tracing/azotel v0.4.0
 	github.com/alphadose/haxmap v1.4.1
 	github.com/caarlos0/env/v11 v11.3.1
-	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gin-contrib/cors v1.7.6
 	github.com/gin-gonic/gin v1.11.0
 	github.com/google/uuid v1.6.0
+	github.com/italypaleale/go-kit v0.0.0-20251214064356-57c1a0f9caa3
 	github.com/jinzhu/copier v0.4.0
 	github.com/lestrrat-go/jwx/v2 v2.1.6
 	github.com/lmittmann/tint v1.1.2
@@ -53,6 +53,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
+	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.10 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect

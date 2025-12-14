@@ -8,15 +8,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/italypaleale/go-kit/servicerunner"
+	"github.com/italypaleale/go-kit/signals"
+	slogkit "github.com/italypaleale/go-kit/slog"
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
 	revaultermetrics "github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/server"
-	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
-	"github.com/italypaleale/revaulter/pkg/utils/signals"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
@@ -36,19 +37,19 @@ func main() {
 		if errors.As(err, &lce) {
 			lce.LogFatal(initLogger)
 		} else {
-			logging.FatalError(initLogger, "Failed to load configuration", err)
+			slogkit.FatalError(initLogger, "Failed to load configuration", err)
 			return
 		}
 	}
 	conf := config.Get()
 
 	// Shutdown functions
-	shutdownFns := make([]utils.Service, 0, 3)
+	shutdownFns := make([]servicerunner.Service, 0, 3)
 
 	// Get the logger and set it in the context
 	log, shutdownFn, err := getLogger(context.Background(), conf)
 	if err != nil {
-		logging.FatalError(initLogger, "Failed to create logger", err)
+		slogkit.FatalError(initLogger, "Failed to create logger", err)
 		return
 	}
 	slog.SetDefault(log)
@@ -59,7 +60,7 @@ func main() {
 	// Validate the configuration
 	err = processConfig(log, conf)
 	if err != nil {
-		logging.FatalError(log, "Invalid configuration", err)
+		slogkit.FatalError(log, "Invalid configuration", err)
 		return
 	}
 
@@ -76,7 +77,7 @@ func main() {
 	// Init metrics
 	metrics, metricsShutdownFn, err := revaultermetrics.NewRevaulterMetrics(ctx, log)
 	if err != nil {
-		logging.FatalError(log, "Failed to init metrics", err)
+		slogkit.FatalError(log, "Failed to init metrics", err)
 		return
 	}
 	if metricsShutdownFn != nil {
@@ -90,7 +91,7 @@ func main() {
 	}
 	traceExporter, err := autoexport.NewSpanExporter(ctx)
 	if err != nil {
-		logging.FatalError(log, "Failed to init trace exporter", err)
+		slogkit.FatalError(log, "Failed to init trace exporter", err)
 		return
 	}
 	shutdownFns = append(shutdownFns, traceExporter.Shutdown)
@@ -103,17 +104,17 @@ func main() {
 		TraceExporter: traceExporter,
 	})
 	if err != nil {
-		logging.FatalError(log, "Cannot initialize the server", err)
+		slogkit.FatalError(log, "Cannot initialize the server", err)
 		return
 	}
 
 	// Run the service
 	// This call blocks until the context is canceled
-	err = utils.
+	err = servicerunner.
 		NewServiceRunner(srv.Run).
 		Run(ctx)
 	if err != nil {
-		logging.FatalError(log, "Failed to run services", err)
+		slogkit.FatalError(log, "Failed to run services", err)
 		return
 	}
 
@@ -121,7 +122,7 @@ func main() {
 	// We give these a timeout of 5s
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-	err = utils.
+	err = servicerunner.
 		NewServiceRunner(shutdownFns...).
 		Run(shutdownCtx)
 	if err != nil {

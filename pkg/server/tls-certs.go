@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/italypaleale/go-kit/fsnotify"
+
 	"github.com/italypaleale/revaulter/pkg/utils"
-	"github.com/italypaleale/revaulter/pkg/utils/fsnotify"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
