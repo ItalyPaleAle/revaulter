@@ -11,9 +11,10 @@
   },
   "packageManager": "pnpm@10.13.1",
   "dependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
     "date-fns": "4.1.0",
     "js-cookie": "3.0.5",
-    "tailwindcss": "3.4.13"
+    "tailwindcss": "^4.1.18"
   },
   "devDependencies": {
     "@fullhuman/postcss-purgecss": "^6.0.0",

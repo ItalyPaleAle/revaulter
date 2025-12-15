@@ -4,7 +4,7 @@ module.exports = {
     plugins: {
         'postcss-import': {},
         'postcss-url': {},
-        tailwindcss: {},
+        '@tailwindcss/postcss': {},
         ...(production ? { cssnano: {} } : {}),
     },
 }

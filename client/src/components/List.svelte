@@ -1,7 +1,7 @@
 <h1 class="text-lg font-medium text-slate-900 dark:text-white">Pending requests</h1>
 
 {#if pageError}
-    <p class="p-2 mt-2 border rounded-sm bg-rose-50 dark:bg-rose-800 text-rose-800 dark:text-white border-rose-700 dark:border-rose-900">Failed to list pending items: {pageError}</p>
+    <p class="p-2 mt-2 border rounded-xs bg-rose-50 dark:bg-rose-800 text-rose-800 dark:text-white border-rose-700 dark:border-rose-900">Failed to list pending items: {pageError}</p>
 {/if}
 {#if list === null}
     <div class="px-8 py-8 mx-auto my-4 text-lg text-center bg-white rounded-lg shadow-lg lg:text-left lg:pl-20 dark:bg-slate-800 ring-1 ring-slate-900/5 text-slate-700 dark:text-slate-200">
@@ -13,7 +13,7 @@
             <div class="flex flex-row w-full mx-auto md:w-2/3">
                 <div role="button"
                     tabindex="0"
-                    class="flex flex-row items-center flex-auto p-2 m-2 rounded shadow-sm text-emerald-700 dark:text-emerald-400 hover:text-slate-900 hover:dark:text-white bg-slate-200 dark:bg-slate-700 border-emerald-300 dark:border-emerald-600 hover:bg-emerald-300 hover:dark:bg-emerald-600"
+                    class="flex flex-row items-center flex-auto p-2 m-2 rounded-sm shadow-xs text-emerald-700 dark:text-emerald-400 hover:text-slate-900 dark:hover:text-white bg-slate-200 dark:bg-slate-700 border-emerald-300 dark:border-emerald-600 hover:bg-emerald-300 dark:hover:bg-emerald-600 cursor-pointer"
                     on:click={() => SubmitAll(true)} on:keypress={() => SubmitAll(true)}
                 >
                     <span class="pr-2 w-7">
@@ -23,7 +23,7 @@
                 </div>
                 <div role="button"
                     tabindex="0"
-                    class="flex flex-row items-center flex-auto p-2 m-2 rounded shadow-sm text-rose-700 dark:text-rose-400 hover:text-slate-900 hover:dark:text-white bg-slate-200 dark:bg-slate-700 border-rose-300 dark:border-rose-600 hover:bg-rose-300 hover:dark:bg-rose-600"
+                    class="flex flex-row items-center flex-auto p-2 m-2 rounded-sm shadow-xs text-rose-700 dark:text-rose-400 hover:text-slate-900 dark:hover:text-white bg-slate-200 dark:bg-slate-700 border-rose-300 dark:border-rose-600 hover:bg-rose-300 dark:hover:bg-rose-600 cursor-pointer"
                     on:click={() => SubmitAll(false)} on:keypress={() => SubmitAll(false)}
                 >
                     <span class="pr-2 w-7">
@@ -40,7 +40,7 @@
         {:else}
             <div class="px-4 py-5 mx-auto my-4 bg-white rounded-lg shadow-lg dark:bg-slate-800 ring-1 ring-slate-900/5 text-slate-700 dark:text-slate-200">
                 <p>There's no request pending your action at this time.</p>
-                <p class="text-sm">Need help getting started? Check out the <a href="https://github.com/italypaleale/revaulter#apis" class="underline hover:text-slate-900 hover:dark:text-white">documentation</a> for the APIs.</p>
+                <p class="text-sm">Need help getting started? Check out the <a href="https://github.com/italypaleale/revaulter#apis" class="underline hover:text-slate-900 dark:hover:text-white">documentation</a> for the APIs.</p>
             </div>
         {/each}
     </div>

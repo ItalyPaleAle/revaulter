@@ -1,6 +1,6 @@
 <div class="my-2">
     {#if error}
-        <p class="p-2 border rounded-sm bg-rose-50 dark:bg-rose-800 text-rose-800 dark:text-white border-rose-700 dark:border-rose-900">{error}</p>
+        <p class="p-2 border rounded-xs bg-rose-50 dark:bg-rose-800 text-rose-800 dark:text-white border-rose-700 dark:border-rose-900">{error}</p>
     {/if}
     <div class="flex flex-row">
         <div class="flex-none pt-2 mr-4 w-14 h-14 text-slate-700 dark:text-slate-300">
@@ -10,41 +10,41 @@
             <div class="space-y-0.5">
                 <span class="flex flex-row items-center">
                     <span class="flex-none w-6 pr-2"></span>
-                    <span class="flex-grow">
+                    <span class="grow">
                         <b class="text-slate-900 dark:text-white">{item.requestor}</b> wants to <b class="text-slate-900 dark:text-white">{itemUI.action}</b> {itemUI.actionObject}
                     </span>
                 </span>
                 {#if item.note}
                     <span class="flex flex-row items-center text-sm">
-                        <span class="flex-grow-0 w-6 pr-2">
+                        <span class="grow-0 w-6 pr-2">
                             <Icon icon="note" title="Note" size={'4'} />
                         </span>
-                        <span class="flex-grow">
+                        <span class="grow">
                             <span class="italic font-semibold text-slate-900 dark:text-white">{item.note}</span>
                         </span>
                     </span>
                 {/if}
                 <span class="flex flex-row items-center text-sm">
-                    <span class="flex-grow-0 w-6 pr-2">
+                    <span class="grow-0 w-6 pr-2">
                         <Icon icon="key" title="Vault name and key" size={'4'} />
                     </span>
-                    <span class="flex-grow">
+                    <span class="grow">
                         <b class="text-slate-900 dark:text-white">{item.vaultName}</b> / <b class="text-slate-900 dark:text-white">{item.keyId}</b>
                     </span>
                 </span>
                 <span class="flex flex-row items-center text-sm">
-                    <span class="flex-grow-0 w-6 pr-2">
+                    <span class="grow-0 w-6 pr-2">
                         <Icon icon="clock" title="Time of the request (local)" size={'4'} />
                     </span>
-                    <span class="flex-grow">
+                    <span class="grow">
                         <b class="text-slate-900 dark:text-white">{format(item.date * 1000, 'PPpp')}</b>
                     </span>
                 </span>
                 <span class="flex flex-row items-center text-sm">
-                    <span class="flex-grow-0 w-6 pr-2">
+                    <span class="grow-0 w-6 pr-2">
                         <Icon icon="data" title="Request ID" size={'4'} />
                     </span>
-                    <span class="flex-grow font-mono">
+                    <span class="grow font-mono">
                         {item.state}
                     </span>
                 </span>
@@ -65,7 +65,7 @@
                 {:else}
                     <div class="flex flex-row">
                         <div role="button"
-                            class="flex flex-row items-center flex-auto p-2 m-2 rounded shadow-sm text-emerald-700 dark:text-emerald-400 hover:text-slate-900 hover:dark:text-white bg-slate-200 dark:bg-slate-700 border-emerald-300 dark:border-emerald-600 hover:bg-emerald-300 hover:dark:bg-emerald-600"
+                            class="flex flex-row items-center flex-auto p-2 m-2 rounded-sm shadow-xs text-emerald-700 dark:text-emerald-400 hover:text-slate-900 dark:hover:text-white bg-slate-200 dark:bg-slate-700 border-emerald-300 dark:border-emerald-600 hover:bg-emerald-300 dark:hover:bg-emerald-600 cursor-pointer"
                             tabindex="-20"
                             on:click={() => submit(true)} on:keypress={() => submit(true)}
                         >
@@ -75,7 +75,7 @@
                             <span>Confirm</span>
                         </div>
                         <div role="button"
-                            class="flex flex-row items-center flex-auto p-2 m-2 rounded shadow-sm text-rose-700 dark:text-rose-400 hover:text-slate-900 hover:dark:text-white bg-slate-200 dark:bg-slate-700 border-rose-300 dark:border-rose-600 hover:bg-rose-300 hover:dark:bg-rose-600"
+                            class="flex flex-row items-center flex-auto p-2 m-2 rounded-sm shadow-xs text-rose-700 dark:text-rose-400 hover:text-slate-900 dark:hover:text-white bg-slate-200 dark:bg-slate-700 border-rose-300 dark:border-rose-600 hover:bg-rose-300 dark:hover:bg-rose-600 cursor-pointer"
                             tabindex="-19"
                             on:click={() => submit(false)} on:keypress={() => submit(false)}
                         >
