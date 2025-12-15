@@ -1,0 +1,15 @@
+printWidth: 120
+trailingComma: es5
+tabWidth: 4
+semi: false
+singleQuote: true
+quoteProps: "consistent"
+bracketSameLine: true
+useTabs: false
+endOfLine: lf
+plugins:
+  - "prettier-plugin-tailwindcss"
+overrides:
+  - files: ["*.json", "*.yaml"]
+    options:
+      tabWidth: 2
