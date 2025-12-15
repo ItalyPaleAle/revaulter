@@ -28,9 +28,9 @@ jobs:
     steps:
 
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
 
@@ -39,7 +39,7 @@ jobs:
         with:
           package_json_file: 'client/package.json'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: 'client/.nvmrc'
           cache: 'pnpm'
@@ -116,17 +116,18 @@ jobs:
           go generate -v ./...
 
       - name: Run golangci-Lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 
       - name: Run tests
+        env:
+          CGO_ENABLED: "1"
         run: |
-          CGO_ENABLED=1 \
-            go test -v \
-              -race \
-              -tags unit \
-              ./... 
+          go test -v \
+            -race \
+            -tags unit \
+            ./... 
 
       - name: Build for all platforms
         env:
@@ -329,7 +330,7 @@ jobs:
           ls -al .out
 
       - name: Publish binaries as Actions Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: artifacts
           path: .out
@@ -359,7 +360,7 @@ jobs:
           push: true
 
       - name: Binary attestation linux-amd64
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: linux-amd64/revaulter
@@ -368,7 +369,7 @@ jobs:
             .bin/revaulter-*-linux-amd64/revaulter-cli
 
       - name: Binary attestation linux-386
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: linux-386/revaulter
@@ -377,7 +378,7 @@ jobs:
             .bin/revaulter-*-linux-386/revaulter-cli
 
       - name: Binary attestation linux-arm64
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: linux-arm64/revaulter
@@ -386,7 +387,7 @@ jobs:
             .bin/revaulter-*-linux-arm64/revaulter-cli
 
       - name: Binary attestation linux-armv7
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: linux-armv7/revaulter
@@ -395,7 +396,7 @@ jobs:
             .bin/revaulter-*-linux-armv7/revaulter-cli
 
       - name: Binary attestation macos-x64
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: macos-x64/revaulter
@@ -404,7 +405,7 @@ jobs:
             .bin/revaulter-*-macos-x64/revaulter-cli
 
       - name: Binary attestation macos-arm64
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: macos-arm64/revaulter
@@ -413,7 +414,7 @@ jobs:
             .bin/revaulter-*-macos-arm64/revaulter-cli
 
       - name: Binary attestation windows-x64
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: windows-x64/revaulter
@@ -422,7 +423,7 @@ jobs:
             .bin/revaulter-*-windows-x64/revaulter-cli.exe
 
       - name: Binary attestation windows-arm64
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: windows-arm64/revaulter
@@ -431,7 +432,7 @@ jobs:
             .bin/revaulter-*-windows-arm64/revaulter-cli.exe
 
       - name: Binary attestation freebsd-amd64
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: freebsd-amd64/revaulter
@@ -440,7 +441,7 @@ jobs:
             .bin/revaulter-*-freebsd-amd64/revaulter-cli
 
       - name: Binary attestation freebsd-arm64
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: freebsd-arm64/revaulter
@@ -449,7 +450,7 @@ jobs:
             .bin/revaulter-*-freebsd-arm64/revaulter-cli
 
       - name: Container image attestation
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: 'ghcr.io/${{ env.REPO_OWNER }}/revaulter'
@@ -457,7 +458,7 @@ jobs:
           push-to-registry: true
 
       - name: Container image attestation for CLI
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: 'ghcr.io/${{ env.REPO_OWNER }}/revaulter-cli'
