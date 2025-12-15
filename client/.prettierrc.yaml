@@ -3,13 +3,13 @@ trailingComma: es5
 tabWidth: 4
 semi: false
 singleQuote: true
-quoteProps: "consistent"
+quoteProps: 'consistent'
 bracketSameLine: true
 useTabs: false
 endOfLine: lf
 plugins:
-  - "prettier-plugin-tailwindcss"
+  - 'prettier-plugin-tailwindcss'
 overrides:
-  - files: ["*.json", "*.yaml"]
+  - files: ['*.json', '*.yaml']
     options:
       tabWidth: 2

@@ -1,3 +1,15 @@
+<script lang="ts">
+import IconContainer from './IconContainer.svelte'
+
+interface Props {
+    icon: string
+    title: string
+    size?: string
+}
+
+let {icon, title, size = '12'}: Props = $props()
+</script>
+
 <i class="w-{size}">
     {#if icon == 'lock-open'}
         <!--
@@ -91,11 +103,3 @@
         </IconContainer>
     {/if}
 </i>
-
-<script lang="ts">
-import IconContainer from './IconContainer.svelte'
-
-export let icon: string
-export let title: string
-export let size = '12'
-</script>

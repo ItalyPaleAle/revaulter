@@ -51,8 +51,9 @@ module.exports = {
                     loader: 'svelte-loader',
                     options: {
                         hotReload: true,
-                        dev: !prod,
-                        preprocess: require('svelte-preprocess')({}),
+                        compilerOptions: {
+                            dev: !prod,
+                        },
                     },
                 },
             },
