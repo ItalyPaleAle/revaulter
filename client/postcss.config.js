@@ -1,4 +1,4 @@
-const production = process.env.NODE_ENV == 'production'
+const production = process.env.NODE_ENV === 'production'
 
 export default {
     plugins: {

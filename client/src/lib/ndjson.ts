@@ -32,7 +32,7 @@ export default async function* gen<T>(reader: ReadableStreamDefaultReader): Asyn
 
         const parts = buf.split(matcher)
         if (parts.length) {
-            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+            // biome-ignore lint/style/noNonNullAssertion: it's guaranteed not undefined
             buf = parts.pop()!
             for (const i of parts) {
                 // Ignore empty records

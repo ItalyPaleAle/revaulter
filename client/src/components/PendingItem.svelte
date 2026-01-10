@@ -1,8 +1,8 @@
 <script lang="ts">
-import {format} from 'date-fns'
+import { format } from 'date-fns'
 
-import {Request} from '../lib/request'
-import {pendingRequestStatus, type pendingRequestItem, operations} from '../lib/types'
+import { Request } from '../lib/request'
+import { pendingRequestStatus, type pendingRequestItem, operations } from '../lib/types'
 
 import Icon from './Icon.svelte'
 import LoadingSpinner from './LoadingSpinner.svelte'
@@ -12,9 +12,9 @@ interface Props {
     submit?: (confirm: boolean) => void
 }
 
-let {item, submit = $bindable()}: Props = $props()
+let { item, submit = $bindable() }: Props = $props()
 
-let itemUI = $derived(uiForOperation(item.operation))
+const itemUI = $derived(uiForOperation(item.operation))
 
 function uiForOperation(operation: operations) {
     switch (operation) {
@@ -23,42 +23,42 @@ function uiForOperation(operation: operations) {
                 action: 'encrypt',
                 actionObject: 'a message',
                 icon: 'lock-closed',
-                iconTitle: 'Encrypt request'
+                iconTitle: 'Encrypt request',
             }
         case operations.operationDecrypt:
             return {
                 action: 'decrypt',
                 actionObject: 'a message',
                 icon: 'lock-open',
-                iconTitle: 'Decrypt request'
+                iconTitle: 'Decrypt request',
             }
         case operations.operationSign:
             return {
                 action: 'sign',
                 actionObject: 'a message',
                 icon: 'pencil',
-                iconTitle: 'Sign request'
+                iconTitle: 'Sign request',
             }
         case operations.operationVerify:
             return {
                 action: 'verify',
                 actionObject: 'a signature',
                 icon: 'check-badge',
-                iconTitle: 'Verify request'
+                iconTitle: 'Verify request',
             }
         case operations.operationWrap:
             return {
                 action: 'wrap',
                 actionObject: 'a key',
                 icon: 'lock-closed',
-                iconTitle: 'Wrap request'
+                iconTitle: 'Wrap request',
             }
         case operations.operationUnwrap:
             return {
                 action: 'unwrap',
                 actionObject: 'a key',
                 icon: 'lock-open',
-                iconTitle: 'Unwrap request'
+                iconTitle: 'Unwrap request',
             }
     }
 }
@@ -75,7 +75,7 @@ function doSubmit(confirm: boolean) {
         confirm?: boolean
         cancel?: boolean
     } = {
-        state: item.state
+        state: item.state,
     }
     if (confirm) {
         body.confirm = true
@@ -88,10 +88,10 @@ function doSubmit(confirm: boolean) {
 
     submitting = Promise.resolve()
         .then(() =>
-            Request<{confirmed?: boolean; canceled?: boolean}>('/api/confirm', {
+            Request<{ confirmed?: boolean; canceled?: boolean }>('/api/confirm', {
                 postData: body,
                 // Set timeout to 60s as this operation can take longer
-                timeout: 60*1000
+                timeout: 60 * 1000,
             })
         )
         .then((res) => {
@@ -108,7 +108,6 @@ function doSubmit(confirm: boolean) {
             }
         })
         .catch((err) => {
-            // eslint-disable-next-line
             error = err && typeof err.toString == 'function' ? err.toString() : ''
             item.status = pendingRequestStatus.pendingRequestFailed_Client
         })

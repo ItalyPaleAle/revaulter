@@ -28,13 +28,9 @@ export type Response<T> = {
 /**
  * Performs API requests.
  */
-export async function Request<T>(url: string, options?: RequestOptions): Promise<Response<T>> {
-    if (!options) {
-        options = {}
-    }
-
+export async function Request<T>(url: string, options: RequestOptions = {}): Promise<Response<T>> {
     // URL prefix
-    url = (import.meta.env.VITE_URL_PREFIX || '') + url
+    const reqUrl = (import.meta.env.VITE_URL_PREFIX || '') + url
 
     // Set the options
     const reqOptions: RequestInit = {
@@ -84,7 +80,7 @@ export async function Request<T>(url: string, options?: RequestOptions): Promise
 
     // Make the request
     try {
-        let p = fetch(url, reqOptions)
+        let p = fetch(reqUrl, reqOptions)
         if (timeout !== null) {
             p = timeoutPromise(p, timeout)
         }
@@ -104,7 +100,7 @@ export async function Request<T>(url: string, options?: RequestOptions): Promise
         let ttl: number | undefined = undefined
         const ttlHeader = response.headers.get('x-session-ttl')
         if (ttlHeader) {
-            ttl = parseInt(ttlHeader, 10)
+            ttl = Number.parseInt(ttlHeader, 10)
             if (ttl < 1) {
                 ttl = 0
             }

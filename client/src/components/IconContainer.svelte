@@ -1,5 +1,5 @@
 <script lang="ts">
-import type {Snippet} from 'svelte'
+import type { Snippet } from 'svelte'
 
 interface Props {
     title: string
@@ -7,7 +7,7 @@ interface Props {
     children: Snippet
 }
 
-let {title, size, children}: Props = $props()
+const { title, size, children }: Props = $props()
 </script>
 
 {#if title}

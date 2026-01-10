@@ -1,21 +1,21 @@
 <script lang="ts">
-import {onMount} from 'svelte'
+import { onMount } from 'svelte'
 
 import LoadingSpinner from './LoadingSpinner.svelte'
 import PendingItem from './PendingItem.svelte'
 import Icon from './Icon.svelte'
 
 import ndjson from '../lib/ndjson'
-import {ThrowResponseNotOk} from '../lib/request'
-import {pendingRequestStatus, type pendingRequestItem} from '../lib/types'
+import { ThrowResponseNotOk } from '../lib/request'
+import { pendingRequestStatus, type pendingRequestItem } from '../lib/types'
 
 interface Props {
     onsessionExpired?: (value: boolean) => void
 }
 
-let {onsessionExpired}: Props = $props()
+const { onsessionExpired }: Props = $props()
 
-let list: Record<string, pendingRequestItem & {_submit?: (confirm: boolean) => void}> | null = $state(null)
+let list: Record<string, pendingRequestItem & { _submit?: (confirm: boolean) => void }> | null = $state(null)
 let pageError: string | null = $state(null)
 let redirectTimeout: ReturnType<typeof setTimeout> | null = null
 
@@ -39,7 +39,7 @@ function Subscribe(): () => void {
     let controller: AbortController | null = null
 
     const stopFn = () => {
-        controller && controller.abort()
+        controller?.abort()
         controller = null
     }
 
@@ -50,13 +50,13 @@ function Subscribe(): () => void {
                 controller = new AbortController()
 
                 // We can't use the higher-level Request API here because we need to get access to the stream
-                const res = await fetch((import.meta.env.VITE_URL_PREFIX || '') + '/api/list', {
+                const res = await fetch(`${import.meta.env.VITE_URL_PREFIX || ''}/api/list`, {
                     headers: new Headers({
-                        accept: 'application/x-ndjson '
+                        accept: 'application/x-ndjson ',
                     }),
                     credentials: 'same-origin',
                     cache: 'no-store',
-                    signal: controller.signal
+                    signal: controller.signal,
                 })
                 if (!res.ok) {
                     // If the error is that we got a 401 response, redirect to the auth page
@@ -71,7 +71,7 @@ function Subscribe(): () => void {
                 let ttl = 0
                 const ttlHeader = res.headers.get('x-session-ttl')
                 if (ttlHeader) {
-                    ttl = parseInt(ttlHeader, 10)
+                    ttl = Number.parseInt(ttlHeader, 10)
                     if (ttl < 1) {
                         ttl = 0
                     }
@@ -88,10 +88,13 @@ function Subscribe(): () => void {
                 }
                 // Send the signal 1 second earlier so this is triggered before the server closes the request
                 // If the server gets to this before the client, the loop is restarted and the client is redirected (see above where we check for 401 responses) rather than seeing a message here
-                redirectTimeout = setTimeout(() => {
-                    stopFn()
-                    onsessionExpired?.(true)
-                }, (ttl - 1) * 1000)
+                redirectTimeout = setTimeout(
+                    () => {
+                        stopFn()
+                        onsessionExpired?.(true)
+                    },
+                    (ttl - 1) * 1000
+                )
 
                 // Get the stream of NDJSON messages
                 if (!res.body) {
@@ -106,7 +109,7 @@ function Subscribe(): () => void {
                 const gen = ndjson<pendingRequestItem>(res.body.getReader())
                 // eslint-disable-line no-constant-condition
                 while (true) {
-                    const {done, value} = await gen.next()
+                    const { done, value } = await gen.next()
                     if (done) {
                         break
                     }
@@ -116,8 +119,7 @@ function Subscribe(): () => void {
                 }
             }
         } catch (err) {
-            // eslint-disable-next-line @typescript-eslint/restrict-plus-operands
-            pageError = 'Error: ' + err
+            pageError = `Error: ${err}`
             stopFn()
         }
     })()
@@ -143,7 +145,7 @@ function RedirectToAuth() {
     if (!hasRedirected) {
         // Use a flag to prevent multiple redirects
         hasRedirected = true
-        window.location.href = (import.meta.env.VITE_URL_PREFIX || '') + '/auth/signin'
+        window.location.href = `${import.meta.env.VITE_URL_PREFIX || ''}/auth/signin`
     }
 }
 

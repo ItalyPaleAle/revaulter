@@ -1,5 +1,10 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
   "formatter": {
     "enabled": true,
     "lineWidth": 120,
@@ -10,7 +15,10 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true
+      "recommended": true,
+      "suspicious": {
+        "noDoubleEquals": "off"
+      }
     }
   },
   "javascript": {
@@ -31,8 +39,7 @@
     {
       "include": ["*.svelte"],
       "linter": {
-        "rules": {
-        }
+        "rules": {}
       }
     }
   ]

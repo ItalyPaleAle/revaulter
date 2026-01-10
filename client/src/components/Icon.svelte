@@ -7,7 +7,7 @@ interface Props {
     size?: string
 }
 
-let {icon, title, size = '12'}: Props = $props()
+const { icon, title, size = '12' }: Props = $props()
 </script>
 
 <i class="w-{size}">
