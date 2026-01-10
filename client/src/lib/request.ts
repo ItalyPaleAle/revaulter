@@ -26,12 +26,6 @@ export type Response<T> = {
 }
 
 /**
- * URL prefix
- * Used to export the URL_PREFIX constant since globals do not work well with the Svelte language server.
- */
-export const URLPrefix = URL_PREFIX || ''
-
-/**
  * Performs API requests.
  */
 export async function Request<T>(url: string, options?: RequestOptions): Promise<Response<T>> {
@@ -40,7 +34,7 @@ export async function Request<T>(url: string, options?: RequestOptions): Promise
     }
 
     // URL prefix
-    url = URLPrefix + url
+    url = (import.meta.env.VITE_URL_PREFIX || '') + url
 
     // Set the options
     const reqOptions: RequestInit = {

@@ -6,7 +6,7 @@ import PendingItem from './PendingItem.svelte'
 import Icon from './Icon.svelte'
 
 import ndjson from '../lib/ndjson'
-import {ThrowResponseNotOk, URLPrefix} from '../lib/request'
+import {ThrowResponseNotOk} from '../lib/request'
 import {pendingRequestStatus, type pendingRequestItem} from '../lib/types'
 
 interface Props {
@@ -17,7 +17,7 @@ let {onsessionExpired}: Props = $props()
 
 let list: Record<string, pendingRequestItem & {_submit?: (confirm: boolean) => void}> | null = $state(null)
 let pageError: string | null = $state(null)
-let redirectTimeout = 0
+let redirectTimeout: ReturnType<typeof setTimeout> | null = null
 
 let stop: (() => void) | null = null
 
@@ -50,7 +50,7 @@ function Subscribe(): () => void {
                 controller = new AbortController()
 
                 // We can't use the higher-level Request API here because we need to get access to the stream
-                const res = await fetch(URLPrefix + '/api/list', {
+                const res = await fetch((import.meta.env.VITE_URL_PREFIX || '') + '/api/list', {
                     headers: new Headers({
                         accept: 'application/x-ndjson '
                     }),
@@ -143,7 +143,7 @@ function RedirectToAuth() {
     if (!hasRedirected) {
         // Use a flag to prevent multiple redirects
         hasRedirected = true
-        window.location.href = URLPrefix + '/auth/signin'
+        window.location.href = (import.meta.env.VITE_URL_PREFIX || '') + '/auth/signin'
     }
 }
 
