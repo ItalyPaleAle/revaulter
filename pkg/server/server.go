@@ -265,7 +265,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 
 	// Static files as fallback
 	// This doesn't include most middlewares
-	s.appRouter.NoRoute(s.serveClient())
+	s.appRouter.NoRoute(s.serveClient()...)
 
 	return nil
 }

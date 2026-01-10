@@ -10,10 +10,12 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/italypaleale/revaulter/client"
+	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
 )
 
@@ -21,18 +23,22 @@ import (
 
 const staticBaseDir = "dist"
 
-func (s *Server) serveClient() func(c *gin.Context) {
+func (s *Server) serveClient() []gin.HandlerFunc {
 	// Option used during development to proxy to another server (such as a dev server)
 	clientProxyServer := config.Get().Dev.ClientProxyServer
 
 	if clientProxyServer == "" {
-		return func(c *gin.Context) {
-			if !prepareStaticResponse(c) {
-				return
-			}
+		return []gin.HandlerFunc{
+			// Add cache-control header for static assets to cache for 30 days
+			addClientCacheHeaders(30 * 86400),
+			func(c *gin.Context) {
+				if !prepareStaticResponse(c) {
+					return
+				}
 
-			// Serve the request from the embedded FS
-			serveStaticFiles(c, c.Request.URL.Path, client.StaticFS)
+				// Serve the request from the embedded FS
+				serveStaticFiles(c, c.Request.URL.Path, client.StaticFS)
+			},
 		}
 	}
 
@@ -41,13 +47,15 @@ func (s *Server) serveClient() func(c *gin.Context) {
 		panic(fmt.Sprintf("Failed to parse value for 'dev.clientProxyServer': %v", err))
 	}
 	proxy := proxyStaticFilesFunc(u)
-	return func(c *gin.Context) {
-		if !prepareStaticResponse(c) {
-			return
-		}
+	return []gin.HandlerFunc{
+		func(c *gin.Context) {
+			if !prepareStaticResponse(c) {
+				return
+			}
 
-		// Serve the request from the proxy
-		proxy.ServeHTTP(c.Writer, c.Request)
+			// Serve the request from the proxy
+			proxy.ServeHTTP(c.Writer, c.Request)
+		},
 	}
 }
 
@@ -100,6 +108,7 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 		return
 	}
 	defer f.Close()
+
 	stat, err := f.Stat()
 	if err != nil {
 		switch {
@@ -139,6 +148,7 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 		AbortWithErrorJSON(c, fmt.Errorf("file %s does not implement io.ReadSeekCloser", stat.Name()))
 		return
 	}
+
 	http.ServeContent(c.Writer, c.Request, stat.Name(), stat.ModTime(), fseek)
 }
 
@@ -151,4 +161,53 @@ func proxyStaticFilesFunc(upstream *url.URL) *httputil.ReverseProxy {
 		req.URL.Host = upstream.Host
 	}
 	return proxy
+}
+
+func addClientCacheHeaders(cacheMaxAge int64) func(c *gin.Context) {
+	cfg := config.Get()
+
+	cacheControlHeader := fmt.Sprintf("public, max-age=%d", cacheMaxAge)
+
+	// Go does not save the last modification time for embedded files
+	// As a workaround, we use the time the app build time
+	buildTime := buildinfo.GetBuildDate()
+	lastModifiedHeader := buildTime.Format(time.RFC1123)
+
+	if cfg.Dev.DisableClientCache {
+		return func(c *gin.Context) {
+			c.Header("Cache-Control", "no-cache")
+		}
+	}
+
+	return func(c *gin.Context) {
+		if isNotModified(c) {
+			// Request has already been aborted
+			return
+		}
+
+		// Add cache-control and last-modified header
+		c.Header("Cache-Control", cacheControlHeader)
+		if lastModifiedHeader != "" {
+			c.Header("Last-Modified", lastModifiedHeader)
+		}
+	}
+}
+
+func isNotModified(c *gin.Context) bool {
+	// Check if there's an If-Modified-Since header
+	ims := c.Request.Header.Get("If-Modified-Since")
+	if ims == "" {
+		return false
+	}
+
+	// If there's no build time, it's always modified
+	buildTime := buildinfo.GetBuildDate()
+	imsDate, err := time.Parse(time.RFC1123, ims)
+	// Ignore headers with invalid dates
+	if err != nil || !imsDate.After(buildTime) {
+		return false
+	}
+
+	c.AbortWithStatus(http.StatusNotModified)
+	return true
 }

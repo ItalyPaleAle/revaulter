@@ -162,6 +162,9 @@ type Config struct {
 // Dev includes options using during development only
 type Dev struct {
 	ClientProxyServer string
+
+	// If true, disables caching on the client
+	DisableClientCache bool
 }
 
 // Internal properties
