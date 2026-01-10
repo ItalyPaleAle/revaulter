@@ -1,4 +1,4 @@
-import { timeoutPromise, TimeoutError } from './utils'
+import { TimeoutError, timeoutPromise } from './utils'
 
 const requestTimeout = 15000 // 15s
 

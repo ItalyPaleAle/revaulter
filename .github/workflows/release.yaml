@@ -107,12 +107,18 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install client dependencies
+        working-directory: client
+        run: |
+          pnpm install --frozen-lockfile
+
+      - name: Run biome
+        working-directory: client
+        run: |
+          npx biome check
+
       - name: Run go-generate
         run: |
-          echo -e "\n###\nFetching NPM dependencies\n"
-          (cd client; pnpm install --frozen-lockfile)
-
-          echo -e "\n###\nRunning 'go generate'\n"
           go generate -v ./...
 
       - name: Run golangci-Lint

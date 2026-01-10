@@ -2,7 +2,7 @@
 import { format } from 'date-fns'
 
 import { Request } from '../lib/request'
-import { pendingRequestStatus, type pendingRequestItem, operations } from '../lib/types'
+import { operations, type pendingRequestItem, pendingRequestStatus } from '../lib/types'
 
 import Icon from './Icon.svelte'
 import LoadingSpinner from './LoadingSpinner.svelte'
