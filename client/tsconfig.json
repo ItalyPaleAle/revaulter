@@ -1,17 +1,19 @@
 {
   "extends": "@tsconfig/svelte/tsconfig.json",
   "compilerOptions": {
-    "lib": ["ES2019", "WebWorker", "DOM"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
     "target": "ES2022",
-    "module": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "allowJs": true,
     "checkJs": true,
     "noImplicitAny": true,
     "noImplicitReturns": true,
-    "outDir": "dist",
-    "types": ["svelte"]
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "types": ["svelte", "vite/client"]
   },
-  "include": ["src/**/*", "src/*"],
+  "include": ["src/**/*", "vite.config.ts"],
   "exclude": ["node_modules/*", "dist/*"]
 }

@@ -3,7 +3,7 @@ interface Props {
     size?: string
 }
 
-let {size = '1.5rem'}: Props = $props()
+const { size = '1.5rem' }: Props = $props()
 </script>
 
 <!--
