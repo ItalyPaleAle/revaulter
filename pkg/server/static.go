@@ -86,6 +86,12 @@ func prepareStaticResponse(c *gin.Context) (ok bool) {
 func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 	reqPath = strings.TrimLeft(reqPath, "/")
 
+	// If the request is for a HTML file, set the security headers
+	ext := strings.ToLower(path.Ext(reqPath))
+	if ext == ".html" || ext == ".htm" {
+		setPageSecurityHeaders(c.Writer)
+	}
+
 	// Check if the static file exists
 	f, err := filesystem.Open(staticBaseDir + "/" + reqPath)
 	if err != nil {
@@ -210,4 +216,16 @@ func isNotModified(c *gin.Context) bool {
 
 	c.AbortWithStatus(http.StatusNotModified)
 	return true
+}
+
+func setPageSecurityHeaders(w http.ResponseWriter) {
+	// Set the CSP header and the legacy X-Frame-Options
+	w.Header().Set("Content-Security-Policy", `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'`)
+	w.Header().Set("X-Frame-Options", "DENY")
+
+	// Disable FLOC
+	w.Header().Set("Permissions-Policy", "interest-cohort=()")
+
+	// Disable indexing by search engines
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 }
