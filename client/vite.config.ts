@@ -12,8 +12,17 @@ export default defineConfig(({ mode }) => {
             VitePWA({
                 registerType: 'autoUpdate',
                 workbox: {
+                    // Include the compiled files and assets
                     globPatterns: ['**/*.{js,css,html,svg,png,ico,woff,woff2}'],
                     globIgnores: ['**/*.map', '**/manifest*.json', '**/*.LICENSE.txt'],
+                    // Inline the Workbox runtime into the sw.js file
+                    inlineWorkboxRuntime: true,
+                    // Disable navigation fallback so SW only serves exact precached URLs
+                    navigateFallback: null,
+                    // No runtime caching - only serve precached assets
+                    runtimeCaching: [],
+                    // Clean up old caches from previous versions
+                    cleanupOutdatedCaches: true,
                 },
                 manifest: {
                     name: 'Revaulter',
