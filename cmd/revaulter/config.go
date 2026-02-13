@@ -114,10 +114,7 @@ func getLogger(ctx context.Context, cfg *config.Config) (log *slog.Logger, shutd
 	logGlobal.SetLoggerProvider(provider)
 
 	// Wrap the handler in a "fanout" one
-	handler = slogkit.LogFanoutHandler{
-		handler,
-		otelslog.NewHandler(buildinfo.AppName, otelslog.WithLoggerProvider(provider)),
-	}
+	handler = slog.NewMultiHandler(handler, otelslog.NewHandler(buildinfo.AppName, otelslog.WithLoggerProvider(provider)))
 
 	// Return a function to invoke during shutdown
 	shutdownFn = provider.Shutdown
