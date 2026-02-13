@@ -1,13 +1,11 @@
 <script lang="ts">
 import { onMount } from 'svelte'
-
-import Icon from './Icon.svelte'
-import LoadingSpinner from './LoadingSpinner.svelte'
-import PendingItem from './PendingItem.svelte'
-
 import ndjson from '../lib/ndjson'
 import { ThrowResponseNotOk } from '../lib/request'
 import { type pendingRequestItem, pendingRequestStatus } from '../lib/types'
+import Icon from './Icon.svelte'
+import LoadingSpinner from './LoadingSpinner.svelte'
+import PendingItem from './PendingItem.svelte'
 
 interface Props {
     onsessionExpired?: (value: boolean) => void

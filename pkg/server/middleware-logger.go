@@ -40,11 +40,8 @@ func (s *Server) MiddlewareLogger(parentLog *slog.Logger) func(c *gin.Context) {
 		duration := time.Since(start)
 		clientIP := c.ClientIP()
 		statusCode := c.Writer.Status()
-		respSize := c.Writer.Size()
-		if respSize < 0 {
-			// If no data was written, respSize could be -1
-			respSize = 0
-		}
+		// If no data was written, respSize could be -1
+		respSize := max(c.Writer.Size(), 0)
 
 		// Get the logger and the appropriate error level
 		var level slog.Level

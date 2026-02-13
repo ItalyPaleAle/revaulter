@@ -206,7 +206,7 @@ func (c *Config) GetInstanceID() string {
 	return c.internal.instanceID
 }
 
-// Validates the configuration and performs some sanitization
+// Validate the configuration and performs some sanitization
 func (c *Config) Validate(logger *slog.Logger) error {
 	// Check required variables
 	if c.AzureClientId == "" {

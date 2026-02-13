@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      GOLANGCI_LINT_VERSION: "v2.4.0"
+      GOLANGCI_LINT_VERSION: "v2.9.0"
 
     steps:
 
@@ -115,7 +115,8 @@ jobs:
       - name: Run biome
         working-directory: client
         run: |
-          npx biome check
+          pnpm run check
+          pnpm run svelte-check
 
       - name: Run go-generate
         run: |

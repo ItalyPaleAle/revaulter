@@ -1,8 +1,8 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte'
+import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import sri from 'vite-plugin-sri-gen'
-import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig(({ mode }) => {
     const isProduction = mode === 'production'

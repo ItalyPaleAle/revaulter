@@ -24,7 +24,7 @@ const (
 	retryIntervalSeconds = 20
 )
 
-// Interface for webhook clients
+// Webhook client interface
 type Webhook interface {
 	// SendWebhook sends the notification
 	SendWebhook(ctx context.Context, data *WebhookRequest) error

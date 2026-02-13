@@ -74,7 +74,7 @@ func generateYAMLFromStruct(filePath string) error {
 			doc := field.Doc.Text()
 			if doc != "" {
 				fmt.Fprint(outFile, "## Description:\n")
-				for _, line := range strings.Split(doc, "\n") {
+				for line := range strings.SplitSeq(doc, "\n") {
 					if line == "" {
 						lastEmpty = true
 						continue

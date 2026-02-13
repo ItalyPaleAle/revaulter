@@ -10,7 +10,7 @@ import (
 	"github.com/italypaleale/revaulter/pkg/utils/configloader"
 )
 
-// Updates the configuration in the global config object for the test
+// SetTestConfig updates the configuration in the global config object for the test
 // Returns a function that should be called with "defer" to restore the previous configuration
 func SetTestConfig(values map[string]any) func() {
 	// Save the previous config

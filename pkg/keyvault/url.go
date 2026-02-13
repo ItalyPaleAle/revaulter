@@ -4,7 +4,7 @@ import (
 	"strings"
 )
 
-// vaultUrl returns the URL for the Azure Key Vault
+// VaultUrl returns the URL for the Azure Key Vault
 // Parameter vault can be one of:
 // - The address of the vault, such as "https://<name>.vault.azure.net" (could be a different format if using different clouds or private endpoints)
 // - The FQDN of the vault, such as "<name>.vault.azure.net" (or another domain if using different clouds or private endpoints)

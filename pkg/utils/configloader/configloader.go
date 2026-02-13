@@ -94,10 +94,9 @@ func loadFromMap(dst any, m map[string]any) error {
 // Copyright (C) 2023 The Dapr Authors
 // License: Apache2
 func toTruthyBoolHookFunc() mapstructure.DecodeHookFunc {
-	var boolVar bool
-	stringType := reflect.TypeOf("")
-	boolType := reflect.TypeOf(boolVar)
-	boolPtrType := reflect.TypeOf(&boolVar)
+	stringType := reflect.TypeFor[string]()
+	boolType := reflect.TypeFor[bool]()
+	boolPtrType := reflect.TypeFor[*bool]()
 
 	return func(
 		f reflect.Type,
