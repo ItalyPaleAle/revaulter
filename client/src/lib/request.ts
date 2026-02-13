@@ -48,7 +48,7 @@ export async function Request<T>(url: string, options: RequestOptions = {}): Pro
     // Headers
     if (options.headers && typeof options.headers == 'object') {
         for (const key in options.headers) {
-            if (Object.prototype.hasOwnProperty.call(options.headers, key)) {
+            if (Object.hasOwn(options.headers, key)) {
                 headers.set(key, options.headers[key])
             }
         }
@@ -97,7 +97,7 @@ export async function Request<T>(url: string, options: RequestOptions = {}): Pro
         await ThrowResponseNotOk(response)
 
         // Get the TTL
-        let ttl: number | undefined = undefined
+        let ttl: number | undefined
         const ttlHeader = response.headers.get('x-session-ttl')
         if (ttlHeader) {
             ttl = Number.parseInt(ttlHeader, 10)
