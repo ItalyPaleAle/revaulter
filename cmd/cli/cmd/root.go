@@ -14,7 +14,7 @@ var (
 	rootCmd = &cobra.Command{
 		Use:           "revaulter-cli",
 		Short:         "A CLI for interacting with Revaulter",
-		Long:          `revaulter-cli helps interacting with Revaulter servers, performing operations on keys stored on Azure Key Vault, including: key wrapping and unwrapping, data encryption and decryption, computing and verifying digital signatures`,
+		Long:          `revaulter-cli helps interacting with Revaulter v2 servers using the WebAuthn/browser-crypto flow.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {

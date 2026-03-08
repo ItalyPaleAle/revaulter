@@ -187,19 +187,7 @@ func (w *webhookClient) getLink(data *WebhookRequest) string {
 
 func (w *webhookClient) preparePlainRequest(ctx context.Context, webhookUrl string, data *WebhookRequest) (req *http.Request, err error) {
 	// Format the message
-	message := fmt.Sprintf(
-		`Received a request to %s a key using key **%s** in vault **%s**.
-
-Confirm request: %s
-
-(Request ID: %s - Client IP: %s)`,
-		data.OperationName,
-		data.KeyId,
-		data.Vault,
-		w.getLink(data),
-		data.StateId,
-		data.Requestor,
-	)
+	message := w.formatPlainMessage(data)
 
 	// Create the request
 	req, err = http.NewRequestWithContext(ctx, http.MethodPost, webhookUrl, strings.NewReader(message))
@@ -218,20 +206,7 @@ Confirm request: %s
 
 func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl string, data *WebhookRequest) (req *http.Request, err error) {
 	// Format the message
-	var note string
-	if data.Note != "" {
-		note = "Note: *" + data.Note + "*\n"
-	}
-	message := fmt.Sprintf(
-		"Received a request to %s a key using key **%s** in vault **%s**.\n%s[Confirm request](%s)\n`(Request ID: %s - Client IP: %s)`",
-		data.OperationName,
-		data.KeyId,
-		data.Vault,
-		note,
-		w.getLink(data),
-		data.StateId,
-		data.Requestor,
-	)
+	message := w.formatSlackMessage(data)
 
 	// Build the body
 	buf := &bytes.Buffer{}
@@ -260,10 +235,90 @@ func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl stri
 }
 
 type WebhookRequest struct {
+	Flow string
+
 	OperationName string
 	KeyId         string
 	Vault         string
-	StateId       string
-	Requestor     string
-	Note          string
+
+	TargetUser string
+	KeyLabel   string
+	Algorithm  string
+
+	StateId   string
+	Requestor string
+	Note      string
+}
+
+func (w *webhookClient) formatPlainMessage(data *WebhookRequest) string {
+	if data != nil && data.Flow == "v2" {
+		var note string
+		if data.Note != "" {
+			note = "\n\nNote: " + data.Note
+		}
+		return fmt.Sprintf(
+			`Received a v2 request to %s using key label **%s** for user **%s** (algorithm **%s**).
+
+Open Revaulter: %s
+
+(Request ID: %s - Client IP: %s)%s`,
+			data.OperationName,
+			data.KeyLabel,
+			data.TargetUser,
+			data.Algorithm,
+			w.getLink(data),
+			data.StateId,
+			data.Requestor,
+			note,
+		)
+	}
+
+	return fmt.Sprintf(
+		`Received a request to %s a key using key **%s** in vault **%s**.
+
+Confirm request: %s
+
+(Request ID: %s - Client IP: %s)`,
+		data.OperationName,
+		data.KeyId,
+		data.Vault,
+		w.getLink(data),
+		data.StateId,
+		data.Requestor,
+	)
+}
+
+func (w *webhookClient) formatSlackMessage(data *WebhookRequest) string {
+	if data != nil && data.Flow == "v2" {
+		var note string
+		if data.Note != "" {
+			note = "Note: *" + data.Note + "*\n"
+		}
+		return fmt.Sprintf(
+			"Received a v2 request to %s using key label **%s** for user **%s** (algorithm **%s**).\n%s[Open Revaulter](%s)\n`(Request ID: %s - Client IP: %s)`",
+			data.OperationName,
+			data.KeyLabel,
+			data.TargetUser,
+			data.Algorithm,
+			note,
+			w.getLink(data),
+			data.StateId,
+			data.Requestor,
+		)
+	}
+
+	var note string
+	if data.Note != "" {
+		note = "Note: *" + data.Note + "*\n"
+	}
+	return fmt.Sprintf(
+		"Received a request to %s a key using key **%s** in vault **%s**.\n%s[Confirm request](%s)\n`(Request ID: %s - Client IP: %s)`",
+		data.OperationName,
+		data.KeyId,
+		data.Vault,
+		note,
+		w.getLink(data),
+		data.StateId,
+		data.Requestor,
+	)
 }

@@ -1,318 +1,68 @@
-# Install and configure Revaulter
+# Install and configure Revaulter (v2)
 
-Revaulter runs as a lightweight app on a server you control that exposes a HTTPS endpoint. You can install it on the same server where the application that requires the cryptographic key runs, or on a separate machine.
+Revaulter runs as a lightweight HTTPS service. Admins connect to the web UI to approve requests; CLI clients call the `/v2/request/*` APIs.
 
-> **Firewall rules:** Revaulter must be deployed on a server that admins can connect to via HTTPS, on a port of your choice. While Revaulter doesn't need to be exposed on the public Internet, your admins must be able to connect to it, even if through a private IP or VPN. Additionally, Revaulter must be able to make outgoing HTTPS requests.
+## Installation
 
-## Configuration
+Install the server binary on a machine that:
 
-Revaulter requires a configuration file `config.yaml` in one of the following paths:
+- is reachable by admins over HTTPS
+- can reach your database
+- can send outbound webhook requests
+
+## Configuration file
+
+Revaulter loads `config.yaml` from one of:
 
 - `/etc/revaulter/config.yaml`
 - `$HOME/.revaulter/config.yaml`
-- Or in the same folder where the Revaulter binary is located
+- the same directory as the Revaulter binary
 
-> You can specify a custom configuration file using the `REVAULTER_CONFIG` environmental variable.
+You can override the path with `REVAULTER_CONFIG`.
 
-You can find an example of the configuration file, and a description of every option, in the [`config.sample.yaml`](/config.sample.yaml) file.
+Use [`config.sample.yaml`](../config.sample.yaml) as the full reference.
 
-Keys can also be passed as environmental variables with the `REVAULTER_` prefix.
+## Minimum v2 configuration
 
-### Supported configuration options
+Required:
 
-- Azure credentials:
-  - **`azureClientId`** (**required**):  
-    Client ID of the Azure AD application (see the [Azure AD application](./01-set-up.md#azure-ad-application) step in the [Set up](./01-set-up.md) document).  
-    Environmental variable name: `REVAULTER_AZURECLIENTID`
-  - **`azureTenantId`** (**required**):  
-    Tenant ID of the Azure AD application.  
-    Environmental variable name: `REVAULTER_AZURETENANTID`
-  - **`azureClientSecret`** (optional but **recommended** when not using Federated Identity Credentials):  
-    Client secret of the Azure AD application, for using confidential clients.  
-    Environmental variable name: `REVAULTER_AZURECLIENTSECRET`
-  - **`azureFederatedIdentity`** (optional but **recommended** when using Federated Identity Credentials):  
-    Enables the usage of Federated Identity Credentials to obtain assertions for confidential clients for Azure AD applications.  
-    This is an alternative to using client secrets, when the application is running in Azure in an environment that supports Managed Identity, or in an environment that supports Workload Identity Federation with Azure AD.  
-    Currently, these values are supported:
-    - `ManagedIdentity`: uses a system-assigned managed identity
-    - `ManagedIdentity=client-id`: uses a user-assigned managed identity with client id "client-id" (e.g. `ManagedIdentity=00000000-0000-0000-0000-000000000000`)
-    - `WorkloadIdentity`: uses workload identity, e.g. for Kubernetes
-    Environmental variable name: `REVAULTER_AZUREFEDERATEDIDENTITY`
-- Webhooks:
-  - **`webhookUrl`** (**required**):  
-    Endpoint of the webhook, where notifications are sent to.  
-    Environmental variable name: `REVAULTER_WEBHOOKURL`
-  - **`webhookFormat`** (optional, default: `plain`):  
-    The format for the webhook. Currently, these values are supported:
-    - `plain` (default): sends a webhook with content type `text/plain`, where the request's body is the entire message.
-    - `slack`: for usage with Slack or Slack-compatible endpoints
-    - `discord`: for usage with Discord (sends Slack-compatible messages)  
-    Environmental variable name: `REVAULTER_WEBHOOKFORMAT`
-  - **`webhookKey`** (optional):  
-    Value for the Authorization header send with the webhook request. Set this if your webhook requires it.  
-    Environmental variable name: `REVAULTER_WEBHOOKKEY`
-- Revaulter application:
-  - **`baseUrl`** (optional but **recommended**, default: `https://localhost:<port>` if TLS is enabled, or `http://localhost:<port>` otherwise):  
-    The URL your application can be reached at. This is used in the links that are sent in webhook notifications.  
-    Environmental variable name: `REVAULTER_BASEURL`
-  - **`port`** (optional, default: `8080`):  
-    Port to bind to.  
-    Environmental variable name: `REVAULTER_PORT`
-  - **`bind`** (optional, default: `0.0.0.0`):  
-    Address/interface to bind to.  
-    Environmental variable name: `REVAULTER_BIND`
-  - **`tlsPath`**: (optional, defaults to the same folder as the `config.yaml` file):  
-    Path where to load TLS certificates from. Within the folder, the files must be named `tls-cert.pem` and `tls-key.pem`. Revaulter watches for changes in this folder and automatically reloads the TLS certificates when they're updated.  
-    If empty, certificates are loaded from the same folder where the loaded `config.yaml` is located.  
-    Environmental variable name: `REVAULTER_TLSPATH`
-  - **`tlsCertPEM`** (optional):  
-    Full, PEM-encoded TLS certificate. Using `tlsCertPEM` and `tlsKeyPEM` is an alternative method of passing TLS certificates than using `tlsPath`.  
-    Environmental variable name: `REVAULTER_TLSCERTPEM`
-  - **`tlsKeyPEM`** (optional):  
-    Full, PEM-encoded TLS key. Using `tlsCertPEM` and `tlsKeyPEM` is an alternative method of passing TLS certificates than using `tlsPath`.  
-    Environmental variable name: `REVAULTER_TLSKEYPEM`
-  - **`allowedIps`** (optional):  
-    If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.  
-    Note that this value is used to restrict connections to the `/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.  
-    Environmental variable name: `REVAULTER_ALLOWEDIPS`
-  - **`requestKey`** (optional):  
-    If set, clients need to provide this shared key in calls made to the `/request` endpoints, in the `Authorization` header.  
-    Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.  
-    Environmental variable name: `REVAULTER_REQUESTKEY`
-  - **`allowedVaults`** (optional):  
-    If set, allows requests targeting only the Azure Key Vaults named in the list.  
-    Values can be formatted as:
+- `webhookUrl`
+- `databaseDSN`
+- `dbPayloadEncryptionKey`
 
-    - The address of the vault, such as `https://<name>.vault.azure.net` (could be a different format if using different clouds or private endpoints)
-    - The FQDN of the vault, such as `<name>.vault.azure.net` (or another domain if using different clouds or private endpoints)
-    - Only the name of the vault, which will be formatted for `vault.azure.net`
+Recommended:
 
-    Environmental variable name: `REVAULTER_ALLOWEDVAULTS`
-  - **`origins`** (optional, default is equal to the value of `baseUrl`):  
-    Comma-separated lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).  
-    Environmental variable name: `REVAtrustedForwardedIPHeaderULTER_ORIGINS`
-  - **`sessionTimeout`** (optional, default: `5m`)  
-    Timeout for sessions before having to authenticate again, as a Go duration. This cannot be more than 1 hour.  
-    Environmental variable name: `REVAULTER_SESSIONTIMEOUT`
-  - **`requestTimeout`** (optional, default: `5m`):  
-    Default timeout for wrap and unwrap requests, as a Go duration. This is the default value, and can be overridden in each request.  
-    Environmental variable name: `REVAULTER_REQUESTTIMEOUT`
-  - **`tokenSigningKey`** (optional, will be randomly generated at startup if empty):  
-    String used as key to sign state tokens. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).  
-    Environmental variable name: `REVAULTER_TOKENSIGNINGKEY`
-  - **`cookieEncryptionKey`** (optional, will be randomly generated at startup if empty):  
-    String used as key to encrypt cookies. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).  
-    Environmental variable name: `REVAULTER_COOKIEENCRYPTIONKEY`
-  - **`trustedRequestIdHeader`** (optional):  
-    String with the name of a header to trust as ID of each request. The ID is included in logs and in responses as `X-Request-ID` header.  
-    Common values can include:
+- `baseUrl`
+- `origins`
+- `tlsPath` (or `tlsCertPEM` + `tlsKeyPEM`)
+- `requestKey`
+- `allowedIps`
+- `cookieEncryptionKey`
+- `tokenSigningKey`
 
-    - `X-Request-ID`: a [de-facto standard](https://http.dev/x-request-id ) that's vendor agnostic
-    - `CF-Ray`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/get-started/reference/cloudflare-ray-id/)
+Optional v2 auth settings:
 
-    If this option is empty, or if it contains the name of a header that is not found in an incoming request, a random UUID is generated as request ID.
-    Environmental variable name: `REVAULTER_TRUSTEDREQUESTIDHEADER`
-  - **`trustedForwardedIPHeader`** (optional):  
-    String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Vault is served through a proxy service and/or CDN.  
-    This option should not be set if the application is exposed directly, without a proxy or CDN.  
-    Common values can include:
+- `webauthnRpId`
+- `webauthnRpName`
+- `webauthnOrigins`
+- `passwordFactorMode` (`disabled` or `required`)
+- `passwordPbkdf2Iterations`
 
-    - `X-Forwarded-For,X-Real-Ip`: `X-Forwarded-For` is the [de-facto standard](https://http.dev/x-forwarded-for) set by proxies; some set `X-Real-Ip`
-    - `CF-Connecting-IP`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/reference/http-request-headers/#cf-connecting-ip)
+## DSN behavior
 
-    Environmental variable name: `REVAULTER_TRUSTEDFORWARDEDIPHEADER`
-  - **`forceSecureCookies`** (optional, default: `false`):  
-    If true, forces all cookies to be set with the "secure" option, so they are only sent by clients on HTTPS requests.  
-    When false (the default), cookies are set as "secure" only if the current request being served is using HTTPS.  
-    When Revaulter is running behind a proxy that performs TLS termination, this option should normally be set to true.  
-    Environmental variable name: `REVAULTER_FORCESECURECOOKIES`
-- Revaulter application observability:
-  - **`logLevel`** (optional, default: `info`):  
-    Controls log level and verbosity. Supported values: `debug`, `info` (default), `warn`, `error`.  
-    Environmental variable name: `REVAULTER_LOGLEVEL`
-  - **`logAsJson`** (optional, default: depends on environment)  
-    If true, emits logs formatted as JSON. When false, logs are emitted as text strings and colored if the terminal supports it.
-    Defaults to false if a TTY is attached (e.g. when running the application in the terminal directly); true otherwise.  
-    Environmental variable name: `REVAULTER_LOGASJSON`
-  - **`omitHealthCheckLogs`** (optional, default: `true`):  
-    If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.  
-    Environmental variable name: `REVAULTER_OMITHEALTHCHECKLOGS`
+- `postgres://...` / `postgresql://...` => Postgres (native `pgx`)
+- `sqlite://...` => SQLite
+- no scheme (for example `./data/revaulter.db`) => SQLite local file
 
-## Generating a TLS certificate and key
+SQLite is initialized with:
 
-Unless you are exposing Revaulter behind a reverse proxy (such as Traefik, Caddy, Nginx, etc) which performs TLS termination, you should configure Revaulter to use TLS, for both security and performance reasons (to be able to use HTTP/2 for the long-lived requests).
+- `PRAGMA journal_mode=WAL`
+- `PRAGMA foreign_keys=ON`
 
-Using a self-signed certificate is an acceptable option if running Revaulter in the same server as your app. You can generate a self-signed TLS certificate using OpenSSL, for example:
+## Start the server
 
-```sh
-openssl req -x509 -newkey rsa:4096 -keyout tls-key.pem -out tls-cert.pem -days 365 -nodes
+```bash
+revaulter
 ```
 
-There are two ways to pass the TLS certificate and key to Revaulter:
-
-1. Write them to files named `tls-cert.pem` and `tls-key.pem` and place them in a folder (for example, `/etc/revaulter`). Then, set `tlsPath` in the configuration to the path where the TLS certificate and key are set. In this case, Revaulter automatically reloads the certificate and key if they change on disk.
-2. Directly embed the PEM-encoded certificate and key in the configuration file using the options `tlsCertPEM` and `tlsKeyPEM`.
-
-## Using a container
-
-### Start with Docker
-
-You can run Revaulter as a Docker container. Docker container images are available for Linux and support amd64, arm64, and armv7/armhf.
-
-First, create a folder where you will store the configuration file `config.yaml` and the TLS certificate and key (`tls-cert.pem` and `tls-key.pem`), for example `$HOME/.revaulter`.
-
-You can then start Revaulter with:
-
-```sh
-docker run \
-  -d \
-  -p 8080:8080 \
-  --read-only \
-  --user daemon:daemon \
-  -v $HOME/.revaulter:/etc/revaulter:ro \
-  ghcr.io/italypaleale/revaulter:1
-```
-
-> Revaulter follows semver for versioning. The command above uses the latest version in the 1.x branch. We do not publish a container image tagged "latest".
-
-#### Using Docker Compose
-
-This is an example of a `docker-compose.yaml` for running Revaulter:
-
-```yaml
-version: "3.6"
-
-services:
-  revaulter:
-    image: "ghcr.io/italypaleale/revaulter:1"
-    volumes:
-      # Set the path on the host OS
-      - "/path/to/revaulter:/etc/revaulter:ro"
-    ports:
-      - "8080:8080"
-    user: "daemon:daemon"
-    restart: "unless-stopped"
-    read_only: true
-    logging:
-      driver: "json-file"
-      options:
-        max-file: "5"
-        max-size: "20m"
-```
-
-### Start with Podman
-
-Podman allows running containers with a command very similar to Docker. It is supported on Linux on amd64, arm64, and armv7/armhf.
-
-First, create a folder where you will store the configuration file `config.yaml` and the TLS certificate and key (`tls-cert.pem` and `tls-key.pem`), for example `$HOME/.revaulter`.
-
-You can then start Revaulter with:
-
-```sh
-podman run \
-  -d \
-  -p 8080:8080 \
-  --user daemon:daemon \
-  --read-only \
-  --network private \
-  -v $HOME/.revaulter:/etc/revaulter:ro \
-  ghcr.io/italypaleale/revaulter:1
-```
-
-#### Quadlet unit for systemd
-
-Podman includes [Quadlet](https://www.redhat.com/sysadmin/quadlet-podman), which allows managing containers as systemd services. This can be convenient to make other services depend on Revaulter.
-
-To start, create a file named `/etc/containers/systemd/revaulter.container` (note the path is not the standard one for systemd units):
-
-```conf
-[Unit]
-Description=Revaulter service
-Requires=network-online.target local-fs.target
-After=network-online.target local-fs.target
-
-[Container]
-Image=ghcr.io/italypaleale/revaulter:1
-# AutoUpdate requires Podman 4.7+
-AutoUpdate=registry
-User=daemon
-Group=daemon
-Network=private
-PublishPort=8080:8080
-# Set the path on the host OS
-Volume=/path/to/revaulter:/etc/revaulter:ro
-ReadOnly=true
-
-[Install]
-# Setting these targets makes the container start automatically at boot
-WantedBy=multi-user.target default.target
-```
-
-Next, execute these commands to start the container:
-
-```sh
-systemctl daemon-reload
-systemctl start revaulter.service
-```
-
-> Note that `systemctl enable` does not work with Quadlet units. These units are automatically enabled for starting at boot if `WantedBy` includes targets such as `default.target`
-
-## Start as standalone app
-
-If you don't want to (or can't) use Docker/Podman, you can download the latest version of Revaulter from the [Releases](https://github.com/italypaleale/revaulter/releases) page. Fetch the correct archive for your system and architecture, then extract the files and copy the `revaulter` binary to `/usr/local/bin` or another folder.
-
-Place the configuration for Revaulter in the `/etc/revaulter` folder, including the `config.yaml` file and the TLS certificate and key (`tls-cert.pem` and `tls-key.pem`).
-
-You will need to start Revaulter as a service using the process manager for your system.
-
-For example, for Linux distributions based on **systemd** you can use this unit. Copy this file to `/etc/systemd/system/revaulter.service`:
-
-```conf
-[Unit]
-Description=Revaulter service
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=simple
-# Specify the user and group to run Revaulter as
-User=daemon
-Group=daemon
-Restart=always
-RestartSec=30
-# Path where revaulter is installed
-ExecStart=/usr/local/bin/revaulter
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Start the service and enable it at boot with:
-
-```sh
-sudo systemctl enable --now revaulter
-```
-
-Using systemd, you can make your own services depend on Revaulter by adding `revaulter.service` as a value for `Wants=` and `After=` in the unit files.
-
-## Observability: Logs, Traces, Metrics
-
-Revaulter offers supprot for observability using OpenTelemetry.
-
-Observability features are configured with the [OpenTelemetry SDK's standard `OTEL_*` environmental variables](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/). To send logs, metrics, and traces to a collector using the OTLP protocol, you will need to set environmental variables similar to these ([full docs](https://opentelemetry.io/docs/specs/otel/protocol/exporter/)):
-
-```sh
-export OTEL_LOGS_EXPORTER="otlp"
-export OTEL_METRICS_EXPORTER="otlp"
-export OTEL_TRACES_EXPORTER="otlp"
-export OTEL_EXPORTER_OTLP_PROTOCOL="" # "grpc" or "http/protobuf" or "http/json"
-export OTEL_EXPORTER_OTLP_ENDPOINT="http://collector:4318"
-```
-
-Metrics can also be exposed on a Prometheus-compatible endpoint, which can be enabled using environmental variables similar to:
-
-```sh
-export OTEL_METRICS_EXPORTER="prometheus"
-export OTEL_EXPORTER_PROMETHEUS_HOST="0.0.0.0"
-export OTEL_EXPORTER_PROMETHEUS_PORT="9464"
-```
+Then open the web UI, self-register the first admin, and use `revaulter-cli v2 ...` to submit requests.

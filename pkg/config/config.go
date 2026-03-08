@@ -14,33 +14,10 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/jwx/v2/jwk"
-
-	"github.com/italypaleale/revaulter/pkg/keyvault"
 )
 
 // Config is the struct containing configuration
 type Config struct {
-	// Client ID of the Azure AD application
-	// +required
-	AzureClientId string `env:"AZURECLIENTID" yaml:"azureClientId"`
-
-	// Tenant ID of the Azure AD application.
-	// +required
-	AzureTenantId string `env:"AZURETENANTID" yaml:"azureTenantId"`
-
-	// Client secret of the Azure AD application, for using confidential clients.
-	// This is optional, but recommended when not using Federated Identity Credentials.
-	AzureClientSecret string `env:"AZURECLIENTSECRET" yaml:"azureClientSecret"`
-
-	// Enables the usage of Federated Identity Credentials to obtain assertions for confidential clients for Azure AD applications.
-	// This is an alternative to using client secrets, when the application is running in Azure in an environment that supports Managed Identity, or in an environment that supports Workload Identity Federation with Azure AD.
-	// Currently, these values are supported:
-	//
-	// - `ManagedIdentity`: uses a system-assigned managed identity
-	// - `ManagedIdentity=client-id`: uses a user-assigned managed identity with client id "client-id" (e.g. "ManagedIdentity=00000000-0000-0000-0000-000000000000")
-	// - `WorkloadIdentity`: uses workload identity, e.g. for Kubernetes
-	AzureFederatedIdentity string `env:"AZUREFEDERATEDIDENTITY" yaml:"azureFederatedIdentity"`
-
 	// Endpoint of the webhook, where notifications are sent to.
 	// +required
 	WebhookUrl string `env:"WEBHOOKURL" yaml:"webhookUrl"`
@@ -82,20 +59,41 @@ type Config struct {
 	TLSKeyPEM string `env:"TLSKEYPEM" yaml:"tlsKeyPEM"`
 
 	// If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.
-	// Note that this value is used to restrict connections to the `/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
+	// Note that this value is used to restrict connections to the v2 `/v2/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
 	AllowedIPs []string `env:"ALLOWEDIPS" yaml:"allowedIps"`
 
-	// If set, clients need to provide this shared key in calls made to the `/request` endpoints, in the `Authorization` header.
-	// Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
+	// If set, clients need to provide this shared key in calls made to the v2 `/v2/request` endpoints, in the `Authorization` header.
+	// Note that this option only applies to calls to the v2 `/v2/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
 	RequestKey string `env:"REQUESTKEY" yaml:"requestKey"`
 
-	// If set, allows requests targeting only the Azure Key Vaults named in the list.
-	// Values can be formatted as:
-	//
-	// - The address of the vault, such as "https://<name>.vault.azure.net" (could be a different format if using different clouds or private endpoints)
-	// - The FQDN of the vault, such as "<name>.vault.azure.net" (or another domain if using different clouds or private endpoints)
-	// - Only the name of the vault, which will be formatted for "vault.azure.net"
-	AllowedVaults []string `env:"ALLOWEDVAULTS" yaml:"allowedVaults"`
+	// Connection string for the v2 database. The backend is inferred from the DSN (for example: `postgres://`, `postgresql://`, `sqlite://`).
+	// If no scheme is present, the value is treated as a local SQLite file path.
+	// +required
+	DatabaseDSN string `env:"DATABASEDSN" yaml:"databaseDSN"`
+
+	// Shared key used to encrypt sensitive v2 payloads stored in the database.
+	// The value can be provided as raw base64/base64url or hex and is normalized to 32 bytes.
+	// +required
+	DBPayloadEncryptionKey string `env:"DBPAYLOADENCRYPTIONKEY" yaml:"dbPayloadEncryptionKey"`
+
+	// WebAuthn RP ID for v2 authentication. If empty, derived from `baseUrl`.
+	WebAuthnRPID string `env:"WEBAUTHNRPID" yaml:"webauthnRpId"`
+
+	// WebAuthn RP display name for v2 authentication.
+	// +default "Revaulter v2"
+	WebAuthnRPName string `env:"WEBAUTHNRPNAME" yaml:"webauthnRpName"`
+
+	// Allowed origins for WebAuthn v2 auth. If empty, falls back to `baseUrl` and `origins` (excluding `*`).
+	WebAuthnOrigins []string `env:"WEBAUTHNORIGINS" yaml:"webauthnOrigins"`
+
+	// Password factor mode for v2 admin auth.
+	// Supported values: "disabled", "required".
+	// +default "disabled"
+	PasswordFactorMode string `env:"PASSWORDFACTORMODE" yaml:"passwordFactorMode"`
+
+	// PBKDF2 iterations used for the v2 password factor.
+	// +default 300000
+	PasswordPBKDF2Iterations int `env:"PASSWORDPBKDF2ITERATIONS" yaml:"passwordPbkdf2Iterations"`
 
 	// Lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
 	// +default equal to the value of `baseUrl`
@@ -105,11 +103,11 @@ type Config struct {
 	// +default 5m
 	SessionTimeout time.Duration `env:"SESSIONTIMEOUT" yaml:"sessionTimeout"`
 
-	// Default timeout for wrap and unwrap requests, as a Go duration. This is the default value, and can be overridden in each request.
+	// Default timeout for v2 request operations, as a Go duration. This is the default value, and can be overridden in each request.
 	// +default 5m
 	RequestTimeout time.Duration `env:"REQUESTTIMEOUT" yaml:"requestTimeout"`
 
-	// String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Vault is served through a proxy service and/or CDN.
+	// String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Revaulter is served through a proxy service and/or CDN.
 	// This option should not be set if the application is exposed directly, without a proxy or CDN.
 	// Common values include:
 	//
@@ -174,6 +172,7 @@ type internal struct {
 	tokenSigningKeyParsed     []byte
 	cookieEncryptionKeyParsed jwk.Key
 	cookieSigningKeyParsed    jwk.Key
+	dbPayloadEncryptionKey    []byte
 }
 
 // GetTokenSigningKey returns the (parsed) token signing key
@@ -189,6 +188,11 @@ func (c *Config) GetCookieEncryptionKey() jwk.Key {
 // GetCookieSigningKey returns the (parsed) cookie signing key
 func (c *Config) GetCookieSigningKey() jwk.Key {
 	return c.internal.cookieSigningKeyParsed
+}
+
+// GetDBPayloadEncryptionKey returns the parsed v2 database payload encryption key, if configured.
+func (c *Config) GetDBPayloadEncryptionKey() []byte {
+	return c.internal.dbPayloadEncryptionKey
 }
 
 // GetLoadedConfigPath returns the path to the config file that was loaded
@@ -209,14 +213,14 @@ func (c *Config) GetInstanceID() string {
 // Validate the configuration and performs some sanitization
 func (c *Config) Validate(logger *slog.Logger) error {
 	// Check required variables
-	if c.AzureClientId == "" {
-		return errors.New("config entry key 'azureClientId' missing")
-	}
-	if c.AzureTenantId == "" {
-		return errors.New("config entry key 'azureTenantId' missing")
-	}
 	if c.WebhookUrl == "" {
 		return errors.New("config entry key 'webhookUrl' missing")
+	}
+	if c.DatabaseDSN == "" {
+		return errors.New("config entry key 'databaseDSN' missing")
+	}
+	if c.DBPayloadEncryptionKey == "" {
+		return errors.New("config entry key 'dbPayloadEncryptionKey' missing")
 	}
 
 	// Check for invalid values
@@ -226,20 +230,22 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	if c.RequestTimeout < time.Second {
 		return errors.New("config entry key 'requestTimeout' is invalid: must be greater than 1s")
 	}
-	if c.AzureClientSecret != "" && c.AzureFederatedIdentity != "" {
-		return errors.New("cannot specify 'azureClientSecret' in config when 'azureFederatedIdentity' is configured")
+	if (c.DatabaseDSN == "") != (c.DBPayloadEncryptionKey == "") {
+		return errors.New("config entries 'databaseDSN' and 'dbPayloadEncryptionKey' must be configured together")
 	}
-
-	// Format URLs in the Key Vault allowlist
-	for i := range c.AllowedVaults {
-		c.AllowedVaults[i] = keyvault.VaultUrl(c.AllowedVaults[i])
+	if c.PasswordFactorMode == "" {
+		c.PasswordFactorMode = "disabled"
 	}
-
-	// Show warnings if needed
-	if logger != nil {
-		if c.AzureClientSecret == "" && c.AzureFederatedIdentity == "" {
-			logger.Warn(`Revaulter is running without an 'azureClientSecret' in the configuration, which requires using public clients ("mobile and desktop applications"). Configuring the Revaulter Entra ID (Azure AD) application as a confidential client ("web applications") and using either a client secret or Federated Identity is recommended for security.`)
-		}
+	switch c.PasswordFactorMode {
+	case "disabled", "required":
+	default:
+		return errors.New("config entry key 'passwordFactorMode' is invalid: must be 'disabled' or 'required'")
+	}
+	if c.PasswordPBKDF2Iterations == 0 {
+		c.PasswordPBKDF2Iterations = 300000
+	}
+	if c.PasswordPBKDF2Iterations < 10000 {
+		return errors.New("config entry key 'passwordPbkdf2Iterations' is invalid: must be >= 10000")
 	}
 
 	return nil

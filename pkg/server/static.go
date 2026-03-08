@@ -67,18 +67,6 @@ func prepareStaticResponse(c *gin.Context) (ok bool) {
 		return false
 	}
 
-	// If the request is for "/" or for "/index.html", check here if the user has a cookie (but don't validate it here)
-	// If there's no cookie, redirect to the auth page right away and save loading the client app
-	path := strings.TrimPrefix(c.Request.URL.Path, "/")
-	if path == "" || path == "index.html" {
-		v, err := c.Cookie(atCookieName)
-		if err != nil || v == "" {
-			c.Header("Location", "/auth/signin")
-			c.Status(http.StatusFound)
-			return false
-		}
-	}
-
 	return true
 }
 

@@ -21,9 +21,9 @@ func TestValidateConfig(t *testing.T) {
 	})
 
 	t.Cleanup(SetTestConfig(map[string]any{
-		"azureClientId": "d196f679-da38-492c-946a-60ae8324e7f9",
-		"azureTenantId": "e440d651-3dcf-4c20-b147-96a2ff00ee25",
-		"webhookUrl":    "http://test.local",
+		"webhookUrl":             "http://test.local",
+		"databaseDSN":            "sqlite://./test.db",
+		"dbPayloadEncryptionKey": "aGVsbG8",
 	}))
 
 	t.Run("succeeds with all required vars", func(t *testing.T) {
@@ -31,24 +31,14 @@ func TestValidateConfig(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("fails without azureClientId", func(t *testing.T) {
+	t.Run("fails without databaseDSN", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
-			"azureClientId": "",
+			"databaseDSN": "",
 		}))
 
 		err := config.Validate(nil)
 		require.Error(t, err)
-		require.ErrorContains(t, err, "'azureClientId' missing")
-	})
-
-	t.Run("fails without azureTenantId", func(t *testing.T) {
-		t.Cleanup(SetTestConfig(map[string]any{
-			"azureTenantId": "",
-		}))
-
-		err := config.Validate(nil)
-		require.Error(t, err)
-		require.ErrorContains(t, err, "'azureTenantId' missing")
+		require.ErrorContains(t, err, "'databaseDSN' missing")
 	})
 
 	t.Run("fails without webhookUrl", func(t *testing.T) {
@@ -89,6 +79,28 @@ func TestValidateConfig(t *testing.T) {
 		err := config.Validate(nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "'requestTimeout' is invalid")
+	})
+
+	t.Run("fails when databaseDSN is set without dbPayloadEncryptionKey", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"databaseDSN":            "sqlite://./test.db",
+			"dbPayloadEncryptionKey": "",
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'dbPayloadEncryptionKey' missing")
+	})
+
+	t.Run("fails when dbPayloadEncryptionKey is set without databaseDSN", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"databaseDSN":            "",
+			"dbPayloadEncryptionKey": "aGVsbG8",
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'databaseDSN' missing")
 	})
 }
 

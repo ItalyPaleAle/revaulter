@@ -1,32 +1,37 @@
-# 🔐 Revaulter
+# Revaulter
 
-Revaulter lets you perform cryptographic operations with keys stored on [Azure Key Vault](https://learn.microsoft.com/en-us/azure/key-vault/general/overview), securely after getting consent from an admin. You can use Revaulter for:
+Revaulter is an approval-gated cryptography relay.
 
-- Encrypting and decrypting messages
-- Wrapping and unwrapping encryption keys
-- Calculating and verifying digital signatures
+Revaulter v2 performs cryptographic operations in the admin's browser using WebAuthn (with PRF) and WebCrypto, then returns the result to the CLI encrypted with an ephemeral ECDH + AES-GCM transport envelope. Revaulter stores pending requests in a database and relays notifications/results, but does not perform the cryptographic operation itself.
 
-Revaulter works with Azure Key Vault, where your cryptographic keys (RSA, elliptic curve, and symmetric) are stored safely. You can build applications that interact with Revaulter to perform cryptographic operations that are completed in the key vault, only after a user with sufficient permission authorizes it.
+Supported operations (v2):
 
-Some example usages:
-
-- Revaulter can be used to provide an encryption key for starting a long-running application, such as [unlocking encrypted drives at boot time](https://withblue.ink/2020/01/19/auto-mounting-encrypted-drives-with-a-remote-key-on-linux.html). This way, your encryption keys can be stored on your server safely in a wrapped (encrypted) format. By requiring explicit consent from an admin, you can be confident that no one can unwrap your encryption keys without your knowledge and permission.
-- You can use Revaulter as part of a CI/CD pipeline to digitally sign your binaries.
-- Or, you can use Revaulter as a generic tool to encrypt or decrypt (short) messages.
-
-# ⚙️ How it works
-
-Revaulter exposes a few REST endpoints that can be used to perform cryptographic operations, including: encrypting and decrypting arbitrary data, wrapping and unwrapping keys, calculating and verifying digital signatures. These operations are performed on Azure Key Vault, a safe, cloud-based key vault that uses strong keys, including RSA (up to 4096 bits), ECDSA (with NIST curves including P-256, P-384, and P-521), and AES (on Managed HSM Azure Key Vault only).
-
-Revaulter doesn't have standing permission to perform operations on the vault, so every time a request comes in, Revaulter sends a notification to an admin (via a webhook), who can sign into Revaulter via Azure AD and allow (or deny) the operation. Revaulter uses delegated permissions to access the Key Vault, so access is restricted to specific users via Role-Based Access Control on the Azure Key Vault resource.
+- Encrypt / decrypt
+- Wrap key / unwrap key
 
 ![Example of a notification sent by Revaulter (to a Discord chat)](/notification-example.png)
 
-Alternatively, Revaulter can be invoked with a bearer token issued by Azure AD, obtained outside of Revaulter, with permission to access the Key Vault. This allows, for example, using the client credentials flow to obtain an access token (i.e. using a client ID and client secret pair).
+## How It Works (v2)
 
-# 📘 Docs
+1. A CLI client submits a request to `/v2/request/*` with the operation payload and an ephemeral P-256 public key (JWK).
+2. Revaulter stores the request in the database (sensitive payload encrypted at rest) and sends a webhook notification.
+3. An admin signs in to the web UI with WebAuthn (and optionally a password factor).
+4. The browser derives the operation key, performs the crypto locally, and encrypts the result to the CLI using ECDH + AES-GCM.
+5. Revaulter relays the encrypted response envelope to the CLI.
+6. The CLI decrypts the envelope locally and prints the result.
 
-1. [Set up](./docs/01-set-up.md) and configure Azure resources
+## Quick Start
+
+1. Configure `databaseDSN` and `dbPayloadEncryptionKey` in `config.yaml`.
+2. Configure `baseUrl` and TLS.
+3. Start Revaulter.
+4. Open the web UI and self-register the first admin.
+5. Use `revaulter-cli v2 ...` commands to submit requests.
+
+## Docs
+
+1. [Set up (v2)](./docs/01-set-up.md)
 2. [Install and configure Revaulter](./docs/02-install-and-configure-revaulter.md)
-3. [Interacting with Revaulter using the CLI](./docs/03-interacting-with-revaulter-cli.md)
-4. [Using Revaulter REST APIs](./docs/04-using-rest-api.md)
+3. [Using the Revaulter CLI (v2)](./docs/03-interacting-with-revaulter-cli.md)
+4. [Using the REST APIs (v2)](./docs/04-using-rest-api.md)
+5. [Architecture and protocol overview (v2)](./docs/05-revaulter-v2.md)

@@ -1,32 +1,3 @@
-## azureClientId (string)
-## Description:
-##   Client ID of the Azure AD application
-## Required
-azureClientId:
-
-## azureTenantId (string)
-## Description:
-##   Tenant ID of the Azure AD application.
-## Required
-azureTenantId:
-
-## azureClientSecret (string)
-## Description:
-##   Client secret of the Azure AD application, for using confidential clients.
-##   This is optional, but recommended when not using Federated Identity Credentials.
-#azureClientSecret: 
-
-## azureFederatedIdentity (string)
-## Description:
-##   Enables the usage of Federated Identity Credentials to obtain assertions for confidential clients for Azure AD applications.
-##   This is an alternative to using client secrets, when the application is running in Azure in an environment that supports Managed Identity, or in an environment that supports Workload Identity Federation with Azure AD.
-##   Currently, these values are supported:
-##
-##   - `ManagedIdentity`: uses a system-assigned managed identity
-##   - `ManagedIdentity=client-id`: uses a user-assigned managed identity with client id "client-id" (e.g. "ManagedIdentity=00000000-0000-0000-0000-000000000000")
-##   - `WorkloadIdentity`: uses workload identity, e.g. for Kubernetes
-#azureFederatedIdentity: 
-
 ## webhookUrl (string)
 ## Description:
 ##   Endpoint of the webhook, where notifications are sent to.
@@ -88,24 +59,57 @@ webhookUrl:
 ## allowedIps (list of strings)
 ## Description:
 ##   If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.
-##   Note that this value is used to restrict connections to the `/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
+##   Note that this value is used to restrict connections to the v2 `/v2/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
 #allowedIps: 
 
 ## requestKey (string)
 ## Description:
-##   If set, clients need to provide this shared key in calls made to the `/request` endpoints, in the `Authorization` header.
-##   Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
+##   If set, clients need to provide this shared key in calls made to the v2 `/v2/request` endpoints, in the `Authorization` header.
+##   Note that this option only applies to calls to the v2 `/v2/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
 #requestKey: 
 
-## allowedVaults (list of strings)
+## databaseDSN (string)
 ## Description:
-##   If set, allows requests targeting only the Azure Key Vaults named in the list.
-##   Values can be formatted as:
-##
-##   - The address of the vault, such as "https://<name>.vault.azure.net" (could be a different format if using different clouds or private endpoints)
-##   - The FQDN of the vault, such as "<name>.vault.azure.net" (or another domain if using different clouds or private endpoints)
-##   - Only the name of the vault, which will be formatted for "vault.azure.net"
-#allowedVaults: 
+##   Connection string for the v2 database. The backend is inferred from the DSN (for example: `postgres://`, `postgresql://`, `sqlite://`).
+##   If no scheme is present, the value is treated as a local SQLite file path.
+## Required
+databaseDSN:
+
+## dbPayloadEncryptionKey (string)
+## Description:
+##   Shared key used to encrypt sensitive v2 payloads stored in the database.
+##   The value can be provided as raw base64/base64url or hex and is normalized to 32 bytes.
+## Required
+dbPayloadEncryptionKey:
+
+## webauthnRpId (string)
+## Description:
+##   WebAuthn RP ID for v2 authentication. If empty, derived from `baseUrl`.
+#webauthnRpId: 
+
+## webauthnRpName (string)
+## Description:
+##   WebAuthn RP display name for v2 authentication.
+## Default: "Revaulter v2"
+#webauthnRpName: 
+
+## webauthnOrigins (list of strings)
+## Description:
+##   Allowed origins for WebAuthn v2 auth. If empty, falls back to `baseUrl` and `origins` (excluding `*`).
+#webauthnOrigins: 
+
+## passwordFactorMode (string)
+## Description:
+##   Password factor mode for v2 admin auth.
+##   Supported values: "disabled", "required".
+## Default: "disabled"
+#passwordFactorMode: 
+
+## passwordPbkdf2Iterations (number)
+## Description:
+##   PBKDF2 iterations used for the v2 password factor.
+## Default: 300000
+#passwordPbkdf2Iterations: 
 
 ## origins (list of strings)
 ## Description:
@@ -121,13 +125,13 @@ webhookUrl:
 
 ## requestTimeout (duration)
 ## Description:
-##   Default timeout for wrap and unwrap requests, as a Go duration. This is the default value, and can be overridden in each request.
+##   Default timeout for v2 request operations, as a Go duration. This is the default value, and can be overridden in each request.
 ## Default: 5m
 #requestTimeout: 
 
 ## trustedForwardedIPHeader (string)
 ## Description:
-##   String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Vault is served through a proxy service and/or CDN.
+##   String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Revaulter is served through a proxy service and/or CDN.
 ##   This option should not be set if the application is exposed directly, without a proxy or CDN.
 ##   Common values include:
 ##

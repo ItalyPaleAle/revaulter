@@ -9,17 +9,15 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	slogkit "github.com/italypaleale/go-kit/slog"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -31,11 +29,11 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/keyvault"
 	"github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/utils/broker"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
+	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
 const (
@@ -47,19 +45,22 @@ const (
 type Server struct {
 	appRouter  *gin.Engine
 	httpClient *http.Client
-	states     map[string]*requestState
 	lock       sync.RWMutex
 	webhook    webhook.Webhook
 	metrics    *metrics.RevaulterMetrics
 
-	federatedIdentityCredential azcore.TokenCredential
+	// Subscribers for v2 pending request list updates
+	v2Pubsub *broker.Broker[*v2db.V2RequestListItem]
+	// v2 subscriptions to watch request status changes
+	v2Subs map[string]chan struct{}
 
-	// Subscribers that receive public events
-	pubsub *broker.Broker[*requestStatePublic]
-	// Subscriptions to watch for state changes
-	// Each state can only have one subscription
-	// If another call tries to subscribe to the same state, it will evict the first call
-	subs map[string]chan *requestState
+	// v2 database and request store
+	v2DB           *v2db.DB
+	v2RequestStore *v2db.RequestStore
+	v2AuthStore    *v2db.AuthStore
+	v2WebAuthn     *webauthnlib.WebAuthn
+	// Test/dev-only switch to allow placeholder v2 auth flows when WebAuthn is unavailable.
+	v2AllowAuthPlaceholder bool
 
 	// Servers
 	appSrv *http.Server
@@ -77,10 +78,6 @@ type Server struct {
 	// Listeners for the app and metrics servers
 	// These can be used for testing without having to start an actual TCP listener
 	appListener net.Listener
-
-	// Factory for keyvault.Client objects
-	// This is defined as a property to allow for mocking
-	kvClientFactory keyvault.ClientFactory
 
 	// Optional function to add test routes
 	// This is used in testing
@@ -109,14 +106,12 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		states:  map[string]*requestState{},
-		subs:    map[string]chan *requestState{},
-		pubsub:  broker.NewBroker[*requestStatePublic](),
-		webhook: opts.Webhook,
-		metrics: opts.Metrics,
+		v2Subs:   map[string]chan struct{}{},
+		v2Pubsub: broker.NewBroker[*v2db.V2RequestListItem](),
+		webhook:  opts.Webhook,
+		metrics:  opts.Metrics,
 
-		httpClient:      httpClient,
-		kvClientFactory: keyvault.NewClient,
+		httpClient: httpClient,
 
 		addTestRoutes: opts.addTestRoutes,
 	}
@@ -132,14 +127,14 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 
 // Init the Server object and create a Gin server
 func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (err error) {
-	// Init the federated identity credential provider if needed
-	err = s.initFederatedIdentity()
-	if err != nil {
-		return fmt.Errorf("failed to initialize the federated identity credential provider: %w", err)
-	}
-
 	// Init tracer
 	err = s.initTracer(traceExporter)
+	if err != nil {
+		return err
+	}
+
+	// Initialize optional v2 DB-backed request store
+	err = s.initV2Store(log)
 	if err != nil {
 		return err
 	}
@@ -224,50 +219,62 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	}
 	healthzGroup.GET("/healthz", gin.WrapF(s.RouteHealthzHandler))
 
-	// Logger middleware that removes the auth code from the URL
-	codeFilterLogMw := s.MiddlewareLoggerMask(regexp.MustCompile(`(\?|&)(code|state|session_state)=([^&]*)`), "$1$2***")
-
 	// Middleware to allow certain IPs
 	allowIpMw, err := s.AllowIpMiddleware()
 	if err != nil {
 		return err
 	}
 
-	// Requests - these share the /request prefix and all use the allow IP middleware
-	requestRouteGroup := s.appRouter.Group("/request")
-	addStandardMiddlewares(requestRouteGroup)
-	requestRouteGroup.Use(allowIpMw, s.RequestKeyMiddleware())
-	requestRouteGroup.GET("/result/:state", s.RouteRequestResult)
-	requestRouteGroup.POST("/encrypt", s.RouteRequestOperations(OperationEncrypt))
-	requestRouteGroup.POST("/decrypt", s.RouteRequestOperations(OperationDecrypt))
-	requestRouteGroup.POST("/sign", s.RouteRequestOperations(OperationSign))
-	requestRouteGroup.POST("/verify", s.RouteRequestOperations(OperationVerify))
-	requestRouteGroup.POST("/wrapkey", s.RouteRequestOperations(OperationWrapKey))
-	requestRouteGroup.POST("/unwrapkey", s.RouteRequestOperations(OperationUnwrapKey))
+	// v2 routes (WebAuthn + browser crypto flow)
+	v2RouteGroup := s.appRouter.Group("/v2")
+	addStandardMiddlewares(v2RouteGroup)
 
-	// API routes - these share the /api prefix
-	apiRouteGroup := s.appRouter.Group("/api")
-	addStandardMiddlewares(apiRouteGroup)
-	apiRouteGroup.GET("/list",
-		s.AccessTokenMiddleware(AccessTokenMiddlewareOpts{Required: true}),
-		s.RouteApiListGet,
-	)
-	apiRouteGroup.POST("/confirm",
-		s.AccessTokenMiddleware(AccessTokenMiddlewareOpts{Required: true, AllowAccessTokenInHeader: true}),
-		s.RouteApiConfirmPost,
-	)
+	v2RequestGroup := v2RouteGroup.Group("/request")
+	v2RequestGroup.Use(allowIpMw, s.RequestKeyMiddleware())
+	v2RequestGroup.POST("/encrypt", s.RouteV2RequestCreate("encrypt"))
+	v2RequestGroup.POST("/decrypt", s.RouteV2RequestCreate("decrypt"))
+	v2RequestGroup.POST("/wrapkey", s.RouteV2RequestCreate("wrapkey"))
+	v2RequestGroup.POST("/unwrapkey", s.RouteV2RequestCreate("unwrapkey"))
+	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
 
-	// Auth routes - these share the /auth prefix
-	authRouteGroup := s.appRouter.Group("/auth")
-	addStandardMiddlewares(authRouteGroup)
-	authRouteGroup.GET("/signin", s.RouteAuthSignin)
-	authRouteGroup.GET("/confirm", codeFilterLogMw, s.RouteAuthConfirm)
+	v2APIGroup := v2RouteGroup.Group("/api")
+	v2APIGroup.Use(s.V2SessionMiddleware(true))
+	v2APIGroup.Use(s.V2PasswordFactorRequiredMiddleware())
+	v2APIGroup.GET("/list", s.RouteV2APIList)
+	v2APIGroup.GET("/request/:state", s.RouteV2APIRequestGet)
+	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
+
+	v2AuthGroup := v2RouteGroup.Group("/auth")
+	v2AuthGroup.POST("/register/begin", s.RouteV2AuthRegisterBegin)
+	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
+	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
+	v2AuthGroup.POST("/login/finish", s.RouteV2AuthLoginFinish)
+	v2AuthGroup.GET("/session", s.V2SessionMiddleware(true), s.RouteV2AuthSession)
+	v2AuthGroup.POST("/logout", s.V2SessionMiddleware(true), s.RouteV2AuthLogout)
+	v2AuthAdminGroup := v2AuthGroup.Group("/admin")
+	v2AuthAdminGroup.Use(s.V2SessionMiddleware(true))
+	v2AuthAdminGroup.Use(s.V2PasswordFactorRequiredMiddleware())
+	v2AuthAdminGroup.POST("/register/begin", s.RouteV2AuthAdminRegisterBegin)
+	v2AuthAdminGroup.POST("/register/finish", s.RouteV2AuthAdminRegisterFinish)
+
+	// Legacy v1 routes have been removed. Keep explicit compatibility errors.
+	s.registerLegacyV1DisabledRoutes()
 
 	// Static files as fallback
 	// This doesn't include most middlewares
 	s.appRouter.NoRoute(s.serveClient()...)
 
 	return nil
+}
+
+func (s *Server) registerLegacyV1DisabledRoutes() {
+	disabled := func(c *gin.Context) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusGone, "Legacy v1 endpoints have been removed; use /v2 endpoints"))
+	}
+	for _, p := range []string{"/request", "/api", "/auth"} {
+		s.appRouter.Any(p, disabled)
+		s.appRouter.Any(p+"/*path", disabled)
+	}
 }
 
 func (s *Server) getCorsConfig() cors.Config {
@@ -336,42 +343,6 @@ func (s *Server) getBaseURL() string {
 	}
 }
 
-func (s *Server) initFederatedIdentity() (err error) {
-	cfg := config.Get()
-
-	// Crete the federated identity credential object depending on the kind of federated identity
-	afi := strings.ToLower(cfg.AzureFederatedIdentity)
-	switch {
-	case afi == "":
-		// If federated identity is disabled, return
-		return nil
-	case strings.HasPrefix(afi, "managedidentity="):
-		// User-assigned managed identity
-		s.federatedIdentityCredential, err = azidentity.NewManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{
-			ID: azidentity.ClientID(afi[len("managedidentity="):]),
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create managed identity credential object: %w", err)
-		}
-	case afi == "managedidentity":
-		// System-assigned managed identity
-		s.federatedIdentityCredential, err = azidentity.NewManagedIdentityCredential(nil)
-		if err != nil {
-			return fmt.Errorf("failed to create managed identity credential object: %w", err)
-		}
-	case afi == "workloadidentity":
-		// Workload Identity
-		s.federatedIdentityCredential, err = azidentity.NewWorkloadIdentityCredential(nil)
-		if err != nil {
-			return fmt.Errorf("failed to create workload identity credential object: %w", err)
-		}
-	default:
-		return fmt.Errorf("invalid value for configuration option 'azureFederatedIdentity': '%s'", cfg.AzureFederatedIdentity)
-	}
-
-	return nil
-}
-
 // Run the web server
 // Note this function is blocking, and will return only when the servers are shut down via context cancellation.
 func (s *Server) Run(ctx context.Context) error {
@@ -380,6 +351,11 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	defer s.running.Store(false)
 	defer s.wg.Wait()
+	defer func() {
+		if s.v2DB != nil {
+			_ = s.v2DB.Close()
+		}
+	}()
 
 	// App server
 	s.wg.Add(1)
@@ -401,7 +377,7 @@ func (s *Server) Run(ctx context.Context) error {
 			)
 		}
 	}()
-	defer s.pubsub.Shutdown()
+	defer s.v2Pubsub.Shutdown()
 
 	// If we have a tlsCertWatchFn, invoke that
 	if s.tlsCertWatchFn != nil {
@@ -471,6 +447,37 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		}
 	}()
 
+	// Background v2 request expiry sweeper to notify long-poll/list subscribers when requests time out.
+	if s.v2RequestStore != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case now := <-ticker.C:
+					states, err := s.v2RequestStore.ExpirePendingAndReturnStates(ctx, now)
+					if err != nil {
+						log.WarnContext(ctx, "v2 expiry sweeper failed", slog.Any("error", err))
+						continue
+					}
+					if len(states) == 0 {
+						continue
+					}
+					s.lock.Lock()
+					for _, st := range states {
+						s.notifyV2Subscriber(st)
+						s.publishV2ListItem(&v2db.V2RequestListItem{State: st, Status: "removed"})
+					}
+					s.lock.Unlock()
+				}
+			}
+		}()
+	}
+
 	return nil
 }
 
@@ -535,13 +542,4 @@ func (s *Server) loadTLSConfig(log *slog.Logger) (tlsConfig *tls.Config, watchFn
 	log.Debug("Loaded TLS certificates from PEM values")
 
 	return tlsConfig, nil, nil
-}
-
-type operationResponse struct {
-	keyvault.KeyVaultResponse `json:"response,omitempty"`
-
-	State   string `json:"state"`
-	Pending bool   `json:"pending,omitempty"`
-	Done    bool   `json:"done,omitempty"`
-	Failed  bool   `json:"failed,omitempty"`
 }
