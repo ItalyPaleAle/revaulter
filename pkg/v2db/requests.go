@@ -13,11 +13,11 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/italypaleale/go-sql-utils/migrations"
 	pgmigrations "github.com/italypaleale/go-sql-utils/migrations/postgres"
 	sqlitemigrations "github.com/italypaleale/go-sql-utils/migrations/sqlite"
+	"github.com/jackc/pgx/v5"
+
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 

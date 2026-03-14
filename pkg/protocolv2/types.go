@@ -1,6 +1,8 @@
 package protocolv2
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 type RequestCreateBody struct {
 	TargetUser string `json:"targetUser,omitempty"`

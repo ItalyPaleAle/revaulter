@@ -14,7 +14,9 @@ export function generatePrfSalt(): Uint8Array {
 }
 
 function cloneAndDecodeWebAuthnOptions<T>(input: T): T {
-    if (input === null || input === undefined) return input
+    if (input === null || input === undefined) {
+        return input
+    }
     if (typeof input === 'string') {
         // Try base64url decode for known WebAuthn binary fields represented as strings.
         // If it doesn't look like base64url, keep it as-is.
