@@ -119,6 +119,21 @@ export async function decryptTransportEnvelope(
     return new Uint8Array(plain)
 }
 
+export async function computePrfSalt(basePrfSalt: Uint8Array, password?: string): Promise<Uint8Array> {
+    if (!password) {
+        return basePrfSalt
+    }
+    const key = await crypto.subtle.importKey(
+        'raw',
+        asBuf(basePrfSalt) as BufferSource,
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+    )
+    const sig = await crypto.subtle.sign('HMAC', key, asBuf(new TextEncoder().encode(password)) as BufferSource)
+    return new Uint8Array(sig)
+}
+
 export async function deriveOperationKeyBytes(params: {
     state: string
     targetUser: string
@@ -155,13 +170,19 @@ export async function deriveOperationKeyBytes(params: {
     return new Uint8Array(bits)
 }
 
-async function deriveCanaryKey(prfSecret: Uint8Array, password: string): Promise<CryptoKey> {
-    const ikm = await crypto.subtle.importKey('raw', asBuf(prfSecret) as BufferSource, 'HKDF', false, ['deriveKey'])
+async function deriveCanaryKey(password: string): Promise<CryptoKey> {
+    const ikm = await crypto.subtle.importKey(
+        'raw',
+        asBuf(new TextEncoder().encode(password)) as BufferSource,
+        'HKDF',
+        false,
+        ['deriveKey']
+    )
     return crypto.subtle.deriveKey(
         {
             name: 'HKDF',
             hash: 'SHA-256',
-            salt: new TextEncoder().encode(password),
+            salt: new Uint8Array(),
             info: new TextEncoder().encode('revaulter/v2/password-canary'),
         },
         ikm,
@@ -171,8 +192,8 @@ async function deriveCanaryKey(prfSecret: Uint8Array, password: string): Promise
     )
 }
 
-export async function encryptPasswordCanary(prfSecret: Uint8Array, password: string): Promise<string> {
-    const key = await deriveCanaryKey(prfSecret, password)
+export async function encryptPasswordCanary(password: string): Promise<string> {
+    const key = await deriveCanaryKey(password)
     const nonce = crypto.getRandomValues(new Uint8Array(12))
     const plaintext = new TextEncoder().encode('revaulter-password-ok')
     const ct = await crypto.subtle.encrypt(
@@ -184,7 +205,7 @@ export async function encryptPasswordCanary(prfSecret: Uint8Array, password: str
     return `${bytesToBase64Url(nonce)}.${bytesToBase64Url(ct)}`
 }
 
-export async function verifyPasswordCanary(prfSecret: Uint8Array, password: string, canary: string): Promise<boolean> {
+export async function verifyPasswordCanary(password: string, canary: string): Promise<boolean> {
     const parts = canary.split('.')
     if (parts.length !== 2) {
         return false
@@ -192,7 +213,7 @@ export async function verifyPasswordCanary(prfSecret: Uint8Array, password: stri
     try {
         const nonce = base64UrlToBytes(parts[0])
         const ct = base64UrlToBytes(parts[1])
-        const key = await deriveCanaryKey(prfSecret, password)
+        const key = await deriveCanaryKey(password)
 
         // Decrypt
         // We don't check the decrypted plaintext - if the password is incorrect, the decryption fails anyways (due to the AES-GCM tag mismatch)

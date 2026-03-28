@@ -56,6 +56,7 @@ type v2AuthRegisterBeginResponse struct {
 	ExpiresAt   int64  `json:"expiresAt"`
 	Mode        string `json:"mode"`
 	Options     any    `json:"options,omitempty"`
+	BasePrfSalt string `json:"basePrfSalt"`
 }
 
 type v2AuthSessionInfo struct {
@@ -75,7 +76,7 @@ type v2AuthLoginBeginResponse struct {
 	ExpiresAt   int64  `json:"expiresAt"`
 	Mode        string `json:"mode"`
 	Options     any    `json:"options,omitempty"`
-	PrfSalt     string `json:"prfSalt,omitempty"`
+	BasePrfSalt string `json:"basePrfSalt"`
 }
 
 type v2AuthLoginFinishResponse struct {
@@ -188,6 +189,7 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 						ExpiresAt:   ch.ExpiresAt.Unix(),
 						Mode:        "webauthn",
 						Options:     creation,
+						BasePrfSalt: config.Get().GetPRFSalt(),
 					})
 					return
 				}
@@ -219,6 +221,7 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 		DisplayName: req.DisplayName,
 		ExpiresAt:   ch.ExpiresAt.Unix(),
 		Mode:        "webauthn-placeholder",
+		BasePrfSalt: config.Get().GetPRFSalt(),
 	})
 }
 
@@ -285,22 +288,7 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 		return
 	}
 
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	prfSalt := base64.RawURLEncoding.EncodeToString(buf)
-
-	assertion, session, err := s.webAuthn.BeginDiscoverableLogin(
-		webauthnlib.WithAssertionExtensions(protocol.AuthenticationExtensions{
-			"prf": map[string]any{
-				"eval": map[string]any{
-					"first": buf,
-				},
-			},
-		}),
-	)
+	assertion, session, err := s.webAuthn.BeginDiscoverableLogin()
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -322,7 +310,7 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 		ExpiresAt:   ch.ExpiresAt.Unix(),
 		Mode:        "webauthn",
 		Options:     assertion,
-		PrfSalt:     prfSalt,
+		BasePrfSalt: config.Get().GetPRFSalt(),
 	})
 }
 

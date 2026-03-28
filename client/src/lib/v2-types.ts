@@ -62,6 +62,7 @@ export type V2RegisterBeginResponse = {
     expiresAt: number
     mode: string
     options?: unknown
+    basePrfSalt: string
 }
 
 export type V2LoginBeginResponse = {
@@ -70,7 +71,7 @@ export type V2LoginBeginResponse = {
     expiresAt: number
     mode: string
     options?: unknown
-    prfSalt?: string
+    basePrfSalt: string
 }
 
 export type V2SessionResponse = {

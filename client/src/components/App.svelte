@@ -16,7 +16,7 @@ import {
     v2SetPasswordCanary,
 } from '../lib/v2-api'
 import type { V2PendingRequestItem, V2SessionResponse } from '../lib/v2-types'
-import { bytesToB64url, b64urlToBytes, encryptPasswordCanary, verifyPasswordCanary } from '../lib/v2-crypto'
+import { bytesToB64url, b64urlToBytes, computePrfSalt, encryptPasswordCanary, verifyPasswordCanary } from '../lib/v2-crypto'
 import { webauthnLoginWithPrfPlaceholder, webauthnRegisterPlaceholder } from '../lib/v2-webauthn'
 import LoadingSpinner from './LoadingSpinner.svelte'
 import V2PendingItem from './V2PendingItem.svelte'
@@ -41,7 +41,6 @@ let newAdminSuccess = $state<string | null>(null)
 
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
-let pendingCanary = $state<string | null>(null)
 let items = $state<Record<string, V2PendingRequestItem>>({})
 let listConnected = $state(false)
 let stopStream: (() => void) | null = null
@@ -140,9 +139,13 @@ async function doLogin(internalCall = false) {
     }
     try {
         const begin = await v2LoginBegin()
+        const prfSalt = await computePrfSalt(
+            b64urlToBytes(begin.basePrfSalt),
+            password.trim() || undefined
+        )
         const assertion = await webauthnLoginWithPrfPlaceholder({
             challenge: begin.challenge,
-            prfSalt: begin.prfSalt ? b64urlToBytes(begin.prfSalt) : undefined,
+            prfSalt,
             options: begin.options,
         })
         const finish = await v2LoginFinish({
@@ -156,14 +159,19 @@ async function doLogin(internalCall = false) {
         if (!assertion.prfSecret || assertion.prfSecret.length === 0) {
             throw new Error('Authenticator did not return PRF output')
         }
-        setPrfSecret(assertion.prfSecret)
-        authError = null
+
+        // If user has a canary, verify the password is correct
         const canary = (finish as Record<string, unknown>).passwordCanary as string | undefined
         if (canary) {
-            pendingCanary = canary
-            uiState = 'password'
-        } else if (internalCall) {
-            // First registration — prompt to set a password
+            const ok = await verifyPasswordCanary(password, canary)
+            if (!ok) {
+                throw new Error('Incorrect password')
+            }
+        }
+        setPrfSecret(assertion.prfSecret)
+        authError = null
+        if (internalCall) {
+            // After first registration — prompt to set a password
             uiState = 'password'
         } else {
             uiState = 'ready'
@@ -171,7 +179,9 @@ async function doLogin(internalCall = false) {
         }
     } catch (err) {
         authError = err instanceof Error ? err.message : String(err)
-        uiState = 'auth'
+        if (!internalCall) {
+            uiState = 'auth'
+        }
     } finally {
         if (!internalCall) {
             authBusy = false
@@ -179,34 +189,30 @@ async function doLogin(internalCall = false) {
     }
 }
 
-async function doPasswordVerify() {
-    if (!prfSecret) {
+async function doSetPassword() {
+    if (!prfSecret || password.trim() === '') {
+        // Skip — go straight to ready
+        uiState = 'ready'
+        startListStream()
         return
     }
     authBusy = true
     authError = null
     try {
-        if (pendingCanary) {
-            // Verify existing canary
-            const ok = await verifyPasswordCanary(prfSecret, password, pendingCanary)
-            if (!ok) {
-                authError = 'Incorrect password.'
-                return
-            }
-        } else if (password.trim() !== '') {
-            // First time setting a password — create and store canary
-            const canary = await encryptPasswordCanary(prfSecret, password)
-            await v2SetPasswordCanary(canary)
+        // Create canary so future logins can verify the password
+        const canary = await encryptPasswordCanary(password)
+        await v2SetPasswordCanary(canary)
+        // Re-login with the password baked into the PRF salt so prfSecret is correct
+        await doLogin(true)
+        if (uiState === 'password') {
+            // doLogin(true) would set uiState='password' again — override to ready
+            uiState = 'ready'
+            startListStream()
         }
-        pendingCanary = null
-        uiState = 'ready'
-        startListStream()
     } catch (err) {
         authError = err instanceof Error ? err.message : String(err)
     } finally {
         authBusy = false
-        // Reset the password in the UI
-        password = ''
     }
 }
 
@@ -406,28 +412,30 @@ function sortedItems() {
                             {authError}
                         </div>
                     {/if}
-                    <button
-                        type="button"
-                        class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
-                        disabled={authBusy}
-                        onclick={() => { if (!authBusy) void doLogin() }}
+                    <form
+                        class="space-y-3"
+                        onsubmit={(e) => {
+                            e.preventDefault()
+                            if (!authBusy) void doLogin()
+                        }}
                     >
-                        {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                        Sign In with Passkey
-                    </button>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-password">Password (if set)</label>
+                            <input id="v2-password" type="password" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={password} />
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave empty if you haven't set a password.</p>
+                        </div>
+                        <button type="submit" class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50" disabled={authBusy}>
+                            {#if authBusy}<LoadingSpinner size="1rem" />{/if}
+                            Sign In with Passkey
+                        </button>
+                    </form>
                 </div>
             {:else if uiState === 'password'}
                 <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-950/30 space-y-4">
                     <div>
-                        <h2 class="font-semibold text-slate-900 dark:text-white">
-                            {pendingCanary ? 'Enter Password' : 'Set a Password (Optional)'}
-                        </h2>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Set a Password (Optional)</h2>
                         <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                            {#if pendingCanary}
-                                Enter your password to unlock operations.
-                            {:else}
-                                Optionally set a password to add a second factor for encrypt/decrypt operations. You can skip this step.
-                            {/if}
+                            Optionally set a password to add a second factor for encrypt/decrypt operations. You can skip this step.
                         </p>
                     </div>
                     {#if authError}
@@ -439,9 +447,7 @@ function sortedItems() {
                         class="space-y-3"
                         onsubmit={(e) => {
                             e.preventDefault()
-                            if (!authBusy) {
-                                doPasswordVerify()
-                            }
+                            if (!authBusy) void doSetPassword()
                         }}
                     >
                         <div>
@@ -451,17 +457,15 @@ function sortedItems() {
                         <div class="flex gap-2">
                             <button type="submit" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50" disabled={authBusy}>
                                 {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                                {pendingCanary ? 'Unlock' : 'Set Password'}
+                                Set Password and Continue
                             </button>
-                            {#if !pendingCanary}
-                                <button
-                                    type="button"
-                                    class="rounded border border-slate-300 dark:border-slate-600 px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-800"
-                                    onclick={() => { uiState = 'ready'; startListStream() }}
-                                >
-                                    Skip
-                                </button>
-                            {/if}
+                            <button
+                                type="button"
+                                class="rounded border border-slate-300 dark:border-slate-600 px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-800"
+                                onclick={() => { uiState = 'ready'; startListStream() }}
+                            >
+                                Skip
+                            </button>
                         </div>
                     </form>
                 </div>

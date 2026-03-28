@@ -20,17 +20,17 @@ import (
 )
 
 type AuthStore struct {
-	db   *DB
+	db  *DB
 	log *slog.Logger
 }
 
 type Admin struct {
-	ID              string
-	Username        string
-	DisplayName     string
-	Status          string
-	WebAuthnUserID  string
-	PasswordCanary  string
+	ID             string
+	Username       string
+	DisplayName    string
+	Status         string
+	WebAuthnUserID string
+	PasswordCanary string
 }
 
 type AuthSession struct {
@@ -828,4 +828,3 @@ func insertSessionPgx(ctx context.Context, tx pgx.Tx, adminID, username string, 
 		sess.ID, sess.AdminID, sess.Username, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix())
 	return sess, err
 }
-
