@@ -104,6 +104,16 @@ func TestValidateConfig(t *testing.T) {
 	})
 }
 
+func TestSetSecretKey(t *testing.T) {
+	t.Cleanup(SetTestConfig(map[string]any{
+		"secretKey": "hello-world",
+	}))
+
+	err := config.SetSecretKey(nil)
+	require.NoError(t, err)
+	assert.Equal(t, "99e165b3c1a3cad19c40957829c7358446e096443d87a20a6fca2cae1f5f9d27", hex.EncodeToString(config.GetSecretKey()))
+}
+
 func TestSetTokenSigningKey(t *testing.T) {
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
@@ -115,7 +125,7 @@ func TestSetTokenSigningKey(t *testing.T) {
 
 		err := config.SetTokenSigningKey(logger)
 		require.NoError(t, err)
-		assert.Equal(t, "b8cf67b06159c291d6cc1e27b10cddeab93f48f444995f4b0fb886e3ea75d422", hex.EncodeToString(config.GetTokenSigningKey()))
+		assert.Equal(t, "106f91bd03b5e3735cd6efcb50474f50c4b6de2ff28084af01642056aaa93e9e", hex.EncodeToString(config.GetTokenSigningKey()))
 	})
 
 	t.Run("tokenSigningKey not present", func(t *testing.T) {
@@ -158,11 +168,11 @@ func TestSetCookieKeys(t *testing.T) {
 		err = csk.Raw(&cskRaw)
 		require.NoError(t, err)
 
-		require.Equal(t, "l8LxoY6e2c/nZigC7n0cJg", base64.RawStdEncoding.EncodeToString(cekRaw))
-		require.Equal(t, "HyY6TBU8Qwd2yXspvM0zDEPt/Sz7DEcTdjvEHNgENxw", base64.RawStdEncoding.EncodeToString(cskRaw))
+		require.Equal(t, "wJEZU13IzSYiJoN1p91LZQ", base64.RawStdEncoding.EncodeToString(cekRaw))
+		require.Equal(t, "WXuBILBbwdBXqCeLPbpumAyQygAh3XyO0Wh7UIJqb6I", base64.RawStdEncoding.EncodeToString(cskRaw))
 
-		require.Equal(t, "o2Bqhc6QPigj8GwA", cek.KeyID())
-		require.Equal(t, "o2Bqhc6QPigj8GwA", csk.KeyID())
+		require.Equal(t, "Tx-KPWjsUo_5iMRe", cek.KeyID())
+		require.Equal(t, "Tx-KPWjsUo_5iMRe", csk.KeyID())
 	})
 
 	t.Run("cookieEncryptionKey no present", func(t *testing.T) {
@@ -186,6 +196,7 @@ func TestSetCookieKeys(t *testing.T) {
 
 		require.Len(t, cekRaw, 16)
 		require.Len(t, cskRaw, 32)
+		require.NotEqual(t, make([]byte, 32), cskRaw)
 
 		require.NotEmpty(t, cek.KeyID())
 		require.NotEmpty(t, csk.KeyID())

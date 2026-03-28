@@ -70,28 +70,28 @@ func TestWebhook(t *testing.T) {
 		"webhookFormat": "plain",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint", r.URL.String())
-		requireBodyEqual(t, r.Body, "Received a request to wrap a key using key **mykey** in vault **myvault**.\n\nConfirm request: http://test.local/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
+		requireBodyEqual(t, r.Body, "Received a request to encrypt a message using key **mykey** in vault **myvault**.\n\nConfirm request: http://test.local/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
 	}))
 
 	t.Run("empty format, fallback to plain", basicTestFn(map[string]any{
 		"webhookFormat": "",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint", r.URL.String())
-		requireBodyEqual(t, r.Body, "Received a request to wrap a key using key **mykey** in vault **myvault**.\n\nConfirm request: http://test.local/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
+		requireBodyEqual(t, r.Body, "Received a request to encrypt a message using key **mykey** in vault **myvault**.\n\nConfirm request: http://test.local/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
 	}))
 
 	t.Run("format slack", basicTestFn(map[string]any{
 		"webhookFormat": "slack",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint", r.URL.String())
-		requireBodyEqual(t, r.Body, `{"text":"Received a request to wrap a key using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
+		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt a message using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("format discord appends /slack", basicTestFn(map[string]any{
 		"webhookFormat": "discord",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://test.local/endpoint/slack", r.URL.String())
-		requireBodyEqual(t, r.Body, `{"text":"Received a request to wrap a key using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
+		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt a message using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("format discord with /slack already appended", basicTestFn(map[string]any{
@@ -99,7 +99,7 @@ func TestWebhook(t *testing.T) {
 		"webhookFormat": "discord",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://my.local/endpoint/slack", r.URL.String())
-		requireBodyEqual(t, r.Body, `{"text":"Received a request to wrap a key using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
+		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt a message using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("plain request with authorization", basicTestFn(map[string]any{

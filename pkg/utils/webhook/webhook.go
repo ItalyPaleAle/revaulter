@@ -274,7 +274,7 @@ Open Revaulter: %s
 	}
 
 	return fmt.Sprintf(
-		`Received a request to %s a key using key **%s** in vault **%s**.
+		`Received a request to %s a message using key **%s** in vault **%s**.
 
 Confirm request: %s
 
@@ -312,7 +312,7 @@ func (w *webhookClient) formatSlackMessage(data *WebhookRequest) string {
 		note = "Note: *" + data.Note + "*\n"
 	}
 	return fmt.Sprintf(
-		"Received a request to %s a key using key **%s** in vault **%s**.\n%s[Confirm request](%s)\n`(Request ID: %s - Client IP: %s)`",
+		"Received a request to %s a message using key **%s** in vault **%s**.\n%s[Confirm request](%s)\n`(Request ID: %s - Client IP: %s)`",
 		data.OperationName,
 		data.KeyId,
 		data.Vault,

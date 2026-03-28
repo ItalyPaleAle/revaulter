@@ -42,9 +42,11 @@ func SetTestConfig(values map[string]any) func() {
 	if err != nil {
 		panic(err)
 	}
-	err = config.SetSecretKey(nil)
-	if err != nil {
-		panic(err)
+	if config.SecretKey != "" {
+		err = config.SetSecretKey(nil)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	// Return a function that restores the original value
