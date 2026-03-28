@@ -22,21 +22,6 @@ import (
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
-func init() {
-	v2 := &cobra.Command{
-		Use:   "v2",
-		Short: "Interact with Revaulter v2 (WebAuthn/browser crypto)",
-		Long:  "Commands for the Revaulter v2 protocol using browser-mediated crypto and encrypted transport envelopes",
-	}
-	v2.AddCommand(
-		newV2OperationCmd("encrypt", "Encrypt data", func() v2OperationFlags { return &v2OperationFlagsEncrypt{} }),
-		newV2OperationCmd("decrypt", "Decrypt data", func() v2OperationFlags { return &v2OperationFlagsDecrypt{} }),
-		newV2OperationCmd("wrapkey", "Wrap a key", func() v2OperationFlags { return &v2OperationFlagsWrapKey{} }),
-		newV2OperationCmd("unwrapkey", "Unwrap a key", func() v2OperationFlags { return &v2OperationFlagsUnwrapKey{} }),
-	)
-	rootCmd.AddCommand(v2)
-}
-
 type v2OperationCmd struct {
 	Operation string
 	Short     string
@@ -65,21 +50,26 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := o.flags.Validate(); err != nil {
+	err = o.flags.Validate()
+	if err != nil {
 		return fmt.Errorf("invalid flags: %w", err)
 	}
+
 	kp, err := newV2TransportKeyPair()
 	if err != nil {
 		return err
 	}
+
 	state, err := o.createRequest(cmd.Context(), httpClient, kp.Public)
 	if err != nil {
 		return fmt.Errorf("failed to start operation: %w", err)
 	}
+
 	res, err := o.getResult(cmd.Context(), httpClient, state, kp.Private)
 	if err != nil {
 		return fmt.Errorf("failed to get response: %w", err)
 	}
+
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", " ")
 	return enc.Encode(res)
@@ -99,7 +89,8 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 		req.Header.Set("Authorization", "APIKey "+key)
 	}
 	var res protocolv2.RequestResultResponse
-	if err := doJSONRequest(httpClient, req, &res); err != nil {
+	err = doJSONRequest(httpClient, req, &res)
+	if err != nil {
 		return "", err
 	}
 	if !res.Pending || res.State == "" {

@@ -129,7 +129,9 @@ export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | nul
     const gen = ndjson<V2PendingRequestItem>(res.body.getReader())
     while (true) {
         const { done, value } = await gen.next()
-        if (done) break
+        if (done) {
+            break
+        }
         yield value ?? null
     }
 }

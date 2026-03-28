@@ -18,6 +18,9 @@
       "recommended": true,
       "suspicious": {
         "noDoubleEquals": "off"
+      },
+      "style": {
+        "useBlockStatements": "error"
       }
     }
   },

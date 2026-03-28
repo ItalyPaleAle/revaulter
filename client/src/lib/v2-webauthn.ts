@@ -148,7 +148,7 @@ export async function webauthnLoginWithPrfPlaceholder(args: {
             throw new Error('WebAuthn is not available in this browser')
         }
         return {
-            id: (args.allowedCredentialIds?.[0]) || crypto.randomUUID(),
+            id: args.allowedCredentialIds?.[0] || crypto.randomUUID(),
             signCount: 0,
             prfSecret: salt,
         }

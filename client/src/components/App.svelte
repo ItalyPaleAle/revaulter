@@ -60,25 +60,14 @@ async function initialize() {
     authError = null
     pageError = null
 
-    // Handle /setup path
-    let path = window.location.pathname
-    if (path.endsWith('/')) {
-        path = path.slice(0, -1)
-    }
-    if (path == '/setup') {
-        try {
-            const status = await v2AuthStatus()
-            if (!status.setupNeeded) {
-                pageError = 'Setup has already been completed. Use the login page instead.'
-                uiState = 'auth'
-                return
-            }
+    try {
+        const status = await v2AuthStatus()
+        if (status.setupNeeded) {
             uiState = 'setup'
-        } catch (err) {
-            pageError = err instanceof Error ? err.message : String(err)
-            uiState = 'auth'
+            return
         }
-        return
+    } catch {
+        // If status check fails, continue with normal session flow
     }
 
     try {

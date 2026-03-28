@@ -2,7 +2,9 @@ import { Decode as Base64UrlDecode, Encode as Base64UrlEncode } from 'arraybuffe
 import type { EcP256PublicJwk, V2ResponseEnvelope } from './v2-types'
 
 function asBuf(v?: Uint8Array | ArrayBuffer): BufferSource | undefined {
-    if (v === undefined) return undefined
+    if (v === undefined) {
+        return undefined
+    }
     return v as unknown as BufferSource
 }
 
