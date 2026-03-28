@@ -1,8 +1,7 @@
 package config
 
 import (
-	"crypto"
-	"crypto/hmac"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -262,10 +261,11 @@ func (c *Config) SetTokenSigningKey(logger *slog.Logger) (err error) {
 		return nil
 	}
 
-	// Compute a HMAC to ensure the key is 256-bit long
-	h := hmac.New(crypto.SHA256.New, b)
-	h.Write([]byte("revaulter-token-signing-key"))
-	c.internal.tokenSigningKeyParsed = h.Sum(nil)
+	// Use HKDF to ensure the key is 256-bit long
+	c.internal.tokenSigningKeyParsed, err = hkdf.Key(sha256.New, b, nil, "revaulter-token-signing-key", 32)
+	if err != nil {
+		return fmt.Errorf("failed to derive token signing key: %w", err)
+	}
 
 	return nil
 }
@@ -281,11 +281,13 @@ func (c *Config) SetCookieKeys(logger *slog.Logger) (err error) {
 		cskRaw []byte
 	)
 	if c.CookieEncryptionKey != "" {
-		h := hmac.New(crypto.SHA384.New, []byte(c.CookieEncryptionKey))
-		h.Write([]byte("revaulter-cookie-keys"))
-		sum := h.Sum(nil)
-		cekRaw = sum[0:16]
-		cskRaw = sum[16:]
+		var material []byte
+		material, err = hkdf.Key(sha256.New, []byte(c.CookieEncryptionKey), nil, "revaulter-cookie-keys", 48)
+		if err != nil {
+			return fmt.Errorf("failed to derive cookie keys: %w", err)
+		}
+		cekRaw = material[0:16]
+		cskRaw = material[16:]
 	} else {
 		if logger != nil {
 			logger.Info("No 'cookieEncryptionKey' found in the configuration: a random one will be generated")
@@ -298,7 +300,7 @@ func (c *Config) SetCookieKeys(logger *slog.Logger) (err error) {
 		}
 
 		cskRaw = make([]byte, 32)
-		_, err = io.ReadFull(rand.Reader, cekRaw)
+		_, err = io.ReadFull(rand.Reader, cskRaw)
 		if err != nil {
 			return fmt.Errorf("failed to generate random cookieSigningKey: %w", err)
 		}
