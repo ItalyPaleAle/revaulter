@@ -67,20 +67,14 @@ export async function v2AdminRegisterFinish(args: {
     ).data
 }
 
-export async function v2LoginBegin(username: string) {
-    return (await Request<V2LoginBeginResponse>('/v2/auth/login/begin', { postData: { username } })).data
+export async function v2LoginBegin() {
+    return (await Request<V2LoginBeginResponse>('/v2/auth/login/begin', { postData: {} })).data
 }
 
-export async function v2LoginFinish(args: {
-    username: string
-    challengeId: string
-    credential: unknown
-    passwordProof?: string
-}) {
+export async function v2LoginFinish(args: { challengeId: string; credential: unknown; passwordProof?: string }) {
     return (
         await Request<{ authenticated: boolean; session: V2SessionResponse }>('/v2/auth/login/finish', {
             postData: {
-                username: args.username,
                 challengeId: args.challengeId,
                 credential: args.credential,
                 passwordProof: args.passwordProof,

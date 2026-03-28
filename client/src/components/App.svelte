@@ -92,9 +92,6 @@ async function initialize() {
         }
         uiState = 'auth'
         authError = 'Session exists but local PRF material is missing. Sign in again to continue.'
-        if (!username) {
-            username = sess.username
-        }
     } catch (err) {
         if (err instanceof ResponseNotOkError) {
             if (err.statusCode === 401) {
@@ -179,45 +176,20 @@ async function doLogin(internalCall = false) {
         authError = null
     }
     try {
-        const begin = await v2LoginBegin(username)
-        if (begin.passwordFactorRequired && password.trim() === '') {
-            throw new Error('Password factor is required for this account')
-        }
+        const begin = await v2LoginBegin()
         const assertion = await webauthnLoginWithPrfPlaceholder({
             challenge: begin.challenge,
-            allowedCredentialIds: begin.allowedCredentialIds,
             prfSalt: begin.prfSalt ? b64urlToBytes(begin.prfSalt) : undefined,
             options: begin.options,
         })
-        let passwordProof: string | undefined
-        if (begin.passwordFactorRequired) {
-            if (!begin.passwordSalt || !begin.passwordProofChallenge) {
-                throw new Error('Server did not provide password-factor parameters')
-            }
-            const authKey = await derivePasswordAuthKeyBytes(
-                password,
-                b64urlToBytes(begin.passwordSalt),
-                begin.passwordPbkdf2Iterations || 300_000
-            )
-            passwordProof = await computePasswordProof({
-                username: begin.username,
-                challengeId: begin.challengeId,
-                webauthnChallenge: begin.challenge,
-                passwordProofChallenge: begin.passwordProofChallenge,
-                passwordAuthKey: authKey,
-            })
-        }
         const finish = await v2LoginFinish({
-            username: begin.username,
             challengeId: begin.challengeId,
             credential: (assertion.raw as { credential?: unknown })?.credential ?? {
                 id: assertion.id,
                 signCount: assertion.signCount,
             },
-            passwordProof,
         })
         session = finish.session
-        setPasswordMeta(begin.passwordSalt, begin.passwordPbkdf2Iterations)
         if (!assertion.prfSecret || assertion.prfSecret.length === 0) {
             throw new Error('Authenticator did not return PRF output')
         }
@@ -441,39 +413,27 @@ function sortedItems() {
                     </form>
                 </div>
             {:else if uiState === 'auth' || !prfSecret}
-                <div class="grid gap-4 lg:grid-cols-[1fr_1.1fr]">
-                    <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-950/30">
+                <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-950/30 space-y-4">
+                    <div>
                         <h2 class="font-semibold text-slate-900 dark:text-white">Admin Session</h2>
                         <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
                             Sign in with your passkey to continue.
                         </p>
-                        {#if authError}
-                            <div class="mt-4 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
-                                {authError}
-                            </div>
-                        {/if}
                     </div>
-
-                    <form
-                        class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3"
-                        onsubmit={(e) => {
-                            e.preventDefault()
-                            if (!authBusy) void doLogin()
-                        }}
+                    {#if authError}
+                        <div class="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
+                            {authError}
+                        </div>
+                    {/if}
+                    <button
+                        type="button"
+                        class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+                        disabled={authBusy}
+                        onclick={() => { if (!authBusy) void doLogin() }}
                     >
-                        <div>
-                            <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-username">Username</label>
-                            <input id="v2-username" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={username} required />
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-password">Password (if required)</label>
-                            <input id="v2-password" type="password" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={password} />
-                        </div>
-                        <button type="submit" class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50" disabled={authBusy}>
-                            {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                            Sign In
-                        </button>
-                    </form>
+                        {#if authBusy}<LoadingSpinner size="1rem" />{/if}
+                        Sign In with Passkey
+                    </button>
                 </div>
             {:else}
                 <div class="space-y-4">

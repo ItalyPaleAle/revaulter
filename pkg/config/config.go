@@ -248,12 +248,12 @@ func (c *Config) Validate(logger *slog.Logger) error {
 }
 
 // SetSecretKey parses and normalizes the secret key.
-func (c *Config) SetSecretKey(logger *slog.Logger) error {
+func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
 	if c.SecretKey == "" {
 		return errors.New("secret key value is empty")
 	}
 
-	var err error
+	// Use HKDF to ensure the key is 256-bit long
 	c.internal.secretKey, err = hkdf.Key(sha256.New, []byte(c.SecretKey), nil, "revaulter-secret-key", 32)
 	if err != nil {
 		return fmt.Errorf("failed to derive secret key: %w", err)
@@ -279,6 +279,7 @@ func (c *Config) SetTokenSigningKey(logger *slog.Logger) (err error) {
 		return nil
 	}
 
+	// Use HKDF to ensure the key is 256-bit long
 	c.internal.tokenSigningKeyParsed, err = hkdf.Key(sha256.New, b, nil, "revaulter-token-signing-key", 32)
 	if err != nil {
 		return fmt.Errorf("failed to derive token signing key: %w", err)

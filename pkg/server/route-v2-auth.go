@@ -33,12 +33,7 @@ type v2AuthRegisterFinishRequest struct {
 	} `json:"passwordFactor,omitempty"`
 }
 
-type v2AuthLoginBeginRequest struct {
-	Username string `json:"username"`
-}
-
 type v2AuthLoginFinishRequest struct {
-	Username      string          `json:"username"`
 	ChallengeID   string          `json:"challengeId"`
 	Credential    json.RawMessage `json:"credential"`
 	PasswordProof string          `json:"passwordProof,omitempty"`
@@ -146,6 +141,7 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 		user, err := newV2WebAuthnUserForRegistration(req.Username, req.DisplayName)
 		if err == nil {
 			creation, session, waErr := s.webAuthn.BeginRegistration(user,
+				webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
 				webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
 					"prf": map[string]any{},
 				}),
@@ -270,136 +266,49 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
 		return
 	}
-	var req v2AuthLoginBeginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
-		return
-	}
-	req.Username = normalizeV2Username(req.Username)
-	if req.Username == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "username is required"))
-		return
-	}
-
-	admin, err := s.authStore.GetAdminByUsername(c.Request.Context(), req.Username)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	if admin == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Invalid login"))
-		return
-	}
-	credIDs, err := s.authStore.ListCredentialIDs(c.Request.Context(), req.Username)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	cfg := config.Get()
-	pwRequired := cfg.PasswordFactorMode == "required"
-	pwFactor, err := s.authStore.GetPasswordFactorByUsername(c.Request.Context(), req.Username)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	if pwRequired && (pwFactor == nil || !pwFactor.Enabled) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Password factor is required for this account"))
-		return
-	}
-	var pwSalt string
-	var pwIterations int
-	var pwProofChallenge string
-	if pwFactor != nil && pwFactor.Enabled {
-		pwSalt = pwFactor.Salt
-		pwIterations = pwFactor.Iterations
-		pwProofChallenge, err = randomB64URL(32)
-		if err != nil {
-			AbortWithErrorJSON(c, err)
-			return
-		}
-	}
-	var ch *v2db.AuthChallenge
-	var prfSalt string
-	if s.webAuthn != nil {
-		user, uErr := s.v2LoadWebAuthnUser(c.Request.Context(), req.Username)
-		if uErr == nil && user != nil {
-			buf := make([]byte, 32)
-			if _, rErr := rand.Read(buf); rErr == nil {
-				prfSalt = base64.RawURLEncoding.EncodeToString(buf)
-				assertion, session, waErr := s.webAuthn.BeginLogin(user,
-					webauthnlib.WithAssertionExtensions(protocol.AuthenticationExtensions{
-						"prf": map[string]any{
-							"eval": map[string]any{
-								"first": buf,
-							},
-						},
-					}),
-				)
-				if waErr == nil {
-					ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), "login", req.Username, session.Challenge, session.Expires, v2LoginChallengePayload{
-						Challenge:              session.Challenge,
-						WebAuthnSession:        session,
-						PasswordRequired:       pwRequired,
-						PasswordSalt:           pwSalt,
-						PasswordIterations:     pwIterations,
-						PasswordProofChallenge: pwProofChallenge,
-					})
-					if err == nil {
-						c.JSON(http.StatusOK, gin.H{
-							"challengeId":              ch.ID,
-							"challenge":                session.Challenge,
-							"username":                 req.Username,
-							"allowedCredentialIds":     credIDs,
-							"expiresAt":                ch.ExpiresAt.Unix(),
-							"mode":                     "webauthn",
-							"options":                  assertion,
-							"prfSalt":                  prfSalt,
-							"passwordFactorRequired":   pwRequired,
-							"passwordSalt":             pwSalt,
-							"passwordPbkdf2Iterations": pwIterations,
-							"passwordProofChallenge":   pwProofChallenge,
-						})
-						return
-					}
-				}
-			}
-		}
-	}
-	if !s.v2AllowAuthPlaceholder {
+	if s.webAuthn == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server"))
 		return
 	}
+
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	prfSalt := base64.RawURLEncoding.EncodeToString(buf)
+
+	assertion, session, err := s.webAuthn.BeginDiscoverableLogin(
+		webauthnlib.WithAssertionExtensions(protocol.AuthenticationExtensions{
+			"prf": map[string]any{
+				"eval": map[string]any{
+					"first": buf,
+				},
+			},
+		}),
+	)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	fallbackChallenge, err := randomB64URL(32)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), "login", req.Username, fallbackChallenge, time.Now().Add(5*time.Minute), v2LoginChallengePayload{
-		Challenge:              fallbackChallenge,
-		PasswordRequired:       pwRequired,
-		PasswordSalt:           pwSalt,
-		PasswordIterations:     pwIterations,
-		PasswordProofChallenge: pwProofChallenge,
+
+	// Store the challenge with an empty username — the user will be identified from the credential in finish.
+	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "login", "", session.Challenge, session.Expires, v2LoginChallengePayload{
+		Challenge:       session.Challenge,
+		WebAuthnSession: session,
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"challengeId":              ch.ID,
-		"challenge":                ch.Challenge,
-		"username":                 req.Username,
-		"allowedCredentialIds":     credIDs,
-		"expiresAt":                ch.ExpiresAt.Unix(),
-		"mode":                     "webauthn-placeholder",
-		"passwordFactorRequired":   pwRequired,
-		"passwordSalt":             pwSalt,
-		"passwordPbkdf2Iterations": pwIterations,
-		"passwordProofChallenge":   pwProofChallenge,
+		"challengeId": ch.ID,
+		"challenge":   session.Challenge,
+		"expiresAt":   ch.ExpiresAt.Unix(),
+		"mode":        "webauthn",
+		"options":     assertion,
+		"prfSalt":     prfSalt,
 	})
 }
 
@@ -413,12 +322,11 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
-	req.Username = normalizeV2Username(req.Username)
-	if req.Username == "" || req.ChallengeID == "" || len(req.Credential) == 0 {
+	if req.ChallengeID == "" || len(req.Credential) == 0 {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing required login fields"))
 		return
 	}
-	sess, err := s.v2LoginFinish(c, req)
+	sess, username, err := s.v2LoginFinish(c, req)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -430,7 +338,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"authenticated": true,
 		"session": gin.H{
-			"username":         req.Username,
+			"username":         username,
 			"ttl":              int(time.Until(sess.ExpiresAt).Seconds()),
 			"passwordVerified": sess.PasswordVerified,
 		},
@@ -740,129 +648,96 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 	return err
 }
 
-func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v2db.AuthSession, error) {
-	cfg := config.Get()
-	pwRequiredCfg := cfg.PasswordFactorMode == "required"
+func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v2db.AuthSession, string, error) {
 	if s.webAuthn == nil {
-		if !s.v2AllowAuthPlaceholder {
-			return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
-		}
-		legacy, err := parseLegacyLoginCredential(req.Credential)
-		if err != nil {
-			return nil, NewResponseError(http.StatusBadRequest, "Invalid login credential payload")
-		}
-		var payload v2LoginChallengePayload
-		ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", req.Username, &payload)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
-		}
-		passwordVerified := false
-		if payload.PasswordRequired || pwRequiredCfg {
-			if req.PasswordProof == "" {
-				return nil, NewResponseError(http.StatusUnauthorized, "Password factor proof is required")
-			}
-			pf, err := s.authStore.GetPasswordFactorByUsername(c.Request.Context(), req.Username)
-			if err != nil {
-				return nil, err
-			}
-			if pf == nil || !pf.Enabled {
-				return nil, NewResponseError(http.StatusUnauthorized, "Password factor not enrolled")
-			}
-			challengeForProof := payload.Challenge
-			if challengeForProof == "" && payload.WebAuthnSession != nil {
-				challengeForProof = payload.WebAuthnSession.Challenge
-			}
-			msg := buildV2PasswordProofMessage(req.Username, req.ChallengeID, challengeForProof, payload.PasswordProofChallenge)
-			if !v2db.VerifyPasswordProof(pf.AuthKey, req.PasswordProof, msg) {
-				return nil, NewResponseError(http.StatusUnauthorized, "Invalid password factor proof")
-			}
-			passwordVerified = true
-		}
-		sess, err := s.authStore.Login(c.Request.Context(), v2db.LoginInput{
-			Username:         req.Username,
-			CredentialID:     legacy.ID,
-			SignCount:        legacy.SignCount,
-			PasswordVerified: passwordVerified,
-			SessionTTL:       config.Get().SessionTimeout,
-		})
-		if err == v2db.ErrInvalidLogin {
-			return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
-		}
-		return sess, err
+		return nil, "", NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 	}
 
 	var payload v2LoginChallengePayload
-	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", req.Username, &payload)
+	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", "", &payload)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !ok {
-		return nil, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
+		return nil, "", NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
 	}
 	if payload.WebAuthnSession == nil {
-		return nil, NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
+		return nil, "", NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
 	}
-	user, err := s.v2LoadWebAuthnUser(c.Request.Context(), req.Username)
-	if err != nil {
-		return nil, err
-	}
-	if user == nil {
-		return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
-	}
-	waReq, err := newJSONHTTPRequest(c, req.Credential)
-	if err != nil {
-		return nil, err
-	}
-	cred, err := s.webAuthn.FinishLogin(user, *payload.WebAuthnSession, waReq)
-	if err != nil {
-		return nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
-	}
-	passwordVerified := false
-	if payload.PasswordRequired {
-		if req.PasswordProof == "" {
-			return nil, NewResponseError(http.StatusUnauthorized, "Password factor proof is required")
-		}
-		pf, err := s.authStore.GetPasswordFactorByUsername(c.Request.Context(), req.Username)
+
+	// FinishDiscoverableLogin identifies the user from the credential's userHandle.
+	var discoveredUser *v2WebAuthnUser
+	handler := func(rawID, userHandle []byte) (webauthnlib.User, error) {
+		webAuthnUserID := base64.RawURLEncoding.EncodeToString(userHandle)
+		admin, err := s.authStore.GetAdminByWebAuthnUserID(c.Request.Context(), webAuthnUserID)
 		if err != nil {
 			return nil, err
 		}
+		if admin == nil || admin.Status != "active" {
+			return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+		}
+		user, err := s.v2LoadWebAuthnUser(c.Request.Context(), admin.Username)
+		if err != nil {
+			return nil, err
+		}
+		if user == nil {
+			return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+		}
+		discoveredUser = user
+		return user, nil
+	}
+
+	waReq, err := newJSONHTTPRequest(c, req.Credential)
+	if err != nil {
+		return nil, "", err
+	}
+	cred, err := s.webAuthn.FinishDiscoverableLogin(handler, *payload.WebAuthnSession, waReq)
+	if err != nil {
+		return nil, "", NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
+	}
+	if discoveredUser == nil {
+		return nil, "", NewResponseError(http.StatusUnauthorized, "Invalid login")
+	}
+	username := discoveredUser.name
+
+	passwordVerified := false
+	if payload.PasswordRequired {
+		if req.PasswordProof == "" {
+			return nil, "", NewResponseError(http.StatusUnauthorized, "Password factor proof is required")
+		}
+		pf, err := s.authStore.GetPasswordFactorByUsername(c.Request.Context(), username)
+		if err != nil {
+			return nil, "", err
+		}
 		if pf == nil || !pf.Enabled {
-			return nil, NewResponseError(http.StatusUnauthorized, "Password factor not enrolled")
+			return nil, "", NewResponseError(http.StatusUnauthorized, "Password factor not enrolled")
 		}
 		challengeForProof := payload.Challenge
 		if challengeForProof == "" {
 			challengeForProof = payload.WebAuthnSession.Challenge
 		}
-		msg := buildV2PasswordProofMessage(req.Username, req.ChallengeID, challengeForProof, payload.PasswordProofChallenge)
+		msg := buildV2PasswordProofMessage(username, req.ChallengeID, challengeForProof, payload.PasswordProofChallenge)
 		if !v2db.VerifyPasswordProof(pf.AuthKey, req.PasswordProof, msg) {
-			return nil, NewResponseError(http.StatusUnauthorized, "Invalid password factor proof")
+			return nil, "", NewResponseError(http.StatusUnauthorized, "Invalid password factor proof")
 		}
 		passwordVerified = true
 	}
 	sess, err := s.authStore.Login(c.Request.Context(), v2db.LoginInput{
-		Username:         req.Username,
+		Username:         username,
 		CredentialID:     base64.RawURLEncoding.EncodeToString(cred.ID),
 		SignCount:        int64(cred.Authenticator.SignCount),
 		PasswordVerified: passwordVerified,
 		SessionTTL:       config.Get().SessionTimeout,
 	})
 	if err == v2db.ErrInvalidLogin {
-		return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+		return nil, "", NewResponseError(http.StatusUnauthorized, "Invalid login")
 	}
-	return sess, err
+	return sess, username, err
 }
 
 type v2LegacyRegisterCredential struct {
 	ID        string `json:"id"`
 	PublicKey string `json:"publicKey"`
-	SignCount int64  `json:"signCount"`
-}
-
-type v2LegacyLoginCredential struct {
-	ID        string `json:"id"`
 	SignCount int64  `json:"signCount"`
 }
 
@@ -873,17 +748,6 @@ func parseLegacyRegisterCredential(raw json.RawMessage) (*v2LegacyRegisterCreden
 	}
 	if v.ID == "" || v.PublicKey == "" {
 		return nil, NewResponseError(http.StatusBadRequest, "Missing required registration credential fields")
-	}
-	return &v, nil
-}
-
-func parseLegacyLoginCredential(raw json.RawMessage) (*v2LegacyLoginCredential, error) {
-	var v v2LegacyLoginCredential
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, err
-	}
-	if v.ID == "" {
-		return nil, NewResponseError(http.StatusBadRequest, "Missing required login credential fields")
 	}
 	return &v, nil
 }

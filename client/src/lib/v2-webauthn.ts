@@ -138,27 +138,13 @@ export async function webauthnRegisterPlaceholder(args: {
 
 export async function webauthnLoginWithPrfPlaceholder(args: {
     challenge: string
-    allowedCredentialIds?: string[]
     prfSalt?: Uint8Array
     options?: unknown
 }): Promise<{ id: string; signCount: number; prfSecret?: Uint8Array; raw?: unknown }> {
     const salt = args.prfSalt ?? generatePrfSalt()
     if (!('credentials' in navigator) || typeof PublicKeyCredential === 'undefined') {
-        if (!allowPlaceholderWebAuthnFallback()) {
-            throw new Error('WebAuthn is not available in this browser')
-        }
-        return {
-            id: args.allowedCredentialIds?.[0] || crypto.randomUUID(),
-            signCount: 0,
-            prfSecret: salt,
-        }
+        throw new Error('WebAuthn is not available in this browser')
     }
-
-    const allowCredentials =
-        args.allowedCredentialIds?.map((id) => ({
-            type: 'public-key' as const,
-            id: b64urlToBytes(id),
-        })) ?? []
 
     const reqOptions =
         args.options && typeof args.options === 'object' && 'publicKey' in (args.options as Record<string, unknown>)
@@ -169,11 +155,6 @@ export async function webauthnLoginWithPrfPlaceholder(args: {
         ? {
               ...reqOptions,
               challenge: asBuf(b64urlToBytes(args.challenge)),
-              allowCredentials:
-                  (reqOptions.allowCredentials as PublicKeyCredentialDescriptor[] | undefined)?.map((c) => ({
-                      ...c,
-                      id: asBuf(c.id as unknown as Uint8Array | ArrayBuffer),
-                  })) ?? allowCredentials.map((c) => ({ ...c, id: asBuf(c.id) })),
               extensions: {
                   ...(reqOptions.extensions || {}),
                   prf: {
@@ -186,7 +167,6 @@ export async function webauthnLoginWithPrfPlaceholder(args: {
         : {
               challenge: asBuf(b64urlToBytes(args.challenge)),
               timeout: 60_000,
-              allowCredentials: allowCredentials.map((c) => ({ ...c, id: asBuf(c.id) })),
               userVerification: 'preferred',
               extensions: {
                   prf: {

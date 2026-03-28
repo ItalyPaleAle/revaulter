@@ -70,16 +70,10 @@ export type V2RegisterBeginResponse = {
 export type V2LoginBeginResponse = {
     challengeId: string
     challenge: string
-    username: string
-    allowedCredentialIds: string[]
     expiresAt: number
     mode: string
     options?: unknown
     prfSalt?: string
-    passwordFactorRequired?: boolean
-    passwordSalt?: string
-    passwordPbkdf2Iterations?: number
-    passwordProofChallenge?: string
 }
 
 export type V2SessionResponse = {

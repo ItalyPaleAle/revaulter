@@ -290,10 +290,8 @@ func (s *AuthStore) migrationSQLitePasswordFactor(ctx context.Context, conn *sql
 		`ALTER TABLE v2_admin_sessions ADD COLUMN password_verified INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, stmt := range stmts {
-		if _, err := conn.ExecContext(ctx, stmt); err != nil {
-			if isIgnorableSQLiteMigrationError(err) {
-				continue
-			}
+		_, err := conn.ExecContext(ctx, stmt)
+		if err != nil {
 			return err
 		}
 	}
@@ -314,10 +312,8 @@ func (s *AuthStore) migrationPostgresPasswordFactor(ctx context.Context) error {
 		`ALTER TABLE v2_admin_sessions ADD COLUMN password_verified smallint NOT NULL DEFAULT 0`,
 	}
 	for _, stmt := range stmts {
-		if _, err := s.db.Postgres.Exec(ctx, stmt); err != nil {
-			if isIgnorablePostgresMigrationError(err) {
-				continue
-			}
+		_, err := s.db.Postgres.Exec(ctx, stmt)
+		if err != nil {
 			return err
 		}
 	}
@@ -329,18 +325,12 @@ func (s *AuthStore) migrationSQLiteWebAuthnUserID(ctx context.Context, conn *sql
 		return errors.New("sqlite migration connection is nil")
 	}
 	_, err := conn.ExecContext(ctx, `ALTER TABLE v2_admins ADD COLUMN webauthn_user_id TEXT NOT NULL DEFAULT ''`)
-	if err != nil && !isIgnorableSQLiteMigrationError(err) {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (s *AuthStore) migrationPostgresWebAuthnUserID(ctx context.Context) error {
 	_, err := s.db.Postgres.Exec(ctx, `ALTER TABLE v2_admins ADD COLUMN webauthn_user_id text NOT NULL DEFAULT ''`)
-	if err != nil && !isIgnorablePostgresMigrationError(err) {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (s *AuthStore) CountAdmins(ctx context.Context) (int, error) {
@@ -355,6 +345,28 @@ func (s *AuthStore) CountAdmins(ctx context.Context) (int, error) {
 		err = errors.New("unsupported backend")
 	}
 	return n, err
+}
+
+func (s *AuthStore) GetAdminByWebAuthnUserID(ctx context.Context, webAuthnUserID string) (*Admin, error) {
+	var a Admin
+	var err error
+	switch s.db.Backend {
+	case BackendSQLite:
+		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id FROM v2_admins WHERE webauthn_user_id = ?`, webAuthnUserID).
+			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID)
+	case BackendPostgres:
+		err = s.db.Postgres.QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id FROM v2_admins WHERE webauthn_user_id = $1`, webAuthnUserID).
+			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID)
+	default:
+		err = errors.New("unsupported backend")
+	}
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
 }
 
 func (s *AuthStore) GetAdminByUsername(ctx context.Context, username string) (*Admin, error) {
@@ -1035,19 +1047,4 @@ func (s *AuthStore) openSecret(kind, id, stored string) (string, error) {
 		return "", err
 	}
 	return string(plain), nil
-}
-
-func isIgnorableSQLiteMigrationError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "duplicate column name")
-}
-
-func isIgnorablePostgresMigrationError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "already exists") || strings.Contains(msg, "duplicate column")
 }
