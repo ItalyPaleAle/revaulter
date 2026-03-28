@@ -32,6 +32,13 @@ function uiForOperation(operation: operations) {
                 icon: 'lock-open',
                 iconTitle: 'Decrypt request',
             }
+        default:
+            return {
+                action: operation,
+                actionObject: 'a message',
+                icon: 'lock-closed',
+                iconTitle: 'Request',
+            }
     }
 }
 

@@ -44,6 +44,60 @@ type v2LoginChallengePayload struct {
 	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
 }
 
+type v2AuthStatusResponse struct {
+	SetupNeeded bool `json:"setupNeeded"`
+}
+
+type v2AuthRegisterBeginResponse struct {
+	ChallengeID string `json:"challengeId"`
+	Challenge   string `json:"challenge"`
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName"`
+	ExpiresAt   int64  `json:"expiresAt"`
+	Mode        string `json:"mode"`
+	Options     any    `json:"options,omitempty"`
+}
+
+type v2AuthSessionInfo struct {
+	Username string `json:"username"`
+	TTL      int    `json:"ttl"`
+}
+
+type v2AuthRegisterFinishResponse struct {
+	Registered bool               `json:"registered"`
+	Username   string             `json:"username,omitempty"`
+	Session    *v2AuthSessionInfo `json:"session,omitempty"`
+}
+
+type v2AuthLoginBeginResponse struct {
+	ChallengeID string `json:"challengeId"`
+	Challenge   string `json:"challenge"`
+	ExpiresAt   int64  `json:"expiresAt"`
+	Mode        string `json:"mode"`
+	Options     any    `json:"options,omitempty"`
+	PrfSalt     string `json:"prfSalt,omitempty"`
+}
+
+type v2AuthLoginFinishResponse struct {
+	Authenticated  bool               `json:"authenticated"`
+	Session        *v2AuthSessionInfo `json:"session,omitempty"`
+	PasswordCanary string             `json:"passwordCanary,omitempty"`
+}
+
+type v2AuthSetPasswordCanaryRequest struct {
+	Canary string `json:"canary"`
+}
+
+type v2AuthSessionResponse struct {
+	Authenticated bool   `json:"authenticated"`
+	Username      string `json:"username"`
+	TTL           int    `json:"ttl"`
+}
+
+type v2AuthLogoutResponse struct {
+	LoggedOut bool `json:"loggedOut"`
+}
+
 func (s *Server) RouteV2AuthStatus(c *gin.Context) {
 	if s.authStore == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
@@ -54,8 +108,8 @@ func (s *Server) RouteV2AuthStatus(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"setupNeeded": count == 0,
+	c.JSON(http.StatusOK, v2AuthStatusResponse{
+		SetupNeeded: count == 0,
 	})
 }
 
@@ -126,14 +180,14 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 					WebAuthnSession: session,
 				})
 				if err == nil {
-					c.JSON(http.StatusOK, gin.H{
-						"challengeId": ch.ID,
-						"challenge":   session.Challenge,
-						"username":    req.Username,
-						"displayName": req.DisplayName,
-						"expiresAt":   ch.ExpiresAt.Unix(),
-						"mode":        "webauthn",
-						"options":     creation,
+					c.JSON(http.StatusOK, v2AuthRegisterBeginResponse{
+						ChallengeID: ch.ID,
+						Challenge:   session.Challenge,
+						Username:    req.Username,
+						DisplayName: req.DisplayName,
+						ExpiresAt:   ch.ExpiresAt.Unix(),
+						Mode:        "webauthn",
+						Options:     creation,
 					})
 					return
 				}
@@ -158,14 +212,13 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"challengeId": ch.ID,
-		"challenge":   ch.Challenge,
-		"username":    req.Username,
-		"displayName": req.DisplayName,
-		"expiresAt":   ch.ExpiresAt.Unix(),
-		// Placeholder contract: browser can wrap a real WebAuthn payload into `credential`
-		"mode": "webauthn-placeholder",
+	c.JSON(http.StatusOK, v2AuthRegisterBeginResponse{
+		ChallengeID: ch.ID,
+		Challenge:   ch.Challenge,
+		Username:    req.Username,
+		DisplayName: req.DisplayName,
+		ExpiresAt:   ch.ExpiresAt.Unix(),
+		Mode:        "webauthn-placeholder",
 	})
 }
 
@@ -198,9 +251,9 @@ func (s *Server) routeV2AuthRegisterFinish(c *gin.Context, adminManaged bool) {
 			AbortWithErrorJSON(c, err)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"registered": true,
-			"username":   req.Username,
+		c.JSON(http.StatusOK, v2AuthRegisterFinishResponse{
+			Registered: true,
+			Username:   req.Username,
 		})
 		return
 	}
@@ -213,11 +266,11 @@ func (s *Server) routeV2AuthRegisterFinish(c *gin.Context, adminManaged bool) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"registered": true,
-		"session": gin.H{
-			"username": req.Username,
-			"ttl":      int(time.Until(sess.ExpiresAt).Seconds()),
+	c.JSON(http.StatusOK, v2AuthRegisterFinishResponse{
+		Registered: true,
+		Session: &v2AuthSessionInfo{
+			Username: req.Username,
+			TTL:      int(time.Until(sess.ExpiresAt).Seconds()),
 		},
 	})
 }
@@ -263,13 +316,13 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"challengeId": ch.ID,
-		"challenge":   session.Challenge,
-		"expiresAt":   ch.ExpiresAt.Unix(),
-		"mode":        "webauthn",
-		"options":     assertion,
-		"prfSalt":     prfSalt,
+	c.JSON(http.StatusOK, v2AuthLoginBeginResponse{
+		ChallengeID: ch.ID,
+		Challenge:   session.Challenge,
+		ExpiresAt:   ch.ExpiresAt.Unix(),
+		Mode:        "webauthn",
+		Options:     assertion,
+		PrfSalt:     prfSalt,
 	})
 }
 
@@ -296,13 +349,47 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"authenticated": true,
-		"session": gin.H{
-			"username": username,
-			"ttl":      int(time.Until(sess.ExpiresAt).Seconds()),
+	resp := v2AuthLoginFinishResponse{
+		Authenticated: true,
+		Session: &v2AuthSessionInfo{
+			Username: username,
+			TTL:      int(time.Until(sess.ExpiresAt).Seconds()),
 		},
-	})
+	}
+	admin, _ := s.authStore.GetAdminByUsername(c.Request.Context(), username)
+	if admin != nil && admin.PasswordCanary != "" {
+		resp.PasswordCanary = admin.PasswordCanary
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Server) RouteV2AuthSetPasswordCanary(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
+		return
+	}
+	username, _ := c.Get(contextKeyAdminUsername)
+	usernameStr, _ := username.(string)
+	if usernameStr == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+	var req v2AuthSetPasswordCanaryRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Canary == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "canary is required"))
+		return
+	}
+	if len(req.Canary) > 512 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "canary is too large"))
+		return
+	}
+	if err := s.authStore.SetPasswordCanary(c.Request.Context(), usernameStr, req.Canary); err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, struct {
+		OK bool `json:"ok"`
+	}{OK: true})
 }
 
 func (s *Server) RouteV2AuthSession(c *gin.Context) {
@@ -313,10 +400,10 @@ func (s *Server) RouteV2AuthSession(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"authenticated": true,
-		"username":      username,
-		"ttl":           int(time.Until(expiry).Seconds()),
+	c.JSON(http.StatusOK, v2AuthSessionResponse{
+		Authenticated: true,
+		Username:      username.(string),
+		TTL:           int(time.Until(expiry).Seconds()),
 	})
 }
 
@@ -331,7 +418,7 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	}
 	secureCookie := config.Get().ForceSecureCookies || c.Request.URL.Scheme == "https:"
 	c.SetCookie(sessionCookieName, "", -1, "/v2", c.Request.URL.Host, secureCookie, true)
-	c.JSON(http.StatusOK, gin.H{"loggedOut": true})
+	c.JSON(http.StatusOK, v2AuthLogoutResponse{LoggedOut: true})
 }
 
 func (s *Server) setV2SessionCookie(c *gin.Context, sess *v2db.AuthSession) error {

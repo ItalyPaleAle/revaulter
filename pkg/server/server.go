@@ -248,6 +248,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
 	v2AuthGroup.POST("/login/finish", s.RouteV2AuthLoginFinish)
 	v2AuthGroup.GET("/session", s.V2SessionMiddleware(true), s.RouteV2AuthSession)
+	v2AuthGroup.POST("/password-canary", s.V2SessionMiddleware(true), s.RouteV2AuthSetPasswordCanary)
 	v2AuthGroup.POST("/logout", s.V2SessionMiddleware(true), s.RouteV2AuthLogout)
 	v2AuthAdminGroup := v2AuthGroup.Group("/admin")
 	v2AuthAdminGroup.Use(s.V2SessionMiddleware(true))

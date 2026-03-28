@@ -25,11 +25,12 @@ type AuthStore struct {
 }
 
 type Admin struct {
-	ID             string
-	Username       string
-	DisplayName    string
-	Status         string
-	WebAuthnUserID string
+	ID              string
+	Username        string
+	DisplayName     string
+	Status          string
+	WebAuthnUserID  string
+	PasswordCanary  string
 }
 
 type AuthSession struct {
@@ -134,6 +135,7 @@ func (s *AuthStore) migrationSQLite(ctx context.Context, conn *sql.Conn) error {
 			display_name TEXT NOT NULL,
 			status TEXT NOT NULL,
 			webauthn_user_id TEXT NOT NULL DEFAULT '',
+			password_canary TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
@@ -249,11 +251,11 @@ func (s *AuthStore) GetAdminByWebAuthnUserID(ctx context.Context, webAuthnUserID
 	var err error
 	switch s.db.Backend {
 	case BackendSQLite:
-		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id FROM v2_admins WHERE webauthn_user_id = ?`, webAuthnUserID).
-			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID)
+		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE webauthn_user_id = ?`, webAuthnUserID).
+			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID, &a.PasswordCanary)
 	case BackendPostgres:
-		err = s.db.Postgres.QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id FROM v2_admins WHERE webauthn_user_id = $1`, webAuthnUserID).
-			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID)
+		err = s.db.Postgres.QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE webauthn_user_id = $1`, webAuthnUserID).
+			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID, &a.PasswordCanary)
 	default:
 		err = errors.New("unsupported backend")
 	}
@@ -271,11 +273,11 @@ func (s *AuthStore) GetAdminByUsername(ctx context.Context, username string) (*A
 	var err error
 	switch s.db.Backend {
 	case BackendSQLite:
-		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id FROM v2_admins WHERE username = ?`, username).
-			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID)
+		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE username = ?`, username).
+			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID, &a.PasswordCanary)
 	case BackendPostgres:
-		err = s.db.Postgres.QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id FROM v2_admins WHERE username = $1`, username).
-			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID)
+		err = s.db.Postgres.QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE username = $1`, username).
+			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID, &a.PasswordCanary)
 	default:
 		err = errors.New("unsupported backend")
 	}
@@ -286,6 +288,19 @@ func (s *AuthStore) GetAdminByUsername(ctx context.Context, username string) (*A
 		return nil, err
 	}
 	return &a, nil
+}
+
+func (s *AuthStore) SetPasswordCanary(ctx context.Context, username, canary string) error {
+	switch s.db.Backend {
+	case BackendSQLite:
+		_, err := s.db.SQLite.ExecContext(ctx, `UPDATE v2_admins SET password_canary = ? WHERE username = ?`, canary, username)
+		return err
+	case BackendPostgres:
+		_, err := s.db.Postgres.Exec(ctx, `UPDATE v2_admins SET password_canary = $1 WHERE username = $2`, canary, username)
+		return err
+	default:
+		return errors.New("unsupported backend")
+	}
 }
 
 func (s *AuthStore) ListCredentialIDs(ctx context.Context, username string) ([]string, error) {

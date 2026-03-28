@@ -13,14 +13,15 @@ import {
     v2RegisterBegin,
     v2RegisterFinish,
     v2Session,
+    v2SetPasswordCanary,
 } from '../lib/v2-api'
 import type { V2PendingRequestItem, V2SessionResponse } from '../lib/v2-types'
-import { bytesToB64url, b64urlToBytes } from '../lib/v2-crypto'
+import { bytesToB64url, b64urlToBytes, encryptPasswordCanary, verifyPasswordCanary } from '../lib/v2-crypto'
 import { webauthnLoginWithPrfPlaceholder, webauthnRegisterPlaceholder } from '../lib/v2-webauthn'
 import LoadingSpinner from './LoadingSpinner.svelte'
 import V2PendingItem from './V2PendingItem.svelte'
 
-type UIState = 'boot' | 'auth' | 'setup' | 'ready'
+type UIState = 'boot' | 'auth' | 'setup' | 'password' | 'ready'
 
 const sessionStoragePrfKey = 'revaulter:v2:prf'
 
@@ -34,13 +35,13 @@ let displayName = $state('')
 let password = $state('')
 let newAdminUsername = $state('')
 let newAdminDisplayName = $state('')
-let newAdminPassword = $state('')
 let newAdminBusy = $state(false)
 let newAdminError = $state<string | null>(null)
 let newAdminSuccess = $state<string | null>(null)
 
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
+let pendingCanary = $state<string | null>(null)
 let items = $state<Record<string, V2PendingRequestItem>>({})
 let listConnected = $state(false)
 let stopStream: (() => void) | null = null
@@ -156,9 +157,18 @@ async function doLogin(internalCall = false) {
             throw new Error('Authenticator did not return PRF output')
         }
         setPrfSecret(assertion.prfSecret)
-        uiState = 'ready'
         authError = null
-        startListStream()
+        const canary = (finish as Record<string, unknown>).passwordCanary as string | undefined
+        if (canary) {
+            pendingCanary = canary
+            uiState = 'password'
+        } else if (internalCall) {
+            // First registration — prompt to set a password
+            uiState = 'password'
+        } else {
+            uiState = 'ready'
+            startListStream()
+        }
     } catch (err) {
         authError = err instanceof Error ? err.message : String(err)
         uiState = 'auth'
@@ -166,6 +176,37 @@ async function doLogin(internalCall = false) {
         if (!internalCall) {
             authBusy = false
         }
+    }
+}
+
+async function doPasswordVerify() {
+    if (!prfSecret) {
+        return
+    }
+    authBusy = true
+    authError = null
+    try {
+        if (pendingCanary) {
+            // Verify existing canary
+            const ok = await verifyPasswordCanary(prfSecret, password, pendingCanary)
+            if (!ok) {
+                authError = 'Incorrect password.'
+                return
+            }
+        } else if (password.trim() !== '') {
+            // First time setting a password — create and store canary
+            const canary = await encryptPasswordCanary(prfSecret, password)
+            await v2SetPasswordCanary(canary)
+        }
+        pendingCanary = null
+        uiState = 'ready'
+        startListStream()
+    } catch (err) {
+        authError = err instanceof Error ? err.message : String(err)
+    } finally {
+        authBusy = false
+        // Reset the password in the UI
+        password = ''
     }
 }
 
@@ -191,9 +232,6 @@ async function doAdminRegister() {
     newAdminSuccess = null
     try {
         const begin = await v2AdminRegisterBegin(newAdminUsername, newAdminDisplayName)
-        if (begin.passwordFactorRequired && newAdminPassword.trim() === '') {
-            throw new Error('Password factor is required for the new admin')
-        }
         const cred = await webauthnRegisterPlaceholder({
             username: begin.username,
             displayName: begin.displayName,
@@ -205,18 +243,6 @@ async function doAdminRegister() {
             displayName: begin.displayName,
             challengeId: begin.challengeId,
             credential: (cred.raw as { credential?: unknown })?.credential ?? cred,
-            passwordFactor:
-                begin.passwordFactorRequired && begin.passwordSalt
-                    ? {
-                          authKey: bytesToB64url(
-                              await derivePasswordAuthKeyBytes(
-                                  newAdminPassword,
-                                  b64urlToBytes(begin.passwordSalt),
-                                  begin.passwordPbkdf2Iterations || 300_000
-                              )
-                          ),
-                      }
-                    : undefined,
         })
         if (!finish.registered) {
             throw new Error('Admin registration failed')
@@ -224,7 +250,6 @@ async function doAdminRegister() {
         newAdminSuccess = `Admin ${finish.username} registered`
         newAdminUsername = ''
         newAdminDisplayName = ''
-        newAdminPassword = ''
     } catch (err) {
         newAdminError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -316,9 +341,6 @@ function sortedItems() {
                 <div class="flex flex-col items-start gap-2 md:items-end">
                     <div class="text-sm text-slate-700 dark:text-slate-200">
                         Signed in as <span class="font-mono">{session.username}</span>
-                        {#if session.passwordVerified}
-                            <span class="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">password verified</span>
-                        {/if}
                     </div>
                     <button class="rounded border border-slate-300 dark:border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800" onclick={doLogout}>
                         Sign out
@@ -365,11 +387,6 @@ function sortedItems() {
                             <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-displayname">Display name</label>
                             <input id="v2-displayname" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={displayName} required />
                         </div>
-                        <div>
-                            <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-password">Optional password (local key derivation only)</label>
-                            <input id="v2-password" type="password" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={password} />
-                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used for optional local derivation and for server password-factor proof when enabled/required.</p>
-                        </div>
                         <button type="submit" class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50" disabled={authBusy}>
                             {#if authBusy}<LoadingSpinner size="1rem" />{/if}
                             Register and Sign In
@@ -398,6 +415,55 @@ function sortedItems() {
                         {#if authBusy}<LoadingSpinner size="1rem" />{/if}
                         Sign In with Passkey
                     </button>
+                </div>
+            {:else if uiState === 'password'}
+                <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-950/30 space-y-4">
+                    <div>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">
+                            {pendingCanary ? 'Enter Password' : 'Set a Password (Optional)'}
+                        </h2>
+                        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                            {#if pendingCanary}
+                                Enter your password to unlock operations.
+                            {:else}
+                                Optionally set a password to add a second factor for encrypt/decrypt operations. You can skip this step.
+                            {/if}
+                        </p>
+                    </div>
+                    {#if authError}
+                        <div class="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
+                            {authError}
+                        </div>
+                    {/if}
+                    <form
+                        class="space-y-3"
+                        onsubmit={(e) => {
+                            e.preventDefault()
+                            if (!authBusy) {
+                                doPasswordVerify()
+                            }
+                        }}
+                    >
+                        <div>
+                            <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-password">Password</label>
+                            <input id="v2-password" type="password" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={password} />
+                        </div>
+                        <div class="flex gap-2">
+                            <button type="submit" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50" disabled={authBusy}>
+                                {#if authBusy}<LoadingSpinner size="1rem" />{/if}
+                                {pendingCanary ? 'Unlock' : 'Set Password'}
+                            </button>
+                            {#if !pendingCanary}
+                                <button
+                                    type="button"
+                                    class="rounded border border-slate-300 dark:border-slate-600 px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-800"
+                                    onclick={() => { uiState = 'ready'; startListStream() }}
+                                >
+                                    Skip
+                                </button>
+                            {/if}
+                        </div>
+                    </form>
                 </div>
             {:else}
                 <div class="space-y-4">
@@ -433,7 +499,7 @@ function sortedItems() {
                                 {newAdminSuccess}
                             </div>
                         {/if}
-                        <div class="grid gap-3 md:grid-cols-3">
+                        <div class="grid gap-3 md:grid-cols-2">
                             <div>
                                 <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-new-admin-username">Username</label>
                                 <input id="v2-new-admin-username" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={newAdminUsername} required />
@@ -441,10 +507,6 @@ function sortedItems() {
                             <div>
                                 <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-new-admin-displayname">Display name</label>
                                 <input id="v2-new-admin-displayname" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={newAdminDisplayName} required />
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-new-admin-password">Password factor (if required)</label>
-                                <input id="v2-new-admin-password" type="password" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={newAdminPassword} />
                             </div>
                         </div>
                         <div class="flex justify-end">

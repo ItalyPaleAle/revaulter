@@ -68,6 +68,10 @@ export async function v2LoginFinish(args: { challengeId: string; credential: unk
     ).data
 }
 
+export async function v2SetPasswordCanary(canary: string) {
+    return (await Request<{ ok: boolean }>('/v2/auth/password-canary', { postData: { canary } })).data
+}
+
 export async function v2Session() {
     return (await Request<V2SessionResponse>('/v2/auth/session')).data
 }

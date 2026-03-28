@@ -181,14 +181,10 @@ export async function encryptPasswordCanary(prfSecret: Uint8Array, password: str
         asBuf(plaintext) as BufferSource
     )
     // Encode as nonce.ciphertext (both base64url)
-    return bytesToBase64Url(nonce) + '.' + bytesToBase64Url(ct)
+    return `${bytesToBase64Url(nonce)}.${bytesToBase64Url(ct)}`
 }
 
-export async function verifyPasswordCanary(
-    prfSecret: Uint8Array,
-    password: string,
-    canary: string
-): Promise<boolean> {
+export async function verifyPasswordCanary(prfSecret: Uint8Array, password: string, canary: string): Promise<boolean> {
     const parts = canary.split('.')
     if (parts.length !== 2) {
         return false
@@ -200,7 +196,11 @@ export async function verifyPasswordCanary(
 
         // Decrypt
         // We don't check the decrypted plaintext - if the password is incorrect, the decryption fails anyways (due to the AES-GCM tag mismatch)
-        await crypto.subtle.decrypt({ name: 'AES-GCM', iv: asBuf(nonce) as BufferSource }, key, asBuf(ct) as BufferSource)
+        await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: asBuf(nonce) as BufferSource },
+            key,
+            asBuf(ct) as BufferSource
+        )
         return true
     } catch {
         return false
