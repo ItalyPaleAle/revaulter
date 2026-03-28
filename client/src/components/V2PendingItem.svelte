@@ -32,7 +32,12 @@ let detailOpen = $state(false)
 let detail = $state<V2RequestDetail | null>(null)
 
 $effect(() => {
-    if (localStatus === '_processing' || localStatus === 'confirmed' || localStatus === 'canceled' || localStatus === '_failed') {
+    if (
+        localStatus === '_processing' ||
+        localStatus === 'confirmed' ||
+        localStatus === 'canceled' ||
+        localStatus === '_failed'
+    ) {
         return
     }
     localStatus = item.status

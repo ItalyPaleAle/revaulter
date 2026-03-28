@@ -17,11 +17,14 @@ export async function v2AuthStatus() {
 }
 
 export async function v2RegisterBegin(username: string, displayName: string) {
-    return (await Request<V2RegisterBeginResponse>('/v2/auth/register/begin', { postData: { username, displayName } })).data
+    return (await Request<V2RegisterBeginResponse>('/v2/auth/register/begin', { postData: { username, displayName } }))
+        .data
 }
 
 export async function v2AdminRegisterBegin(username: string, displayName: string) {
-    return (await Request<V2RegisterBeginResponse>('/v2/auth/admin/register/begin', { postData: { username, displayName } })).data
+    return (
+        await Request<V2RegisterBeginResponse>('/v2/auth/admin/register/begin', { postData: { username, displayName } })
+    ).data
 }
 
 export async function v2RegisterFinish(args: {
@@ -103,7 +106,11 @@ export async function v2GetRequest(state: string) {
 }
 
 export async function v2Confirm(state: string, responseEnvelope: V2ResponseEnvelope) {
-    return (await Request<{ confirmed: boolean }>('/v2/api/confirm', { postData: { state, confirm: true, responseEnvelope } })).data
+    return (
+        await Request<{ confirmed: boolean }>('/v2/api/confirm', {
+            postData: { state, confirm: true, responseEnvelope },
+        })
+    ).data
 }
 
 export async function v2Cancel(state: string) {
@@ -127,7 +134,10 @@ export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | nul
     }
 }
 
-export function buildV2RequestBody(base: Omit<V2RequestCreateBody, 'clientTransportKey'>, clientTransportKey: EcP256PublicJwk): V2RequestCreateBody {
+export function buildV2RequestBody(
+    base: Omit<V2RequestCreateBody, 'clientTransportKey'>,
+    clientTransportKey: EcP256PublicJwk
+): V2RequestCreateBody {
     return {
         ...base,
         clientTransportKey,

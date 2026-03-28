@@ -63,7 +63,9 @@ function serializePublicKeyCredential(cred: PublicKeyCredential) {
                 authenticatorData: bytesToB64url(new Uint8Array(cred.response.authenticatorData)),
                 clientDataJSON: bytesToB64url(new Uint8Array(cred.response.clientDataJSON)),
                 signature: bytesToB64url(new Uint8Array(cred.response.signature)),
-                userHandle: cred.response.userHandle ? bytesToB64url(new Uint8Array(cred.response.userHandle)) : undefined,
+                userHandle: cred.response.userHandle
+                    ? bytesToB64url(new Uint8Array(cred.response.userHandle))
+                    : undefined,
             },
         }
     }
@@ -96,9 +98,11 @@ export async function webauthnRegisterPlaceholder(args: {
     const userId = crypto.getRandomValues(new Uint8Array(16))
     const creationOptions =
         args.options && typeof args.options === 'object' && 'publicKey' in (args.options as Record<string, unknown>)
-            ? (cloneAndDecodeWebAuthnOptions(args.options) as PublicKeyCredentialCreationOptionsJSON & {
-                  publicKey: PublicKeyCredentialCreationOptions
-              }).publicKey
+            ? (
+                  cloneAndDecodeWebAuthnOptions(args.options) as PublicKeyCredentialCreationOptionsJSON & {
+                      publicKey: PublicKeyCredentialCreationOptions
+                  }
+              ).publicKey
             : null
     const cred = (await navigator.credentials.create({
         publicKey: creationOptions ?? {
@@ -144,7 +148,7 @@ export async function webauthnLoginWithPrfPlaceholder(args: {
             throw new Error('WebAuthn is not available in this browser')
         }
         return {
-            id: (args.allowedCredentialIds && args.allowedCredentialIds[0]) || crypto.randomUUID(),
+            id: (args.allowedCredentialIds?.[0]) || crypto.randomUUID(),
             signCount: 0,
             prfSecret: salt,
         }
@@ -158,7 +162,8 @@ export async function webauthnLoginWithPrfPlaceholder(args: {
 
     const reqOptions =
         args.options && typeof args.options === 'object' && 'publicKey' in (args.options as Record<string, unknown>)
-            ? (cloneAndDecodeWebAuthnOptions(args.options) as { publicKey: PublicKeyCredentialRequestOptions }).publicKey
+            ? (cloneAndDecodeWebAuthnOptions(args.options) as { publicKey: PublicKeyCredentialRequestOptions })
+                  .publicKey
             : null
     const effectivePublicKey: PublicKeyCredentialRequestOptions = reqOptions
         ? {

@@ -103,7 +103,9 @@ async function initialize() {
         }
         uiState = 'auth'
         authError = 'Session exists but local PRF material is missing. Sign in again to continue.'
-        if (!username) username = sess.username
+        if (!username) {
+            username = sess.username
+        }
     } catch (err) {
         if (err instanceof ResponseNotOkError) {
             if (err.statusCode === 401) {
@@ -219,7 +221,10 @@ async function doLogin(internalCall = false) {
         const finish = await v2LoginFinish({
             username: begin.username,
             challengeId: begin.challengeId,
-            credential: (assertion.raw as { credential?: unknown })?.credential ?? { id: assertion.id, signCount: assertion.signCount },
+            credential: (assertion.raw as { credential?: unknown })?.credential ?? {
+                id: assertion.id,
+                signCount: assertion.signCount,
+            },
             passwordProof,
         })
         session = finish.session
@@ -258,7 +263,6 @@ async function doLogout() {
     items = {}
     listConnected = false
     uiState = 'auth'
-
 }
 
 async function doAdminRegister() {
@@ -345,7 +349,7 @@ function startListStream() {
                 passwordFactorSalt = undefined
                 passwordFactorIterations = undefined
                 uiState = 'auth'
-            
+
                 authError = 'Session expired. Sign in again.'
                 return
             }

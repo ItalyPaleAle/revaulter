@@ -27,11 +27,7 @@ export async function generateTransportKeyPairJwk(): Promise<{
     privateKey: CryptoKey
     publicKeyJwk: EcP256PublicJwk
 }> {
-    const keyPair = await crypto.subtle.generateKey(
-        { name: 'ECDH', namedCurve: 'P-256' },
-        true,
-        ['deriveBits']
-    )
+    const keyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
     const jwk = (await crypto.subtle.exportKey('jwk', keyPair.publicKey)) as JsonWebKey
     if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) {
         throw new Error('Failed to export transport public key as P-256 JWK')
@@ -130,7 +126,9 @@ export async function deriveOperationKeyBytes(params: {
     prfSecret: Uint8Array
     passwordKey?: Uint8Array
 }): Promise<Uint8Array> {
-    const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret) as BufferSource, 'HKDF', false, ['deriveBits'])
+    const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret) as BufferSource, 'HKDF', false, [
+        'deriveBits',
+    ])
     const salt = params.passwordKey ?? new Uint8Array()
     const infoObj = {
         v: 1,
@@ -153,8 +151,18 @@ export async function deriveOperationKeyBytes(params: {
     return new Uint8Array(bits)
 }
 
-export async function derivePasswordKeyBytes(password: string, salt: Uint8Array, iterations = 300_000): Promise<Uint8Array> {
-    const key = await crypto.subtle.importKey('raw', asBuf(new TextEncoder().encode(password)) as BufferSource, 'PBKDF2', false, ['deriveBits'])
+export async function derivePasswordKeyBytes(
+    password: string,
+    salt: Uint8Array,
+    iterations = 300_000
+): Promise<Uint8Array> {
+    const key = await crypto.subtle.importKey(
+        'raw',
+        asBuf(new TextEncoder().encode(password)) as BufferSource,
+        'PBKDF2',
+        false,
+        ['deriveBits']
+    )
     const bits = await crypto.subtle.deriveBits(
         {
             name: 'PBKDF2',
@@ -169,7 +177,9 @@ export async function derivePasswordKeyBytes(password: string, salt: Uint8Array,
 }
 
 async function hkdfSha256(inputKeyMaterial: Uint8Array, info: string, salt?: Uint8Array): Promise<Uint8Array> {
-    const key = await crypto.subtle.importKey('raw', asBuf(inputKeyMaterial) as BufferSource, 'HKDF', false, ['deriveBits'])
+    const key = await crypto.subtle.importKey('raw', asBuf(inputKeyMaterial) as BufferSource, 'HKDF', false, [
+        'deriveBits',
+    ])
     const bits = await crypto.subtle.deriveBits(
         {
             name: 'HKDF',
@@ -183,12 +193,20 @@ async function hkdfSha256(inputKeyMaterial: Uint8Array, info: string, salt?: Uin
     return new Uint8Array(bits)
 }
 
-export async function derivePasswordAuthKeyBytes(password: string, salt: Uint8Array, iterations = 300_000): Promise<Uint8Array> {
+export async function derivePasswordAuthKeyBytes(
+    password: string,
+    salt: Uint8Array,
+    iterations = 300_000
+): Promise<Uint8Array> {
     const base = await derivePasswordKeyBytes(password, salt, iterations)
     return hkdfSha256(base, 'revaulter/v2/password-auth')
 }
 
-export async function derivePasswordLocalKeyBytes(password: string, salt: Uint8Array, iterations = 300_000): Promise<Uint8Array> {
+export async function derivePasswordLocalKeyBytes(
+    password: string,
+    salt: Uint8Array,
+    iterations = 300_000
+): Promise<Uint8Array> {
     const base = await derivePasswordKeyBytes(password, salt, iterations)
     return hkdfSha256(base, 'revaulter/v2/password-local')
 }
@@ -201,9 +219,21 @@ export async function computePasswordProof(params: {
     passwordAuthKey: Uint8Array
 }): Promise<string> {
     const msg = new TextEncoder().encode(
-        ['revaulter-v2-password-proof', params.username, params.challengeId, params.webauthnChallenge, params.passwordProofChallenge].join('|')
+        [
+            'revaulter-v2-password-proof',
+            params.username,
+            params.challengeId,
+            params.webauthnChallenge,
+            params.passwordProofChallenge,
+        ].join('|')
     )
-    const hmacKey = await crypto.subtle.importKey('raw', asBuf(params.passwordAuthKey) as BufferSource, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+    const hmacKey = await crypto.subtle.importKey(
+        'raw',
+        asBuf(params.passwordAuthKey) as BufferSource,
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+    )
     const sig = await crypto.subtle.sign('HMAC', hmacKey, asBuf(msg) as BufferSource)
     return bytesToBase64Url(sig)
 }
@@ -216,9 +246,13 @@ export async function performAesGcmOperation(params: {
     aad?: Uint8Array
     tag?: Uint8Array
 }): Promise<Uint8Array> {
-    const key = await crypto.subtle.importKey('raw', asBuf(params.keyBytes) as BufferSource, { name: 'AES-GCM' }, false, [
-        params.mode === 'encrypt' || params.mode === 'wrapkey' ? 'encrypt' : 'decrypt',
-    ])
+    const key = await crypto.subtle.importKey(
+        'raw',
+        asBuf(params.keyBytes) as BufferSource,
+        { name: 'AES-GCM' },
+        false,
+        [params.mode === 'encrypt' || params.mode === 'wrapkey' ? 'encrypt' : 'decrypt']
+    )
     const iv = params.nonce ?? crypto.getRandomValues(new Uint8Array(12))
 
     if (params.mode === 'encrypt' || params.mode === 'wrapkey') {
