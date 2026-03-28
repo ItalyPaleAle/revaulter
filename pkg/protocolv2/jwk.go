@@ -37,10 +37,12 @@ func (j ECP256PublicJWK) ValidatePublic() error {
 	if j.Kid != "" || j.Alg != "" || j.Use != "" {
 		return errors.New("JWK must not include 'kid', 'alg', or 'use' fields")
 	}
-	if _, err := decodeB64URL32(j.X); err != nil {
+	_, err := decodeB64URL32(j.X)
+	if err != nil {
 		return fmt.Errorf("invalid JWK 'x': %w", err)
 	}
-	if _, err := decodeB64URL32(j.Y); err != nil {
+	_, err = decodeB64URL32(j.Y)
+	if err != nil {
 		return fmt.Errorf("invalid JWK 'y': %w", err)
 	}
 	return nil
@@ -48,7 +50,8 @@ func (j ECP256PublicJWK) ValidatePublic() error {
 
 // ToECDHPublicKey converts the JWK into an ecdh public key.
 func (j ECP256PublicJWK) ToECDHPublicKey() (*ecdh.PublicKey, error) {
-	if err := j.ValidatePublic(); err != nil {
+	err := j.ValidatePublic()
+	if err != nil {
 		return nil, err
 	}
 
@@ -73,6 +76,7 @@ func ECP256PublicJWKFromECDH(pk *ecdh.PublicKey) (ECP256PublicJWK, error) {
 	if pk == nil {
 		return ECP256PublicJWK{}, errors.New("public key is nil")
 	}
+
 	raw := pk.Bytes()
 	if len(raw) != 65 || raw[0] != 0x04 {
 		return ECP256PublicJWK{}, fmt.Errorf("unexpected P-256 key encoding length: %d", len(raw))

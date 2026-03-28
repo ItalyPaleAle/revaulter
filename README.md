@@ -22,7 +22,7 @@ Supported operations (v2):
 
 ## Quick Start
 
-1. Configure `databaseDSN` and `dbPayloadEncryptionKey` in `config.yaml`.
+1. Configure `databaseDSN` and `secretKey` in `config.yaml`.
 2. Configure `baseUrl` and TLS.
 3. Start Revaulter.
 4. Open the web UI and self-register the first admin.

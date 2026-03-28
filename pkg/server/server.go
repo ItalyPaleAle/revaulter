@@ -55,10 +55,10 @@ type Server struct {
 	v2Subs map[string]chan struct{}
 
 	// v2 database and request store
-	v2DB           *v2db.DB
-	v2RequestStore *v2db.RequestStore
-	v2AuthStore    *v2db.AuthStore
-	v2WebAuthn     *webauthnlib.WebAuthn
+	db           *v2db.DB
+	requestStore *v2db.RequestStore
+	authStore    *v2db.AuthStore
+	webAuthn     *webauthnlib.WebAuthn
 	// Test/dev-only switch to allow placeholder v2 auth flows when WebAuthn is unavailable.
 	v2AllowAuthPlaceholder bool
 
@@ -134,7 +134,7 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 	}
 
 	// Initialize optional v2 DB-backed request store
-	err = s.initV2Store(log)
+	err = s.initStore(log)
 	if err != nil {
 		return err
 	}
@@ -352,8 +352,8 @@ func (s *Server) Run(ctx context.Context) error {
 	defer s.running.Store(false)
 	defer s.wg.Wait()
 	defer func() {
-		if s.v2DB != nil {
-			_ = s.v2DB.Close()
+		if s.db != nil {
+			_ = s.db.Close()
 		}
 	}()
 
@@ -448,7 +448,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 	}()
 
 	// Background v2 request expiry sweeper to notify long-poll/list subscribers when requests time out.
-	if s.v2RequestStore != nil {
+	if s.requestStore != nil {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -459,7 +459,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case now := <-ticker.C:
-					states, err := s.v2RequestStore.ExpirePendingAndReturnStates(ctx, now)
+					states, err := s.requestStore.ExpirePendingAndReturnStates(ctx, now)
 					if err != nil {
 						log.WarnContext(ctx, "v2 expiry sweeper failed", slog.Any("error", err))
 						continue

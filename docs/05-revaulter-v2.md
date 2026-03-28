@@ -14,12 +14,12 @@ Revaulter v2 does not need Azure AD or Azure Key Vault.
 
 ## Configuration
 
-Enable v2 by configuring:
+Enable by configuring:
 
 - `databaseDSN`
-- `dbPayloadEncryptionKey`
+- `secretKey`
 
-Optional v2 auth settings:
+Optional auth settings:
 
 - `webauthnRpId`
 - `webauthnRpName`

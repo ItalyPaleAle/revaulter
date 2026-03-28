@@ -59,39 +59,39 @@ type Config struct {
 	TLSKeyPEM string `env:"TLSKEYPEM" yaml:"tlsKeyPEM"`
 
 	// If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.
-	// Note that this value is used to restrict connections to the v2 `/v2/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
+	// Note that this value is used to restrict connections to the `/v2/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
 	AllowedIPs []string `env:"ALLOWEDIPS" yaml:"allowedIps"`
 
-	// If set, clients need to provide this shared key in calls made to the v2 `/v2/request` endpoints, in the `Authorization` header.
-	// Note that this option only applies to calls to the v2 `/v2/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
+	// If set, clients need to provide this shared key in calls made to the `/v2/request` endpoints, in the `Authorization` header.
+	// Note that this option only applies to calls to the `/v2/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
 	RequestKey string `env:"REQUESTKEY" yaml:"requestKey"`
 
-	// Connection string for the v2 database. The backend is inferred from the DSN (for example: `postgres://`, `postgresql://`, `sqlite://`).
+	// Connection string for the database. The backend is inferred from the DSN (for example: `postgres://`, `postgresql://`, `sqlite://`).
 	// If no scheme is present, the value is treated as a local SQLite file path.
 	// +required
 	DatabaseDSN string `env:"DATABASEDSN" yaml:"databaseDSN"`
 
-	// Shared key used to encrypt sensitive v2 payloads stored in the database.
-	// The value can be provided as raw base64/base64url or hex and is normalized to 32 bytes.
+	// Shared key used to encrypt sensitive payloads stored in the database.
+	// It's recommended to generate with `openssl rand -base64 32`
 	// +required
-	DBPayloadEncryptionKey string `env:"DBPAYLOADENCRYPTIONKEY" yaml:"dbPayloadEncryptionKey"`
+	SecretKey string `env:"SECRETKEY" yaml:"secretKey"`
 
-	// WebAuthn RP ID for v2 authentication. If empty, derived from `baseUrl`.
+	// WebAuthn RP ID for authentication. If empty, derived from `baseUrl`.
 	WebAuthnRPID string `env:"WEBAUTHNRPID" yaml:"webauthnRpId"`
 
-	// WebAuthn RP display name for v2 authentication.
-	// +default "Revaulter v2"
+	// WebAuthn RP display name for authentication.
+	// +default "Revaulter"
 	WebAuthnRPName string `env:"WEBAUTHNRPNAME" yaml:"webauthnRpName"`
 
-	// Allowed origins for WebAuthn v2 auth. If empty, falls back to `baseUrl` and `origins` (excluding `*`).
+	// Allowed origins for WebAuthn auth. If empty, falls back to `baseUrl` and `origins` (excluding `*`).
 	WebAuthnOrigins []string `env:"WEBAUTHNORIGINS" yaml:"webauthnOrigins"`
 
-	// Password factor mode for v2 admin auth.
+	// Password factor mode for admin auth.
 	// Supported values: "disabled", "required".
 	// +default "disabled"
 	PasswordFactorMode string `env:"PASSWORDFACTORMODE" yaml:"passwordFactorMode"`
 
-	// PBKDF2 iterations used for the v2 password factor.
+	// PBKDF2 iterations used for the password factor.
 	// +default 300000
 	PasswordPBKDF2Iterations int `env:"PASSWORDPBKDF2ITERATIONS" yaml:"passwordPbkdf2Iterations"`
 
@@ -172,7 +172,7 @@ type internal struct {
 	tokenSigningKeyParsed     []byte
 	cookieEncryptionKeyParsed jwk.Key
 	cookieSigningKeyParsed    jwk.Key
-	dbPayloadEncryptionKey    []byte
+	secretKey                 []byte
 }
 
 // GetTokenSigningKey returns the (parsed) token signing key
@@ -190,9 +190,9 @@ func (c *Config) GetCookieSigningKey() jwk.Key {
 	return c.internal.cookieSigningKeyParsed
 }
 
-// GetDBPayloadEncryptionKey returns the parsed v2 database payload encryption key, if configured.
-func (c *Config) GetDBPayloadEncryptionKey() []byte {
-	return c.internal.dbPayloadEncryptionKey
+// GetSecretKey returns the parsed secret key, if configured
+func (c *Config) GetSecretKey() []byte {
+	return c.internal.secretKey
 }
 
 // GetLoadedConfigPath returns the path to the config file that was loaded
@@ -219,8 +219,8 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	if c.DatabaseDSN == "" {
 		return errors.New("config entry key 'databaseDSN' missing")
 	}
-	if c.DBPayloadEncryptionKey == "" {
-		return errors.New("config entry key 'dbPayloadEncryptionKey' missing")
+	if c.SecretKey == "" {
+		return errors.New("config entry key 'secretKey' missing")
 	}
 
 	// Check for invalid values
@@ -229,9 +229,6 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	}
 	if c.RequestTimeout < time.Second {
 		return errors.New("config entry key 'requestTimeout' is invalid: must be greater than 1s")
-	}
-	if (c.DatabaseDSN == "") != (c.DBPayloadEncryptionKey == "") {
-		return errors.New("config entries 'databaseDSN' and 'dbPayloadEncryptionKey' must be configured together")
 	}
 	if c.PasswordFactorMode == "" {
 		c.PasswordFactorMode = "disabled"

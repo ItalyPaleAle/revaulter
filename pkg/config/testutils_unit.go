@@ -42,7 +42,7 @@ func SetTestConfig(values map[string]any) func() {
 	if err != nil {
 		panic(err)
 	}
-	err = config.SetDBPayloadEncryptionKey(nil)
+	err = config.SetSecretKey(nil)
 	if err != nil {
 		panic(err)
 	}

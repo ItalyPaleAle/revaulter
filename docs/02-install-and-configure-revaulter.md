@@ -28,7 +28,7 @@ Required:
 
 - `webhookUrl`
 - `databaseDSN`
-- `dbPayloadEncryptionKey`
+- `secretKey`
 
 Recommended:
 
@@ -40,7 +40,7 @@ Recommended:
 - `cookieEncryptionKey`
 - `tokenSigningKey`
 
-Optional v2 auth settings:
+Optional auth settings:
 
 - `webauthnRpId`
 - `webauthnRpName`

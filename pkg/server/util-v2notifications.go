@@ -1,7 +1,17 @@
 package server
 
-// Important: methods below must be called with s.lock held.
+import (
+	"github.com/italypaleale/revaulter/pkg/v2db"
+)
 
+func (s *Server) publishV2ListItem(item *v2db.V2RequestListItem) {
+	if s.v2Pubsub == nil || item == nil {
+		return
+	}
+	go s.v2Pubsub.Publish(item)
+}
+
+// Callers must hold lock with s.lock
 func (s *Server) subscribeToV2State(state string) chan struct{} {
 	ch := s.v2Subs[state]
 	if ch != nil {
@@ -12,6 +22,7 @@ func (s *Server) subscribeToV2State(state string) chan struct{} {
 	return ch
 }
 
+// Callers must hold lock with s.lock
 func (s *Server) unsubscribeToV2State(state string, watch chan struct{}) {
 	ch := s.v2Subs[state]
 	if ch != nil && ch == watch {
@@ -20,6 +31,7 @@ func (s *Server) unsubscribeToV2State(state string, watch chan struct{}) {
 	}
 }
 
+// Callers must hold lock with s.lock
 func (s *Server) notifyV2Subscriber(state string) {
 	ch := s.v2Subs[state]
 	if ch == nil {

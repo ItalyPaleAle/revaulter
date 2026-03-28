@@ -59,55 +59,55 @@ webhookUrl:
 ## allowedIps (list of strings)
 ## Description:
 ##   If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.
-##   Note that this value is used to restrict connections to the v2 `/v2/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
+##   Note that this value is used to restrict connections to the `/v2/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
 #allowedIps: 
 
 ## requestKey (string)
 ## Description:
-##   If set, clients need to provide this shared key in calls made to the v2 `/v2/request` endpoints, in the `Authorization` header.
-##   Note that this option only applies to calls to the v2 `/v2/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
+##   If set, clients need to provide this shared key in calls made to the `/v2/request` endpoints, in the `Authorization` header.
+##   Note that this option only applies to calls to the `/v2/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
 #requestKey: 
 
 ## databaseDSN (string)
 ## Description:
-##   Connection string for the v2 database. The backend is inferred from the DSN (for example: `postgres://`, `postgresql://`, `sqlite://`).
+##   Connection string for the database. The backend is inferred from the DSN (for example: `postgres://`, `postgresql://`, `sqlite://`).
 ##   If no scheme is present, the value is treated as a local SQLite file path.
 ## Required
 databaseDSN:
 
-## dbPayloadEncryptionKey (string)
+## secretKey (string)
 ## Description:
-##   Shared key used to encrypt sensitive v2 payloads stored in the database.
-##   The value can be provided as raw base64/base64url or hex and is normalized to 32 bytes.
+##   Shared key used to encrypt sensitive payloads stored in the database.
+##   It's recommended to generate with `openssl rand -base64 32`
 ## Required
-dbPayloadEncryptionKey:
+secretKey:
 
 ## webauthnRpId (string)
 ## Description:
-##   WebAuthn RP ID for v2 authentication. If empty, derived from `baseUrl`.
+##   WebAuthn RP ID for authentication. If empty, derived from `baseUrl`.
 #webauthnRpId: 
 
 ## webauthnRpName (string)
 ## Description:
-##   WebAuthn RP display name for v2 authentication.
-## Default: "Revaulter v2"
+##   WebAuthn RP display name for authentication.
+## Default: "Revaulter"
 #webauthnRpName: 
 
 ## webauthnOrigins (list of strings)
 ## Description:
-##   Allowed origins for WebAuthn v2 auth. If empty, falls back to `baseUrl` and `origins` (excluding `*`).
+##   Allowed origins for WebAuthn auth. If empty, falls back to `baseUrl` and `origins` (excluding `*`).
 #webauthnOrigins: 
 
 ## passwordFactorMode (string)
 ## Description:
-##   Password factor mode for v2 admin auth.
+##   Password factor mode for admin auth.
 ##   Supported values: "disabled", "required".
 ## Default: "disabled"
 #passwordFactorMode: 
 
 ## passwordPbkdf2Iterations (number)
 ## Description:
-##   PBKDF2 iterations used for the v2 password factor.
+##   PBKDF2 iterations used for the password factor.
 ## Default: 300000
 #passwordPbkdf2Iterations: 
 

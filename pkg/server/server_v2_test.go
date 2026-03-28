@@ -45,16 +45,16 @@ const (
 
 func TestMain(m *testing.M) {
 	_ = config.SetTestConfig(map[string]any{
-		"logLevel":               "info",
-		"port":                   testServerPort,
-		"bind":                   "127.0.0.1",
-		"sessionTimeout":         5 * time.Minute,
-		"requestTimeout":         5 * time.Minute,
-		"webhookUrl":             "http://test.local",
-		"databaseDSN":            ":memory:",
-		"dbPayloadEncryptionKey": "dGVzdC12Mi1kYi1rZXk",
-		"cookieEncryptionKey":    "hello-world",
-		"tokenSigningKey":        "hello-world",
+		"logLevel":            "info",
+		"port":                testServerPort,
+		"bind":                "127.0.0.1",
+		"sessionTimeout":      5 * time.Minute,
+		"requestTimeout":      5 * time.Minute,
+		"webhookUrl":          "http://test.local",
+		"databaseDSN":         ":memory:",
+		"secretKey":           "dGVzdC12Mi1kYi1rZXk",
+		"cookieEncryptionKey": "hello-world",
+		"tokenSigningKey":     "hello-world",
 	})
 
 	gin.SetMode(gin.ReleaseMode)
@@ -65,7 +65,7 @@ func TestServerV2AuthPlaceholderPasswordFactorRequired(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
 		"databaseDSN":              tmpDir + "/v2.db",
-		"dbPayloadEncryptionKey":   "dGVzdC12Mi1kYi1rZXk", // test-v2-db-key
+		"secretKey":                "dGVzdC12Mi1kYi1rZXk", // test-v2-db-key
 		"baseUrl":                  fmt.Sprintf("https://localhost:%d", testServerPort),
 		"origins":                  []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 		"passwordFactorMode":       "required",
@@ -76,7 +76,7 @@ func TestServerV2AuthPlaceholderPasswordFactorRequired(t *testing.T) {
 	require.NotNil(t, srv)
 	defer cleanup()
 	// Use placeholder v2 auth payloads in this test; WebAuthn verification is exercised elsewhere.
-	srv.v2WebAuthn = nil
+	srv.webAuthn = nil
 	srv.v2AllowAuthPlaceholder = true
 
 	stopServerFn := startTestServer(t, srv)
@@ -136,7 +136,7 @@ func TestServerV2AuthPlaceholderPasswordFactorRequired(t *testing.T) {
 	require.NotEmpty(t, res.Cookies())
 	var v2SessionCookie *http.Cookie
 	for _, c := range res.Cookies() {
-		if c.Name == v2SessionCookieName {
+		if c.Name == sessionCookieName {
 			v2SessionCookie = c
 			break
 		}
@@ -206,7 +206,7 @@ func TestServerV2AuthPlaceholderPasswordFactorRequired(t *testing.T) {
 	require.Equal(t, true, loginFinish["authenticated"])
 	var loginCookie *http.Cookie
 	for _, c := range res.Cookies() {
-		if c.Name == v2SessionCookieName {
+		if c.Name == sessionCookieName {
 			loginCookie = c
 			break
 		}
@@ -223,7 +223,7 @@ func TestServerV2AuthPlaceholderPasswordFactorRequired(t *testing.T) {
 	require.Equal(t, http.StatusOK, res3.StatusCode)
 
 	// Ensure auth key is encrypted at rest when using server init path (auth store gets payload key)
-	pf, err := srv.v2AuthStore.GetPasswordFactorByUsername(t.Context(), "alice")
+	pf, err := srv.authStore.GetPasswordFactorByUsername(t.Context(), "alice")
 	require.NoError(t, err)
 	require.NotNil(t, pf)
 	require.Equal(t, passwordAuthKey, pf.AuthKey)
@@ -234,17 +234,17 @@ func TestServerV2AuthPlaceholderPasswordFactorRequired(t *testing.T) {
 func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":            tmpDir + "/v2-req.db",
-		"dbPayloadEncryptionKey": "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":                fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":                []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		"passwordFactorMode":     "disabled",
+		"databaseDSN":        tmpDir + "/v2-req.db",
+		"secretKey":          "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":            fmt.Sprintf("https://localhost:%d", testServerPort),
+		"origins":            []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"passwordFactorMode": "disabled",
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
 	defer cleanup()
-	srv.v2WebAuthn = nil
+	srv.webAuthn = nil
 	srv.v2AllowAuthPlaceholder = true
 
 	stopServerFn := startTestServer(t, srv)
@@ -307,7 +307,7 @@ func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	var sessionCookie *http.Cookie
 	for _, c := range res.Cookies() {
-		if c.Name == v2SessionCookieName {
+		if c.Name == sessionCookieName {
 			sessionCookie = c
 			break
 		}
@@ -399,17 +399,17 @@ func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 func TestServerV2AdminManagedRegisterPlaceholder(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":            tmpDir + "/v2-admins.db",
-		"dbPayloadEncryptionKey": "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":                fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":                []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		"passwordFactorMode":     "disabled",
+		"databaseDSN":        tmpDir + "/v2-admins.db",
+		"secretKey":          "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":            fmt.Sprintf("https://localhost:%d", testServerPort),
+		"origins":            []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"passwordFactorMode": "disabled",
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
 	defer cleanup()
-	srv.v2WebAuthn = nil
+	srv.webAuthn = nil
 	srv.v2AllowAuthPlaceholder = true
 
 	stopServerFn := startTestServer(t, srv)
@@ -438,7 +438,7 @@ func TestServerV2AdminManagedRegisterPlaceholder(t *testing.T) {
 
 	getSessionCookie := func(res *http.Response) *http.Cookie {
 		for _, c := range res.Cookies() {
-			if c.Name == v2SessionCookieName {
+			if c.Name == sessionCookieName {
 				return c
 			}
 		}
@@ -500,10 +500,10 @@ func TestServerV2AdminManagedRegisterPlaceholder(t *testing.T) {
 func TestServerV2ModeDisablesLegacyRoutes(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":            tmpDir + "/v2-only.db",
-		"dbPayloadEncryptionKey": "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":                fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":                []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN": tmpDir + "/v2-only.db",
+		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
+		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -532,17 +532,17 @@ func TestServerV2ModeDisablesLegacyRoutes(t *testing.T) {
 func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":            tmpDir + "/v2-security.db",
-		"dbPayloadEncryptionKey": "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":                fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":                []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		"passwordFactorMode":     "disabled",
+		"databaseDSN":        tmpDir + "/v2-security.db",
+		"secretKey":          "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":            fmt.Sprintf("https://localhost:%d", testServerPort),
+		"origins":            []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"passwordFactorMode": "disabled",
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
 	defer cleanup()
-	srv.v2WebAuthn = nil
+	srv.webAuthn = nil
 	srv.v2AllowAuthPlaceholder = true
 
 	stopServerFn := startTestServer(t, srv)
@@ -586,7 +586,7 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	}
 	getSessionCookie := func(res *http.Response) *http.Cookie {
 		for _, c := range res.Cookies() {
-			if c.Name == v2SessionCookieName {
+			if c.Name == sessionCookieName {
 				return c
 			}
 		}
@@ -774,17 +774,17 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 func TestServerV2PlaceholderAuthDisabledByDefault(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":            tmpDir + "/v2-placeholder-disabled.db",
-		"dbPayloadEncryptionKey": "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":                fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":                []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN": tmpDir + "/v2-placeholder-disabled.db",
+		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
+		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
 	defer cleanup()
 	// Simulate WebAuthn unavailable without enabling placeholder fallback.
-	srv.v2WebAuthn = nil
+	srv.webAuthn = nil
 
 	stopServerFn := startTestServer(t, srv)
 	defer stopServerFn(t)
@@ -803,10 +803,10 @@ func TestServerV2PlaceholderAuthDisabledByDefault(t *testing.T) {
 func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":            tmpDir + "/v2-webhook.db",
-		"dbPayloadEncryptionKey": "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":                fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":                []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN": tmpDir + "/v2-webhook.db",
+		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
+		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	webhookRequests := make(chan *webhook.WebhookRequest, 1)

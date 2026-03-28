@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -14,14 +15,15 @@ import (
 	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
-func (s *Server) initV2Store(log *slog.Logger) error {
+func (s *Server) initStore(log *slog.Logger) error {
 	cfg := config.Get()
 	if cfg.DatabaseDSN == "" {
 		return nil
 	}
-	key := cfg.GetDBPayloadEncryptionKey()
+
+	key := cfg.GetSecretKey()
 	if len(key) == 0 {
-		return fmt.Errorf("databaseDSN configured but dbPayloadEncryptionKey was not parsed")
+		return errors.New("databaseDSN configured but secretKey was not parsed")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -29,33 +31,37 @@ func (s *Server) initV2Store(log *slog.Logger) error {
 
 	db, _, err := v2db.Open(ctx, cfg.DatabaseDSN)
 	if err != nil {
-		return fmt.Errorf("failed to open v2 database: %w", err)
+		return fmt.Errorf("failed to open database: %w", err)
 	}
+
 	authStore, err := v2db.NewAuthStoreWithPayloadKey(ctx, db, key, log)
 	if err != nil {
 		_ = db.Close()
-		return fmt.Errorf("failed to initialize v2 auth store: %w", err)
+		return fmt.Errorf("failed to initialize auth store: %w", err)
 	}
+
 	store, err := v2db.NewRequestStore(ctx, db, key, log)
 	if err != nil {
 		_ = db.Close()
-		return fmt.Errorf("failed to initialize v2 request store: %w", err)
+		return fmt.Errorf("failed to initialize request store: %w", err)
 	}
 
-	s.v2DB = db
-	s.v2AuthStore = authStore
-	s.v2RequestStore = store
-	if wa, err := s.initV2WebAuthn(); err != nil {
+	s.db = db
+	s.authStore = authStore
+	s.requestStore = store
+
+	s.webAuthn, err = s.initWebAuthn()
+	if err != nil {
 		_ = db.Close()
-		return fmt.Errorf("failed to initialize v2 WebAuthn config: %w", err)
-	} else {
-		s.v2WebAuthn = wa
+		return fmt.Errorf("failed to initialize WebAuthn config: %w", err)
 	}
+
 	return nil
 }
 
-func (s *Server) initV2WebAuthn() (*webauthnlib.WebAuthn, error) {
+func (s *Server) initWebAuthn() (*webauthnlib.WebAuthn, error) {
 	cfg := config.Get()
+
 	rpID := strings.ToLower(strings.TrimSpace(cfg.WebAuthnRPID))
 	if rpID == "" {
 		base, err := url.Parse(cfg.BaseUrl)
@@ -64,8 +70,9 @@ func (s *Server) initV2WebAuthn() (*webauthnlib.WebAuthn, error) {
 		}
 		rpID = strings.ToLower(base.Hostname())
 	}
+
 	if rpID == "" {
-		return nil, fmt.Errorf("invalid WebAuthn RP ID")
+		return nil, errors.New("cannot determine WebAuthn RP ID: configuration values for 'webauthnRpId' and 'baseUrl' are both empty")
 	}
 
 	origins := make([]string, 0, 1+len(cfg.Origins)+len(cfg.WebAuthnOrigins))
@@ -97,16 +104,12 @@ func (s *Server) initV2WebAuthn() (*webauthnlib.WebAuthn, error) {
 		filtered = append(filtered, o)
 	}
 	if len(filtered) == 0 {
-		return nil, fmt.Errorf("no valid WebAuthn origins configured")
-	}
-	rpName := strings.TrimSpace(cfg.WebAuthnRPName)
-	if rpName == "" {
-		rpName = "Revaulter v2"
+		return nil, errors.New("no valid WebAuthn origins configured")
 	}
 
 	return webauthnlib.New(&webauthnlib.Config{
 		RPID:          rpID,
-		RPDisplayName: rpName,
+		RPDisplayName: cfg.WebAuthnRPName,
 		RPOrigins:     filtered,
 	})
 }

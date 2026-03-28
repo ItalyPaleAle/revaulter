@@ -8,34 +8,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSetDBPayloadEncryptionKey(t *testing.T) {
+func TestSetSecretKey(t *testing.T) {
 	raw := []byte("supersecret-key-material")
 
 	t.Run("parses base64", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
-			"dbPayloadEncryptionKey": base64.RawURLEncoding.EncodeToString(raw),
+			"secretKey": base64.RawURLEncoding.EncodeToString(raw),
 		}))
-		err := config.SetDBPayloadEncryptionKey(nil)
+		err := config.SetSecretKey(nil)
 		require.NoError(t, err)
-		require.Len(t, config.GetDBPayloadEncryptionKey(), 32)
+		require.Len(t, config.GetSecretKey(), 32)
 	})
 
 	t.Run("parses hex", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
-			"dbPayloadEncryptionKey": hex.EncodeToString(raw),
+			"secretKey": hex.EncodeToString(raw),
 		}))
-		err := config.SetDBPayloadEncryptionKey(nil)
+		err := config.SetSecretKey(nil)
 		require.NoError(t, err)
-		require.Len(t, config.GetDBPayloadEncryptionKey(), 32)
+		require.Len(t, config.GetSecretKey(), 32)
 	})
 
 	t.Run("invalid", func(t *testing.T) {
-		prev := config.DBPayloadEncryptionKey
+		prev := config.SecretKey
 		t.Cleanup(func() {
-			config.DBPayloadEncryptionKey = prev
+			config.SecretKey = prev
 		})
-		config.DBPayloadEncryptionKey = "%%%"
-		err := config.SetDBPayloadEncryptionKey(nil)
+		config.SecretKey = "%%%"
+		err := config.SetSecretKey(nil)
 		require.Error(t, err)
 	})
 }

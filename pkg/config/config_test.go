@@ -21,9 +21,9 @@ func TestValidateConfig(t *testing.T) {
 	})
 
 	t.Cleanup(SetTestConfig(map[string]any{
-		"webhookUrl":             "http://test.local",
-		"databaseDSN":            "sqlite://./test.db",
-		"dbPayloadEncryptionKey": "aGVsbG8",
+		"webhookUrl":  "http://test.local",
+		"databaseDSN": "sqlite://./test.db",
+		"secretKey":   "aGVsbG8",
 	}))
 
 	t.Run("succeeds with all required vars", func(t *testing.T) {
@@ -81,21 +81,21 @@ func TestValidateConfig(t *testing.T) {
 		require.ErrorContains(t, err, "'requestTimeout' is invalid")
 	})
 
-	t.Run("fails when databaseDSN is set without dbPayloadEncryptionKey", func(t *testing.T) {
+	t.Run("fails when databaseDSN is set without secretKey", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
-			"databaseDSN":            "sqlite://./test.db",
-			"dbPayloadEncryptionKey": "",
+			"databaseDSN": "sqlite://./test.db",
+			"secretKey":   "",
 		}))
 
 		err := config.Validate(nil)
 		require.Error(t, err)
-		require.ErrorContains(t, err, "'dbPayloadEncryptionKey' missing")
+		require.ErrorContains(t, err, "'secretKey' missing")
 	})
 
-	t.Run("fails when dbPayloadEncryptionKey is set without databaseDSN", func(t *testing.T) {
+	t.Run("fails when secretKey is set without databaseDSN", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
-			"databaseDSN":            "",
-			"dbPayloadEncryptionKey": "aGVsbG8",
+			"databaseDSN": "",
+			"secretKey":   "aGVsbG8",
 		}))
 
 		err := config.Validate(nil)

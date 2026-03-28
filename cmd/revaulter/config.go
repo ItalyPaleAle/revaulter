@@ -178,8 +178,8 @@ func processConfig(log *slog.Logger, cfg *config.Config) (err error) {
 		return err
 	}
 
-	// Parse optional v2 DB payload encryption key
-	err = cfg.SetDBPayloadEncryptionKey(log)
+	// Parse optional DB payload encryption key
+	err = cfg.SetSecretKey(log)
 	if err != nil {
 		return err
 	}

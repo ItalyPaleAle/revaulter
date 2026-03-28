@@ -1,9 +1,5 @@
 package protocolv2
 
-import (
-	"encoding/json"
-)
-
 type RequestCreateBody struct {
 	TargetUser string `json:"targetUser,omitempty"`
 	KeyLabel   string `json:"keyLabel,omitempty"`
@@ -36,5 +32,4 @@ type RequestResultResponse struct {
 	Failed           bool              `json:"failed,omitempty"`
 	ResponseEnvelope *ResponseEnvelope `json:"responseEnvelope,omitempty"`
 	Error            string            `json:"error,omitempty"`
-	Response         json.RawMessage   `json:"response,omitempty"` // Reserved for compatibility during migration
 }

@@ -69,7 +69,7 @@ func (s *Server) RouteV2AuthAdminRegisterBegin(c *gin.Context) {
 }
 
 func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
-	if s.v2AuthStore == nil {
+	if s.authStore == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
 		return
 	}
@@ -85,7 +85,7 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 		return
 	}
 
-	count, err := s.v2AuthStore.CountAdmins(c.Request.Context())
+	count, err := s.authStore.CountAdmins(c.Request.Context())
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -101,7 +101,7 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 			return
 		}
 	}
-	if existing, err := s.v2AuthStore.GetAdminByUsername(c.Request.Context(), req.Username); err != nil {
+	if existing, err := s.authStore.GetAdminByUsername(c.Request.Context(), req.Username); err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	} else if existing != nil {
@@ -127,12 +127,12 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 	if adminManaged {
 		challengeKind = "register-admin"
 	}
-	if s.v2WebAuthn != nil {
+	if s.webAuthn != nil {
 		user, err := newV2WebAuthnUserForRegistration(req.Username, req.DisplayName)
 		if err == nil {
-			creation, session, waErr := s.v2WebAuthn.BeginRegistration(user)
+			creation, session, waErr := s.webAuthn.BeginRegistration(user)
 			if waErr == nil {
-				ch, err = s.v2AuthStore.BeginChallengeWithPayload(c.Request.Context(), challengeKind, req.Username, session.Challenge, session.Expires, v2RegisterChallengePayload{
+				ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), challengeKind, req.Username, session.Challenge, session.Expires, v2RegisterChallengePayload{
 					WebAuthnSession:    session,
 					PasswordRequired:   pwRequired,
 					PasswordSalt:       pwSalt,
@@ -169,7 +169,7 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	ch, err = s.v2AuthStore.BeginChallengeWithPayload(c.Request.Context(), challengeKind, req.Username, fallbackChallenge, time.Now().Add(5*time.Minute), v2RegisterChallengePayload{
+	ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), challengeKind, req.Username, fallbackChallenge, time.Now().Add(5*time.Minute), v2RegisterChallengePayload{
 		PasswordRequired:   pwRequired,
 		PasswordSalt:       pwSalt,
 		PasswordIterations: pwIterations,
@@ -201,7 +201,7 @@ func (s *Server) RouteV2AuthAdminRegisterFinish(c *gin.Context) {
 }
 
 func (s *Server) routeV2AuthRegisterFinish(c *gin.Context, adminManaged bool) {
-	if s.v2AuthStore == nil {
+	if s.authStore == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
 		return
 	}
@@ -247,7 +247,7 @@ func (s *Server) routeV2AuthRegisterFinish(c *gin.Context, adminManaged bool) {
 }
 
 func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
-	if s.v2AuthStore == nil {
+	if s.authStore == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
 		return
 	}
@@ -262,7 +262,7 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 		return
 	}
 
-	admin, err := s.v2AuthStore.GetAdminByUsername(c.Request.Context(), req.Username)
+	admin, err := s.authStore.GetAdminByUsername(c.Request.Context(), req.Username)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -271,14 +271,14 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Invalid login"))
 		return
 	}
-	credIDs, err := s.v2AuthStore.ListCredentialIDs(c.Request.Context(), req.Username)
+	credIDs, err := s.authStore.ListCredentialIDs(c.Request.Context(), req.Username)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 	cfg := config.Get()
 	pwRequired := cfg.PasswordFactorMode == "required"
-	pwFactor, err := s.v2AuthStore.GetPasswordFactorByUsername(c.Request.Context(), req.Username)
+	pwFactor, err := s.authStore.GetPasswordFactorByUsername(c.Request.Context(), req.Username)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -301,13 +301,13 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 	}
 	var ch *v2db.AuthChallenge
 	var prfSalt string
-	if s.v2WebAuthn != nil {
+	if s.webAuthn != nil {
 		user, uErr := s.v2LoadWebAuthnUser(c.Request.Context(), req.Username)
 		if uErr == nil && user != nil {
 			buf := make([]byte, 32)
 			if _, rErr := rand.Read(buf); rErr == nil {
 				prfSalt = base64.RawURLEncoding.EncodeToString(buf)
-				assertion, session, waErr := s.v2WebAuthn.BeginLogin(user,
+				assertion, session, waErr := s.webAuthn.BeginLogin(user,
 					webauthnlib.WithAssertionExtensions(protocol.AuthenticationExtensions{
 						"prf": map[string]any{
 							"eval": map[string]any{
@@ -317,7 +317,7 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 					}),
 				)
 				if waErr == nil {
-					ch, err = s.v2AuthStore.BeginChallengeWithPayload(c.Request.Context(), "login", req.Username, session.Challenge, session.Expires, v2LoginChallengePayload{
+					ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), "login", req.Username, session.Challenge, session.Expires, v2LoginChallengePayload{
 						Challenge:              session.Challenge,
 						WebAuthnSession:        session,
 						PasswordRequired:       pwRequired,
@@ -359,7 +359,7 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	ch, err = s.v2AuthStore.BeginChallengeWithPayload(c.Request.Context(), "login", req.Username, fallbackChallenge, time.Now().Add(5*time.Minute), v2LoginChallengePayload{
+	ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), "login", req.Username, fallbackChallenge, time.Now().Add(5*time.Minute), v2LoginChallengePayload{
 		Challenge:              fallbackChallenge,
 		PasswordRequired:       pwRequired,
 		PasswordSalt:           pwSalt,
@@ -385,7 +385,7 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
-	if s.v2AuthStore == nil {
+	if s.authStore == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
 		return
 	}
@@ -419,10 +419,10 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthSession(c *gin.Context) {
-	username, _ := c.Get(contextKeyV2AdminUsername)
-	expiryAny, _ := c.Get(contextKeyV2SessionExpiry)
+	username, _ := c.Get(contextKeyAdminUsername)
+	expiryAny, _ := c.Get(contextKeySessionExpiry)
 	expiry, _ := expiryAny.(time.Time)
-	passwordVerifiedAny, _ := c.Get(contextKeyV2PasswordVerified)
+	passwordVerifiedAny, _ := c.Get(contextKeyPasswordVerified)
 	passwordVerified, _ := passwordVerifiedAny.(bool)
 	if username == nil || expiry.IsZero() {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -437,16 +437,16 @@ func (s *Server) RouteV2AuthSession(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthLogout(c *gin.Context) {
-	if s.v2AuthStore == nil {
+	if s.authStore == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
 		return
 	}
-	sessID, _ := c.Get(contextKeyV2SessionID)
+	sessID, _ := c.Get(contextKeySessionID)
 	if id, _ := sessID.(string); id != "" {
-		_ = s.v2AuthStore.RevokeSession(c.Request.Context(), id)
+		_ = s.authStore.RevokeSession(c.Request.Context(), id)
 	}
 	secureCookie := config.Get().ForceSecureCookies || c.Request.URL.Scheme == "https:"
-	c.SetCookie(v2SessionCookieName, "", -1, "/v2", c.Request.URL.Host, secureCookie, true)
+	c.SetCookie(sessionCookieName, "", -1, "/v2", c.Request.URL.Host, secureCookie, true)
 	c.JSON(http.StatusOK, gin.H{"loggedOut": true})
 }
 
@@ -459,7 +459,7 @@ func (s *Server) setV2SessionCookie(c *gin.Context, sess *v2db.AuthSession) erro
 		ttl = time.Second
 	}
 	secureCookie := config.Get().ForceSecureCookies || c.Request.URL.Scheme == "https:"
-	return setSecureCookie(c, v2SessionCookieName, sess.ID, ttl, "/v2", c.Request.URL.Host, secureCookie, true, serializeSecureCookieEncryptedJWT)
+	return setSecureCookie(c, sessionCookieName, sess.ID, ttl, "/v2", c.Request.URL.Host, secureCookie, true, serializeSecureCookieEncryptedJWT)
 }
 
 func normalizeV2Username(u string) string {
@@ -490,7 +490,7 @@ func buildV2PasswordProofMessage(username, challengeID, webauthnChallenge, passw
 func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (*v2db.AuthSession, error) {
 	cfg := config.Get()
 	pwRequired := cfg.PasswordFactorMode == "required"
-	if s.v2WebAuthn == nil {
+	if s.webAuthn == nil {
 		if !s.v2AllowAuthPlaceholder {
 			return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 		}
@@ -499,7 +499,7 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 			return nil, NewResponseError(http.StatusBadRequest, "Invalid registration credential payload")
 		}
 		var payload v2RegisterChallengePayload
-		ok, err := s.v2AuthStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "register", req.Username, &payload)
+		ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "register", req.Username, &payload)
 		if err != nil {
 			return nil, err
 		}
@@ -522,7 +522,7 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 				AuthKey: req.PasswordFactor.AuthKey,
 			}
 		}
-		return s.v2AuthStore.RegisterFirstAdmin(c.Request.Context(), v2db.RegisterFirstAdminInput{
+		return s.authStore.RegisterFirstAdmin(c.Request.Context(), v2db.RegisterFirstAdminInput{
 			Username:       req.Username,
 			DisplayName:    req.DisplayName,
 			CredentialID:   legacy.ID,
@@ -534,7 +534,7 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 	}
 
 	var payload v2RegisterChallengePayload
-	ok, err := s.v2AuthStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "register", req.Username, &payload)
+	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "register", req.Username, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -557,7 +557,7 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 	if err != nil {
 		return nil, err
 	}
-	cred, err := s.v2WebAuthn.FinishRegistration(user, *payload.WebAuthnSession, waReq)
+	cred, err := s.webAuthn.FinishRegistration(user, *payload.WebAuthnSession, waReq)
 	if err != nil {
 		return nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn registration verification failed: %v", err)
 	}
@@ -565,7 +565,7 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 	if err != nil {
 		return nil, err
 	}
-	sess, err := s.v2AuthStore.RegisterFirstAdmin(c.Request.Context(), v2db.RegisterFirstAdminInput{
+	sess, err := s.authStore.RegisterFirstAdmin(c.Request.Context(), v2db.RegisterFirstAdminInput{
 		Username:     req.Username,
 		DisplayName:  req.DisplayName,
 		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
@@ -601,7 +601,7 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 	cfg := config.Get()
 	pwRequired := cfg.PasswordFactorMode == "required"
 	challengeKind := "register-admin"
-	if s.v2WebAuthn == nil {
+	if s.webAuthn == nil {
 		if !s.v2AllowAuthPlaceholder {
 			return NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 		}
@@ -610,7 +610,7 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 			return NewResponseError(http.StatusBadRequest, "Invalid registration credential payload")
 		}
 		var payload v2RegisterChallengePayload
-		ok, err := s.v2AuthStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, challengeKind, req.Username, &payload)
+		ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, challengeKind, req.Username, &payload)
 		if err != nil {
 			return err
 		}
@@ -633,7 +633,7 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 				AuthKey: req.PasswordFactor.AuthKey,
 			}
 		}
-		err = s.v2AuthStore.RegisterAdmin(c.Request.Context(), v2db.RegisterAdminInput{
+		err = s.authStore.RegisterAdmin(c.Request.Context(), v2db.RegisterAdminInput{
 			Username:       req.Username,
 			DisplayName:    req.DisplayName,
 			CredentialID:   legacy.ID,
@@ -648,7 +648,7 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 	}
 
 	var payload v2RegisterChallengePayload
-	ok, err := s.v2AuthStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, challengeKind, req.Username, &payload)
+	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, challengeKind, req.Username, &payload)
 	if err != nil {
 		return err
 	}
@@ -670,7 +670,7 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 	if err != nil {
 		return err
 	}
-	cred, err := s.v2WebAuthn.FinishRegistration(user, *payload.WebAuthnSession, waReq)
+	cred, err := s.webAuthn.FinishRegistration(user, *payload.WebAuthnSession, waReq)
 	if err != nil {
 		return NewResponseErrorf(http.StatusUnauthorized, "WebAuthn registration verification failed: %v", err)
 	}
@@ -678,7 +678,7 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 	if err != nil {
 		return err
 	}
-	err = s.v2AuthStore.RegisterAdmin(c.Request.Context(), v2db.RegisterAdminInput{
+	err = s.authStore.RegisterAdmin(c.Request.Context(), v2db.RegisterAdminInput{
 		Username:     req.Username,
 		DisplayName:  req.DisplayName,
 		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
@@ -712,7 +712,7 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v2db.AuthSession, error) {
 	cfg := config.Get()
 	pwRequiredCfg := cfg.PasswordFactorMode == "required"
-	if s.v2WebAuthn == nil {
+	if s.webAuthn == nil {
 		if !s.v2AllowAuthPlaceholder {
 			return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 		}
@@ -721,7 +721,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 			return nil, NewResponseError(http.StatusBadRequest, "Invalid login credential payload")
 		}
 		var payload v2LoginChallengePayload
-		ok, err := s.v2AuthStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", req.Username, &payload)
+		ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", req.Username, &payload)
 		if err != nil {
 			return nil, err
 		}
@@ -733,7 +733,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 			if req.PasswordProof == "" {
 				return nil, NewResponseError(http.StatusUnauthorized, "Password factor proof is required")
 			}
-			pf, err := s.v2AuthStore.GetPasswordFactorByUsername(c.Request.Context(), req.Username)
+			pf, err := s.authStore.GetPasswordFactorByUsername(c.Request.Context(), req.Username)
 			if err != nil {
 				return nil, err
 			}
@@ -750,7 +750,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 			}
 			passwordVerified = true
 		}
-		sess, err := s.v2AuthStore.Login(c.Request.Context(), v2db.LoginInput{
+		sess, err := s.authStore.Login(c.Request.Context(), v2db.LoginInput{
 			Username:         req.Username,
 			CredentialID:     legacy.ID,
 			SignCount:        legacy.SignCount,
@@ -764,7 +764,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 	}
 
 	var payload v2LoginChallengePayload
-	ok, err := s.v2AuthStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", req.Username, &payload)
+	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", req.Username, &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -785,7 +785,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 	if err != nil {
 		return nil, err
 	}
-	cred, err := s.v2WebAuthn.FinishLogin(user, *payload.WebAuthnSession, waReq)
+	cred, err := s.webAuthn.FinishLogin(user, *payload.WebAuthnSession, waReq)
 	if err != nil {
 		return nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
 	}
@@ -794,7 +794,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 		if req.PasswordProof == "" {
 			return nil, NewResponseError(http.StatusUnauthorized, "Password factor proof is required")
 		}
-		pf, err := s.v2AuthStore.GetPasswordFactorByUsername(c.Request.Context(), req.Username)
+		pf, err := s.authStore.GetPasswordFactorByUsername(c.Request.Context(), req.Username)
 		if err != nil {
 			return nil, err
 		}
@@ -811,7 +811,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 		}
 		passwordVerified = true
 	}
-	sess, err := s.v2AuthStore.Login(c.Request.Context(), v2db.LoginInput{
+	sess, err := s.authStore.Login(c.Request.Context(), v2db.LoginInput{
 		Username:         req.Username,
 		CredentialID:     base64.RawURLEncoding.EncodeToString(cred.ID),
 		SignCount:        int64(cred.Authenticator.SignCount),
@@ -895,14 +895,14 @@ func (u *v2WebAuthnUser) WebAuthnDisplayName() string                   { return
 func (u *v2WebAuthnUser) WebAuthnCredentials() []webauthnlib.Credential { return u.credentials }
 
 func (s *Server) v2LoadWebAuthnUser(ctx context.Context, username string) (*v2WebAuthnUser, error) {
-	admin, err := s.v2AuthStore.GetAdminByUsername(ctx, username)
+	admin, err := s.authStore.GetAdminByUsername(ctx, username)
 	if err != nil {
 		return nil, err
 	}
 	if admin == nil || admin.Status != "active" {
 		return nil, nil
 	}
-	records, err := s.v2AuthStore.ListCredentials(ctx, username)
+	records, err := s.authStore.ListCredentials(ctx, username)
 	if err != nil {
 		return nil, err
 	}

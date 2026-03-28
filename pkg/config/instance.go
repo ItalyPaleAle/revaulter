@@ -43,6 +43,7 @@ func GetDefaultConfig() *Config {
 		SessionTimeout:      5 * time.Minute,
 		RequestTimeout:      5 * time.Minute,
 		OmitHealthCheckLogs: true,
+		WebAuthnRPName:      "Revaulter",
 	}
 }
 

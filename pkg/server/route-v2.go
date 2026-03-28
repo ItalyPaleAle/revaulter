@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
@@ -24,7 +26,7 @@ import (
 
 var noteValidate = regexp.MustCompile(`[^A-Za-z0-9 .\/_-]`)
 
-type v2ConfirmRequest struct {
+type confirmRequest struct {
 	State            string                       `json:"state"`
 	Confirm          bool                         `json:"confirm,omitempty"`
 	Cancel           bool                         `json:"cancel,omitempty"`
@@ -33,16 +35,23 @@ type v2ConfirmRequest struct {
 
 func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if s.v2RequestStore == nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 database is not configured"))
+		log := logging.LogFromContext(c.Request.Context())
+		span := trace.SpanFromContext(c.Request.Context())
+
+		if s.requestStore == nil {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
 			return
 		}
+
 		var body protocolv2.RequestCreateBody
-		if err := c.ShouldBindJSON(&body); err != nil {
+		err := c.ShouldBindJSON(&body)
+		if err != nil {
 			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid request body: %v", err))
 			return
 		}
-		if err := validateV2CreateBody(operation, body); err != nil {
+
+		err = validateV2CreateBody(operation, body)
+		if err != nil {
 			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid request: %v", err))
 			return
 		}
@@ -55,7 +64,8 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 		state := id.String()
-		err = s.v2RequestStore.CreateRequest(c.Request.Context(), v2db.CreateRequestInput{
+
+		err = s.requestStore.CreateRequest(c.Request.Context(), v2db.CreateRequestInput{
 			State:       state,
 			Operation:   operation,
 			RequestorIP: c.ClientIP(),
@@ -84,10 +94,12 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			Expiry:     now.Add(timeout).Unix(),
 			Note:       body.Note,
 		})
-		// Notify admins via webhook in background (v2-specific message).
+
+		// Notify admins via webhook in background
 		go func() {
-			whCtx := context.Background()
-			if err := s.webhook.SendWebhook(whCtx, &webhook.WebhookRequest{
+			// Use a background context because the request's context is canceled when the handler returns
+			webhookCtx := trace.ContextWithSpan(context.Background(), span)
+			webhookErr := s.webhook.SendWebhook(webhookCtx, &webhook.WebhookRequest{
 				Flow:          "v2",
 				OperationName: operation,
 				TargetUser:    body.TargetUser,
@@ -96,16 +108,19 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 				StateId:       state,
 				Requestor:     c.ClientIP(),
 				Note:          body.Note,
-			}); err != nil {
-				logging.LogFromContext(c.Request.Context()).ErrorContext(c.Request.Context(), "Error sending v2 webhook notification", "error", err)
+			})
+			if webhookErr != nil {
+				log.ErrorContext(webhookCtx, "Error sending webhook", slog.Any("error", webhookErr))
+				return
 			}
+			log.InfoContext(webhookCtx, "Sent webhook notification")
 		}()
 	}
 }
 
 func (s *Server) RouteV2RequestResult(c *gin.Context) {
-	if s.v2RequestStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 database is not configured"))
+	if s.requestStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
 		return
 	}
 	state := c.Param("state")
@@ -115,7 +130,7 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 	}
 
 	for {
-		rec, err := s.v2RequestStore.GetRequest(c.Request.Context(), state)
+		rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
 		if err != nil {
 			AbortWithErrorJSON(c, err)
 			return
@@ -168,20 +183,21 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 }
 
 func (s *Server) RouteV2APIList(c *gin.Context) {
-	if s.v2RequestStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 database is not configured"))
+	if s.requestStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
 		return
 	}
-	if strings.EqualFold(c.GetHeader("accept"), ndJSONContentType) {
+	if strings.ToLower(c.GetHeader("accept")) == ndJSONContentType {
 		s.routeV2APIListStream(c)
 		return
 	}
-	list, err := s.v2RequestStore.ListPending(c.Request.Context())
+
+	list, err := s.requestStore.ListPending(c.Request.Context())
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	username, _ := c.Get(contextKeyV2AdminUsername)
+	username, _ := c.Get(contextKeyAdminUsername)
 	userStr, _ := username.(string)
 	if userStr != "" {
 		filtered := list[:0]
@@ -196,12 +212,12 @@ func (s *Server) RouteV2APIList(c *gin.Context) {
 }
 
 func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
-	if s.v2RequestStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 database is not configured"))
+	if s.requestStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
 		return
 	}
 	state := c.Param("state")
-	rec, err := s.v2RequestStore.GetRequest(c.Request.Context(), state)
+	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -230,11 +246,11 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 }
 
 func (s *Server) RouteV2APIConfirm(c *gin.Context) {
-	if s.v2RequestStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 database is not configured"))
+	if s.requestStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
 		return
 	}
-	var req v2ConfirmRequest
+	var req confirmRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
@@ -249,7 +265,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	}
 
 	if req.Cancel {
-		rec, err := s.v2RequestStore.GetRequest(c.Request.Context(), req.State)
+		rec, err := s.requestStore.GetRequest(c.Request.Context(), req.State)
 		if err != nil {
 			AbortWithErrorJSON(c, err)
 			return
@@ -262,7 +278,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 			return
 		}
-		ok, err := s.v2RequestStore.CancelRequest(c.Request.Context(), req.State)
+		ok, err := s.requestStore.CancelRequest(c.Request.Context(), req.State)
 		if err != nil {
 			AbortWithErrorJSON(c, err)
 			return
@@ -290,7 +306,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid responseEnvelope: %v", err))
 		return
 	}
-	rec, err := s.v2RequestStore.GetRequest(c.Request.Context(), req.State)
+	rec, err := s.requestStore.GetRequest(c.Request.Context(), req.State)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -307,7 +323,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid responseEnvelope binding: %v", err))
 		return
 	}
-	ok, err := s.v2RequestStore.CompleteRequest(c.Request.Context(), req.State, *req.ResponseEnvelope)
+	ok, err := s.requestStore.CompleteRequest(c.Request.Context(), req.State, *req.ResponseEnvelope)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -365,7 +381,7 @@ func validateV2ResponseEnvelopeBinding(env protocolv2.ResponseEnvelope, rec *v2d
 }
 
 func (s *Server) v2AuthorizeTargetUser(c *gin.Context, targetUser string) bool {
-	usernameAny, ok := c.Get(contextKeyV2AdminUsername)
+	usernameAny, ok := c.Get(contextKeyAdminUsername)
 	if !ok {
 		return false
 	}
@@ -377,11 +393,14 @@ func (s *Server) v2AuthorizeTargetUser(c *gin.Context, targetUser string) bool {
 }
 
 func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
+	// Validate the operation
 	switch op {
 	case "encrypt", "decrypt", "wrapkey", "unwrapkey":
 	default:
 		return NewResponseError(http.StatusBadRequest, "Invalid operation")
 	}
+
+	// Check required fields
 	if body.TargetUser == "" {
 		return NewResponseError(http.StatusBadRequest, "missing parameter 'targetUser'")
 	}
@@ -394,47 +413,70 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 	if body.Value == "" {
 		return NewResponseError(http.StatusBadRequest, "missing parameter 'value'")
 	}
-	if _, err := utils.DecodeBase64String(body.Value); err != nil {
+
+	// Validate base64-encoded fields
+	_, err := utils.DecodeBase64String(body.Value)
+	if err != nil {
 		return NewResponseError(http.StatusBadRequest, "invalid 'value' format")
 	}
-	if _, err := utils.DecodeBase64String(body.Nonce); err != nil {
+	_, err = utils.DecodeBase64String(body.Nonce)
+	if err != nil {
 		return NewResponseError(http.StatusBadRequest, "invalid 'nonce' format")
 	}
-	if _, err := utils.DecodeBase64String(body.Tag); err != nil {
+	_, err = utils.DecodeBase64String(body.Tag)
+	if err != nil {
 		return NewResponseError(http.StatusBadRequest, "invalid 'tag' format")
 	}
-	if _, err := utils.DecodeBase64String(body.AdditionalData); err != nil {
+	_, err = utils.DecodeBase64String(body.AdditionalData)
+	if err != nil {
 		return NewResponseError(http.StatusBadRequest, "invalid 'additionalData' format")
 	}
+
+	// Validate optional note
 	if body.Note != "" && noteValidate.MatchString(body.Note) {
 		return NewResponseError(http.StatusBadRequest, "parameter 'note' contains invalid characters")
 	}
 	if len(body.Note) > 40 {
 		return NewResponseError(http.StatusBadRequest, "parameter 'note' cannot be longer than 40 characters")
 	}
-	if err := body.ClientTransportKey.ValidatePublic(); err != nil {
+
+	// Validate the client transport key
+	err = body.ClientTransportKey.ValidatePublic()
+	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
 func validateV2ResponseEnvelope(env protocolv2.ResponseEnvelope) error {
+	// Currently only supported transport algorithm is ECDH+P-256 with AES-256-GCM
 	if env.TransportAlg != "ecdh-p256+a256gcm" {
 		return NewResponseError(http.StatusBadRequest, "unsupported transportAlg")
 	}
-	if err := env.BrowserEphemeralPublicKey.ValidatePublic(); err != nil {
+
+	// Validate the browser's ephemeral public key
+	err := env.BrowserEphemeralPublicKey.ValidatePublic()
+	if err != nil {
 		return err
 	}
+
+	// Validate required fields
 	if env.Nonce == "" || env.Ciphertext == "" {
 		return NewResponseError(http.StatusBadRequest, "nonce and ciphertext are required")
 	}
-	if _, err := utils.DecodeBase64String(env.Nonce); err != nil {
+
+	// Validate base64-encoded fields
+	_, err = utils.DecodeBase64String(env.Nonce)
+	if err != nil {
 		return NewResponseError(http.StatusBadRequest, "invalid nonce format")
 	}
-	if _, err := utils.DecodeBase64String(env.Ciphertext); err != nil {
+	_, err = utils.DecodeBase64String(env.Ciphertext)
+	if err != nil {
 		return NewResponseError(http.StatusBadRequest, "invalid ciphertext format")
 	}
-	if _, err := utils.DecodeBase64String(env.AAD); err != nil {
+	_, err = utils.DecodeBase64String(env.AAD)
+	if err != nil {
 		return NewResponseError(http.StatusBadRequest, "invalid aad format")
 	}
 	return nil
@@ -454,12 +496,12 @@ func parseV2Timeout(raw string) time.Duration {
 }
 
 func (s *Server) routeV2APIListStream(c *gin.Context) {
-	list, err := s.v2RequestStore.ListPending(c.Request.Context())
+	list, err := s.requestStore.ListPending(c.Request.Context())
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	usernameAny, _ := c.Get(contextKeyV2AdminUsername)
+	usernameAny, _ := c.Get(contextKeyAdminUsername)
 	username, _ := usernameAny.(string)
 
 	c.Header("content-type", ndJSONContentType)
@@ -516,7 +558,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 				hasData = false
 			}
 		case <-reconcileTicker.C:
-			curList, err := s.v2RequestStore.ListPending(c.Request.Context())
+			curList, err := s.requestStore.ListPending(c.Request.Context())
 			if err != nil {
 				continue
 			}

@@ -12,25 +12,25 @@ import (
 )
 
 const (
-	headerSessionTTL             = "x-session-ttl"
-	v2SessionCookieName          = "_v2s"
-	contextKeyV2SessionID        = "v2SessionID"
-	contextKeyV2AdminID          = "v2AdminID"
-	contextKeyV2AdminUsername    = "v2AdminUsername"
-	contextKeyV2PasswordVerified = "v2PasswordVerified"
-	contextKeyV2SessionExpiry    = "v2SessionExpiry"
+	headerSessionTTL           = "x-session-ttl"
+	sessionCookieName          = "_s"
+	contextKeySessionID        = "SessionID"
+	contextKeyAdminID          = "AdminID"
+	contextKeyAdminUsername    = "AdminUsername"
+	contextKeyPasswordVerified = "PasswordVerified"
+	contextKeySessionExpiry    = "SessionExpiry"
 )
 
 func (s *Server) V2SessionMiddleware(required bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if s.v2AuthStore == nil {
+		if s.authStore == nil {
 			if required {
-				AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
+				AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
 			}
 			return
 		}
 
-		sessID, ttl, err := getSecureCookieEncryptedJWT(c, v2SessionCookieName)
+		sessID, ttl, err := getSecureCookieEncryptedJWT(c, sessionCookieName)
 		if err != nil || sessID == "" {
 			if err != nil {
 				_ = c.Error(fmt.Errorf("cookie error: %w", err))
@@ -41,7 +41,7 @@ func (s *Server) V2SessionMiddleware(required bool) gin.HandlerFunc {
 			return
 		}
 
-		sess, err := s.v2AuthStore.GetSession(c.Request.Context(), sessID)
+		sess, err := s.authStore.GetSession(c.Request.Context(), sessID)
 		if err != nil || sess == nil {
 			if err != nil {
 				_ = c.Error(fmt.Errorf("session lookup error: %w", err))
@@ -61,11 +61,11 @@ func (s *Server) V2SessionMiddleware(required bool) gin.HandlerFunc {
 			ttl = 0
 		}
 		c.Header(headerSessionTTL, strconv.Itoa(int(ttl.Seconds())))
-		c.Set(contextKeyV2SessionID, sess.ID)
-		c.Set(contextKeyV2AdminID, sess.AdminID)
-		c.Set(contextKeyV2AdminUsername, sess.Username)
-		c.Set(contextKeyV2PasswordVerified, sess.PasswordVerified)
-		c.Set(contextKeyV2SessionExpiry, sess.ExpiresAt)
+		c.Set(contextKeySessionID, sess.ID)
+		c.Set(contextKeyAdminID, sess.AdminID)
+		c.Set(contextKeyAdminUsername, sess.Username)
+		c.Set(contextKeyPasswordVerified, sess.PasswordVerified)
+		c.Set(contextKeySessionExpiry, sess.ExpiresAt)
 	}
 }
 
@@ -74,7 +74,7 @@ func (s *Server) V2PasswordFactorRequiredMiddleware() gin.HandlerFunc {
 		if config.Get().PasswordFactorMode != "required" {
 			return
 		}
-		v, _ := c.Get(contextKeyV2PasswordVerified)
+		v, _ := c.Get(contextKeyPasswordVerified)
 		ok, _ := v.(bool)
 		if !ok {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Password factor verification is required"))

@@ -31,14 +31,12 @@ Examples:
 - SQLite URI: `sqlite://./data/revaulter.db`
 - Postgres: `postgres://user:pass@db.example.com:5432/revaulter?sslmode=require`
 
-## Generate a DB Payload Encryption Key
+## Generate a Secret Key
 
-Set `dbPayloadEncryptionKey` to a strong secret (hex or base64/base64url). Revaulter derives a fixed 32-byte key from it and uses it to encrypt sensitive request payloads stored in the database.
-
-Example (base64url):
+Set `secretKey` to a strong secret. For example:
 
 ```bash
-openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+openssl rand -base64 32
 ```
 
 ## First Admin Registration
