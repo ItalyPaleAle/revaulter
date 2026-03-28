@@ -245,6 +245,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
 
 	v2AuthGroup := v2RouteGroup.Group("/auth")
+	v2AuthGroup.GET("/status", s.RouteV2AuthStatus)
 	v2AuthGroup.POST("/register/begin", s.RouteV2AuthRegisterBegin)
 	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)

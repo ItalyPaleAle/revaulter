@@ -60,6 +60,21 @@ type v2LoginChallengePayload struct {
 	PasswordProofChallenge string                   `json:"passwordProofChallenge,omitempty"`
 }
 
+func (s *Server) RouteV2AuthStatus(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
+		return
+	}
+	count, err := s.authStore.CountAdmins(c.Request.Context())
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"setupNeeded": count == 0,
+	})
+}
+
 func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	s.routeV2AuthRegisterBegin(c, false)
 }
@@ -130,7 +145,11 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 	if s.webAuthn != nil {
 		user, err := newV2WebAuthnUserForRegistration(req.Username, req.DisplayName)
 		if err == nil {
-			creation, session, waErr := s.webAuthn.BeginRegistration(user)
+			creation, session, waErr := s.webAuthn.BeginRegistration(user,
+				webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
+					"prf": map[string]any{},
+				}),
+			)
 			if waErr == nil {
 				ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), challengeKind, req.Username, session.Challenge, session.Expires, v2RegisterChallengePayload{
 					WebAuthnSession:    session,
@@ -522,9 +541,14 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 				AuthKey: req.PasswordFactor.AuthKey,
 			}
 		}
+		webAuthnUserID := ""
+		if payload.WebAuthnSession != nil {
+			webAuthnUserID = base64.RawURLEncoding.EncodeToString(payload.WebAuthnSession.UserID)
+		}
 		return s.authStore.RegisterFirstAdmin(c.Request.Context(), v2db.RegisterFirstAdminInput{
 			Username:       req.Username,
 			DisplayName:    req.DisplayName,
+			WebAuthnUserID: webAuthnUserID,
 			CredentialID:   legacy.ID,
 			PublicKey:      legacy.PublicKey,
 			SignCount:      legacy.SignCount,
@@ -566,11 +590,12 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 		return nil, err
 	}
 	sess, err := s.authStore.RegisterFirstAdmin(c.Request.Context(), v2db.RegisterFirstAdminInput{
-		Username:     req.Username,
-		DisplayName:  req.DisplayName,
-		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
-		PublicKey:    string(credJSON),
-		SignCount:    int64(cred.Authenticator.SignCount),
+		Username:       req.Username,
+		DisplayName:    req.DisplayName,
+		WebAuthnUserID: base64.RawURLEncoding.EncodeToString(payload.WebAuthnSession.UserID),
+		CredentialID:   base64.RawURLEncoding.EncodeToString(cred.ID),
+		PublicKey:      string(credJSON),
+		SignCount:      int64(cred.Authenticator.SignCount),
 		PasswordFactor: func() *v2db.PasswordFactorEnrollment {
 			if !payload.PasswordRequired {
 				return nil
@@ -633,9 +658,14 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 				AuthKey: req.PasswordFactor.AuthKey,
 			}
 		}
+		webAuthnUserID := ""
+		if payload.WebAuthnSession != nil {
+			webAuthnUserID = base64.RawURLEncoding.EncodeToString(payload.WebAuthnSession.UserID)
+		}
 		err = s.authStore.RegisterAdmin(c.Request.Context(), v2db.RegisterAdminInput{
 			Username:       req.Username,
 			DisplayName:    req.DisplayName,
+			WebAuthnUserID: webAuthnUserID,
 			CredentialID:   legacy.ID,
 			PublicKey:      legacy.PublicKey,
 			SignCount:      legacy.SignCount,
@@ -679,11 +709,12 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 		return err
 	}
 	err = s.authStore.RegisterAdmin(c.Request.Context(), v2db.RegisterAdminInput{
-		Username:     req.Username,
-		DisplayName:  req.DisplayName,
-		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
-		PublicKey:    string(credJSON),
-		SignCount:    int64(cred.Authenticator.SignCount),
+		Username:       req.Username,
+		DisplayName:    req.DisplayName,
+		WebAuthnUserID: base64.RawURLEncoding.EncodeToString(payload.WebAuthnSession.UserID),
+		CredentialID:   base64.RawURLEncoding.EncodeToString(cred.ID),
+		PublicKey:      string(credJSON),
+		SignCount:      int64(cred.Authenticator.SignCount),
 		PasswordFactor: func() *v2db.PasswordFactorEnrollment {
 			if !payload.PasswordRequired {
 				return nil
@@ -919,8 +950,15 @@ func (s *Server) v2LoadWebAuthnUser(ctx context.Context, username string) (*v2We
 	if len(creds) == 0 {
 		return nil, nil
 	}
+	// Use the stored WebAuthn user ID if available; fall back to the DB admin ID for pre-migration admins.
+	userID := []byte(admin.ID)
+	if admin.WebAuthnUserID != "" {
+		if decoded, err := base64.RawURLEncoding.DecodeString(admin.WebAuthnUserID); err == nil {
+			userID = decoded
+		}
+	}
 	return &v2WebAuthnUser{
-		id:          []byte(admin.ID),
+		id:          userID,
 		name:        admin.Username,
 		displayName: admin.DisplayName,
 		credentials: creds,

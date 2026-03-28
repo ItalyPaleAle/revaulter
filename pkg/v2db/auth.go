@@ -31,10 +31,11 @@ type AuthStore struct {
 }
 
 type Admin struct {
-	ID          string
-	Username    string
-	DisplayName string
-	Status      string
+	ID             string
+	Username       string
+	DisplayName    string
+	Status         string
+	WebAuthnUserID string
 }
 
 type AuthSession struct {
@@ -78,6 +79,7 @@ type PasswordFactorEnrollment struct {
 type RegisterFirstAdminInput struct {
 	Username       string
 	DisplayName    string
+	WebAuthnUserID string
 	CredentialID   string
 	PublicKey      string
 	SignCount      int64
@@ -88,6 +90,7 @@ type RegisterFirstAdminInput struct {
 type RegisterAdminInput struct {
 	Username       string
 	DisplayName    string
+	WebAuthnUserID string
 	CredentialID   string
 	PublicKey      string
 	SignCount      int64
@@ -149,6 +152,9 @@ func (s *AuthStore) migrate(ctx context.Context) error {
 			func(ctx context.Context) error {
 				return s.migrationSQLitePasswordFactor(ctx, m.GetConn())
 			},
+			func(ctx context.Context) error {
+				return s.migrationSQLiteWebAuthnUserID(ctx, m.GetConn())
+			},
 		}, s.log)
 	case BackendPostgres:
 		m := pgmigrations.Migrations{
@@ -156,7 +162,7 @@ func (s *AuthStore) migrate(ctx context.Context) error {
 			MetadataTableName: "_revaulter_v2_migrations",
 			MetadataKey:       "auth",
 		}
-		return m.Perform(ctx, []migrations.MigrationFn{s.migrationPostgres, s.migrationPostgresPasswordFactor}, s.log)
+		return m.Perform(ctx, []migrations.MigrationFn{s.migrationPostgres, s.migrationPostgresPasswordFactor, s.migrationPostgresWebAuthnUserID}, s.log)
 	default:
 		return errors.New("unsupported backend")
 	}
@@ -318,6 +324,25 @@ func (s *AuthStore) migrationPostgresPasswordFactor(ctx context.Context) error {
 	return nil
 }
 
+func (s *AuthStore) migrationSQLiteWebAuthnUserID(ctx context.Context, conn *sql.Conn) error {
+	if conn == nil {
+		return errors.New("sqlite migration connection is nil")
+	}
+	_, err := conn.ExecContext(ctx, `ALTER TABLE v2_admins ADD COLUMN webauthn_user_id TEXT NOT NULL DEFAULT ''`)
+	if err != nil && !isIgnorableSQLiteMigrationError(err) {
+		return err
+	}
+	return nil
+}
+
+func (s *AuthStore) migrationPostgresWebAuthnUserID(ctx context.Context) error {
+	_, err := s.db.Postgres.Exec(ctx, `ALTER TABLE v2_admins ADD COLUMN webauthn_user_id text NOT NULL DEFAULT ''`)
+	if err != nil && !isIgnorablePostgresMigrationError(err) {
+		return err
+	}
+	return nil
+}
+
 func (s *AuthStore) CountAdmins(ctx context.Context) (int, error) {
 	var n int
 	var err error
@@ -337,11 +362,11 @@ func (s *AuthStore) GetAdminByUsername(ctx context.Context, username string) (*A
 	var err error
 	switch s.db.Backend {
 	case BackendSQLite:
-		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status FROM v2_admins WHERE username = ?`, username).
-			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status)
+		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id FROM v2_admins WHERE username = ?`, username).
+			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID)
 	case BackendPostgres:
-		err = s.db.Postgres.QueryRow(ctx, `SELECT id, username, display_name, status FROM v2_admins WHERE username = $1`, username).
-			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status)
+		err = s.db.Postgres.QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id FROM v2_admins WHERE username = $1`, username).
+			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID)
 	default:
 		err = errors.New("unsupported backend")
 	}
@@ -703,8 +728,8 @@ func (s *AuthStore) registerFirstAdminSQLite(ctx context.Context, in RegisterFir
 
 	now := time.Now().UTC()
 	adminID := uuid.NewString()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admins (id, username, display_name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)`,
-		adminID, in.Username, in.DisplayName, now.Unix(), now.Unix()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)`,
+		adminID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix()); err != nil {
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -748,8 +773,8 @@ func (s *AuthStore) registerAdminSQLite(ctx context.Context, in RegisterAdminInp
 
 	now := time.Now().UTC()
 	adminID := uuid.NewString()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admins (id, username, display_name, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)`,
-		adminID, in.Username, in.DisplayName, now.Unix(), now.Unix()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)`,
+		adminID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix()); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -786,8 +811,8 @@ func (s *AuthStore) registerFirstAdminPostgres(ctx context.Context, in RegisterF
 
 	now := time.Now().UTC()
 	adminID := uuid.NewString()
-	if _, err := tx.Exec(ctx, `INSERT INTO v2_admins (id, username, display_name, status, created_at, updated_at) VALUES ($1,$2,$3,'active',$4,$5)`,
-		adminID, in.Username, in.DisplayName, now.Unix(), now.Unix()); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES ($1,$2,$3,'active',$4,$5,$6)`,
+		adminID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix()); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -831,8 +856,8 @@ func (s *AuthStore) registerAdminPostgres(ctx context.Context, in RegisterAdminI
 
 	now := time.Now().UTC()
 	adminID := uuid.NewString()
-	if _, err := tx.Exec(ctx, `INSERT INTO v2_admins (id, username, display_name, status, created_at, updated_at) VALUES ($1,$2,$3,'active',$4,$5)`,
-		adminID, in.Username, in.DisplayName, now.Unix(), now.Unix()); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES ($1,$2,$3,'active',$4,$5,$6)`,
+		adminID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix()); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,

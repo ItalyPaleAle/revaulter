@@ -13,36 +13,26 @@ export function generatePrfSalt(): Uint8Array {
     return crypto.getRandomValues(new Uint8Array(32))
 }
 
-function cloneAndDecodeWebAuthnOptions<T>(input: T): T {
+function cloneAndDecodeWebAuthnOptions<T>(input: T, skipBinaryDecoding = false): T {
     if (input === null || input === undefined) {
         return input
     }
-    if (typeof input === 'string') {
-        // Try base64url decode for known WebAuthn binary fields represented as strings.
-        // If it doesn't look like base64url, keep it as-is.
-        if (/^[A-Za-z0-9_-]+$/.test(input) && input.length >= 8) {
-            try {
-                return b64urlToBytes(input) as T
-            } catch {
-                return input
-            }
-        }
-        return input as T
-    }
     if (Array.isArray(input)) {
-        return input.map((v) => cloneAndDecodeWebAuthnOptions(v)) as T
+        return input.map((v) => cloneAndDecodeWebAuthnOptions(v, skipBinaryDecoding)) as T
     }
     if (typeof input === 'object') {
         const out: Record<string, unknown> = {}
         for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
             if (
+                !skipBinaryDecoding &&
                 (k === 'challenge' || k === 'id' || k === 'rawId' || k === 'userHandle') &&
                 typeof v === 'string'
             ) {
                 out[k] = b64urlToBytes(v)
                 continue
             }
-            out[k] = cloneAndDecodeWebAuthnOptions(v)
+            // Propagate skipBinaryDecoding into 'rp' to preserve domain strings like rp.id and rp.name.
+            out[k] = cloneAndDecodeWebAuthnOptions(v, skipBinaryDecoding || k === 'rp')
         }
         return out as T
     }

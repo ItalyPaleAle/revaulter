@@ -12,6 +12,10 @@ import type {
     V2SessionResponse,
 } from './v2-types'
 
+export async function v2AuthStatus() {
+    return (await Request<{ setupNeeded: boolean }>('/v2/auth/status')).data
+}
+
 export async function v2RegisterBegin(username: string, displayName: string) {
     return (await Request<V2RegisterBeginResponse>('/v2/auth/register/begin', { postData: { username, displayName } })).data
 }

@@ -5,6 +5,7 @@ import { ResponseNotOkError } from '../lib/request'
 import {
     v2AdminRegisterBegin,
     v2AdminRegisterFinish,
+    v2AuthStatus,
     v2ListStream,
     v2LoginBegin,
     v2LoginFinish,
@@ -19,14 +20,12 @@ import { webauthnLoginWithPrfPlaceholder, webauthnRegisterPlaceholder } from '..
 import LoadingSpinner from './LoadingSpinner.svelte'
 import V2PendingItem from './V2PendingItem.svelte'
 
-type UIState = 'boot' | 'auth' | 'ready'
-type AuthMode = 'login' | 'register'
+type UIState = 'boot' | 'auth' | 'setup' | 'ready'
 
 const sessionStoragePrfKey = 'revaulter:v2:prf'
 const sessionStoragePasswordMetaKey = 'revaulter:v2:password-meta'
 
 let uiState = $state<UIState>('boot')
-let authMode = $state<AuthMode>('login')
 let authBusy = $state(false)
 let authError = $state<string | null>(null)
 let pageError = $state<string | null>(null)
@@ -60,6 +59,28 @@ onMount(() => {
 async function initialize() {
     authError = null
     pageError = null
+
+    // Handle /setup path
+    let path = window.location.pathname
+    if (path.endsWith('/')) {
+        path = path.slice(0, -1)
+    }
+    if (path == '/setup') {
+        try {
+            const status = await v2AuthStatus()
+            if (!status.setupNeeded) {
+                pageError = 'Setup has already been completed. Use the login page instead.'
+                uiState = 'auth'
+                return
+            }
+            uiState = 'setup'
+        } catch (err) {
+            pageError = err instanceof Error ? err.message : String(err)
+            uiState = 'auth'
+        }
+        return
+    }
+
     try {
         const sess = await v2Session()
         session = sess
@@ -81,14 +102,12 @@ async function initialize() {
             return
         }
         uiState = 'auth'
-        authMode = 'login'
         authError = 'Session exists but local PRF material is missing. Sign in again to continue.'
         if (!username) username = sess.username
     } catch (err) {
         if (err instanceof ResponseNotOkError) {
             if (err.statusCode === 401) {
                 uiState = 'auth'
-                authMode = 'login'
                 return
             }
             if (err.statusCode === 503) {
@@ -154,7 +173,6 @@ async function doRegister() {
         await doLogin(true)
     } catch (err) {
         if (err instanceof ResponseNotOkError && err.statusCode === 409) {
-            authMode = 'login'
             authError = err.message || 'Registration is closed; use login'
         } else {
             authError = err instanceof Error ? err.message : String(err)
@@ -240,7 +258,7 @@ async function doLogout() {
     items = {}
     listConnected = false
     uiState = 'auth'
-    authMode = 'login'
+
 }
 
 async function doAdminRegister() {
@@ -327,7 +345,7 @@ function startListStream() {
                 passwordFactorSalt = undefined
                 passwordFactorIterations = undefined
                 uiState = 'auth'
-                authMode = 'login'
+            
                 authError = 'Session expired. Sign in again.'
                 return
             }
@@ -389,29 +407,13 @@ function sortedItems() {
 
             {#if uiState === 'boot'}
                 <div class="text-sm text-slate-700 dark:text-slate-200"><LoadingSpinner /> Initializing…</div>
-            {:else if uiState === 'auth' || !prfSecret}
+            {:else if uiState === 'setup'}
                 <div class="grid gap-4 lg:grid-cols-[1fr_1.1fr]">
                     <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-950/30">
-                        <h2 class="font-semibold text-slate-900 dark:text-white">Admin Session</h2>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Initial Setup</h2>
                         <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                            First user can register as admin. After that, use login.
+                            Register the first admin account. You will need a passkey-capable authenticator (e.g. Touch ID, Windows Hello, or a security key).
                         </p>
-                        <div class="mt-4 flex gap-2">
-                            <button
-                                type="button"
-                                class="rounded px-3 py-1.5 text-sm border {authMode === 'login' ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100' : 'border-slate-300 dark:border-slate-600'}"
-                                onclick={() => (authMode = 'login')}
-                            >
-                                Login
-                            </button>
-                            <button
-                                type="button"
-                                class="rounded px-3 py-1.5 text-sm border {authMode === 'register' ? 'bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100' : 'border-slate-300 dark:border-slate-600'}"
-                                onclick={() => (authMode = 'register')}
-                            >
-                                Register First Admin
-                            </button>
-                        </div>
                         {#if authError}
                             <div class="mt-4 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
                                 {authError}
@@ -423,24 +425,17 @@ function sortedItems() {
                         class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3"
                         onsubmit={(e) => {
                             e.preventDefault()
-                            if (authBusy) return
-                            if (authMode === 'register') {
-                                void doRegister()
-                            } else {
-                                void doLogin()
-                            }
+                            if (!authBusy) void doRegister()
                         }}
                     >
                         <div>
                             <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-username">Username</label>
                             <input id="v2-username" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={username} required />
                         </div>
-                        {#if authMode === 'register'}
-                            <div>
-                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-displayname">Display name</label>
-                                <input id="v2-displayname" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={displayName} required />
-                            </div>
-                        {/if}
+                        <div>
+                            <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-displayname">Display name</label>
+                            <input id="v2-displayname" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={displayName} required />
+                        </div>
                         <div>
                             <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-password">Optional password (local key derivation only)</label>
                             <input id="v2-password" type="password" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={password} />
@@ -448,7 +443,42 @@ function sortedItems() {
                         </div>
                         <button type="submit" class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50" disabled={authBusy}>
                             {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                            {authMode === 'register' ? 'Register and Sign In' : 'Sign In'}
+                            Register and Sign In
+                        </button>
+                    </form>
+                </div>
+            {:else if uiState === 'auth' || !prfSecret}
+                <div class="grid gap-4 lg:grid-cols-[1fr_1.1fr]">
+                    <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-950/30">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Admin Session</h2>
+                        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                            Sign in with your passkey to continue.
+                        </p>
+                        {#if authError}
+                            <div class="mt-4 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
+                                {authError}
+                            </div>
+                        {/if}
+                    </div>
+
+                    <form
+                        class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3"
+                        onsubmit={(e) => {
+                            e.preventDefault()
+                            if (!authBusy) void doLogin()
+                        }}
+                    >
+                        <div>
+                            <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-username">Username</label>
+                            <input id="v2-username" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={username} required />
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-password">Password (if required)</label>
+                            <input id="v2-password" type="password" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={password} />
+                        </div>
+                        <button type="submit" class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50" disabled={authBusy}>
+                            {#if authBusy}<LoadingSpinner size="1rem" />{/if}
+                            Sign In
                         </button>
                     </form>
                 </div>
