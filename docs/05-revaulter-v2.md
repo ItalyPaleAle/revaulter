@@ -41,8 +41,6 @@ SQLite is initialized with WAL mode enabled.
 
 - `encrypt`
 - `decrypt`
-- `wrapkey`
-- `unwrapkey`
 
 Initial algorithm support:
 
@@ -97,8 +95,6 @@ CLI-facing:
 
 - `POST /v2/request/encrypt`
 - `POST /v2/request/decrypt`
-- `POST /v2/request/wrapkey`
-- `POST /v2/request/unwrapkey`
 - `GET /v2/request/result/:state`
 
 Admin-facing:

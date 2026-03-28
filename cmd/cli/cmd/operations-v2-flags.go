@@ -120,6 +120,3 @@ func (f *v2OperationFlagsDecrypt) RequestBody(clientTransportKey protocolv2.ECP2
 	f.AddBaseRequestFields(&data, clientTransportKey)
 	return json.Marshal(data)
 }
-
-type v2OperationFlagsWrapKey = v2OperationFlagsEncrypt
-type v2OperationFlagsUnwrapKey = v2OperationFlagsDecrypt

@@ -4,14 +4,13 @@ Revaulter is an approval-gated cryptography relay.
 
 Revaulter v2 performs cryptographic operations in the admin's browser using WebAuthn (with PRF) and WebCrypto, then returns the result to the CLI encrypted with an ephemeral ECDH + AES-GCM transport envelope. Revaulter stores pending requests in a database and relays notifications/results, but does not perform the cryptographic operation itself.
 
-Supported operations (v2):
+Supported operations:
 
 - Encrypt / decrypt
-- Wrap key / unwrap key
 
 ![Example of a notification sent by Revaulter (to a Discord chat)](/notification-example.png)
 
-## How It Works (v2)
+## How It Works
 
 1. A CLI client submits a request to `/v2/request/*` with the operation payload and an ephemeral P-256 public key (JWK).
 2. Revaulter stores the request in the database (sensitive payload encrypted at rest) and sends a webhook notification.

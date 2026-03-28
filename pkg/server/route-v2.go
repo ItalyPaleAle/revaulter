@@ -395,7 +395,7 @@ func (s *Server) v2AuthorizeTargetUser(c *gin.Context, targetUser string) bool {
 func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 	// Validate the operation
 	switch op {
-	case "encrypt", "decrypt", "wrapkey", "unwrapkey":
+	case "encrypt", "decrypt":
 	default:
 		return NewResponseError(http.StatusBadRequest, "Invalid operation")
 	}

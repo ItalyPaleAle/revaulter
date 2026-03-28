@@ -30,7 +30,7 @@ export type V2RequestCreateBody = {
 export type V2PendingRequestItem = {
     state: string
     status: 'pending' | 'completed' | 'canceled' | 'expired' | 'removed'
-    operation: 'encrypt' | 'decrypt' | 'wrapkey' | 'unwrapkey'
+    operation: 'encrypt' | 'decrypt'
     targetUser: string
     keyLabel: string
     algorithm: string
@@ -43,7 +43,7 @@ export type V2PendingRequestItem = {
 export type V2RequestDetail = {
     state: string
     status: string
-    operation: 'encrypt' | 'decrypt' | 'wrapkey' | 'unwrapkey'
+    operation: 'encrypt' | 'decrypt'
     targetUser: string
     keyLabel: string
     algorithm: string

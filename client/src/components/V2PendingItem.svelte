@@ -119,11 +119,10 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
 
     let resultPlain: Uint8Array
     switch (req.operation) {
-        case 'encrypt':
-        case 'wrapkey': {
+        case 'encrypt': {
             const nonce = input.nonce ? b64urlToBytes(input.nonce) : crypto.getRandomValues(new Uint8Array(12))
             const combined = await performAesGcmOperation({
-                mode: req.operation,
+                mode: 'encrypt',
                 keyBytes: operationKey,
                 value,
                 nonce,
@@ -143,14 +142,13 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
             )
             break
         }
-        case 'decrypt':
-        case 'unwrapkey': {
+        case 'decrypt': {
             const nonce = b64urlToBytes(input.nonce)
             if (nonce.length === 0) {
-                throw new Error('Missing nonce for decrypt/unwrap')
+                throw new Error('Missing nonce for decrypt')
             }
             const plain = await performAesGcmOperation({
-                mode: req.operation,
+                mode: 'decrypt',
                 keyBytes: operationKey,
                 value,
                 nonce,
@@ -188,10 +186,6 @@ function operationTitle(op: V2PendingRequestItem['operation']) {
             return 'Encrypt'
         case 'decrypt':
             return 'Decrypt'
-        case 'wrapkey':
-            return 'Wrap Key'
-        case 'unwrapkey':
-            return 'Unwrap Key'
     }
 }
 

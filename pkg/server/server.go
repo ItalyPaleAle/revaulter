@@ -233,8 +233,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2RequestGroup.Use(allowIpMw, s.RequestKeyMiddleware())
 	v2RequestGroup.POST("/encrypt", s.RouteV2RequestCreate("encrypt"))
 	v2RequestGroup.POST("/decrypt", s.RouteV2RequestCreate("decrypt"))
-	v2RequestGroup.POST("/wrapkey", s.RouteV2RequestCreate("wrapkey"))
-	v2RequestGroup.POST("/unwrapkey", s.RouteV2RequestCreate("unwrapkey"))
 	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
 
 	v2APIGroup := v2RouteGroup.Group("/api")

@@ -241,7 +241,7 @@ export async function computePasswordProof(params: {
 }
 
 export async function performAesGcmOperation(params: {
-    mode: 'encrypt' | 'decrypt' | 'wrapkey' | 'unwrapkey'
+    mode: 'encrypt' | 'decrypt'
     keyBytes: Uint8Array
     value: Uint8Array
     nonce?: Uint8Array
@@ -253,11 +253,11 @@ export async function performAesGcmOperation(params: {
         asBuf(params.keyBytes) as BufferSource,
         { name: 'AES-GCM' },
         false,
-        [params.mode === 'encrypt' || params.mode === 'wrapkey' ? 'encrypt' : 'decrypt']
+        [params.mode === 'encrypt' ? 'encrypt' : 'decrypt']
     )
     const iv = params.nonce ?? crypto.getRandomValues(new Uint8Array(12))
 
-    if (params.mode === 'encrypt' || params.mode === 'wrapkey') {
+    if (params.mode === 'encrypt') {
         const res = await crypto.subtle.encrypt(
             { name: 'AES-GCM', iv: asBuf(iv) as BufferSource, additionalData: asBuf(params.aad) },
             key,
@@ -266,7 +266,7 @@ export async function performAesGcmOperation(params: {
         return new Uint8Array(res)
     }
 
-    // For decrypt/unwrap, if a separate tag is passed, concatenate ciphertext+tag (WebCrypto expects combined input).
+    // For decrypt, if a separate tag is passed, concatenate ciphertext+tag (WebCrypto expects combined input).
     const combined =
         params.tag && params.tag.length > 0
             ? (() => {

@@ -15,8 +15,6 @@ Revaulter v2 exposes REST APIs for request submission, admin approval, and resul
 
 - `POST /v2/request/encrypt`
 - `POST /v2/request/decrypt`
-- `POST /v2/request/wrapkey`
-- `POST /v2/request/unwrapkey`
 - `GET /v2/request/result/:state`
 
 ## Create request body (example)

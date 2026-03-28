@@ -32,34 +32,6 @@ function uiForOperation(operation: operations) {
                 icon: 'lock-open',
                 iconTitle: 'Decrypt request',
             }
-        case operations.operationSign:
-            return {
-                action: 'sign',
-                actionObject: 'a message',
-                icon: 'pencil',
-                iconTitle: 'Sign request',
-            }
-        case operations.operationVerify:
-            return {
-                action: 'verify',
-                actionObject: 'a signature',
-                icon: 'check-badge',
-                iconTitle: 'Verify request',
-            }
-        case operations.operationWrap:
-            return {
-                action: 'wrap',
-                actionObject: 'a key',
-                icon: 'lock-closed',
-                iconTitle: 'Wrap request',
-            }
-        case operations.operationUnwrap:
-            return {
-                action: 'unwrap',
-                actionObject: 'a key',
-                icon: 'lock-open',
-                iconTitle: 'Unwrap request',
-            }
     }
 }
 

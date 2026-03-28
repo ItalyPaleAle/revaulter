@@ -44,8 +44,6 @@ func init() {
 	rootCmd.AddCommand(
 		newV2OperationCmd("encrypt", "Encrypt data", func() v2OperationFlags { return &v2OperationFlagsEncrypt{} }),
 		newV2OperationCmd("decrypt", "Decrypt data", func() v2OperationFlags { return &v2OperationFlagsDecrypt{} }),
-		newV2OperationCmd("wrapkey", "Wrap a key", func() v2OperationFlags { return &v2OperationFlagsWrapKey{} }),
-		newV2OperationCmd("unwrapkey", "Unwrap a key", func() v2OperationFlags { return &v2OperationFlagsUnwrapKey{} }),
 	)
 }
 

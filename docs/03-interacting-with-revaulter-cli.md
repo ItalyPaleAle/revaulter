@@ -12,12 +12,8 @@ The Revaulter CLI (`revaulter-cli`) submits v2 crypto requests and waits for app
 
 ## Commands
 
-Use the `v2` command group:
-
-- `revaulter-cli v2 encrypt`
-- `revaulter-cli v2 decrypt`
-- `revaulter-cli v2 wrapkey`
-- `revaulter-cli v2 unwrapkey`
+- `revaulter-cli encrypt`
+- `revaulter-cli decrypt`
 
 ## Common flags
 
@@ -39,7 +35,7 @@ Optional:
 ## Example: encrypt
 
 ```bash
-revaulter-cli v2 encrypt \
+revaulter-cli encrypt \
   --server https://revaulter.example.com \
   --target-user alice \
   --key-label boot-disk \
@@ -50,14 +46,14 @@ revaulter-cli v2 encrypt \
 ## Example: decrypt
 
 ```bash
-revaulter-cli v2 decrypt \
+revaulter-cli decrypt \
   --server https://revaulter.example.com \
   --target-user alice \
   --key-label boot-disk \
   --algorithm aes-gcm-256 \
-  --value <base64url-ciphertext> \
-  --nonce <base64url-nonce> \
-  --tag <base64url-tag>
+  --value <base64-ciphertext> \
+  --nonce <base64-nonce> \
+  --tag <base64-tag>
 ```
 
 ## Output

@@ -38,7 +38,7 @@ func TestRequestStoreSQLiteLifecycle(t *testing.T) {
 
 	err = store.CreateRequest(ctx, CreateRequestInput{
 		State:       "state-1",
-		Operation:   "wrapkey",
+		Operation:   "encrypt",
 		RequestorIP: "127.0.0.1",
 		CreatedAt:   now,
 		ExpiresAt:   now.Add(5 * time.Minute),
@@ -91,7 +91,7 @@ func TestRequestStoreSQLiteCancel(t *testing.T) {
 
 	err = store.CreateRequest(ctx, CreateRequestInput{
 		State:       "state-2",
-		Operation:   "unwrapkey",
+		Operation:   "decrypt",
 		RequestorIP: "127.0.0.1",
 		CreatedAt:   time.Now(),
 		ExpiresAt:   time.Now().Add(time.Minute),

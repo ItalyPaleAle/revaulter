@@ -38,7 +38,7 @@ func TestWebhook(t *testing.T) {
 
 	getWebhookRequest := func() *WebhookRequest {
 		return &WebhookRequest{
-			OperationName: "wrap",
+			OperationName: "encrypt",
 			KeyId:         "mykey",
 			Vault:         "myvault",
 			StateId:       "mystate",
