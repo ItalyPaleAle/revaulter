@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	"github.com/italypaleale/revaulter/pkg/config"
 )
 
 const (
@@ -17,7 +15,6 @@ const (
 	contextKeySessionID        = "SessionID"
 	contextKeyAdminID          = "AdminID"
 	contextKeyAdminUsername    = "AdminUsername"
-	contextKeyPasswordVerified = "PasswordVerified"
 	contextKeySessionExpiry    = "SessionExpiry"
 )
 
@@ -64,21 +61,7 @@ func (s *Server) V2SessionMiddleware(required bool) gin.HandlerFunc {
 		c.Set(contextKeySessionID, sess.ID)
 		c.Set(contextKeyAdminID, sess.AdminID)
 		c.Set(contextKeyAdminUsername, sess.Username)
-		c.Set(contextKeyPasswordVerified, sess.PasswordVerified)
 		c.Set(contextKeySessionExpiry, sess.ExpiresAt)
 	}
 }
 
-func (s *Server) V2PasswordFactorRequiredMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if config.Get().PasswordFactorMode != "required" {
-			return
-		}
-		v, _ := c.Get(contextKeyPasswordVerified)
-		ok, _ := v.(bool)
-		if !ok {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Password factor verification is required"))
-			return
-		}
-	}
-}

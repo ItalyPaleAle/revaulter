@@ -62,9 +62,6 @@ export type V2RegisterBeginResponse = {
     expiresAt: number
     mode: string
     options?: unknown
-    passwordFactorRequired?: boolean
-    passwordSalt?: string
-    passwordPbkdf2Iterations?: number
 }
 
 export type V2LoginBeginResponse = {
@@ -80,7 +77,6 @@ export type V2SessionResponse = {
     authenticated: boolean
     username: string
     ttl: number
-    passwordVerified?: boolean
 }
 
 export type V2AdminRegisterFinishResponse = {

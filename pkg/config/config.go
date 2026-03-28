@@ -85,15 +85,6 @@ type Config struct {
 	// Allowed origins for WebAuthn auth. If empty, falls back to `baseUrl` and `origins` (excluding `*`).
 	WebAuthnOrigins []string `env:"WEBAUTHNORIGINS" yaml:"webauthnOrigins"`
 
-	// Password factor mode for admin auth.
-	// Supported values: "disabled", "required".
-	// +default "disabled"
-	PasswordFactorMode string `env:"PASSWORDFACTORMODE" yaml:"passwordFactorMode"`
-
-	// PBKDF2 iterations used for the password factor.
-	// +default 300000
-	PasswordPBKDF2Iterations int `env:"PASSWORDPBKDF2ITERATIONS" yaml:"passwordPbkdf2Iterations"`
-
 	// Lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
 	// +default equal to the value of `baseUrl`
 	Origins []string `env:"ORIGINS" yaml:"origins"`
@@ -229,21 +220,6 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	if c.RequestTimeout < time.Second {
 		return errors.New("config entry key 'requestTimeout' is invalid: must be greater than 1s")
 	}
-	if c.PasswordFactorMode == "" {
-		c.PasswordFactorMode = "disabled"
-	}
-	switch c.PasswordFactorMode {
-	case "disabled", "required":
-	default:
-		return errors.New("config entry key 'passwordFactorMode' is invalid: must be 'disabled' or 'required'")
-	}
-	if c.PasswordPBKDF2Iterations == 0 {
-		c.PasswordPBKDF2Iterations = 300000
-	}
-	if c.PasswordPBKDF2Iterations < 10000 {
-		return errors.New("config entry key 'passwordPbkdf2Iterations' is invalid: must be >= 10000")
-	}
-
 	return nil
 }
 

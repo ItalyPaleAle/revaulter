@@ -34,7 +34,7 @@ func (s *Server) initStore(log *slog.Logger) error {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
-	authStore, err := v2db.NewAuthStoreWithPayloadKey(ctx, db, key, log)
+	authStore, err := v2db.NewAuthStore(ctx, db, log)
 	if err != nil {
 		_ = db.Close()
 		return fmt.Errorf("failed to initialize auth store: %w", err)

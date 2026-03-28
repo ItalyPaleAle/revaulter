@@ -15,7 +15,7 @@ import {
     v2Session,
 } from '../lib/v2-api'
 import type { V2PendingRequestItem, V2SessionResponse } from '../lib/v2-types'
-import { bytesToB64url, b64urlToBytes, computePasswordProof, derivePasswordAuthKeyBytes } from '../lib/v2-crypto'
+import { bytesToB64url, b64urlToBytes } from '../lib/v2-crypto'
 import { webauthnLoginWithPrfPlaceholder, webauthnRegisterPlaceholder } from '../lib/v2-webauthn'
 import LoadingSpinner from './LoadingSpinner.svelte'
 import V2PendingItem from './V2PendingItem.svelte'
@@ -23,7 +23,6 @@ import V2PendingItem from './V2PendingItem.svelte'
 type UIState = 'boot' | 'auth' | 'setup' | 'ready'
 
 const sessionStoragePrfKey = 'revaulter:v2:prf'
-const sessionStoragePasswordMetaKey = 'revaulter:v2:password-meta'
 
 let uiState = $state<UIState>('boot')
 let authBusy = $state(false)
@@ -42,8 +41,6 @@ let newAdminSuccess = $state<string | null>(null)
 
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
-let passwordFactorSalt = $state<string | undefined>(undefined)
-let passwordFactorIterations = $state<number | undefined>(undefined)
 let items = $state<Record<string, V2PendingRequestItem>>({})
 let listConnected = $state(false)
 let stopStream: (() => void) | null = null
@@ -74,18 +71,8 @@ async function initialize() {
         const sess = await v2Session()
         session = sess
         const stored = sessionStorage.getItem(sessionStoragePrfKey)
-        const passwordMeta = sessionStorage.getItem(sessionStoragePasswordMetaKey)
         if (stored) {
             prfSecret = b64urlToBytes(stored)
-            if (passwordMeta) {
-                try {
-                    const parsed = JSON.parse(passwordMeta) as { salt?: string; iterations?: number }
-                    passwordFactorSalt = parsed.salt
-                    passwordFactorIterations = parsed.iterations
-                } catch {
-                    sessionStorage.removeItem(sessionStoragePasswordMetaKey)
-                }
-            }
             uiState = 'ready'
             startListStream()
             return
@@ -114,25 +101,12 @@ function setPrfSecret(v: Uint8Array) {
     sessionStorage.setItem(sessionStoragePrfKey, bytesToB64url(v))
 }
 
-function setPasswordMeta(salt?: string, iterations?: number) {
-    passwordFactorSalt = salt
-    passwordFactorIterations = iterations
-    if (!salt) {
-        sessionStorage.removeItem(sessionStoragePasswordMetaKey)
-        return
-    }
-    sessionStorage.setItem(sessionStoragePasswordMetaKey, JSON.stringify({ salt, iterations }))
-}
-
 async function doRegister() {
     authBusy = true
     authError = null
     pageError = null
     try {
         const begin = await v2RegisterBegin(username, displayName)
-        if (begin.passwordFactorRequired && password.trim() === '') {
-            throw new Error('Password factor is required for first-admin registration')
-        }
         const cred = await webauthnRegisterPlaceholder({
             username: begin.username,
             displayName: begin.displayName,
@@ -144,18 +118,6 @@ async function doRegister() {
             displayName: begin.displayName,
             challengeId: begin.challengeId,
             credential: (cred.raw as { credential?: unknown })?.credential ?? cred,
-            passwordFactor:
-                begin.passwordFactorRequired && begin.passwordSalt
-                    ? {
-                          authKey: bytesToB64url(
-                              await derivePasswordAuthKeyBytes(
-                                  password,
-                                  b64urlToBytes(begin.passwordSalt),
-                                  begin.passwordPbkdf2Iterations || 300_000
-                              )
-                          ),
-                      }
-                    : undefined,
         })
         // Re-login to collect PRF material (registration attestation does not yield PRF output).
         await doLogin(true)
@@ -216,11 +178,8 @@ async function doLogout() {
         // Ignore and clear local state anyway.
     }
     sessionStorage.removeItem(sessionStoragePrfKey)
-    sessionStorage.removeItem(sessionStoragePasswordMetaKey)
     session = null
     prfSecret = null
-    passwordFactorSalt = undefined
-    passwordFactorIterations = undefined
     items = {}
     listConnected = false
     uiState = 'auth'
@@ -274,7 +233,9 @@ async function doAdminRegister() {
 }
 
 function startListStream() {
-    if (stopStream) return
+    if (stopStream) {
+        return
+    }
     let stopped = false
     stopStream = () => {
         stopped = true
@@ -286,9 +247,13 @@ function startListStream() {
         listConnected = false
         try {
             for await (const item of v2ListStream()) {
-                if (stopped) return
+                if (stopped) {
+                    return
+                }
                 listConnected = true
-                if (!item) continue
+                if (!item) {
+                    continue
+                }
                 if (item.status === 'removed') {
                     delete items[item.state]
                     items = { ...items }
@@ -300,15 +265,14 @@ function startListStream() {
                 }
             }
         } catch (err) {
-            if (stopped) return
+            if (stopped) {
+                return
+            }
             const msg = err instanceof Error ? err.message : String(err)
             if (msg.includes('401')) {
                 sessionStorage.removeItem(sessionStoragePrfKey)
-                sessionStorage.removeItem(sessionStoragePasswordMetaKey)
                 prfSecret = null
                 session = null
-                passwordFactorSalt = undefined
-                passwordFactorIterations = undefined
                 uiState = 'auth'
 
                 authError = 'Session expired. Sign in again.'
@@ -506,8 +470,6 @@ function sortedItems() {
                                     {item}
                                     {prfSecret}
                                     {password}
-                                    {passwordFactorSalt}
-                                    {passwordFactorIterations}
                                     onRemoved={removeItem}
                                 />
                             {/each}

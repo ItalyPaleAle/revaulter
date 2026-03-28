@@ -32,17 +32,10 @@ export async function v2RegisterFinish(args: {
     displayName: string
     challengeId: string
     credential: unknown
-    passwordFactor?: { authKey: string }
 }) {
     return (
         await Request<{ registered: boolean; session: V2SessionResponse }>('/v2/auth/register/finish', {
-            postData: {
-                username: args.username,
-                displayName: args.displayName,
-                challengeId: args.challengeId,
-                credential: args.credential,
-                passwordFactor: args.passwordFactor,
-            },
+            postData: args,
         })
     ).data
 }
@@ -52,17 +45,10 @@ export async function v2AdminRegisterFinish(args: {
     displayName: string
     challengeId: string
     credential: unknown
-    passwordFactor?: { authKey: string }
 }) {
     return (
         await Request<V2AdminRegisterFinishResponse>('/v2/auth/admin/register/finish', {
-            postData: {
-                username: args.username,
-                displayName: args.displayName,
-                challengeId: args.challengeId,
-                credential: args.credential,
-                passwordFactor: args.passwordFactor,
-            },
+            postData: args,
         })
     ).data
 }
@@ -71,13 +57,12 @@ export async function v2LoginBegin() {
     return (await Request<V2LoginBeginResponse>('/v2/auth/login/begin', { postData: {} })).data
 }
 
-export async function v2LoginFinish(args: { challengeId: string; credential: unknown; passwordProof?: string }) {
+export async function v2LoginFinish(args: { challengeId: string; credential: unknown }) {
     return (
         await Request<{ authenticated: boolean; session: V2SessionResponse }>('/v2/auth/login/finish', {
             postData: {
                 challengeId: args.challengeId,
                 credential: args.credential,
-                passwordProof: args.passwordProof,
             },
         })
     ).data

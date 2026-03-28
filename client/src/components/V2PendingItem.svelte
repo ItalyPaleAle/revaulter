@@ -5,7 +5,6 @@ import {
     b64urlToBytes,
     bytesToB64url,
     deriveOperationKeyBytes,
-    derivePasswordLocalKeyBytes,
     encryptTransportEnvelope,
     performAesGcmOperation,
     splitAesGcmCiphertextAndTag,
@@ -18,12 +17,10 @@ interface Props {
     item: V2PendingRequestItem
     prfSecret: Uint8Array
     password?: string
-    passwordFactorSalt?: string
-    passwordFactorIterations?: number
     onRemoved?: (state: string) => void
 }
 
-let { item, prfSecret, password = '', passwordFactorSalt, passwordFactorIterations, onRemoved }: Props = $props()
+let { item, prfSecret, password = '', onRemoved }: Props = $props()
 
 let working = $state(false)
 let localStatus = $state<string>('pending')
@@ -42,10 +39,6 @@ $effect(() => {
     }
     localStatus = item.status
 })
-
-function passwordSaltForUser(username: string) {
-    return new TextEncoder().encode(`revaulter/v2/password/${username}`)
-}
 
 async function ensureDetail() {
     if (detail) return detail
@@ -98,11 +91,6 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
         throw new Error(`Unsupported algorithm: ${req.algorithm}`)
     }
 
-    let passwordKey: Uint8Array | undefined
-    if (password.trim() !== '') {
-        const salt = passwordFactorSalt ? b64urlToBytes(passwordFactorSalt) : passwordSaltForUser(req.targetUser)
-        passwordKey = await derivePasswordLocalKeyBytes(password, salt, passwordFactorIterations || 300_000)
-    }
     const operationKey = await deriveOperationKeyBytes({
         state: req.state,
         targetUser: req.targetUser,
@@ -110,7 +98,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
         operation: req.operation,
         algorithm: req.algorithm,
         prfSecret,
-        passwordKey,
+        password: password.trim() || undefined,
     })
 
     const input = req.request
@@ -142,6 +130,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
             )
             break
         }
+
         case 'decrypt': {
             const nonce = b64urlToBytes(input.nonce)
             if (nonce.length === 0) {

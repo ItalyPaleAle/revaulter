@@ -24,35 +24,24 @@ type v2AuthRegisterBeginRequest struct {
 }
 
 type v2AuthRegisterFinishRequest struct {
-	Username       string          `json:"username"`
-	DisplayName    string          `json:"displayName"`
-	ChallengeID    string          `json:"challengeId"`
-	Credential     json.RawMessage `json:"credential"`
-	PasswordFactor *struct {
-		AuthKey string `json:"authKey"`
-	} `json:"passwordFactor,omitempty"`
+	Username    string          `json:"username"`
+	DisplayName string          `json:"displayName"`
+	ChallengeID string          `json:"challengeId"`
+	Credential  json.RawMessage `json:"credential"`
 }
 
 type v2AuthLoginFinishRequest struct {
-	ChallengeID   string          `json:"challengeId"`
-	Credential    json.RawMessage `json:"credential"`
-	PasswordProof string          `json:"passwordProof,omitempty"`
+	ChallengeID string          `json:"challengeId"`
+	Credential  json.RawMessage `json:"credential"`
 }
 
 type v2RegisterChallengePayload struct {
-	WebAuthnSession    *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
-	PasswordRequired   bool                     `json:"passwordRequired,omitempty"`
-	PasswordSalt       string                   `json:"passwordSalt,omitempty"`
-	PasswordIterations int                      `json:"passwordIterations,omitempty"`
+	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
 }
 
 type v2LoginChallengePayload struct {
-	Challenge              string                   `json:"challenge,omitempty"`
-	WebAuthnSession        *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
-	PasswordRequired       bool                     `json:"passwordRequired,omitempty"`
-	PasswordSalt           string                   `json:"passwordSalt,omitempty"`
-	PasswordIterations     int                      `json:"passwordIterations,omitempty"`
-	PasswordProofChallenge string                   `json:"passwordProofChallenge,omitempty"`
+	Challenge       string                   `json:"challenge,omitempty"`
+	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
 }
 
 func (s *Server) RouteV2AuthStatus(c *gin.Context) {
@@ -118,20 +107,6 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Username already exists"))
 		return
 	}
-	cfg := config.Get()
-	pwRequired := cfg.PasswordFactorMode == "required"
-	pwIterations := cfg.PasswordPBKDF2Iterations
-	if pwIterations <= 0 {
-		pwIterations = 300000
-	}
-	pwSalt := ""
-	if pwRequired {
-		pwSalt, err = randomB64URL(16)
-		if err != nil {
-			AbortWithErrorJSON(c, err)
-			return
-		}
-	}
 	var ch *v2db.AuthChallenge
 	challengeKind := "register"
 	if adminManaged {
@@ -148,23 +123,17 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 			)
 			if waErr == nil {
 				ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), challengeKind, req.Username, session.Challenge, session.Expires, v2RegisterChallengePayload{
-					WebAuthnSession:    session,
-					PasswordRequired:   pwRequired,
-					PasswordSalt:       pwSalt,
-					PasswordIterations: pwIterations,
+					WebAuthnSession: session,
 				})
 				if err == nil {
 					c.JSON(http.StatusOK, gin.H{
-						"challengeId":              ch.ID,
-						"challenge":                session.Challenge,
-						"username":                 req.Username,
-						"displayName":              req.DisplayName,
-						"expiresAt":                ch.ExpiresAt.Unix(),
-						"mode":                     "webauthn",
-						"options":                  creation,
-						"passwordFactorRequired":   pwRequired,
-						"passwordSalt":             pwSalt,
-						"passwordPbkdf2Iterations": pwIterations,
+						"challengeId": ch.ID,
+						"challenge":   session.Challenge,
+						"username":    req.Username,
+						"displayName": req.DisplayName,
+						"expiresAt":   ch.ExpiresAt.Unix(),
+						"mode":        "webauthn",
+						"options":     creation,
 					})
 					return
 				}
@@ -184,11 +153,7 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), challengeKind, req.Username, fallbackChallenge, time.Now().Add(5*time.Minute), v2RegisterChallengePayload{
-		PasswordRequired:   pwRequired,
-		PasswordSalt:       pwSalt,
-		PasswordIterations: pwIterations,
-	})
+	ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), challengeKind, req.Username, fallbackChallenge, time.Now().Add(5*time.Minute), v2RegisterChallengePayload{})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -199,11 +164,8 @@ func (s *Server) routeV2AuthRegisterBegin(c *gin.Context, adminManaged bool) {
 		"username":    req.Username,
 		"displayName": req.DisplayName,
 		"expiresAt":   ch.ExpiresAt.Unix(),
-		// Placeholder contract: browser can wrap a real WebAuthn payload into `credential`.
-		"mode":                     "webauthn-placeholder",
-		"passwordFactorRequired":   pwRequired,
-		"passwordSalt":             pwSalt,
-		"passwordPbkdf2Iterations": pwIterations,
+		// Placeholder contract: browser can wrap a real WebAuthn payload into `credential`
+		"mode": "webauthn-placeholder",
 	})
 }
 
@@ -254,9 +216,8 @@ func (s *Server) routeV2AuthRegisterFinish(c *gin.Context, adminManaged bool) {
 	c.JSON(http.StatusOK, gin.H{
 		"registered": true,
 		"session": gin.H{
-			"username":         req.Username,
-			"ttl":              int(time.Until(sess.ExpiresAt).Seconds()),
-			"passwordVerified": sess.PasswordVerified,
+			"username": req.Username,
+			"ttl":      int(time.Until(sess.ExpiresAt).Seconds()),
 		},
 	})
 }
@@ -338,9 +299,8 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"authenticated": true,
 		"session": gin.H{
-			"username":         username,
-			"ttl":              int(time.Until(sess.ExpiresAt).Seconds()),
-			"passwordVerified": sess.PasswordVerified,
+			"username": username,
+			"ttl":      int(time.Until(sess.ExpiresAt).Seconds()),
 		},
 	})
 }
@@ -349,17 +309,14 @@ func (s *Server) RouteV2AuthSession(c *gin.Context) {
 	username, _ := c.Get(contextKeyAdminUsername)
 	expiryAny, _ := c.Get(contextKeySessionExpiry)
 	expiry, _ := expiryAny.(time.Time)
-	passwordVerifiedAny, _ := c.Get(contextKeyPasswordVerified)
-	passwordVerified, _ := passwordVerifiedAny.(bool)
 	if username == nil || expiry.IsZero() {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"authenticated":    true,
-		"username":         username,
-		"ttl":              int(time.Until(expiry).Seconds()),
-		"passwordVerified": passwordVerified,
+		"authenticated": true,
+		"username":      username,
+		"ttl":           int(time.Until(expiry).Seconds()),
 	})
 }
 
@@ -404,19 +361,7 @@ func randomB64URL(n int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-func buildV2PasswordProofMessage(username, challengeID, webauthnChallenge, passwordProofChallenge string) []byte {
-	return []byte(strings.Join([]string{
-		"revaulter-v2-password-proof",
-		username,
-		challengeID,
-		webauthnChallenge,
-		passwordProofChallenge,
-	}, "|"))
-}
-
 func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (*v2db.AuthSession, error) {
-	cfg := config.Get()
-	pwRequired := cfg.PasswordFactorMode == "required"
 	if s.webAuthn == nil {
 		if !s.v2AllowAuthPlaceholder {
 			return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
@@ -433,22 +378,6 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 		if !ok {
 			return nil, NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
 		}
-		var pwEnrollment *v2db.PasswordFactorEnrollment
-		if pwRequired {
-			if req.PasswordFactor == nil || req.PasswordFactor.AuthKey == "" {
-				return nil, NewResponseError(http.StatusBadRequest, "Password factor is required")
-			}
-			pwEnrollment = &v2db.PasswordFactorEnrollment{
-				Salt: payload.PasswordSalt,
-				Iterations: func() int {
-					if payload.PasswordIterations > 0 {
-						return payload.PasswordIterations
-					}
-					return cfg.PasswordPBKDF2Iterations
-				}(),
-				AuthKey: req.PasswordFactor.AuthKey,
-			}
-		}
 		webAuthnUserID := ""
 		if payload.WebAuthnSession != nil {
 			webAuthnUserID = base64.RawURLEncoding.EncodeToString(payload.WebAuthnSession.UserID)
@@ -460,7 +389,6 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 			CredentialID:   legacy.ID,
 			PublicKey:      legacy.PublicKey,
 			SignCount:      legacy.SignCount,
-			PasswordFactor: pwEnrollment,
 			SessionTTL:     config.Get().SessionTimeout,
 		})
 	}
@@ -475,9 +403,6 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 	}
 	if payload.WebAuthnSession == nil {
 		return nil, NewResponseError(http.StatusConflict, "Registration challenge is missing WebAuthn session data")
-	}
-	if payload.PasswordRequired && (req.PasswordFactor == nil || req.PasswordFactor.AuthKey == "") {
-		return nil, NewResponseError(http.StatusBadRequest, "Password factor is required")
 	}
 	user := &v2WebAuthnUser{
 		id:          payload.WebAuthnSession.UserID,
@@ -504,25 +429,7 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 		CredentialID:   base64.RawURLEncoding.EncodeToString(cred.ID),
 		PublicKey:      string(credJSON),
 		SignCount:      int64(cred.Authenticator.SignCount),
-		PasswordFactor: func() *v2db.PasswordFactorEnrollment {
-			if !payload.PasswordRequired {
-				return nil
-			}
-			if req.PasswordFactor == nil || req.PasswordFactor.AuthKey == "" {
-				return nil
-			}
-			return &v2db.PasswordFactorEnrollment{
-				Salt: payload.PasswordSalt,
-				Iterations: func() int {
-					if payload.PasswordIterations > 0 {
-						return payload.PasswordIterations
-					}
-					return cfg.PasswordPBKDF2Iterations
-				}(),
-				AuthKey: req.PasswordFactor.AuthKey,
-			}
-		}(),
-		SessionTTL: config.Get().SessionTimeout,
+		SessionTTL:     config.Get().SessionTimeout,
 	})
 	if err == v2db.ErrFirstAdminAlreadyExists {
 		return nil, NewResponseError(http.StatusConflict, "First admin already exists; use login")
@@ -531,8 +438,6 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 }
 
 func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegisterFinishRequest) error {
-	cfg := config.Get()
-	pwRequired := cfg.PasswordFactorMode == "required"
 	challengeKind := "register-admin"
 	if s.webAuthn == nil {
 		if !s.v2AllowAuthPlaceholder {
@@ -550,22 +455,6 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 		if !ok {
 			return NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
 		}
-		var pwEnrollment *v2db.PasswordFactorEnrollment
-		if pwRequired {
-			if req.PasswordFactor == nil || req.PasswordFactor.AuthKey == "" {
-				return NewResponseError(http.StatusBadRequest, "Password factor is required")
-			}
-			pwEnrollment = &v2db.PasswordFactorEnrollment{
-				Salt: payload.PasswordSalt,
-				Iterations: func() int {
-					if payload.PasswordIterations > 0 {
-						return payload.PasswordIterations
-					}
-					return cfg.PasswordPBKDF2Iterations
-				}(),
-				AuthKey: req.PasswordFactor.AuthKey,
-			}
-		}
 		webAuthnUserID := ""
 		if payload.WebAuthnSession != nil {
 			webAuthnUserID = base64.RawURLEncoding.EncodeToString(payload.WebAuthnSession.UserID)
@@ -577,7 +466,6 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 			CredentialID:   legacy.ID,
 			PublicKey:      legacy.PublicKey,
 			SignCount:      legacy.SignCount,
-			PasswordFactor: pwEnrollment,
 		})
 		if err == v2db.ErrAdminAlreadyExists {
 			return NewResponseError(http.StatusConflict, "Username already exists")
@@ -595,9 +483,6 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 	}
 	if payload.WebAuthnSession == nil {
 		return NewResponseError(http.StatusConflict, "Registration challenge is missing WebAuthn session data")
-	}
-	if payload.PasswordRequired && (req.PasswordFactor == nil || req.PasswordFactor.AuthKey == "") {
-		return NewResponseError(http.StatusBadRequest, "Password factor is required")
 	}
 	user := &v2WebAuthnUser{
 		id:          payload.WebAuthnSession.UserID,
@@ -623,24 +508,6 @@ func (s *Server) v2RegisterAdditionalAdminFinish(c *gin.Context, req v2AuthRegis
 		CredentialID:   base64.RawURLEncoding.EncodeToString(cred.ID),
 		PublicKey:      string(credJSON),
 		SignCount:      int64(cred.Authenticator.SignCount),
-		PasswordFactor: func() *v2db.PasswordFactorEnrollment {
-			if !payload.PasswordRequired {
-				return nil
-			}
-			if req.PasswordFactor == nil || req.PasswordFactor.AuthKey == "" {
-				return nil
-			}
-			return &v2db.PasswordFactorEnrollment{
-				Salt: payload.PasswordSalt,
-				Iterations: func() int {
-					if payload.PasswordIterations > 0 {
-						return payload.PasswordIterations
-					}
-					return cfg.PasswordPBKDF2Iterations
-				}(),
-				AuthKey: req.PasswordFactor.AuthKey,
-			}
-		}(),
 	})
 	if err == v2db.ErrAdminAlreadyExists {
 		return NewResponseError(http.StatusConflict, "Username already exists")
@@ -700,34 +567,11 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 	}
 	username := discoveredUser.name
 
-	passwordVerified := false
-	if payload.PasswordRequired {
-		if req.PasswordProof == "" {
-			return nil, "", NewResponseError(http.StatusUnauthorized, "Password factor proof is required")
-		}
-		pf, err := s.authStore.GetPasswordFactorByUsername(c.Request.Context(), username)
-		if err != nil {
-			return nil, "", err
-		}
-		if pf == nil || !pf.Enabled {
-			return nil, "", NewResponseError(http.StatusUnauthorized, "Password factor not enrolled")
-		}
-		challengeForProof := payload.Challenge
-		if challengeForProof == "" {
-			challengeForProof = payload.WebAuthnSession.Challenge
-		}
-		msg := buildV2PasswordProofMessage(username, req.ChallengeID, challengeForProof, payload.PasswordProofChallenge)
-		if !v2db.VerifyPasswordProof(pf.AuthKey, req.PasswordProof, msg) {
-			return nil, "", NewResponseError(http.StatusUnauthorized, "Invalid password factor proof")
-		}
-		passwordVerified = true
-	}
 	sess, err := s.authStore.Login(c.Request.Context(), v2db.LoginInput{
-		Username:         username,
-		CredentialID:     base64.RawURLEncoding.EncodeToString(cred.ID),
-		SignCount:        int64(cred.Authenticator.SignCount),
-		PasswordVerified: passwordVerified,
-		SessionTTL:       config.Get().SessionTimeout,
+		Username:     username,
+		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
+		SignCount:    int64(cred.Authenticator.SignCount),
+		SessionTTL:   config.Get().SessionTimeout,
 	})
 	if err == v2db.ErrInvalidLogin {
 		return nil, "", NewResponseError(http.StatusUnauthorized, "Invalid login")

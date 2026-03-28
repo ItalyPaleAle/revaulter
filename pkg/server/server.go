@@ -237,7 +237,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 
 	v2APIGroup := v2RouteGroup.Group("/api")
 	v2APIGroup.Use(s.V2SessionMiddleware(true))
-	v2APIGroup.Use(s.V2PasswordFactorRequiredMiddleware())
 	v2APIGroup.GET("/list", s.RouteV2APIList)
 	v2APIGroup.GET("/request/:state", s.RouteV2APIRequestGet)
 	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
@@ -252,7 +251,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/logout", s.V2SessionMiddleware(true), s.RouteV2AuthLogout)
 	v2AuthAdminGroup := v2AuthGroup.Group("/admin")
 	v2AuthAdminGroup.Use(s.V2SessionMiddleware(true))
-	v2AuthAdminGroup.Use(s.V2PasswordFactorRequiredMiddleware())
 	v2AuthAdminGroup.POST("/register/begin", s.RouteV2AuthAdminRegisterBegin)
 	v2AuthAdminGroup.POST("/register/finish", s.RouteV2AuthAdminRegisterFinish)
 

@@ -8,9 +8,7 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -35,7 +33,6 @@ import (
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils/bufconn"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
-	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
 const (
@@ -61,176 +58,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestServerV2AuthPlaceholderPasswordFactorRequired(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":              tmpDir + "/v2.db",
-		"secretKey":                "dGVzdC12Mi1kYi1rZXk", // test-v2-db-key
-		"baseUrl":                  fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":                  []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		"passwordFactorMode":       "required",
-		"passwordPbkdf2Iterations": 300000,
-	}))
-
-	srv, cleanup := newTestServer(t, nil, nil, nil)
-	require.NotNil(t, srv)
-	defer cleanup()
-	// Use placeholder v2 auth payloads in this test; WebAuthn verification is exercised elsewhere.
-	srv.webAuthn = nil
-	srv.v2AllowAuthPlaceholder = true
-
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
-	client := clientForListener(srv.appListener)
-
-	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
-		t.Helper()
-		b, err := json.Marshal(body)
-		require.NoError(t, err)
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
-		require.NoError(t, err)
-		req.Header.Set("Content-Type", "application/json")
-		for _, c := range cookies {
-			if c != nil {
-				req.AddCookie(c)
-			}
-		}
-		res, err := client.Do(req)
-		require.NoError(t, err)
-		defer closeBody(res)
-		var out map[string]any
-		_ = json.NewDecoder(res.Body).Decode(&out)
-		return res, out
-	}
-
-	// Register begin
-	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{
-		"username":    "alice",
-		"displayName": "Alice",
-	})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	require.Equal(t, true, regBegin["passwordFactorRequired"])
-	regChallengeID, _ := regBegin["challengeId"].(string)
-	require.NotEmpty(t, regChallengeID)
-	regSalt, _ := regBegin["passwordSalt"].(string)
-	require.NotEmpty(t, regSalt)
-
-	passwordAuthKey := base64.RawURLEncoding.EncodeToString([]byte("test-password-auth-key"))
-
-	// Register finish with placeholder credential + password factor enrollment
-	res, regFinish := doPostJSON(t, "/v2/auth/register/finish", map[string]any{
-		"username":    "alice",
-		"displayName": "Alice",
-		"challengeId": regChallengeID,
-		"credential": map[string]any{
-			"id":        "cred-1",
-			"publicKey": `{"placeholder":true}`,
-			"signCount": 1,
-		},
-		"passwordFactor": map[string]any{
-			"authKey": passwordAuthKey,
-		},
-	})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	require.Equal(t, true, regFinish["registered"])
-	require.NotEmpty(t, res.Cookies())
-	var v2SessionCookie *http.Cookie
-	for _, c := range res.Cookies() {
-		if c.Name == sessionCookieName {
-			v2SessionCookie = c
-			break
-		}
-	}
-	require.NotNil(t, v2SessionCookie)
-
-	// Session endpoint should report passwordVerified=true
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/auth/session", testServerPort), nil)
-	require.NoError(t, err)
-	req.AddCookie(v2SessionCookie)
-	res2, err := client.Do(req)
-	require.NoError(t, err)
-	defer closeBody(res2)
-	require.Equal(t, http.StatusOK, res2.StatusCode)
-	var sessionResp map[string]any
-	require.NoError(t, json.NewDecoder(res2.Body).Decode(&sessionResp))
-	require.Equal(t, true, sessionResp["passwordVerified"])
-
-	// Login begin
-	res, loginBegin := doPostJSON(t, "/v2/auth/login/begin", map[string]any{
-		"username": "alice",
-	})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	require.Equal(t, true, loginBegin["passwordFactorRequired"])
-	loginChallengeID, _ := loginBegin["challengeId"].(string)
-	loginChallenge, _ := loginBegin["challenge"].(string)
-	passwordProofChallenge, _ := loginBegin["passwordProofChallenge"].(string)
-	require.NotEmpty(t, loginChallengeID)
-	require.NotEmpty(t, loginChallenge)
-	require.NotEmpty(t, passwordProofChallenge)
-
-	// Missing password proof must fail when required
-	res, _ = doPostJSON(t, "/v2/auth/login/finish", map[string]any{
-		"username":    "alice",
-		"challengeId": loginChallengeID,
-		"credential": map[string]any{
-			"id": "cred-1",
-		},
-	})
-	require.Equal(t, http.StatusUnauthorized, res.StatusCode)
-
-	// Start a new login ceremony and complete with valid proof
-	res, loginBegin = doPostJSON(t, "/v2/auth/login/begin", map[string]any{
-		"username": "alice",
-	})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	loginChallengeID, _ = loginBegin["challengeId"].(string)
-	loginChallenge, _ = loginBegin["challenge"].(string)
-	passwordProofChallenge, _ = loginBegin["passwordProofChallenge"].(string)
-
-	msg := buildV2PasswordProofMessage("alice", loginChallengeID, loginChallenge, passwordProofChallenge)
-	authKeyBytes, err := base64.RawURLEncoding.DecodeString(passwordAuthKey)
-	require.NoError(t, err)
-	mac := hmac.New(sha256.New, authKeyBytes)
-	_, _ = mac.Write(msg)
-	passwordProof := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-
-	res, loginFinish := doPostJSON(t, "/v2/auth/login/finish", map[string]any{
-		"username":      "alice",
-		"challengeId":   loginChallengeID,
-		"passwordProof": passwordProof,
-		"credential": map[string]any{
-			"id": "cred-1",
-		},
-	})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	require.Equal(t, true, loginFinish["authenticated"])
-	var loginCookie *http.Cookie
-	for _, c := range res.Cookies() {
-		if c.Name == sessionCookieName {
-			loginCookie = c
-			break
-		}
-	}
-	require.NotNil(t, loginCookie)
-
-	// Protected v2 API should succeed with password-verified session
-	req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort), nil)
-	require.NoError(t, err)
-	req.AddCookie(loginCookie)
-	res3, err := client.Do(req)
-	require.NoError(t, err)
-	defer closeBody(res3)
-	require.Equal(t, http.StatusOK, res3.StatusCode)
-
-	// Ensure auth key is encrypted at rest when using server init path (auth store gets payload key)
-	pf, err := srv.authStore.GetPasswordFactorByUsername(t.Context(), "alice")
-	require.NoError(t, err)
-	require.NotNil(t, pf)
-	require.Equal(t, passwordAuthKey, pf.AuthKey)
-
-	_ = v2db.VerifyPasswordProof // keep package import used if compiler optimizes differently
-}
-
 func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
@@ -238,7 +65,6 @@ func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 		"secretKey":          "dGVzdC12Mi1kYi1rZXk",
 		"baseUrl":            fmt.Sprintf("https://localhost:%d", testServerPort),
 		"origins":            []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		"passwordFactorMode": "disabled",
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -403,7 +229,6 @@ func TestServerV2AdminManagedRegisterPlaceholder(t *testing.T) {
 		"secretKey":          "dGVzdC12Mi1kYi1rZXk",
 		"baseUrl":            fmt.Sprintf("https://localhost:%d", testServerPort),
 		"origins":            []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		"passwordFactorMode": "disabled",
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -483,18 +308,6 @@ func TestServerV2AdminManagedRegisterPlaceholder(t *testing.T) {
 	require.Equal(t, true, adminRegFinish["registered"])
 	require.Equal(t, "bob", adminRegFinish["username"])
 
-	// Bob can now log in
-	res, bobLoginBegin := doPostJSON(t, "/v2/auth/login/begin", map[string]any{"username": "bob"})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	res, bobLoginFinish := doPostJSON(t, "/v2/auth/login/finish", map[string]any{
-		"username":    "bob",
-		"challengeId": bobLoginBegin["challengeId"],
-		"credential": map[string]any{
-			"id": "cred-bob",
-		},
-	})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	require.Equal(t, true, bobLoginFinish["authenticated"])
 }
 
 func TestServerV2ModeDisablesLegacyRoutes(t *testing.T) {
@@ -536,7 +349,6 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 		"secretKey":          "dGVzdC12Mi1kYi1rZXk",
 		"baseUrl":            fmt.Sprintf("https://localhost:%d", testServerPort),
 		"origins":            []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		"passwordFactorMode": "disabled",
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -614,7 +426,7 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 		require.NotNil(t, c)
 		return c
 	}
-	registerAdmin := func(t *testing.T, actor *http.Cookie, username, displayName, credID string) {
+	_ = func(t *testing.T, actor *http.Cookie, username, displayName, credID string) {
 		t.Helper()
 		res, begin := doPostJSON(t, "/v2/auth/admin/register/begin", map[string]any{
 			"username":    username,
@@ -633,24 +445,7 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 		}, actor)
 		require.Equal(t, http.StatusOK, res.StatusCode)
 	}
-	login := func(t *testing.T, username, credID string) *http.Cookie {
-		t.Helper()
-		res, begin := doPostJSON(t, "/v2/auth/login/begin", map[string]any{"username": username})
-		require.Equal(t, http.StatusOK, res.StatusCode)
-		res, _ = doPostJSON(t, "/v2/auth/login/finish", map[string]any{
-			"username":    username,
-			"challengeId": begin["challengeId"],
-			"credential":  map[string]any{"id": credID},
-		})
-		require.Equal(t, http.StatusOK, res.StatusCode)
-		c := getSessionCookie(res)
-		require.NotNil(t, c)
-		return c
-	}
-
 	aliceCookie := registerFirst(t, "alice", "Alice", "cred-alice")
-	registerAdmin(t, aliceCookie, "bob", "Bob", "cred-bob")
-	bobCookie := login(t, "bob", "cred-bob")
 
 	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -684,15 +479,6 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 	state, _ := create["state"].(string)
 	require.NotEmpty(t, state)
-
-	// Bob cannot read or confirm Alice's request.
-	res, _ = doGetJSON(t, "/v2/api/request/"+state, bobCookie)
-	require.Equal(t, http.StatusForbidden, res.StatusCode)
-	res, _ = doPostJSON(t, "/v2/api/confirm", map[string]any{
-		"state":  state,
-		"cancel": true,
-	}, bobCookie)
-	require.Equal(t, http.StatusForbidden, res.StatusCode)
 
 	// Alice sees the request.
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort), nil)

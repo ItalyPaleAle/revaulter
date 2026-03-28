@@ -2,18 +2,13 @@ package v2db
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,8 +21,7 @@ import (
 
 type AuthStore struct {
 	db   *DB
-	log  *slog.Logger
-	aead cipher.AEAD
+	log *slog.Logger
 }
 
 type Admin struct {
@@ -39,12 +33,11 @@ type Admin struct {
 }
 
 type AuthSession struct {
-	ID               string
-	AdminID          string
-	Username         string
-	PasswordVerified bool
-	ExpiresAt        time.Time
-	CreatedAt        time.Time
+	ID        string
+	AdminID   string
+	Username  string
+	ExpiresAt time.Time
+	CreatedAt time.Time
 }
 
 type AuthChallenge struct {
@@ -61,21 +54,6 @@ type AuthCredentialRecord struct {
 	SignCount    int64
 }
 
-type PasswordFactorRecord struct {
-	AdminID    string
-	Username   string
-	Salt       string
-	Iterations int
-	AuthKey    string
-	Enabled    bool
-}
-
-type PasswordFactorEnrollment struct {
-	Salt       string
-	Iterations int
-	AuthKey    string
-}
-
 type RegisterFirstAdminInput struct {
 	Username       string
 	DisplayName    string
@@ -83,7 +61,6 @@ type RegisterFirstAdminInput struct {
 	CredentialID   string
 	PublicKey      string
 	SignCount      int64
-	PasswordFactor *PasswordFactorEnrollment
 	SessionTTL     time.Duration
 }
 
@@ -94,43 +71,27 @@ type RegisterAdminInput struct {
 	CredentialID   string
 	PublicKey      string
 	SignCount      int64
-	PasswordFactor *PasswordFactorEnrollment
 }
 
 type LoginInput struct {
-	Username         string
-	CredentialID     string
-	SignCount        int64
-	PasswordVerified bool
-	SessionTTL       time.Duration
+	Username     string
+	CredentialID string
+	SignCount    int64
+	SessionTTL   time.Duration
 }
 
 func NewAuthStore(ctx context.Context, db *DB, logger *slog.Logger) (*AuthStore, error) {
 	return NewAuthStoreWithPayloadKey(ctx, db, nil, logger)
 }
 
-func NewAuthStoreWithPayloadKey(ctx context.Context, db *DB, payloadKey []byte, logger *slog.Logger) (*AuthStore, error) {
+func NewAuthStoreWithPayloadKey(ctx context.Context, db *DB, _ []byte, logger *slog.Logger) (*AuthStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	var aead cipher.AEAD
-	if len(payloadKey) > 0 {
-		if len(payloadKey) != 32 {
-			return nil, errors.New("invalid payload key length for auth store")
-		}
-		block, err := aes.NewCipher(payloadKey)
-		if err != nil {
-			return nil, err
-		}
-		aead, err = cipher.NewGCM(block)
-		if err != nil {
-			return nil, err
-		}
-	}
-	s := &AuthStore{db: db, log: logger, aead: aead}
+	s := &AuthStore{db: db, log: logger}
 	if err := s.migrate(ctx); err != nil {
 		return nil, err
 	}
@@ -142,27 +103,21 @@ func (s *AuthStore) migrate(ctx context.Context) error {
 	case BackendSQLite:
 		m := &sqlitemigrations.Migrations{
 			Pool:              s.db.SQLite,
-			MetadataTableName: "_revaulter_v2_migrations",
-			MetadataKey:       "auth",
+			MetadataTableName: "metadata",
+			MetadataKey:       "migrations",
 		}
 		return m.Perform(ctx, []migrations.MigrationFn{
 			func(ctx context.Context) error {
 				return s.migrationSQLite(ctx, m.GetConn())
 			},
-			func(ctx context.Context) error {
-				return s.migrationSQLitePasswordFactor(ctx, m.GetConn())
-			},
-			func(ctx context.Context) error {
-				return s.migrationSQLiteWebAuthnUserID(ctx, m.GetConn())
-			},
 		}, s.log)
 	case BackendPostgres:
 		m := pgmigrations.Migrations{
 			DB:                s.db.Postgres,
-			MetadataTableName: "_revaulter_v2_migrations",
-			MetadataKey:       "auth",
+			MetadataTableName: "metadata",
+			MetadataKey:       "migrations",
 		}
-		return m.Perform(ctx, []migrations.MigrationFn{s.migrationPostgres, s.migrationPostgresPasswordFactor, s.migrationPostgresWebAuthnUserID}, s.log)
+		return m.Perform(ctx, []migrations.MigrationFn{s.migrationPostgres}, s.log)
 	default:
 		return errors.New("unsupported backend")
 	}
@@ -178,6 +133,7 @@ func (s *AuthStore) migrationSQLite(ctx context.Context, conn *sql.Conn) error {
 			username TEXT NOT NULL UNIQUE,
 			display_name TEXT NOT NULL,
 			status TEXT NOT NULL,
+			webauthn_user_id TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
@@ -229,6 +185,7 @@ func (s *AuthStore) migrationPostgres(ctx context.Context) error {
 			username text NOT NULL UNIQUE,
 			display_name text NOT NULL,
 			status text NOT NULL,
+			webauthn_user_id text NOT NULL DEFAULT '',
 			created_at bigint NOT NULL,
 			updated_at bigint NOT NULL
 		)`,
@@ -271,66 +228,6 @@ func (s *AuthStore) migrationPostgres(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-func (s *AuthStore) migrationSQLitePasswordFactor(ctx context.Context, conn *sql.Conn) error {
-	if conn == nil {
-		return errors.New("sqlite migration connection is nil")
-	}
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS v2_admin_password_factors (
-			admin_id TEXT PRIMARY KEY,
-			salt TEXT NOT NULL,
-			pbkdf2_iterations INTEGER NOT NULL,
-			auth_key TEXT NOT NULL,
-			enabled INTEGER NOT NULL DEFAULT 1,
-			created_at INTEGER NOT NULL,
-			rotated_at INTEGER NOT NULL
-		)`,
-		`ALTER TABLE v2_admin_sessions ADD COLUMN password_verified INTEGER NOT NULL DEFAULT 0`,
-	}
-	for _, stmt := range stmts {
-		_, err := conn.ExecContext(ctx, stmt)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *AuthStore) migrationPostgresPasswordFactor(ctx context.Context) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS v2_admin_password_factors (
-			admin_id text PRIMARY KEY,
-			salt text NOT NULL,
-			pbkdf2_iterations integer NOT NULL,
-			auth_key text NOT NULL,
-			enabled smallint NOT NULL DEFAULT 1,
-			created_at bigint NOT NULL,
-			rotated_at bigint NOT NULL
-		)`,
-		`ALTER TABLE v2_admin_sessions ADD COLUMN password_verified smallint NOT NULL DEFAULT 0`,
-	}
-	for _, stmt := range stmts {
-		_, err := s.db.Postgres.Exec(ctx, stmt)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *AuthStore) migrationSQLiteWebAuthnUserID(ctx context.Context, conn *sql.Conn) error {
-	if conn == nil {
-		return errors.New("sqlite migration connection is nil")
-	}
-	_, err := conn.ExecContext(ctx, `ALTER TABLE v2_admins ADD COLUMN webauthn_user_id TEXT NOT NULL DEFAULT ''`)
-	return err
-}
-
-func (s *AuthStore) migrationPostgresWebAuthnUserID(ctx context.Context) error {
-	_, err := s.db.Postgres.Exec(ctx, `ALTER TABLE v2_admins ADD COLUMN webauthn_user_id text NOT NULL DEFAULT ''`)
-	return err
 }
 
 func (s *AuthStore) CountAdmins(ctx context.Context) (int, error) {
@@ -471,43 +368,6 @@ func (s *AuthStore) ListCredentials(ctx context.Context, username string) ([]Aut
 	default:
 		return nil, errors.New("unsupported backend")
 	}
-}
-
-func (s *AuthStore) GetPasswordFactorByUsername(ctx context.Context, username string) (*PasswordFactorRecord, error) {
-	var rec PasswordFactorRecord
-	var enabled int
-	var err error
-	switch s.db.Backend {
-	case BackendSQLite:
-		err = s.db.SQLite.QueryRowContext(ctx, `SELECT p.admin_id, a.username, p.salt, p.pbkdf2_iterations, p.auth_key, p.enabled
-			FROM v2_admin_password_factors p
-			INNER JOIN v2_admins a ON a.id = p.admin_id
-			WHERE a.username = ?`, username).
-			Scan(&rec.AdminID, &rec.Username, &rec.Salt, &rec.Iterations, &rec.AuthKey, &enabled)
-	case BackendPostgres:
-		err = s.db.Postgres.QueryRow(ctx, `SELECT p.admin_id, a.username, p.salt, p.pbkdf2_iterations, p.auth_key, p.enabled
-			FROM v2_admin_password_factors p
-			INNER JOIN v2_admins a ON a.id = p.admin_id
-			WHERE a.username = $1`, username).
-			Scan(&rec.AdminID, &rec.Username, &rec.Salt, &rec.Iterations, &rec.AuthKey, &enabled)
-	default:
-		err = errors.New("unsupported backend")
-	}
-	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if rec.AuthKey != "" {
-		authKey, err := s.openSecret("password-auth-key", rec.AdminID, rec.AuthKey)
-		if err != nil {
-			return nil, err
-		}
-		rec.AuthKey = authKey
-	}
-	rec.Enabled = enabled != 0
-	return &rec, nil
 }
 
 func (s *AuthStore) BeginChallenge(ctx context.Context, kind, username string, ttl time.Duration) (*AuthChallenge, error) {
@@ -664,33 +524,32 @@ func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, err
 func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, error) {
 	var sess AuthSession
 	var expiresAt, createdAt, revokedAt sql.NullInt64
-	var passwordVerified int
 	var err error
 	switch s.db.Backend {
 	case BackendSQLite:
-		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, admin_id, username, password_verified, expires_at, created_at, revoked_at FROM v2_admin_sessions WHERE id = ?`, id).
-			Scan(&sess.ID, &sess.AdminID, &sess.Username, &passwordVerified, &expiresAt, &createdAt, &revokedAt)
+		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, admin_id, username, expires_at, created_at, revoked_at FROM v2_admin_sessions WHERE id = ?`, id).
+			Scan(&sess.ID, &sess.AdminID, &sess.Username, &expiresAt, &createdAt, &revokedAt)
 	case BackendPostgres:
-		err = s.db.Postgres.QueryRow(ctx, `SELECT id, admin_id, username, password_verified, expires_at, created_at, revoked_at FROM v2_admin_sessions WHERE id = $1`, id).
-			Scan(&sess.ID, &sess.AdminID, &sess.Username, &passwordVerified, &expiresAt, &createdAt, &revokedAt)
+		err = s.db.Postgres.QueryRow(ctx, `SELECT id, admin_id, username, expires_at, created_at, revoked_at FROM v2_admin_sessions WHERE id = $1`, id).
+			Scan(&sess.ID, &sess.AdminID, &sess.Username, &expiresAt, &createdAt, &revokedAt)
 	default:
 		err = errors.New("unsupported backend")
 	}
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return nil, err
 	}
 	if revokedAt.Valid {
 		return nil, nil
 	}
-	sess.PasswordVerified = passwordVerified != 0
+
 	sess.ExpiresAt = time.Unix(expiresAt.Int64, 0)
 	sess.CreatedAt = time.Unix(createdAt.Int64, 0)
 	if sess.ExpiresAt.Before(time.Now()) {
 		return nil, nil
 	}
+
 	_ = s.touchSession(ctx, id)
 	return &sess, nil
 }
@@ -731,7 +590,8 @@ func (s *AuthStore) registerFirstAdminSQLite(ctx context.Context, in RegisterFir
 	defer tx.Rollback()
 
 	var n int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_admins`).Scan(&n); err != nil {
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_admins`).Scan(&n)
+	if err != nil {
 		return nil, err
 	}
 	if n > 0 {
@@ -740,29 +600,24 @@ func (s *AuthStore) registerFirstAdminSQLite(ctx context.Context, in RegisterFir
 
 	now := time.Now().UTC()
 	adminID := uuid.NewString()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)`,
-		adminID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix()); err != nil {
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		uuid.NewString(), adminID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix()); err != nil {
-		return nil, err
-	}
-	if in.PasswordFactor != nil {
-		encAuthKey, err := s.sealSecret("password-auth-key", adminID, in.PasswordFactor.AuthKey)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admin_password_factors (admin_id, salt, pbkdf2_iterations, auth_key, enabled, created_at, rotated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-			adminID, in.PasswordFactor.Salt, in.PasswordFactor.Iterations, encAuthKey, now.Unix(), now.Unix()); err != nil {
-			return nil, err
-		}
-	}
-	sess, err := insertSessionSQLite(ctx, tx, adminID, in.Username, in.PasswordFactor != nil, in.SessionTTL)
+	_, err = tx.ExecContext(ctx, `INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)`,
+		adminID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix())
 	if err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(); err != nil {
+	_, err = tx.ExecContext(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		uuid.NewString(), adminID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix())
+	if err != nil {
+		return nil, err
+	}
+
+	sess, err := insertSessionSQLite(ctx, tx, adminID, in.Username, in.SessionTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.Commit()
+	if err != nil {
 		return nil, err
 	}
 	return sess, nil
@@ -793,16 +648,6 @@ func (s *AuthStore) registerAdminSQLite(ctx context.Context, in RegisterAdminInp
 		uuid.NewString(), adminID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix()); err != nil {
 		return err
 	}
-	if in.PasswordFactor != nil {
-		encAuthKey, err := s.sealSecret("password-auth-key", adminID, in.PasswordFactor.AuthKey)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admin_password_factors (admin_id, salt, pbkdf2_iterations, auth_key, enabled, created_at, rotated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-			adminID, in.PasswordFactor.Salt, in.PasswordFactor.Iterations, encAuthKey, now.Unix(), now.Unix()); err != nil {
-			return err
-		}
-	}
 	return tx.Commit()
 }
 
@@ -831,17 +676,7 @@ func (s *AuthStore) registerFirstAdminPostgres(ctx context.Context, in RegisterF
 		uuid.NewString(), adminID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix()); err != nil {
 		return nil, err
 	}
-	if in.PasswordFactor != nil {
-		encAuthKey, err := s.sealSecret("password-auth-key", adminID, in.PasswordFactor.AuthKey)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO v2_admin_password_factors (admin_id, salt, pbkdf2_iterations, auth_key, enabled, created_at, rotated_at) VALUES ($1,$2,$3,$4,1,$5,$6)`,
-			adminID, in.PasswordFactor.Salt, in.PasswordFactor.Iterations, encAuthKey, now.Unix(), now.Unix()); err != nil {
-			return nil, err
-		}
-	}
-	sess, err := insertSessionPgx(ctx, tx, adminID, in.Username, in.PasswordFactor != nil, in.SessionTTL)
+	sess, err := insertSessionPgx(ctx, tx, adminID, in.Username, in.SessionTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -876,16 +711,6 @@ func (s *AuthStore) registerAdminPostgres(ctx context.Context, in RegisterAdminI
 		uuid.NewString(), adminID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix()); err != nil {
 		return err
 	}
-	if in.PasswordFactor != nil {
-		encAuthKey, err := s.sealSecret("password-auth-key", adminID, in.PasswordFactor.AuthKey)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO v2_admin_password_factors (admin_id, salt, pbkdf2_iterations, auth_key, enabled, created_at, rotated_at) VALUES ($1,$2,$3,$4,1,$5,$6)`,
-			adminID, in.PasswordFactor.Salt, in.PasswordFactor.Iterations, encAuthKey, now.Unix(), now.Unix()); err != nil {
-			return err
-		}
-	}
 	return tx.Commit(ctx)
 }
 
@@ -909,7 +734,7 @@ func (s *AuthStore) loginSQLite(ctx context.Context, in LoginInput) (*AuthSessio
 	if _, err := tx.ExecContext(ctx, `UPDATE v2_admin_credentials SET sign_count = ?, last_used_at = ? WHERE credential_id = ?`, in.SignCount, now, in.CredentialID); err != nil {
 		return nil, err
 	}
-	sess, err := insertSessionSQLite(ctx, tx, adminID, in.Username, in.PasswordVerified, in.SessionTTL)
+	sess, err := insertSessionSQLite(ctx, tx, adminID, in.Username, in.SessionTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -939,7 +764,7 @@ func (s *AuthStore) loginPostgres(ctx context.Context, in LoginInput) (*AuthSess
 	if _, err := tx.Exec(ctx, `UPDATE v2_admin_credentials SET sign_count = $1, last_used_at = $2 WHERE credential_id = $3`, in.SignCount, now, in.CredentialID); err != nil {
 		return nil, err
 	}
-	sess, err := insertSessionPgx(ctx, tx, adminID, in.Username, in.PasswordVerified, in.SessionTTL)
+	sess, err := insertSessionPgx(ctx, tx, adminID, in.Username, in.SessionTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -955,96 +780,37 @@ var (
 	ErrInvalidLogin            = errors.New("invalid login")
 )
 
-func insertSessionSQLite(ctx context.Context, tx *sql.Tx, adminID, username string, passwordVerified bool, ttl time.Duration) (*AuthSession, error) {
+func insertSessionSQLite(ctx context.Context, tx *sql.Tx, adminID, username string, ttl time.Duration) (*AuthSession, error) {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
 	now := time.Now().UTC()
 	sess := &AuthSession{
-		ID:               uuid.NewString(),
-		AdminID:          adminID,
-		Username:         username,
-		PasswordVerified: passwordVerified,
-		CreatedAt:        now,
-		ExpiresAt:        now.Add(ttl),
+		ID:        uuid.NewString(),
+		AdminID:   adminID,
+		Username:  username,
+		CreatedAt: now,
+		ExpiresAt: now.Add(ttl),
 	}
-	pw := 0
-	if passwordVerified {
-		pw = 1
-	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO v2_admin_sessions (id, admin_id, username, password_verified, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		sess.ID, sess.AdminID, sess.Username, pw, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix())
+	_, err := tx.ExecContext(ctx, `INSERT INTO v2_admin_sessions (id, admin_id, username, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		sess.ID, sess.AdminID, sess.Username, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix())
 	return sess, err
 }
 
-func insertSessionPgx(ctx context.Context, tx pgx.Tx, adminID, username string, passwordVerified bool, ttl time.Duration) (*AuthSession, error) {
+func insertSessionPgx(ctx context.Context, tx pgx.Tx, adminID, username string, ttl time.Duration) (*AuthSession, error) {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
 	now := time.Now().UTC()
 	sess := &AuthSession{
-		ID:               uuid.NewString(),
-		AdminID:          adminID,
-		Username:         username,
-		PasswordVerified: passwordVerified,
-		CreatedAt:        now,
-		ExpiresAt:        now.Add(ttl),
+		ID:        uuid.NewString(),
+		AdminID:   adminID,
+		Username:  username,
+		CreatedAt: now,
+		ExpiresAt: now.Add(ttl),
 	}
-	pw := 0
-	if passwordVerified {
-		pw = 1
-	}
-	_, err := tx.Exec(ctx, `INSERT INTO v2_admin_sessions (id, admin_id, username, password_verified, expires_at, created_at, last_seen_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		sess.ID, sess.AdminID, sess.Username, pw, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix())
+	_, err := tx.Exec(ctx, `INSERT INTO v2_admin_sessions (id, admin_id, username, expires_at, created_at, last_seen_at) VALUES ($1,$2,$3,$4,$5,$6)`,
+		sess.ID, sess.AdminID, sess.Username, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix())
 	return sess, err
 }
 
-func VerifyPasswordProof(authKeyB64, proofB64 string, message []byte) bool {
-	key, err := base64.RawURLEncoding.DecodeString(authKeyB64)
-	if err != nil || len(key) == 0 {
-		return false
-	}
-	proof, err := base64.RawURLEncoding.DecodeString(proofB64)
-	if err != nil || len(proof) == 0 {
-		return false
-	}
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write(message)
-	return hmac.Equal(mac.Sum(nil), proof)
-}
-
-func (s *AuthStore) sealSecret(kind, id, plain string) (string, error) {
-	if plain == "" || s.aead == nil {
-		return plain, nil
-	}
-	nonce := make([]byte, s.aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
-	ct := s.aead.Seal(nil, nonce, []byte(plain), []byte("revaulter-v2|"+kind+"|"+id))
-	return "enc:" + base64.RawURLEncoding.EncodeToString(nonce) + "." + base64.RawURLEncoding.EncodeToString(ct), nil
-}
-
-func (s *AuthStore) openSecret(kind, id, stored string) (string, error) {
-	if stored == "" || s.aead == nil || !strings.HasPrefix(stored, "enc:") {
-		return stored, nil
-	}
-	rest := strings.TrimPrefix(stored, "enc:")
-	parts := strings.SplitN(rest, ".", 2)
-	if len(parts) != 2 {
-		return "", errors.New("invalid encrypted secret format")
-	}
-	nonce, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return "", err
-	}
-	ct, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return "", err
-	}
-	plain, err := s.aead.Open(nil, nonce, ct, []byte("revaulter-v2|"+kind+"|"+id))
-	if err != nil {
-		return "", err
-	}
-	return string(plain), nil
-}
