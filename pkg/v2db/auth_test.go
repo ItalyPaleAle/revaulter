@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAuthStoreFirstAdminAndLoginSQLite(t *testing.T) {
+func TestAuthStoreRegisterUserAndLoginSQLite(t *testing.T) {
 	ctx := context.Background()
 	conn, _, err := Open(ctx, t.TempDir()+"/auth.db")
 	require.NoError(t, err)
@@ -17,7 +17,7 @@ func TestAuthStoreFirstAdminAndLoginSQLite(t *testing.T) {
 	store, err := NewAuthStore(ctx, conn, nil)
 	require.NoError(t, err)
 
-	n, err := store.CountAdmins(ctx)
+	n, err := store.CountUsers(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
 
@@ -29,7 +29,7 @@ func TestAuthStoreFirstAdminAndLoginSQLite(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	sess, err := store.RegisterFirstAdmin(ctx, RegisterFirstAdminInput{
+	sess, err := store.RegisterUser(ctx, RegisterUserInput{
 		Username:     "alice",
 		DisplayName:  "Alice",
 		CredentialID: "cred-1",
@@ -40,14 +40,15 @@ func TestAuthStoreFirstAdminAndLoginSQLite(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	// Second first-admin registration must fail.
-	_, err = store.RegisterFirstAdmin(ctx, RegisterFirstAdminInput{
-		Username:     "bob",
-		DisplayName:  "Bob",
+	// Duplicate usernames must fail
+	_, err = store.RegisterUser(ctx, RegisterUserInput{
+		Username:     "alice",
+		DisplayName:  "Alice Again",
 		CredentialID: "cred-2",
 		PublicKey:    `{"kty":"EC"}`,
+		SessionTTL:   time.Minute,
 	})
-	require.ErrorIs(t, err, ErrFirstAdminAlreadyExists)
+	require.ErrorIs(t, err, ErrUserAlreadyExists)
 
 	loginCh, err := store.BeginChallenge(ctx, "login", "alice", time.Minute)
 	require.NoError(t, err)
@@ -76,4 +77,3 @@ func TestAuthStoreFirstAdminAndLoginSQLite(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, got)
 }
-

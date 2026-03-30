@@ -2,7 +2,6 @@ import ndjson from './ndjson'
 import { Request } from './request'
 import type {
     EcP256PublicJwk,
-    V2AdminRegisterFinishResponse,
     V2LoginBeginResponse,
     V2PendingRequestItem,
     V2RegisterBeginResponse,
@@ -12,19 +11,9 @@ import type {
     V2SessionResponse,
 } from './v2-types'
 
-export async function v2AuthStatus() {
-    return (await Request<{ setupNeeded: boolean }>('/v2/auth/status')).data
-}
-
 export async function v2RegisterBegin(username: string, displayName: string) {
     return (await Request<V2RegisterBeginResponse>('/v2/auth/register/begin', { postData: { username, displayName } }))
         .data
-}
-
-export async function v2AdminRegisterBegin(username: string, displayName: string) {
-    return (
-        await Request<V2RegisterBeginResponse>('/v2/auth/admin/register/begin', { postData: { username, displayName } })
-    ).data
 }
 
 export async function v2RegisterFinish(args: {
@@ -35,19 +24,6 @@ export async function v2RegisterFinish(args: {
 }) {
     return (
         await Request<{ registered: boolean; session: V2SessionResponse }>('/v2/auth/register/finish', {
-            postData: args,
-        })
-    ).data
-}
-
-export async function v2AdminRegisterFinish(args: {
-    username: string
-    displayName: string
-    challengeId: string
-    credential: unknown
-}) {
-    return (
-        await Request<V2AdminRegisterFinishResponse>('/v2/auth/admin/register/finish', {
             postData: args,
         })
     ).data

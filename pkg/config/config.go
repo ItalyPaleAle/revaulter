@@ -58,11 +58,11 @@ type Config struct {
 	TLSKeyPEM string `env:"TLSKEYPEM" yaml:"tlsKeyPEM"`
 
 	// If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.
-	// Note that this value is used to restrict connections to the `/v2/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
+	// Note that this value is used to restrict connections to the `/v2/request` endpoints only. It does not restrict the endpoints used by authenticated users to confirm (or deny) requests.
 	AllowedIPs []string `env:"ALLOWEDIPS" yaml:"allowedIps"`
 
 	// If set, clients need to provide this shared key in calls made to the `/v2/request` endpoints, in the `Authorization` header.
-	// Note that this option only applies to calls to the `/v2/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
+	// Note that this option only applies to calls to the `/v2/request` endpoints. It does not apply to the endpoints used by authenticated users to confirm (or deny) requests.
 	RequestKey string `env:"REQUESTKEY" yaml:"requestKey"`
 
 	// Connection string for the database. The backend is inferred from the DSN (for example: `postgres://`, `postgresql://`, `sqlite://`).
@@ -85,7 +85,11 @@ type Config struct {
 	// Allowed origins for WebAuthn auth. If empty, falls back to `baseUrl` and `origins` (excluding `*`).
 	WebAuthnOrigins []string `env:"WEBAUTHNORIGINS" yaml:"webauthnOrigins"`
 
-	// Lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
+	// Disable creation of new user accounts.
+	// +default false
+	DisableSignup bool `env:"DISABLESIGNUP" yaml:"disableSignup"`
+
+	// Lists of origins that are allowed for CORS. This should be a list of all URLs users can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
 	// +default equal to the value of `baseUrl`
 	Origins []string `env:"ORIGINS" yaml:"origins"`
 

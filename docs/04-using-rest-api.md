@@ -1,12 +1,12 @@
 # Using Revaulter REST APIs (v2)
 
-Revaulter v2 exposes REST APIs for request submission, admin approval, and result polling.
+Revaulter v2 exposes REST APIs for request submission, user approval, and result polling.
 
 ## Request flow
 
 1. Client submits `POST /v2/request/[operation]`.
 2. Client long-polls `GET /v2/request/result/[state]`.
-3. Admin authenticates in the web UI (`/v2/auth/*`) and approves the request.
+3. A user authenticates in the web UI (`/v2/auth/*`) and approves the request.
 4. Browser performs the crypto operation locally and sends an encrypted response envelope via `POST /v2/api/confirm`.
 5. Revaulter relays the encrypted envelope to the client.
 6. Client decrypts the envelope locally using its ephemeral private key.
@@ -40,7 +40,7 @@ Notes:
 
 - `clientTransportKey` must be a public EC JWK (`P-256`), with no private fields (`d` is rejected).
 - `value`, `nonce`, `tag`, and `additionalData` are base64/base64url-encoded strings.
-- `targetUser` identifies the admin who is allowed to approve the request.
+- `targetUser` identifies the user who is allowed to approve the request.
 
 ## Create request response
 
@@ -86,9 +86,9 @@ Completed:
 
 Failed/expired/canceled requests return a failure response with an error status.
 
-## Admin endpoints (browser/UI)
+## User endpoints (browser/UI)
 
-Authenticated admin flows use:
+Authenticated user flows use:
 
 - `POST /v2/auth/register/begin`
 - `POST /v2/auth/register/finish`

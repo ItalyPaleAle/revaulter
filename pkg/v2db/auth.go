@@ -24,7 +24,7 @@ type AuthStore struct {
 	log *slog.Logger
 }
 
-type Admin struct {
+type User struct {
 	ID             string
 	Username       string
 	DisplayName    string
@@ -35,7 +35,7 @@ type Admin struct {
 
 type AuthSession struct {
 	ID        string
-	AdminID   string
+	UserID    string
 	Username  string
 	ExpiresAt time.Time
 	CreatedAt time.Time
@@ -55,7 +55,7 @@ type AuthCredentialRecord struct {
 	SignCount    int64
 }
 
-type RegisterFirstAdminInput struct {
+type RegisterUserInput struct {
 	Username       string
 	DisplayName    string
 	WebAuthnUserID string
@@ -63,15 +63,6 @@ type RegisterFirstAdminInput struct {
 	PublicKey      string
 	SignCount      int64
 	SessionTTL     time.Duration
-}
-
-type RegisterAdminInput struct {
-	Username       string
-	DisplayName    string
-	WebAuthnUserID string
-	CredentialID   string
-	PublicKey      string
-	SignCount      int64
 }
 
 type LoginInput struct {
@@ -232,9 +223,11 @@ func (s *AuthStore) migrationPostgres(ctx context.Context) error {
 	return nil
 }
 
-func (s *AuthStore) CountAdmins(ctx context.Context) (int, error) {
-	var n int
-	var err error
+func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
+	var (
+		n   int
+		err error
+	)
 	switch s.db.Backend {
 	case BackendSQLite:
 		err = s.db.SQLite.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_admins`).Scan(&n)
@@ -246,9 +239,11 @@ func (s *AuthStore) CountAdmins(ctx context.Context) (int, error) {
 	return n, err
 }
 
-func (s *AuthStore) GetAdminByWebAuthnUserID(ctx context.Context, webAuthnUserID string) (*Admin, error) {
-	var a Admin
-	var err error
+func (s *AuthStore) GetUserByWebAuthnUserID(ctx context.Context, webAuthnUserID string) (*User, error) {
+	var (
+		a   User
+		err error
+	)
 	switch s.db.Backend {
 	case BackendSQLite:
 		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE webauthn_user_id = ?`, webAuthnUserID).
@@ -259,18 +254,21 @@ func (s *AuthStore) GetAdminByWebAuthnUserID(ctx context.Context, webAuthnUserID
 	default:
 		err = errors.New("unsupported backend")
 	}
-	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
+
+	if isErrNoRows(err) {
 		return nil, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return nil, err
 	}
+
 	return &a, nil
 }
 
-func (s *AuthStore) GetAdminByUsername(ctx context.Context, username string) (*Admin, error) {
-	var a Admin
-	var err error
+func (s *AuthStore) GetUserByUsername(ctx context.Context, username string) (*User, error) {
+	var (
+		a   User
+		err error
+	)
 	switch s.db.Backend {
 	case BackendSQLite:
 		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE username = ?`, username).
@@ -281,10 +279,9 @@ func (s *AuthStore) GetAdminByUsername(ctx context.Context, username string) (*A
 	default:
 		err = errors.New("unsupported backend")
 	}
-	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
+	if isErrNoRows(err) {
 		return nil, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return nil, err
 	}
 	return &a, nil
@@ -314,7 +311,8 @@ func (s *AuthStore) ListCredentialIDs(ctx context.Context, username string) ([]s
 		var out []string
 		for rows.Next() {
 			var id string
-			if err := rows.Scan(&id); err != nil {
+			err = rows.Scan(&id)
+			if err != nil {
 				return nil, err
 			}
 			out = append(out, id)
@@ -329,7 +327,8 @@ func (s *AuthStore) ListCredentialIDs(ctx context.Context, username string) ([]s
 		var out []string
 		for rows.Next() {
 			var id string
-			if err := rows.Scan(&id); err != nil {
+			err = rows.Scan(&id)
+			if err != nil {
 				return nil, err
 			}
 			out = append(out, id)
@@ -355,7 +354,8 @@ func (s *AuthStore) ListCredentials(ctx context.Context, username string) ([]Aut
 		var out []AuthCredentialRecord
 		for rows.Next() {
 			var r AuthCredentialRecord
-			if err := rows.Scan(&r.CredentialID, &r.PublicKey, &r.SignCount); err != nil {
+			err := rows.Scan(&r.CredentialID, &r.PublicKey, &r.SignCount)
+			if err != nil {
 				return nil, err
 			}
 			out = append(out, r)
@@ -374,7 +374,8 @@ func (s *AuthStore) ListCredentials(ctx context.Context, username string) ([]Aut
 		var out []AuthCredentialRecord
 		for rows.Next() {
 			var r AuthCredentialRecord
-			if err := rows.Scan(&r.CredentialID, &r.PublicKey, &r.SignCount); err != nil {
+			err := rows.Scan(&r.CredentialID, &r.PublicKey, &r.SignCount)
+			if err != nil {
 				return nil, err
 			}
 			out = append(out, r)
@@ -390,7 +391,8 @@ func (s *AuthStore) BeginChallenge(ctx context.Context, kind, username string, t
 		ttl = 5 * time.Minute
 	}
 	ch := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, ch); err != nil {
+	_, err := io.ReadFull(rand.Reader, ch)
+	if err != nil {
 		return nil, err
 	}
 	id := uuid.NewString()
@@ -491,37 +493,27 @@ func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind, usern
 	default:
 		err = errors.New("unsupported backend")
 	}
-	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
+	if isErrNoRows(err) {
 		return true, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return false, err
 	}
-	if err := json.Unmarshal([]byte(payload), out); err != nil {
+
+	err = json.Unmarshal([]byte(payload), out)
+	if err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (s *AuthStore) RegisterFirstAdmin(ctx context.Context, in RegisterFirstAdminInput) (*AuthSession, error) {
+func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*AuthSession, error) {
 	switch s.db.Backend {
 	case BackendSQLite:
-		return s.registerFirstAdminSQLite(ctx, in)
+		return s.registerUserSQLite(ctx, in)
 	case BackendPostgres:
-		return s.registerFirstAdminPostgres(ctx, in)
+		return s.registerUserPostgres(ctx, in)
 	default:
 		return nil, errors.New("unsupported backend")
-	}
-}
-
-func (s *AuthStore) RegisterAdmin(ctx context.Context, in RegisterAdminInput) error {
-	switch s.db.Backend {
-	case BackendSQLite:
-		return s.registerAdminSQLite(ctx, in)
-	case BackendPostgres:
-		return s.registerAdminPostgres(ctx, in)
-	default:
-		return errors.New("unsupported backend")
 	}
 }
 
@@ -543,14 +535,14 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 	switch s.db.Backend {
 	case BackendSQLite:
 		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, admin_id, username, expires_at, created_at, revoked_at FROM v2_admin_sessions WHERE id = ?`, id).
-			Scan(&sess.ID, &sess.AdminID, &sess.Username, &expiresAt, &createdAt, &revokedAt)
+			Scan(&sess.ID, &sess.UserID, &sess.Username, &expiresAt, &createdAt, &revokedAt)
 	case BackendPostgres:
 		err = s.db.Postgres.QueryRow(ctx, `SELECT id, admin_id, username, expires_at, created_at, revoked_at FROM v2_admin_sessions WHERE id = $1`, id).
-			Scan(&sess.ID, &sess.AdminID, &sess.Username, &expiresAt, &createdAt, &revokedAt)
+			Scan(&sess.ID, &sess.UserID, &sess.Username, &expiresAt, &createdAt, &revokedAt)
 	default:
 		err = errors.New("unsupported backend")
 	}
-	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
+	if isErrNoRows(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -597,7 +589,7 @@ func (s *AuthStore) touchSession(ctx context.Context, id string) error {
 	}
 }
 
-func (s *AuthStore) registerFirstAdminSQLite(ctx context.Context, in RegisterFirstAdminInput) (*AuthSession, error) {
+func (s *AuthStore) registerUserSQLite(ctx context.Context, in RegisterUserInput) (*AuthSession, error) {
 	tx, err := s.db.SQLite.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -605,28 +597,29 @@ func (s *AuthStore) registerFirstAdminSQLite(ctx context.Context, in RegisterFir
 	defer tx.Rollback()
 
 	var n int
-	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_admins`).Scan(&n)
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_admins WHERE username = ?`, in.Username).Scan(&n)
 	if err != nil {
 		return nil, err
 	}
 	if n > 0 {
-		return nil, ErrFirstAdminAlreadyExists
+		return nil, ErrUserAlreadyExists
 	}
 
 	now := time.Now().UTC()
-	adminID := uuid.NewString()
+	userID := uuid.NewString()
 	_, err = tx.ExecContext(ctx, `INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)`,
-		adminID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix())
-	if err != nil {
-		return nil, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		uuid.NewString(), adminID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix())
+		userID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix())
 	if err != nil {
 		return nil, err
 	}
 
-	sess, err := insertSessionSQLite(ctx, tx, adminID, in.Username, in.SessionTTL)
+	_, err = tx.ExecContext(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		uuid.NewString(), userID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix())
+	if err != nil {
+		return nil, err
+	}
+
+	sess, err := insertSessionSQLite(ctx, tx, userID, in.Username, in.SessionTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -638,35 +631,7 @@ func (s *AuthStore) registerFirstAdminSQLite(ctx context.Context, in RegisterFir
 	return sess, nil
 }
 
-func (s *AuthStore) registerAdminSQLite(ctx context.Context, in RegisterAdminInput) error {
-	tx, err := s.db.SQLite.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	var n int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_admins WHERE username = ?`, in.Username).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return ErrAdminAlreadyExists
-	}
-
-	now := time.Now().UTC()
-	adminID := uuid.NewString()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)`,
-		adminID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix()); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		uuid.NewString(), adminID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix()); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s *AuthStore) registerFirstAdminPostgres(ctx context.Context, in RegisterFirstAdminInput) (*AuthSession, error) {
+func (s *AuthStore) registerUserPostgres(ctx context.Context, in RegisterUserInput) (*AuthSession, error) {
 	tx, err := s.db.Postgres.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -674,59 +639,42 @@ func (s *AuthStore) registerFirstAdminPostgres(ctx context.Context, in RegisterF
 	defer tx.Rollback(ctx)
 
 	var n int
-	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM v2_admins`).Scan(&n); err != nil {
-		return nil, err
-	}
-	if n > 0 {
-		return nil, ErrFirstAdminAlreadyExists
-	}
-
-	now := time.Now().UTC()
-	adminID := uuid.NewString()
-	if _, err := tx.Exec(ctx, `INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES ($1,$2,$3,'active',$4,$5,$6)`,
-		adminID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix()); err != nil {
-		return nil, err
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		uuid.NewString(), adminID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix()); err != nil {
-		return nil, err
-	}
-	sess, err := insertSessionPgx(ctx, tx, adminID, in.Username, in.SessionTTL)
+	err = tx.QueryRow(ctx, `SELECT COUNT(*) FROM v2_admins WHERE username = $1`, in.Username).Scan(&n)
 	if err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+
+	if n > 0 {
+		return nil, ErrUserAlreadyExists
+	}
+
+	now := time.Now().UTC()
+	userID := uuid.NewString()
+	_, err = tx.Exec(ctx,
+		`INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES ($1,$2,$3,'active',$4,$5,$6)`,
+		userID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix())
+	if err != nil {
 		return nil, err
 	}
+
+	_, err = tx.Exec(ctx,
+		`INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		uuid.NewString(), userID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix())
+	if err != nil {
+		return nil, err
+	}
+
+	sess, err := insertSessionPgx(ctx, tx, userID, in.Username, in.SessionTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	return sess, nil
-}
-
-func (s *AuthStore) registerAdminPostgres(ctx context.Context, in RegisterAdminInput) error {
-	tx, err := s.db.Postgres.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	var n int
-	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM v2_admins WHERE username = $1`, in.Username).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return ErrAdminAlreadyExists
-	}
-
-	now := time.Now().UTC()
-	adminID := uuid.NewString()
-	if _, err := tx.Exec(ctx, `INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES ($1,$2,$3,'active',$4,$5,$6)`,
-		adminID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix()); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		uuid.NewString(), adminID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix()); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
 }
 
 func (s *AuthStore) loginSQLite(ctx context.Context, in LoginInput) (*AuthSession, error) {
@@ -741,21 +689,26 @@ func (s *AuthStore) loginSQLite(ctx context.Context, in LoginInput) (*AuthSessio
 		in.Username, in.CredentialID).Scan(&adminID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrInvalidLogin
+	} else if err != nil {
+		return nil, err
 	}
+
+	now := time.Now().Unix()
+	_, err = tx.ExecContext(ctx, `UPDATE v2_admin_credentials SET sign_count = ?, last_used_at = ? WHERE credential_id = ?`, in.SignCount, now, in.CredentialID)
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().Unix()
-	if _, err := tx.ExecContext(ctx, `UPDATE v2_admin_credentials SET sign_count = ?, last_used_at = ? WHERE credential_id = ?`, in.SignCount, now, in.CredentialID); err != nil {
-		return nil, err
-	}
+
 	sess, err := insertSessionSQLite(ctx, tx, adminID, in.Username, in.SessionTTL)
 	if err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(); err != nil {
+
+	err = tx.Commit()
+	if err != nil {
 		return nil, err
 	}
+
 	return sess, nil
 }
 
@@ -764,6 +717,7 @@ func (s *AuthStore) loginPostgres(ctx context.Context, in LoginInput) (*AuthSess
 	if err != nil {
 		return nil, err
 	}
+
 	defer tx.Rollback(ctx)
 
 	var adminID string
@@ -771,60 +725,68 @@ func (s *AuthStore) loginPostgres(ctx context.Context, in LoginInput) (*AuthSess
 		in.Username, in.CredentialID).Scan(&adminID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrInvalidLogin
+	} else if err != nil {
+		return nil, err
 	}
+
+	now := time.Now().Unix()
+	_, err = tx.Exec(ctx, `UPDATE v2_admin_credentials SET sign_count = $1, last_used_at = $2 WHERE credential_id = $3`, in.SignCount, now, in.CredentialID)
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().Unix()
-	if _, err := tx.Exec(ctx, `UPDATE v2_admin_credentials SET sign_count = $1, last_used_at = $2 WHERE credential_id = $3`, in.SignCount, now, in.CredentialID); err != nil {
-		return nil, err
-	}
+
 	sess, err := insertSessionPgx(ctx, tx, adminID, in.Username, in.SessionTTL)
 	if err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+
+	err = tx.Commit(ctx)
+	if err != nil {
 		return nil, err
 	}
+
 	return sess, nil
 }
 
 var (
-	ErrFirstAdminAlreadyExists = errors.New("first admin already exists")
-	ErrAdminAlreadyExists      = errors.New("admin already exists")
-	ErrInvalidLogin            = errors.New("invalid login")
+	ErrUserAlreadyExists = errors.New("user already exists")
+	ErrInvalidLogin      = errors.New("invalid login")
 )
 
-func insertSessionSQLite(ctx context.Context, tx *sql.Tx, adminID, username string, ttl time.Duration) (*AuthSession, error) {
+func insertSessionSQLite(ctx context.Context, tx *sql.Tx, userID, username string, ttl time.Duration) (*AuthSession, error) {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
 	now := time.Now().UTC()
 	sess := &AuthSession{
 		ID:        uuid.NewString(),
-		AdminID:   adminID,
+		UserID:    userID,
 		Username:  username,
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),
 	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO v2_admin_sessions (id, admin_id, username, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		sess.ID, sess.AdminID, sess.Username, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix())
+		sess.ID, sess.UserID, sess.Username, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix())
 	return sess, err
 }
 
-func insertSessionPgx(ctx context.Context, tx pgx.Tx, adminID, username string, ttl time.Duration) (*AuthSession, error) {
+func insertSessionPgx(ctx context.Context, tx pgx.Tx, userID, username string, ttl time.Duration) (*AuthSession, error) {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
 	now := time.Now().UTC()
 	sess := &AuthSession{
 		ID:        uuid.NewString(),
-		AdminID:   adminID,
+		UserID:    userID,
 		Username:  username,
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO v2_admin_sessions (id, admin_id, username, expires_at, created_at, last_seen_at) VALUES ($1,$2,$3,$4,$5,$6)`,
-		sess.ID, sess.AdminID, sess.Username, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix())
+		sess.ID, sess.UserID, sess.Username, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix())
 	return sess, err
+}
+
+func isErrNoRows(err error) bool {
+	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows)
 }

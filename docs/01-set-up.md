@@ -1,6 +1,6 @@
 # Set up (v2)
 
-Revaulter v2 does not require Azure AD or Azure Key Vault. All cryptographic operations are performed in the administrator's browser using WebAuthn (PRF) and WebCrypto.
+Revaulter v2 does not require Azure AD or Azure Key Vault. All cryptographic operations are performed in the user's browser using WebAuthn (PRF) and WebCrypto.
 
 ## Requirements
 
@@ -15,11 +15,11 @@ Revaulter v2 does not require Azure AD or Azure Key Vault. All cryptographic ope
 
 ## Choose Your URL
 
-Pick the HTTPS URL admins will use to access Revaulter (for example `https://revaulter.example.com`).
+Pick the HTTPS URL users will use to access Revaulter (for example `https://revaulter.example.com`).
 
 This URL is used for:
 
-- Browser access to the admin UI
+- Browser access to the web UI
 - WebAuthn RP/origin validation (directly or via derived defaults)
 - Links included in webhook notifications
 
@@ -39,8 +39,6 @@ Set `secretKey` to a strong secret. For example:
 openssl rand -base64 32
 ```
 
-## First Admin Registration
+## Account Registration
 
-After the server starts and no admins exist yet, the first user to open the web UI can self-register as an admin using WebAuthn.
-
-Subsequent admins are added through the authenticated admin UI/API.
+Users can create their own accounts from the main web UI using WebAuthn, unless `disableSignup` is set to `true` in the server configuration.

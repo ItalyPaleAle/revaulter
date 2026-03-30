@@ -29,7 +29,7 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
 	cmd.Flags().BoolVar(&f.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 
-	cmd.Flags().StringVar(&f.TargetUser, "target-user", "", "Target admin user for the request")
+	cmd.Flags().StringVar(&f.TargetUser, "target-user", "", "Target user for the request")
 	_ = cmd.MarkFlagRequired("target-user")
 	cmd.Flags().StringVar(&f.KeyLabel, "key-label", "", "Logical key label used for v2 key derivation")
 	_ = cmd.MarkFlagRequired("key-label")

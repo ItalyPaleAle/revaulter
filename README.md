@@ -2,7 +2,7 @@
 
 Revaulter is an approval-gated cryptography relay.
 
-Revaulter v2 performs cryptographic operations in the admin's browser using WebAuthn (with PRF) and WebCrypto, then returns the result to the CLI encrypted with an ephemeral ECDH + AES-GCM transport envelope. Revaulter stores pending requests in a database and relays notifications/results, but does not perform the cryptographic operation itself.
+Revaulter v2 performs cryptographic operations in the user's browser using WebAuthn (with PRF) and WebCrypto, then returns the result to the CLI encrypted with an ephemeral ECDH + AES-GCM transport envelope. Revaulter stores pending requests in a database and relays notifications/results, but does not perform the cryptographic operation itself.
 
 Supported operations:
 
@@ -14,7 +14,7 @@ Supported operations:
 
 1. A CLI client submits a request to `/v2/request/*` with the operation payload and an ephemeral P-256 public key (JWK).
 2. Revaulter stores the request in the database (sensitive payload encrypted at rest) and sends a webhook notification.
-3. An admin signs in to the web UI with WebAuthn (and optionally a password factor).
+3. A user signs in to the web UI with WebAuthn (and optionally a password factor).
 4. The browser derives the operation key, performs the crypto locally, and encrypts the result to the CLI using ECDH + AES-GCM.
 5. Revaulter relays the encrypted response envelope to the CLI.
 6. The CLI decrypts the envelope locally and prints the result.
@@ -24,7 +24,7 @@ Supported operations:
 1. Configure `databaseDSN` and `secretKey` in `config.yaml`.
 2. Configure `baseUrl` and TLS.
 3. Start Revaulter.
-4. Open the web UI and self-register the first admin.
+4. Open the web UI and either sign in or create an account.
 5. Use `revaulter-cli v2 ...` commands to submit requests.
 
 ## Docs

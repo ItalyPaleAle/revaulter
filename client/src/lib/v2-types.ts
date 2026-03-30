@@ -79,8 +79,3 @@ export type V2SessionResponse = {
     username: string
     ttl: number
 }
-
-export type V2AdminRegisterFinishResponse = {
-    registered: boolean
-    username: string
-}

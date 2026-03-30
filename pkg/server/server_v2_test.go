@@ -61,10 +61,10 @@ func TestMain(m *testing.M) {
 func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":        tmpDir + "/v2-req.db",
-		"secretKey":          "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":            fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":            []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN": tmpDir + "/v2-req.db",
+		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
+		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -114,7 +114,7 @@ func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 		return res, out
 	}
 
-	// Register first admin (placeholder path)
+	// Register first user (placeholder path)
 	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{
 		"username":    "alice",
 		"displayName": "Alice",
@@ -222,13 +222,13 @@ func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestServerV2AdminManagedRegisterPlaceholder(t *testing.T) {
+func TestServerV2PublicSignupPlaceholder(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":        tmpDir + "/v2-admins.db",
-		"secretKey":          "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":            fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":            []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN": tmpDir + "/v2-users.db",
+		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
+		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -261,16 +261,7 @@ func TestServerV2AdminManagedRegisterPlaceholder(t *testing.T) {
 		return res, out
 	}
 
-	getSessionCookie := func(res *http.Response) *http.Cookie {
-		for _, c := range res.Cookies() {
-			if c.Name == sessionCookieName {
-				return c
-			}
-		}
-		return nil
-	}
-
-	// First admin self-register
+	// First user self-registers.
 	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{"username": "alice", "displayName": "Alice"})
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	res, _ = doPostJSON(t, "/v2/auth/register/finish", map[string]any{
@@ -284,30 +275,57 @@ func TestServerV2AdminManagedRegisterPlaceholder(t *testing.T) {
 		},
 	})
 	require.Equal(t, http.StatusOK, res.StatusCode)
-	aliceCookie := getSessionCookie(res)
-	require.NotNil(t, aliceCookie)
 
-	// Public register is now closed
-	res, _ = doPostJSON(t, "/v2/auth/register/begin", map[string]any{"username": "bob", "displayName": "Bob"})
-	require.Equal(t, http.StatusConflict, res.StatusCode)
-
-	// Admin-managed register begin/finish for bob
-	res, adminRegBegin := doPostJSON(t, "/v2/auth/admin/register/begin", map[string]any{"username": "bob", "displayName": "Bob"}, aliceCookie)
+	// Public signup remains available for later users.
+	res, regBegin = doPostJSON(t, "/v2/auth/register/begin", map[string]any{"username": "bob", "displayName": "Bob"})
 	require.Equal(t, http.StatusOK, res.StatusCode)
-	res, adminRegFinish := doPostJSON(t, "/v2/auth/admin/register/finish", map[string]any{
+	res, bobRegFinish := doPostJSON(t, "/v2/auth/register/finish", map[string]any{
 		"username":    "bob",
 		"displayName": "Bob",
-		"challengeId": adminRegBegin["challengeId"],
+		"challengeId": regBegin["challengeId"],
 		"credential": map[string]any{
 			"id":        "cred-bob",
 			"publicKey": `{"placeholder":true}`,
 			"signCount": 1,
 		},
-	}, aliceCookie)
+	})
 	require.Equal(t, http.StatusOK, res.StatusCode)
-	require.Equal(t, true, adminRegFinish["registered"])
-	require.Equal(t, "bob", adminRegFinish["username"])
+	require.Equal(t, true, bobRegFinish["registered"])
 
+	// Legacy admin signup endpoints are gone.
+	res, _ = doPostJSON(t, "/v2/auth/admin/register/begin", map[string]any{"username": "charlie", "displayName": "Charlie"})
+	require.Equal(t, http.StatusNotFound, res.StatusCode)
+}
+
+func TestServerV2DisableSignup(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Cleanup(config.SetTestConfig(map[string]any{
+		"databaseDSN":   tmpDir + "/v2-disable-signup.db",
+		"secretKey":     "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":       fmt.Sprintf("https://localhost:%d", testServerPort),
+		"origins":       []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"disableSignup": true,
+	}))
+
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	defer cleanup()
+	srv.webAuthn = nil
+	srv.v2AllowAuthPlaceholder = true
+
+	stopServerFn := startTestServer(t, srv)
+	defer stopServerFn(t)
+	client := clientForListener(srv.appListener)
+
+	body, err := json.Marshal(map[string]any{"username": "alice", "displayName": "Alice"})
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/register/begin", testServerPort), bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer closeBody(res)
+	require.Equal(t, http.StatusForbidden, res.StatusCode)
 }
 
 func TestServerV2ModeDisablesLegacyRoutes(t *testing.T) {
@@ -345,10 +363,10 @@ func TestServerV2ModeDisablesLegacyRoutes(t *testing.T) {
 func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":        tmpDir + "/v2-security.db",
-		"secretKey":          "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":            fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":            []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN": tmpDir + "/v2-security.db",
+		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
+		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -425,25 +443,6 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 		c := getSessionCookie(res)
 		require.NotNil(t, c)
 		return c
-	}
-	_ = func(t *testing.T, actor *http.Cookie, username, displayName, credID string) {
-		t.Helper()
-		res, begin := doPostJSON(t, "/v2/auth/admin/register/begin", map[string]any{
-			"username":    username,
-			"displayName": displayName,
-		}, actor)
-		require.Equal(t, http.StatusOK, res.StatusCode)
-		res, _ = doPostJSON(t, "/v2/auth/admin/register/finish", map[string]any{
-			"username":    username,
-			"displayName": displayName,
-			"challengeId": begin["challengeId"],
-			"credential": map[string]any{
-				"id":        credID,
-				"publicKey": `{"placeholder":true}`,
-				"signCount": 1,
-			},
-		}, actor)
-		require.Equal(t, http.StatusOK, res.StatusCode)
 	}
 	aliceCookie := registerFirst(t, "alice", "Alice", "cred-alice")
 

@@ -95,7 +95,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			Note:       body.Note,
 		})
 
-		// Notify admins via webhook in background
+		// Notify users via webhook in background
 		go func() {
 			// Use a background context because the request's context is canceled when the handler returns
 			webhookCtx := trace.ContextWithSpan(context.Background(), span)
@@ -197,7 +197,7 @@ func (s *Server) RouteV2APIList(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	username, _ := c.Get(contextKeyAdminUsername)
+	username, _ := c.Get(contextKeyUsername)
 	userStr, _ := username.(string)
 	if userStr != "" {
 		filtered := list[:0]
@@ -381,7 +381,7 @@ func validateV2ResponseEnvelopeBinding(env protocolv2.ResponseEnvelope, rec *v2d
 }
 
 func (s *Server) v2AuthorizeTargetUser(c *gin.Context, targetUser string) bool {
-	usernameAny, ok := c.Get(contextKeyAdminUsername)
+	usernameAny, ok := c.Get(contextKeyUsername)
 	if !ok {
 		return false
 	}
@@ -501,7 +501,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	usernameAny, _ := c.Get(contextKeyAdminUsername)
+	usernameAny, _ := c.Get(contextKeyUsername)
 	username, _ := usernameAny.(string)
 
 	c.Header("content-type", ndJSONContentType)

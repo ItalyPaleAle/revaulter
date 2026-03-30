@@ -66,21 +66,14 @@ The CLI automatically:
 - waits for `/v2/request/result/:state`
 - decrypts the returned envelope locally
 
-## Admin workflow
+## User workflow
 
-### First admin
+### Account creation
 
 - `POST /v2/auth/register/begin`
 - `POST /v2/auth/register/finish`
 
-The first admin self-registers when there are zero admins in the database.
-
-### Additional admins
-
-Authenticated admins can register additional admins:
-
-- `POST /v2/auth/admin/register/begin`
-- `POST /v2/auth/admin/register/finish`
+Users create their own accounts from the main web UI unless `disableSignup` is enabled.
 
 ### Login/logout/session
 
@@ -97,7 +90,7 @@ CLI-facing:
 - `POST /v2/request/decrypt`
 - `GET /v2/request/result/:state`
 
-Admin-facing:
+User-facing:
 
 - `GET /v2/api/list`
 - `GET /v2/api/request/:state`

@@ -242,7 +242,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
 
 	v2AuthGroup := v2RouteGroup.Group("/auth")
-	v2AuthGroup.GET("/status", s.RouteV2AuthStatus)
 	v2AuthGroup.POST("/register/begin", s.RouteV2AuthRegisterBegin)
 	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
@@ -250,10 +249,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.GET("/session", s.V2SessionMiddleware(true), s.RouteV2AuthSession)
 	v2AuthGroup.POST("/password-canary", s.V2SessionMiddleware(true), s.RouteV2AuthSetPasswordCanary)
 	v2AuthGroup.POST("/logout", s.V2SessionMiddleware(true), s.RouteV2AuthLogout)
-	v2AuthAdminGroup := v2AuthGroup.Group("/admin")
-	v2AuthAdminGroup.Use(s.V2SessionMiddleware(true))
-	v2AuthAdminGroup.POST("/register/begin", s.RouteV2AuthAdminRegisterBegin)
-	v2AuthAdminGroup.POST("/register/finish", s.RouteV2AuthAdminRegisterFinish)
 
 	// Legacy v1 routes have been removed. Keep explicit compatibility errors.
 	s.registerLegacyV1DisabledRoutes()

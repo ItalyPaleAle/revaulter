@@ -5,8 +5,8 @@ The Revaulter CLI (`revaulter-cli`) submits v2 crypto requests and waits for app
 ## Flow
 
 1. The CLI submits a request to `/v2/request/[operation]`.
-2. Revaulter stores the request and notifies admins.
-3. An admin approves in the browser.
+2. Revaulter stores the request and notifies users.
+3. A user approves in the browser.
 4. The browser performs the crypto operation locally and encrypts the result to the CLI.
 5. The CLI receives the encrypted response envelope and decrypts it locally.
 

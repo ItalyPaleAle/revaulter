@@ -1,12 +1,12 @@
 # Install and configure Revaulter (v2)
 
-Revaulter runs as a lightweight HTTPS service. Admins connect to the web UI to approve requests; CLI clients call the `/v2/request/*` APIs.
+Revaulter runs as a lightweight HTTPS service. Users connect to the web UI to approve requests; CLI clients call the `/v2/request/*` APIs.
 
 ## Installation
 
 Install the server binary on a machine that:
 
-- is reachable by admins over HTTPS
+- is reachable by users over HTTPS
 - can reach your database
 - can send outbound webhook requests
 
@@ -65,4 +65,4 @@ SQLite is initialized with:
 revaulter
 ```
 
-Then open the web UI, self-register the first admin, and use `revaulter-cli v2 ...` to submit requests.
+Then open the web UI, sign in or create an account, and use `revaulter-cli v2 ...` to submit requests.
