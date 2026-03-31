@@ -13,7 +13,13 @@ import {
     v2SetPasswordCanary,
 } from '../lib/v2-api'
 import type { V2PendingRequestItem, V2SessionResponse } from '../lib/v2-types'
-import { bytesToB64url, b64urlToBytes, computePrfSalt, encryptPasswordCanary, verifyPasswordCanary } from '../lib/v2-crypto'
+import {
+    bytesToB64url,
+    b64urlToBytes,
+    computePrfSalt,
+    encryptPasswordCanary,
+    verifyPasswordCanary,
+} from '../lib/v2-crypto'
 import { webauthnLoginWithPrfPlaceholder, webauthnRegisterPlaceholder } from '../lib/v2-webauthn'
 import LoadingSpinner from './LoadingSpinner.svelte'
 import V2PendingItem from './V2PendingItem.svelte'
@@ -125,10 +131,7 @@ async function doLogin(internalCall = false) {
     }
     try {
         const begin = await v2LoginBegin()
-        const prfSalt = await computePrfSalt(
-            b64urlToBytes(begin.basePrfSalt),
-            password.trim() || undefined
-        )
+        const prfSalt = await computePrfSalt(b64urlToBytes(begin.basePrfSalt), password.trim() || undefined)
         const assertion = await webauthnLoginWithPrfPlaceholder({
             challenge: begin.challenge,
             prfSalt,

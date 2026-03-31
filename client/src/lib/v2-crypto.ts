@@ -1,4 +1,5 @@
 import { Decode as Base64UrlDecode, Encode as Base64UrlEncode } from 'arraybuffer-encoding/base64/url'
+import { Decode as Base64StdDecode } from 'arraybuffer-encoding/base64/standard'
 import type { EcP256PublicJwk, V2ResponseEnvelope } from './v2-types'
 
 function asBuf(v?: Uint8Array | ArrayBuffer): BufferSource | undefined {
@@ -22,7 +23,18 @@ function bytesToBase64Url(bytes: ArrayBuffer | Uint8Array): string {
 }
 
 function base64UrlToBytes(s: string): Uint8Array {
-    return new Uint8Array(Base64UrlDecode(s))
+    const normalized = s.trim()
+    if (normalized === '') {
+        return new Uint8Array()
+    }
+
+    // Try using base64-url first
+    try {
+        return new Uint8Array(Base64UrlDecode(normalized))
+    } catch {
+        // Fallback to base64 standard (optional padding)
+        return new Uint8Array(Base64StdDecode(normalized))
+    }
 }
 
 export async function generateTransportKeyPairJwk(): Promise<{
@@ -135,10 +147,8 @@ export async function computePrfSalt(basePrfSalt: Uint8Array, password?: string)
 }
 
 export async function deriveOperationKeyBytes(params: {
-    state: string
     targetUser: string
     keyLabel: string
-    operation: string
     algorithm: string
     prfSecret: Uint8Array
     password?: string
@@ -151,10 +161,8 @@ export async function deriveOperationKeyBytes(params: {
     const salt = params.password ? new TextEncoder().encode(params.password) : new Uint8Array()
     const infoObj = {
         v: 1,
-        state: params.state,
         targetUser: params.targetUser,
         keyLabel: params.keyLabel,
-        operation: params.operation,
         algorithm: params.algorithm,
     }
     const bits = await crypto.subtle.deriveBits(
@@ -265,12 +273,18 @@ export async function performAesGcmOperation(params: {
               })()
             : params.value
 
-    const res = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: asBuf(iv) as BufferSource, additionalData: asBuf(params.aad) },
-        key,
-        asBuf(combined) as BufferSource
-    )
-    return new Uint8Array(res)
+    try {
+        const res = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: asBuf(iv) as BufferSource, additionalData: asBuf(params.aad) },
+            key,
+            asBuf(combined) as BufferSource
+        )
+        return new Uint8Array(res)
+    } catch {
+        throw new Error(
+            'Decryption failed. This normally means that the the ciphertext could not be authenticated. Check that the key label, target user, password, nonce, tag, and additional data match the original encryption request.'
+        )
+    }
 }
 
 export function splitAesGcmCiphertextAndTag(ciphertextWithTag: Uint8Array, tagLen = 16) {

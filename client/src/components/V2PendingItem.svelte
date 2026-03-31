@@ -92,10 +92,8 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
     }
 
     const operationKey = await deriveOperationKeyBytes({
-        state: req.state,
         targetUser: req.targetUser,
         keyLabel: req.keyLabel,
-        operation: req.operation,
         algorithm: req.algorithm,
         prfSecret,
         password: password.trim() || undefined,
@@ -136,13 +134,17 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
             if (nonce.length === 0) {
                 throw new Error('Missing nonce for decrypt')
             }
+            const tag = b64urlToBytes(input.tag)
+            if (tag.length === 0) {
+                throw new Error('Missing authentication tag for decrypt')
+            }
             const plain = await performAesGcmOperation({
                 mode: 'decrypt',
                 keyBytes: operationKey,
                 value,
                 nonce,
                 aad,
-                tag: b64urlToBytes(input.tag),
+                tag,
             })
             resultPlain = new TextEncoder().encode(
                 JSON.stringify({

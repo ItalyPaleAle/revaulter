@@ -19,7 +19,7 @@ func (d *stringValue) Set(s string) error {
 	if err != nil {
 		return fmt.Errorf("invalid base64-encoded input: %w", err)
 	}
-	*d = stringValue(base64.RawStdEncoding.EncodeToString(data))
+	*d = stringValue(base64.RawURLEncoding.EncodeToString(data))
 	return nil
 }
 
