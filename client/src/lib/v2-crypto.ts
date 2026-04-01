@@ -1,26 +1,6 @@
 import { Encode as Base64UrlEncode } from 'arraybuffer-encoding/base64/url'
 import type { EcP256PublicJwk, V2ResponseEnvelope } from './v2-types'
-import { base64UrlToBytes } from './utils'
-
-/** Casts browser binary inputs to the `BufferSource` shape expected by WebCrypto */
-function asBuf(v?: Uint8Array | ArrayBuffer): BufferSource | undefined {
-    if (v === undefined) {
-        return undefined
-    }
-    return v as unknown as BufferSource
-}
-
-/** Returns an owned `ArrayBuffer`, copying when the input is a `Uint8Array` view. */
-function toArrayBuffer(bytes: ArrayBuffer | Uint8Array): ArrayBuffer {
-    if (bytes instanceof Uint8Array) {
-        // Copy typed array views into a standalone buffer before encoding
-        const out = new Uint8Array(bytes.byteLength)
-        out.set(bytes)
-        return out.buffer
-    }
-
-    return bytes
-}
+import { asBuf, base64UrlToBytes, toArrayBuffer } from './utils'
 
 /** Encodes bytes using unpadded base64url, which is the wire format */
 function bytesToBase64Url(bytes: ArrayBuffer | Uint8Array): string {
@@ -148,10 +128,10 @@ export async function decryptTransportEnvelope(
         {
             name: 'AES-GCM',
             iv: asBuf(base64UrlToBytes(env.nonce)) as BufferSource,
-            additionalData: asBuf(env.aad ? base64UrlToBytes(env.aad) : undefined),
+            additionalData: env.aad ? asBuf(base64UrlToBytes(env.aad)) : undefined,
         },
         aesKey,
-        asBuf(base64UrlToBytes(env.ciphertext)) as BufferSource
+        asBuf(base64UrlToBytes(env.ciphertext))
     )
 
     return new Uint8Array(plain)
@@ -167,15 +147,11 @@ export async function computePrfSalt(basePrfSalt: Uint8Array, password?: string)
     }
 
     // Use the server-provided base salt as the HMAC key and the password as the message
-    const key = await crypto.subtle.importKey(
-        'raw',
-        asBuf(basePrfSalt) as BufferSource,
-        { name: 'HMAC', hash: 'SHA-256' },
-        false,
-        ['sign']
-    )
+    const key = await crypto.subtle.importKey('raw', asBuf(basePrfSalt), { name: 'HMAC', hash: 'SHA-256' }, false, [
+        'sign',
+    ])
 
-    const sig = await crypto.subtle.sign('HMAC', key, asBuf(new TextEncoder().encode(password)) as BufferSource)
+    const sig = await crypto.subtle.sign('HMAC', key, asBuf(new TextEncoder().encode(password)))
     return new Uint8Array(sig)
 }
 
@@ -192,9 +168,7 @@ export async function deriveOperationKeyBytes(params: {
     password?: string
 }): Promise<Uint8Array> {
     // Import the WebAuthn PRF output as the HKDF input keying material
-    const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret) as BufferSource, 'HKDF', false, [
-        'deriveBits',
-    ])
+    const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret), 'HKDF', false, ['deriveBits'])
 
     // If a password is present, mix it in as HKDF salt so the derived key depends on both factors
     const salt = params.password ? new TextEncoder().encode(params.password) : new Uint8Array()
@@ -210,7 +184,7 @@ export async function deriveOperationKeyBytes(params: {
         {
             name: 'HKDF',
             hash: 'SHA-256',
-            salt: asBuf(salt) as BufferSource,
+            salt: asBuf(salt),
             info: new TextEncoder().encode(JSON.stringify(infoObj)),
         },
         ikm,
@@ -222,13 +196,9 @@ export async function deriveOperationKeyBytes(params: {
 /** Derives the AES key used to encrypt and verify the password canary value. */
 async function deriveCanaryKey(password: string): Promise<CryptoKey> {
     // Treat the password as HKDF input keying material to get a stable canary key
-    const ikm = await crypto.subtle.importKey(
-        'raw',
-        asBuf(new TextEncoder().encode(password)) as BufferSource,
-        'HKDF',
-        false,
-        ['deriveKey']
-    )
+    const ikm = await crypto.subtle.importKey('raw', asBuf(new TextEncoder().encode(password)), 'HKDF', false, [
+        'deriveKey',
+    ])
 
     return crypto.subtle.deriveKey(
         {
@@ -251,11 +221,7 @@ export async function encryptPasswordCanary(password: string): Promise<string> {
     const plaintext = new TextEncoder().encode('revaulter-password-ok')
 
     // AES-GCM output already contains the authentication tag appended to the ciphertext
-    const ct = await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv: asBuf(nonce) as BufferSource },
-        key,
-        asBuf(plaintext) as BufferSource
-    )
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: asBuf(nonce) }, key, asBuf(plaintext))
 
     // Persist the canary as `nonce.ciphertext`, both encoded as base64url
     return `${bytesToBase64Url(nonce)}.${bytesToBase64Url(ct)}`
@@ -274,11 +240,7 @@ export async function verifyPasswordCanary(password: string, canary: string): Pr
         const key = await deriveCanaryKey(password)
 
         // We do not need to inspect the plaintext here: AES-GCM auth failure is enough to reject the password
-        await crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv: asBuf(nonce) as BufferSource },
-            key,
-            asBuf(ct) as BufferSource
-        )
+        await crypto.subtle.decrypt({ name: 'AES-GCM', iv: asBuf(nonce) }, key, asBuf(ct))
         return true
     } catch {
         return false
@@ -299,23 +261,19 @@ export async function performAesGcmOperation(params: {
     tag?: Uint8Array
 }): Promise<Uint8Array> {
     // Import the raw operation key bytes as an AES-GCM CryptoKey
-    const key = await crypto.subtle.importKey(
-        'raw',
-        asBuf(params.keyBytes) as BufferSource,
-        { name: 'AES-GCM' },
-        false,
-        [params.mode === 'encrypt' ? 'encrypt' : 'decrypt']
-    )
+    const key = await crypto.subtle.importKey('raw', asBuf(params.keyBytes), { name: 'AES-GCM' }, false, [
+        params.mode === 'encrypt' ? 'encrypt' : 'decrypt',
+    ])
 
     // Use the supplied nonce when present, otherwise generate one for encryption callers
-    const iv = params.nonce ?? crypto.getRandomValues(new Uint8Array(12))
+    const nonce = params.nonce ?? crypto.getRandomValues(new Uint8Array(12))
 
     if (params.mode === 'encrypt') {
         // Encrypt the plaintext and bind any additional authenticated data into the tag
         const res = await crypto.subtle.encrypt(
-            { name: 'AES-GCM', iv: asBuf(iv) as BufferSource, additionalData: asBuf(params.aad) },
+            { name: 'AES-GCM', iv: asBuf(nonce), additionalData: asBuf(params.aad) },
             key,
-            asBuf(params.value) as BufferSource
+            asBuf(params.value)
         )
         return new Uint8Array(res)
     }
@@ -334,9 +292,9 @@ export async function performAesGcmOperation(params: {
     try {
         // Decrypt and authenticate the combined ciphertext in one WebCrypto call
         const res = await crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv: asBuf(iv) as BufferSource, additionalData: asBuf(params.aad) },
+            { name: 'AES-GCM', iv: asBuf(nonce), additionalData: asBuf(params.aad) },
             key,
-            asBuf(combined) as BufferSource
+            asBuf(combined)
         )
         return new Uint8Array(res)
     } catch {

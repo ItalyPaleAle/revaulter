@@ -50,3 +50,25 @@ export function base64UrlToBytes(s: string): Uint8Array {
         return new Uint8Array(Base64StdDecode(normalized))
     }
 }
+
+/** Returns an owned `ArrayBuffer`, copying when the input is a `Uint8Array` view. */
+export function toArrayBuffer(bytes: ArrayBuffer | Uint8Array): ArrayBuffer {
+    if (bytes instanceof Uint8Array) {
+        // Copy typed array views into a standalone buffer before encoding
+        const out = new Uint8Array(bytes.byteLength)
+        out.set(bytes)
+        return out.buffer
+    }
+
+    return bytes
+}
+
+/** Casts browser binary inputs to the `BufferSource` shape expected by WebCrypto */
+export function asBuf(v: Uint8Array | ArrayBuffer): BufferSource
+export function asBuf(v?: Uint8Array | ArrayBuffer): undefined
+export function asBuf(v?: Uint8Array | ArrayBuffer): BufferSource | undefined {
+    if (v === undefined) {
+        return undefined
+    }
+    return v as unknown as BufferSource
+}
