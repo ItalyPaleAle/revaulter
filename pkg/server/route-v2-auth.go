@@ -123,69 +123,41 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Username already exists"))
 		return
 	}
-
-	var ch *v2db.AuthChallenge
-	var beginErr error
-	if s.webAuthn != nil {
-		user, err := newV2WebAuthnUserForRegistration(req.Username, req.DisplayName)
-		beginErr = err
-		if err == nil {
-			creation, session, waErr := s.webAuthn.BeginRegistration(user,
-				webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
-				webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
-					"prf": map[string]any{},
-				}),
-			)
-			beginErr = waErr
-			if waErr == nil {
-				ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), "register", req.Username, session.Challenge, session.Expires, v2RegisterChallengePayload{
-					WebAuthnSession: session,
-				})
-				beginErr = err
-				if err == nil {
-					c.JSON(http.StatusOK, v2AuthRegisterBeginResponse{
-						ChallengeID: ch.ID,
-						Challenge:   session.Challenge,
-						Username:    req.Username,
-						DisplayName: req.DisplayName,
-						ExpiresAt:   ch.ExpiresAt.Unix(),
-						Mode:        "webauthn",
-						Options:     creation,
-						BasePrfSalt: config.Get().GetPRFSalt(),
-					})
-					return
-				}
-			}
-		}
-	}
-	if !s.v2AllowAuthPlaceholder {
+	if s.webAuthn == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server"))
 		return
 	}
-	if beginErr != nil {
-		AbortWithErrorJSON(c, beginErr)
-		return
-	}
 
-	fallbackChallenge, err := randomB64URL(32)
+	user, err := newV2WebAuthnUserForRegistration(req.Username, req.DisplayName)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-
-	ch, err = s.authStore.BeginChallengeWithPayload(c.Request.Context(), "register", req.Username, fallbackChallenge, time.Now().Add(5*time.Minute), v2RegisterChallengePayload{})
+	creation, session, err := s.webAuthn.BeginRegistration(user,
+		webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
+		webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
+			"prf": map[string]any{},
+		}),
+	)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-
+	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "register", req.Username, session.Challenge, session.Expires, v2RegisterChallengePayload{
+		WebAuthnSession: session,
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, v2AuthRegisterBeginResponse{
 		ChallengeID: ch.ID,
-		Challenge:   ch.Challenge,
+		Challenge:   session.Challenge,
 		Username:    req.Username,
 		DisplayName: req.DisplayName,
 		ExpiresAt:   ch.ExpiresAt.Unix(),
-		Mode:        "webauthn-placeholder",
+		Mode:        "webauthn",
+		Options:     creation,
 		BasePrfSalt: config.Get().GetPRFSalt(),
 	})
 }
@@ -390,52 +362,9 @@ func normalizeV2Username(u string) string {
 	return strings.ToLower(strings.TrimSpace(u))
 }
 
-func randomB64URL(n int) (string, error) {
-	if n <= 0 {
-		n = 16
-	}
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
 func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (*v2db.AuthSession, error) {
 	if s.webAuthn == nil {
-		if !s.v2AllowAuthPlaceholder {
-			return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
-		}
-		legacy, err := parseLegacyRegisterCredential(req.Credential)
-		if err != nil {
-			return nil, NewResponseError(http.StatusBadRequest, "Invalid registration credential payload")
-		}
-		var payload v2RegisterChallengePayload
-		ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "register", req.Username, &payload)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
-		}
-		webAuthnUserID := ""
-		if payload.WebAuthnSession != nil {
-			webAuthnUserID = base64.RawURLEncoding.EncodeToString(payload.WebAuthnSession.UserID)
-		}
-		sess, err := s.authStore.RegisterUser(c.Request.Context(), v2db.RegisterUserInput{
-			Username:       req.Username,
-			DisplayName:    req.DisplayName,
-			WebAuthnUserID: webAuthnUserID,
-			CredentialID:   legacy.ID,
-			PublicKey:      legacy.PublicKey,
-			SignCount:      legacy.SignCount,
-			SessionTTL:     config.Get().SessionTimeout,
-		})
-
-		if errors.Is(err, v2db.ErrUserAlreadyExists) {
-			return nil, NewResponseError(http.StatusConflict, "Username already exists")
-		}
-		return sess, err
+		return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 	}
 
 	var payload v2RegisterChallengePayload
@@ -554,23 +483,6 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 	return sess, username, err
 }
 
-type v2LegacyRegisterCredential struct {
-	ID        string `json:"id"`
-	PublicKey string `json:"publicKey"`
-	SignCount int64  `json:"signCount"`
-}
-
-func parseLegacyRegisterCredential(raw json.RawMessage) (*v2LegacyRegisterCredential, error) {
-	var v v2LegacyRegisterCredential
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, err
-	}
-	if v.ID == "" || v.PublicKey == "" {
-		return nil, NewResponseError(http.StatusBadRequest, "Missing required registration credential fields")
-	}
-	return &v, nil
-}
-
 func newJSONHTTPRequest(c *gin.Context, raw json.RawMessage) (*http.Request, error) {
 	if len(raw) == 0 || !json.Valid(raw) {
 		return nil, NewResponseError(http.StatusBadRequest, "credential payload must be valid JSON")
@@ -623,23 +535,28 @@ func (s *Server) v2LoadWebAuthnUser(ctx context.Context, username string) (*v2We
 	creds := make([]webauthnlib.Credential, 0, len(records))
 	for _, rec := range records {
 		var c webauthnlib.Credential
-		if err := json.Unmarshal([]byte(rec.PublicKey), &c); err != nil {
-			// Skip placeholder credentials created before WebAuthn verification support.
+		err = json.Unmarshal([]byte(rec.PublicKey), &c)
+		if err != nil {
+			// Skip legacy credential records that do not contain a verified WebAuthn credential
 			continue
 		}
 		c.Authenticator.SignCount = uint32(rec.SignCount)
 		creds = append(creds, c)
 	}
+
 	if len(creds) == 0 {
 		return nil, nil
 	}
+
 	// Use the stored WebAuthn user ID if available; fall back to the DB row ID for pre-migration users.
 	userID := []byte(user.ID)
 	if user.WebAuthnUserID != "" {
-		if decoded, err := base64.RawURLEncoding.DecodeString(user.WebAuthnUserID); err == nil {
+		decoded, err := base64.RawURLEncoding.DecodeString(user.WebAuthnUserID)
+		if err == nil {
 			userID = decoded
 		}
 	}
+
 	return &v2WebAuthnUser{
 		id:          userID,
 		name:        user.Username,

@@ -17,9 +17,11 @@ function cloneAndDecodeWebAuthnOptions<T>(input: T, skipBinaryDecoding = false):
     if (input === null || input === undefined) {
         return input
     }
+
     if (Array.isArray(input)) {
         return input.map((v) => cloneAndDecodeWebAuthnOptions(v, skipBinaryDecoding)) as T
     }
+
     if (typeof input === 'object') {
         const out: Record<string, unknown> = {}
         for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
@@ -36,6 +38,7 @@ function cloneAndDecodeWebAuthnOptions<T>(input: T, skipBinaryDecoding = false):
         }
         return out as T
     }
+
     return input
 }
 
@@ -56,6 +59,7 @@ function serializePublicKeyCredential(cred: PublicKeyCredential) {
             },
         }
     }
+
     if (cred.response instanceof AuthenticatorAssertionResponse) {
         return {
             ...base,
@@ -69,30 +73,18 @@ function serializePublicKeyCredential(cred: PublicKeyCredential) {
             },
         }
     }
+
     return base
 }
 
-function allowPlaceholderWebAuthnFallback(): boolean {
-    return import.meta.env.DEV && import.meta.env.VITE_ALLOW_WEBAUTHN_PLACEHOLDER === '1'
-}
-
-export async function webauthnRegisterPlaceholder(args: {
+export async function webauthnRegister(args: {
     username: string
     displayName: string
     challenge: string
     options?: unknown
 }): Promise<{ id: string; publicKey: string; signCount: number; raw?: unknown }> {
     if (!('credentials' in navigator) || typeof PublicKeyCredential === 'undefined') {
-        if (!allowPlaceholderWebAuthnFallback()) {
-            throw new Error('WebAuthn is not available in this browser')
-        }
-        // Dev/test-only placeholder fallback.
-        return {
-            id: crypto.randomUUID(),
-            publicKey: JSON.stringify({ mode: 'placeholder', username: args.username }),
-            signCount: 0,
-            raw: { id: crypto.randomUUID() },
-        }
+        throw new Error('WebAuthn is not available in this browser')
     }
 
     const userId = crypto.getRandomValues(new Uint8Array(16))
@@ -126,7 +118,7 @@ export async function webauthnRegisterPlaceholder(args: {
     const resp = cred.response as AuthenticatorAttestationResponse
     return {
         id: cred.id,
-        // Server-side verification is not implemented yet; persist the attestation blob as placeholder credential data.
+        // The server verifies the registration response and extracts the credential; this field is ignored in the verified path.
         publicKey: bytesToB64url(new Uint8Array(resp.attestationObject)),
         signCount: 0,
         raw: {
@@ -136,7 +128,7 @@ export async function webauthnRegisterPlaceholder(args: {
     }
 }
 
-export async function webauthnLoginWithPrfPlaceholder(args: {
+export async function webauthnLoginWithPrf(args: {
     challenge: string
     prfSalt?: Uint8Array
     options?: unknown
@@ -192,6 +184,7 @@ export async function webauthnLoginWithPrfPlaceholder(args: {
             results?: { first?: ArrayBuffer }
         }
     }
+
     const prfBuf = ext?.prf?.results?.first
     if (!prfBuf) {
         throw new Error('Authenticator did not return PRF output')

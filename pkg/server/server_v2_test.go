@@ -33,6 +33,7 @@ import (
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils/bufconn"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
+	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
 const (
@@ -58,7 +59,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
+func TestServerV2RequestLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
 		"databaseDSN": tmpDir + "/v2-req.db",
@@ -70,8 +71,6 @@ func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
 	defer cleanup()
-	srv.webAuthn = nil
-	srv.v2AllowAuthPlaceholder = true
 
 	stopServerFn := startTestServer(t, srv)
 	defer stopServerFn(t)
@@ -114,31 +113,7 @@ func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 		return res, out
 	}
 
-	// Register first user (placeholder path)
-	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{
-		"username":    "alice",
-		"displayName": "Alice",
-	})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	res, _ = doPostJSON(t, "/v2/auth/register/finish", map[string]any{
-		"username":    "alice",
-		"displayName": "Alice",
-		"challengeId": regBegin["challengeId"],
-		"credential": map[string]any{
-			"id":        "cred-alice",
-			"publicKey": `{"placeholder":true}`,
-			"signCount": 1,
-		},
-	})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	var sessionCookie *http.Cookie
-	for _, c := range res.Cookies() {
-		if c.Name == sessionCookieName {
-			sessionCookie = c
-			break
-		}
-	}
-	require.NotNil(t, sessionCookie)
+	sessionCookie := seedV2SessionCookie(t, srv, "alice", "Alice")
 
 	// Build JWK for client transport key
 	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
@@ -222,7 +197,7 @@ func TestServerV2RequestLifecyclePlaceholderAuth(t *testing.T) {
 	require.True(t, ok)
 }
 
-func TestServerV2PublicSignupPlaceholder(t *testing.T) {
+func TestServerV2PublicSignup(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
 		"databaseDSN": tmpDir + "/v2-users.db",
@@ -234,8 +209,6 @@ func TestServerV2PublicSignupPlaceholder(t *testing.T) {
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
 	defer cleanup()
-	srv.webAuthn = nil
-	srv.v2AllowAuthPlaceholder = true
 
 	stopServerFn := startTestServer(t, srv)
 	defer stopServerFn(t)
@@ -261,36 +234,13 @@ func TestServerV2PublicSignupPlaceholder(t *testing.T) {
 		return res, out
 	}
 
-	// First user self-registers.
-	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{"username": "alice", "displayName": "Alice"})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	res, _ = doPostJSON(t, "/v2/auth/register/finish", map[string]any{
-		"username":    "alice",
-		"displayName": "Alice",
-		"challengeId": regBegin["challengeId"],
-		"credential": map[string]any{
-			"id":        "cred-alice",
-			"publicKey": `{"placeholder":true}`,
-			"signCount": 1,
-		},
-	})
-	require.Equal(t, http.StatusOK, res.StatusCode)
+	seedV2SessionCookie(t, srv, "alice", "Alice")
 
 	// Public signup remains available for later users.
-	res, regBegin = doPostJSON(t, "/v2/auth/register/begin", map[string]any{"username": "bob", "displayName": "Bob"})
+	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{"username": "bob", "displayName": "Bob"})
 	require.Equal(t, http.StatusOK, res.StatusCode)
-	res, bobRegFinish := doPostJSON(t, "/v2/auth/register/finish", map[string]any{
-		"username":    "bob",
-		"displayName": "Bob",
-		"challengeId": regBegin["challengeId"],
-		"credential": map[string]any{
-			"id":        "cred-bob",
-			"publicKey": `{"placeholder":true}`,
-			"signCount": 1,
-		},
-	})
-	require.Equal(t, http.StatusOK, res.StatusCode)
-	require.Equal(t, true, bobRegFinish["registered"])
+	require.NotEmpty(t, regBegin["challengeId"])
+	require.Equal(t, "webauthn", regBegin["mode"])
 
 	// Legacy admin signup endpoints are gone.
 	res, _ = doPostJSON(t, "/v2/auth/admin/register/begin", map[string]any{"username": "charlie", "displayName": "Charlie"})
@@ -310,8 +260,6 @@ func TestServerV2DisableSignup(t *testing.T) {
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
 	defer cleanup()
-	srv.webAuthn = nil
-	srv.v2AllowAuthPlaceholder = true
 
 	stopServerFn := startTestServer(t, srv)
 	defer stopServerFn(t)
@@ -372,8 +320,6 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
 	defer cleanup()
-	srv.webAuthn = nil
-	srv.v2AllowAuthPlaceholder = true
 
 	stopServerFn := startTestServer(t, srv)
 	defer stopServerFn(t)
@@ -414,37 +360,7 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 		_ = json.NewDecoder(res.Body).Decode(&out)
 		return res, out
 	}
-	getSessionCookie := func(res *http.Response) *http.Cookie {
-		for _, c := range res.Cookies() {
-			if c.Name == sessionCookieName {
-				return c
-			}
-		}
-		return nil
-	}
-	registerFirst := func(t *testing.T, username, displayName, credID string) *http.Cookie {
-		t.Helper()
-		res, begin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{
-			"username":    username,
-			"displayName": displayName,
-		})
-		require.Equal(t, http.StatusOK, res.StatusCode)
-		res, _ = doPostJSON(t, "/v2/auth/register/finish", map[string]any{
-			"username":    username,
-			"displayName": displayName,
-			"challengeId": begin["challengeId"],
-			"credential": map[string]any{
-				"id":        credID,
-				"publicKey": `{"placeholder":true}`,
-				"signCount": 1,
-			},
-		})
-		require.Equal(t, http.StatusOK, res.StatusCode)
-		c := getSessionCookie(res)
-		require.NotNil(t, c)
-		return c
-	}
-	aliceCookie := registerFirst(t, "alice", "Alice", "cred-alice")
+	aliceCookie := seedV2SessionCookie(t, srv, "alice", "Alice")
 
 	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -556,10 +472,10 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.Equal(t, true, result["failed"])
 }
 
-func TestServerV2PlaceholderAuthDisabledByDefault(t *testing.T) {
+func TestServerV2RegisterRequiresWebAuthn(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN": tmpDir + "/v2-placeholder-disabled.db",
+		"databaseDSN": tmpDir + "/v2-register-requires-webauthn.db",
 		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
 		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
 		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
@@ -568,7 +484,6 @@ func TestServerV2PlaceholderAuthDisabledByDefault(t *testing.T) {
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
 	defer cleanup()
-	// Simulate WebAuthn unavailable without enabling placeholder fallback.
 	srv.webAuthn = nil
 
 	stopServerFn := startTestServer(t, srv)
@@ -676,6 +591,31 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	}
 
 	return srv, cleanup
+}
+
+func seedV2SessionCookie(t *testing.T, srv *Server, username string, displayName string) *http.Cookie {
+	t.Helper()
+
+	username = normalizeV2Username(username)
+	sess, err := srv.authStore.RegisterUser(t.Context(), v2db.RegisterUserInput{
+		Username:       username,
+		DisplayName:    displayName,
+		WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("webauthn-" + username)),
+		CredentialID:   "cred-" + username,
+		PublicKey:      `{}`,
+		SignCount:      1,
+		SessionTTL:     config.Get().SessionTimeout,
+	})
+	require.NoError(t, err)
+
+	cookieValue, err := serializeSecureCookieEncryptedJWT(sessionCookieName, sess.ID, time.Until(sess.ExpiresAt))
+	require.NoError(t, err)
+
+	return &http.Cookie{
+		Name:  sessionCookieName,
+		Value: cookieValue,
+		Path:  "/v2",
+	}
 }
 
 func startTestServer(t *testing.T, srv *Server) func(t *testing.T) {

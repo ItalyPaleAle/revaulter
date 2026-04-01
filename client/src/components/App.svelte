@@ -20,7 +20,7 @@ import {
     encryptPasswordCanary,
     verifyPasswordCanary,
 } from '../lib/v2-crypto'
-import { webauthnLoginWithPrfPlaceholder, webauthnRegisterPlaceholder } from '../lib/v2-webauthn'
+import { webauthnLoginWithPrf, webauthnRegister } from '../lib/webauthn'
 import LoadingSpinner from './LoadingSpinner.svelte'
 import V2PendingItem from './V2PendingItem.svelte'
 
@@ -96,7 +96,7 @@ async function doRegister() {
     pageError = null
     try {
         const begin = await v2RegisterBegin(username, displayName)
-        const cred = await webauthnRegisterPlaceholder({
+        const cred = await webauthnRegister({
             username: begin.username,
             displayName: begin.displayName,
             challenge: begin.challenge,
@@ -132,7 +132,7 @@ async function doLogin(internalCall = false) {
     try {
         const begin = await v2LoginBegin()
         const prfSalt = await computePrfSalt(b64urlToBytes(begin.basePrfSalt), password.trim() || undefined)
-        const assertion = await webauthnLoginWithPrfPlaceholder({
+        const assertion = await webauthnLoginWithPrf({
             challenge: begin.challenge,
             prfSalt,
             options: begin.options,

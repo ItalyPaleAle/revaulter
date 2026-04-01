@@ -1,3 +1,6 @@
+import { Decode as Base64UrlDecode } from 'arraybuffer-encoding/base64/url'
+import { Decode as Base64StdDecode } from 'arraybuffer-encoding/base64/standard'
+
 /**
  * Returns a Promise that resolves after a certain amount of time, in ms
  *
@@ -31,3 +34,19 @@ export function timeoutPromise<T>(promise: Promise<T>, timeout: number, message?
  * Error returned by timed out Promises in timeoutPromise
  */
 export class TimeoutError extends Error {}
+
+/** Decodes either base64url or regular base64 into raw bytes. */
+export function base64UrlToBytes(s: string): Uint8Array {
+    const normalized = s.trim()
+    if (normalized === '') {
+        return new Uint8Array()
+    }
+
+    // Prefer base64url because that is what the app emits on the wire
+    try {
+        return new Uint8Array(Base64UrlDecode(normalized))
+    } catch {
+        // Accept standard base64 too so callers can pass CLI or older payloads
+        return new Uint8Array(Base64StdDecode(normalized))
+    }
+}

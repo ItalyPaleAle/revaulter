@@ -59,8 +59,6 @@ type Server struct {
 	requestStore *v2db.RequestStore
 	authStore    *v2db.AuthStore
 	webAuthn     *webauthnlib.WebAuthn
-	// Test/dev-only switch to allow placeholder v2 auth flows when WebAuthn is unavailable.
-	v2AllowAuthPlaceholder bool
 
 	// Servers
 	appSrv *http.Server
