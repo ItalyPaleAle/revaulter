@@ -12,14 +12,16 @@
     "lint:biome": "biome lint .",
     "lint:svelte": "svelte-check",
     "check": "biome check --write .",
-    "svelte-check": "svelte-check"
+    "svelte-check": "svelte-check",
+    "analyze": "cross-replace vite build --mode analyze"
   },
   "packageManager": "pnpm@10.13.1",
   "dependencies": {
     "arraybuffer-encoding": "^1.1.0",
     "date-fns": "4.1.0",
     "js-cookie": "3.0.5",
-    "tailwindcss": "^4.1.18"
+    "tailwindcss": "^4.1.18",
+    "vite-bundle-analyzer": "^1.3.6"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.15",
@@ -27,6 +29,7 @@
     "@tailwindcss/vite": "^4.1.18",
     "@tsconfig/svelte": "^5.0.7",
     "@types/js-cookie": "^3.0.6",
+    "cross-replace": "^0.2.0",
     "cssnano": "^7.1.2",
     "postcss": "^8.5.6",
     "postcss-import": "^16.1.1",

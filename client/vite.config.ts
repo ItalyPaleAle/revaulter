@@ -2,10 +2,21 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { analyzer } from 'vite-bundle-analyzer'
 import sri from 'vite-plugin-sri-gen'
 
 export default defineConfig(({ mode }) => {
+    console.log('Building for mode', mode)
+
+    // Additional plugins, which may not always be used
+    const additionalPlugins = []
+
     const isProduction = mode === 'production'
+
+    // In "analyze" mode, add the analyzer plugin
+    if (mode == 'analyze') {
+        additionalPlugins.push(analyzer())
+    }
 
     return {
         plugins: [
@@ -39,6 +50,7 @@ export default defineConfig(({ mode }) => {
                 },
             }),
             sri(),
+            ...additionalPlugins,
         ],
         define: {},
         build: {
@@ -50,6 +62,9 @@ export default defineConfig(({ mode }) => {
                     entryFileNames: '[name].[hash].js',
                     chunkFileNames: '[name].[hash].js',
                     assetFileNames: '[name].[hash].[ext]',
+                    manualChunks: {
+                        lib: ['svelte', 'date-fns'],
+                    },
                 },
             },
         },
