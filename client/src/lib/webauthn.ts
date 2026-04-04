@@ -1,4 +1,4 @@
-import { asBuf, base64UrlToBytes, bytesToBase64Url } from './utils'
+import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 
 export function generatePrfSalt(): Uint8Array {
     return crypto.getRandomValues(new Uint8Array(32))

@@ -1,5 +1,5 @@
-import type { EcP256PublicJwk, V2ResponseEnvelope } from './v2-types'
-import { asBuf, base64UrlToBytes, bytesToBase64Url } from './utils'
+import type { EcP256PublicJwk, V2ResponseEnvelope } from '$lib/v2-types'
+import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 
 /**
  * Generates an ephemeral ECDH P-256 key pair for transport encryption and exports

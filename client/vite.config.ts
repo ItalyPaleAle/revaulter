@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
@@ -52,6 +53,12 @@ export default defineConfig(({ mode }) => {
             sri(),
             ...additionalPlugins,
         ],
+        resolve: {
+            alias: {
+                '$lib': path.resolve(__dirname, './src/lib'),
+                '$components': path.resolve(__dirname, './src/components'),
+            },
+        },
         define: {},
         build: {
             outDir: 'dist',

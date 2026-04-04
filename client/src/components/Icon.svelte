@@ -1,5 +1,5 @@
 <script lang="ts">
-import IconContainer from './IconContainer.svelte'
+import IconContainer from '$components/IconContainer.svelte'
 
 interface Props {
     icon: string

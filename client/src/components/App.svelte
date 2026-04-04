@@ -1,7 +1,7 @@
 <script lang="ts">
 import { onMount } from 'svelte'
 
-import { ResponseNotOkError } from '../lib/request'
+import { ResponseNotOkError } from '$lib/request'
 import {
     v2ListStream,
     v2LoginBegin,
@@ -11,13 +11,13 @@ import {
     v2RegisterFinish,
     v2Session,
     v2SetPasswordCanary,
-} from '../lib/v2-api'
-import type { V2PendingRequestItem, V2SessionResponse } from '../lib/v2-types'
-import { computePrfSalt, encryptPasswordCanary, verifyPasswordCanary } from '../lib/crypto'
-import { webauthnLoginWithPrf, webauthnRegister } from '../lib/webauthn'
-import LoadingSpinner from './LoadingSpinner.svelte'
-import PendingItem from './PendingItem.svelte'
-import { base64UrlToBytes, bytesToBase64Url } from '../lib/utils'
+} from '$lib/v2-api'
+import type { V2PendingRequestItem, V2SessionResponse } from '$lib/v2-types'
+import { computePrfSalt, encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
+import { webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
+import LoadingSpinner from '$components/LoadingSpinner.svelte'
+import PendingItem from '$components/PendingItem.svelte'
+import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 
 type UIState = 'boot' | 'auth' | 'password' | 'ready'
 
@@ -294,7 +294,6 @@ function sortedItems() {
         <div class="border-b border-slate-200 dark:border-slate-700 px-5 py-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
                 <h1 class="text-xl font-semibold text-slate-900 dark:text-white">Revaulter v2</h1>
-                <p class="text-sm text-slate-600 dark:text-slate-300">WebAuthn + browser crypto confirmation console</p>
             </div>
             {#if session}
                 <div class="flex flex-col items-start gap-2 md:items-end">
@@ -334,9 +333,6 @@ function sortedItems() {
                         >
                             <div>
                                 <h2 class="font-semibold text-slate-900 dark:text-white">Sign In</h2>
-                                <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                    Use your passkey to open this account on the current device/browser.
-                                </p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-password-login">Password (if set)</label>

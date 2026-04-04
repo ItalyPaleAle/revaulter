@@ -248,24 +248,11 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/password-canary", s.V2SessionMiddleware(true), s.RouteV2AuthSetPasswordCanary)
 	v2AuthGroup.POST("/logout", s.V2SessionMiddleware(true), s.RouteV2AuthLogout)
 
-	// Legacy v1 routes have been removed. Keep explicit compatibility errors.
-	s.registerLegacyV1DisabledRoutes()
-
 	// Static files as fallback
 	// This doesn't include most middlewares
 	s.appRouter.NoRoute(s.serveClient()...)
 
 	return nil
-}
-
-func (s *Server) registerLegacyV1DisabledRoutes() {
-	disabled := func(c *gin.Context) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusGone, "Legacy v1 endpoints have been removed; use /v2 endpoints"))
-	}
-	for _, p := range []string{"/request", "/api", "/auth"} {
-		s.appRouter.Any(p, disabled)
-		s.appRouter.Any(p+"/*path", disabled)
-	}
 }
 
 func (s *Server) getCorsConfig() cors.Config {
@@ -274,6 +261,7 @@ func (s *Server) getCorsConfig() cors.Config {
 			http.MethodGet,
 			http.MethodPost,
 			http.MethodHead,
+			http.MethodOptions,
 		},
 		AllowHeaders: []string{
 			"Authorization",
@@ -294,6 +282,7 @@ func (s *Server) getCorsConfig() cors.Config {
 	switch {
 	case len(origins) == 0 || (len(origins) == 1 && origins[0] == ""):
 		// Default is baseUrl
+		corsConfig.AllowAllOrigins = false
 		corsConfig.AllowOrigins = []string{s.getBaseURL()}
 	case len(origins) == 1 && origins[0] == "*":
 		corsConfig.AllowAllOrigins = true
