@@ -273,12 +273,13 @@ func (s *Server) getCorsConfig() cors.Config {
 			"Origin",
 			"Content-Length",
 			"Content-Type",
+			"Cookie",
 		},
 		ExposeHeaders: []string{
 			"Retry-After",
 			"Content-Type",
 		},
-		AllowCredentials: false,
+		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}
 

@@ -99,7 +99,7 @@ func validateJWT(data []byte, name string) (value string, ttl time.Duration, err
 
 type serializeSecureCookieFn func(name string, plaintextValue string, expiration time.Duration) (string, error)
 
-func setSecureCookie(c *gin.Context, name string, plaintextValue string, expiration time.Duration, path string, domain string, secureCookie bool, httpOnly bool, serializeFn serializeSecureCookieFn) error {
+func setSecureCookie(c *gin.Context, name string, plaintextValue string, expiration time.Duration, path string, secureCookie bool, httpOnly bool, serializeFn serializeSecureCookieFn) error {
 	if expiration < 1 {
 		return errors.New("invalid expiration value: must be greater than 0")
 	}

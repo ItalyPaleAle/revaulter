@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/italypaleale/revaulter/pkg/config"
@@ -93,23 +94,47 @@ func (s *Server) initWebAuthn() (*webauthnlib.WebAuthn, error) {
 		}
 		origins = append(origins, strings.TrimRight(origin, "/"))
 	}
-
-	seen := map[string]struct{}{}
-	filtered := make([]string, 0, len(origins))
-	for _, o := range origins {
-		if _, ok := seen[o]; ok {
+	topOrigins := make([]string, 0, len(cfg.Origins))
+	for _, origin := range cfg.Origins {
+		origin = strings.TrimSpace(origin)
+		if origin == "" || origin == "*" {
 			continue
 		}
-		seen[o] = struct{}{}
-		filtered = append(filtered, o)
+		topOrigins = append(topOrigins, strings.TrimRight(origin, "/"))
 	}
+
+	filtered := dedupeOrigins(origins)
 	if len(filtered) == 0 {
 		return nil, errors.New("no valid WebAuthn origins configured")
 	}
 
-	return webauthnlib.New(&webauthnlib.Config{
+	waCfg := &webauthnlib.Config{
 		RPID:          rpID,
 		RPDisplayName: cfg.WebAuthnRPName,
 		RPOrigins:     filtered,
-	})
+	}
+
+	filteredTopOrigins := dedupeOrigins(topOrigins)
+	if len(filteredTopOrigins) > 0 {
+		// When explicit origins are configured, allow WebAuthn related-origin requests from those top-level origins
+		waCfg.RPTopOrigins = filteredTopOrigins
+		waCfg.RPTopOriginVerificationMode = protocol.TopOriginExplicitVerificationMode
+	}
+
+	return webauthnlib.New(waCfg)
+}
+
+func dedupeOrigins(origins []string) []string {
+	seen := make(map[string]struct{}, len(origins))
+	filtered := make([]string, 0, len(origins))
+	for _, origin := range origins {
+		_, ok := seen[origin]
+		if ok {
+			continue
+		}
+
+		seen[origin] = struct{}{}
+		filtered = append(filtered, origin)
+	}
+	return filtered
 }

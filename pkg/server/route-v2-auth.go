@@ -355,7 +355,7 @@ func (s *Server) setV2SessionCookie(c *gin.Context, sess *v2db.AuthSession) erro
 		ttl = time.Second
 	}
 	secureCookie := config.Get().ForceSecureCookies || c.Request.URL.Scheme == "https:"
-	return setSecureCookie(c, sessionCookieName, sess.ID, ttl, "/v2", c.Request.URL.Host, secureCookie, true, serializeSecureCookieEncryptedJWT)
+	return setSecureCookie(c, sessionCookieName, sess.ID, ttl, "/v2", secureCookie, true, serializeSecureCookieEncryptedJWT)
 }
 
 func normalizeV2Username(u string) string {

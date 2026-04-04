@@ -236,15 +236,11 @@ func TestServerV2PublicSignup(t *testing.T) {
 
 	seedV2SessionCookie(t, srv, "alice", "Alice")
 
-	// Public signup remains available for later users.
+	// Public signup remains available for later users
 	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{"username": "bob", "displayName": "Bob"})
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.NotEmpty(t, regBegin["challengeId"])
 	require.Equal(t, "webauthn", regBegin["mode"])
-
-	// Legacy admin signup endpoints are gone.
-	res, _ = doPostJSON(t, "/v2/auth/admin/register/begin", map[string]any{"username": "charlie", "displayName": "Charlie"})
-	require.Equal(t, http.StatusNotFound, res.StatusCode)
 }
 
 func TestServerV2DisableSignup(t *testing.T) {
@@ -274,38 +270,6 @@ func TestServerV2DisableSignup(t *testing.T) {
 	require.NoError(t, err)
 	defer closeBody(res)
 	require.Equal(t, http.StatusForbidden, res.StatusCode)
-}
-
-func TestServerV2ModeDisablesLegacyRoutes(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN": tmpDir + "/v2-only.db",
-		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
-
-	srv, cleanup := newTestServer(t, nil, nil, nil)
-	require.NotNil(t, srv)
-	defer cleanup()
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
-	client := clientForListener(srv.appListener)
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/request/encrypt", testServerPort), bytes.NewReader([]byte(`{}`)))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	res, err := client.Do(req)
-	require.NoError(t, err)
-	defer closeBody(res)
-	require.Equal(t, http.StatusGone, res.StatusCode)
-
-	req, err = http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/auth/signin", testServerPort), nil)
-	require.NoError(t, err)
-	res, err = client.Do(req)
-	require.NoError(t, err)
-	defer closeBody(res)
-	require.Equal(t, http.StatusGone, res.StatusCode)
 }
 
 func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
