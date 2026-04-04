@@ -1,11 +1,5 @@
-import { Encode as Base64UrlEncode } from 'arraybuffer-encoding/base64/url'
 import type { EcP256PublicJwk, V2ResponseEnvelope } from './v2-types'
-import { asBuf, base64UrlToBytes, toArrayBuffer } from './utils'
-
-/** Encodes bytes using unpadded base64url, which is the wire format */
-function bytesToBase64Url(bytes: ArrayBuffer | Uint8Array): string {
-    return Base64UrlEncode(toArrayBuffer(bytes))
-}
+import { asBuf, base64UrlToBytes, bytesToBase64Url } from './utils'
 
 /**
  * Generates an ephemeral ECDH P-256 key pair for transport encryption and exports
@@ -315,14 +309,4 @@ export function splitAesGcmCiphertextAndTag(ciphertextWithTag: Uint8Array, tagLe
         data: ciphertextWithTag.slice(0, ciphertextWithTag.length - tagLen),
         tag: ciphertextWithTag.slice(ciphertextWithTag.length - tagLen),
     }
-}
-
-/** Convenience wrapper that treats missing values as an empty byte array. */
-export function b64urlToBytes(s?: string): Uint8Array {
-    return s ? base64UrlToBytes(s) : new Uint8Array()
-}
-
-/** Convenience wrapper for base64url-encoding `Uint8Array` values. */
-export function bytesToB64url(v: Uint8Array): string {
-    return bytesToBase64Url(v)
 }

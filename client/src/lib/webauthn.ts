@@ -1,13 +1,4 @@
-import { Decode as Base64UrlDecode } from 'arraybuffer-encoding/base64/url'
-import { bytesToB64url } from './v2-crypto'
-
-function asBuf(v: Uint8Array | ArrayBuffer): BufferSource {
-    return v as unknown as BufferSource
-}
-
-function b64urlToBytes(s: string): Uint8Array {
-    return new Uint8Array(Base64UrlDecode(s))
-}
+import { asBuf, base64UrlToBytes, bytesToBase64Url } from './utils'
 
 export function generatePrfSalt(): Uint8Array {
     return crypto.getRandomValues(new Uint8Array(32))
@@ -30,7 +21,7 @@ function cloneAndDecodeWebAuthnOptions<T>(input: T, skipBinaryDecoding = false):
                 (k === 'challenge' || k === 'id' || k === 'rawId' || k === 'userHandle') &&
                 typeof v === 'string'
             ) {
-                out[k] = b64urlToBytes(v)
+                out[k] = base64UrlToBytes(v)
                 continue
             }
             // Propagate skipBinaryDecoding into 'rp' to preserve domain strings like rp.id and rp.name.
@@ -45,7 +36,7 @@ function cloneAndDecodeWebAuthnOptions<T>(input: T, skipBinaryDecoding = false):
 function serializePublicKeyCredential(cred: PublicKeyCredential) {
     const base = {
         id: cred.id,
-        rawId: bytesToB64url(new Uint8Array(cred.rawId)),
+        rawId: bytesToBase64Url(new Uint8Array(cred.rawId)),
         type: cred.type,
         clientExtensionResults: cred.getClientExtensionResults?.() || undefined,
     }
@@ -54,8 +45,8 @@ function serializePublicKeyCredential(cred: PublicKeyCredential) {
         return {
             ...base,
             response: {
-                attestationObject: bytesToB64url(new Uint8Array(cred.response.attestationObject)),
-                clientDataJSON: bytesToB64url(new Uint8Array(cred.response.clientDataJSON)),
+                attestationObject: bytesToBase64Url(new Uint8Array(cred.response.attestationObject)),
+                clientDataJSON: bytesToBase64Url(new Uint8Array(cred.response.clientDataJSON)),
             },
         }
     }
@@ -64,11 +55,11 @@ function serializePublicKeyCredential(cred: PublicKeyCredential) {
         return {
             ...base,
             response: {
-                authenticatorData: bytesToB64url(new Uint8Array(cred.response.authenticatorData)),
-                clientDataJSON: bytesToB64url(new Uint8Array(cred.response.clientDataJSON)),
-                signature: bytesToB64url(new Uint8Array(cred.response.signature)),
+                authenticatorData: bytesToBase64Url(new Uint8Array(cred.response.authenticatorData)),
+                clientDataJSON: bytesToBase64Url(new Uint8Array(cred.response.clientDataJSON)),
+                signature: bytesToBase64Url(new Uint8Array(cred.response.signature)),
                 userHandle: cred.response.userHandle
-                    ? bytesToB64url(new Uint8Array(cred.response.userHandle))
+                    ? bytesToBase64Url(new Uint8Array(cred.response.userHandle))
                     : undefined,
             },
         }
@@ -98,8 +89,8 @@ export async function webauthnRegister(args: {
             : null
     const cred = (await navigator.credentials.create({
         publicKey: creationOptions ?? {
-            challenge: asBuf(b64urlToBytes(args.challenge)),
-            rp: { name: 'Revaulter v2' },
+            challenge: asBuf(base64UrlToBytes(args.challenge)),
+            rp: { name: 'Revaulter' },
             user: {
                 id: asBuf(userId),
                 name: args.username,
@@ -119,11 +110,11 @@ export async function webauthnRegister(args: {
     return {
         id: cred.id,
         // The server verifies the registration response and extracts the credential; this field is ignored in the verified path.
-        publicKey: bytesToB64url(new Uint8Array(resp.attestationObject)),
+        publicKey: bytesToBase64Url(new Uint8Array(resp.attestationObject)),
         signCount: 0,
         raw: {
             credential: serializePublicKeyCredential(cred),
-            clientDataJSON: bytesToB64url(new Uint8Array(resp.clientDataJSON)),
+            clientDataJSON: bytesToBase64Url(new Uint8Array(resp.clientDataJSON)),
         },
     }
 }
@@ -146,7 +137,7 @@ export async function webauthnLoginWithPrf(args: {
     const effectivePublicKey: PublicKeyCredentialRequestOptions = reqOptions
         ? {
               ...reqOptions,
-              challenge: asBuf(b64urlToBytes(args.challenge)),
+              challenge: asBuf(base64UrlToBytes(args.challenge)),
               extensions: {
                   ...(reqOptions.extensions || {}),
                   prf: {
@@ -157,7 +148,7 @@ export async function webauthnLoginWithPrf(args: {
               } as AuthenticationExtensionsClientInputs,
           }
         : {
-              challenge: asBuf(b64urlToBytes(args.challenge)),
+              challenge: asBuf(base64UrlToBytes(args.challenge)),
               timeout: 60_000,
               userVerification: 'preferred',
               extensions: {
@@ -196,10 +187,10 @@ export async function webauthnLoginWithPrf(args: {
         prfSecret: new Uint8Array(prfBuf),
         raw: {
             credential: serializePublicKeyCredential(assertion),
-            authenticatorData: bytesToB64url(new Uint8Array(resp.authenticatorData)),
-            clientDataJSON: bytesToB64url(new Uint8Array(resp.clientDataJSON)),
-            signature: bytesToB64url(new Uint8Array(resp.signature)),
-            userHandle: resp.userHandle ? bytesToB64url(new Uint8Array(resp.userHandle)) : undefined,
+            authenticatorData: bytesToBase64Url(new Uint8Array(resp.authenticatorData)),
+            clientDataJSON: bytesToBase64Url(new Uint8Array(resp.clientDataJSON)),
+            signature: bytesToBase64Url(new Uint8Array(resp.signature)),
+            userHandle: resp.userHandle ? bytesToBase64Url(new Uint8Array(resp.userHandle)) : undefined,
             prfEnabled: ext?.prf?.enabled,
         },
     }

@@ -1,4 +1,4 @@
-import { Decode as Base64UrlDecode } from 'arraybuffer-encoding/base64/url'
+import { Decode as Base64UrlDecode, Encode as Base64UrlEncode } from 'arraybuffer-encoding/base64/url'
 import { Decode as Base64StdDecode } from 'arraybuffer-encoding/base64/standard'
 
 /**
@@ -36,7 +36,11 @@ export function timeoutPromise<T>(promise: Promise<T>, timeout: number, message?
 export class TimeoutError extends Error {}
 
 /** Decodes either base64url or regular base64 into raw bytes. */
-export function base64UrlToBytes(s: string): Uint8Array {
+export function base64UrlToBytes(s?: string): Uint8Array {
+    if (!s) {
+        return new Uint8Array()
+    }
+
     const normalized = s.trim()
     if (normalized === '') {
         return new Uint8Array()
@@ -49,6 +53,11 @@ export function base64UrlToBytes(s: string): Uint8Array {
         // Accept standard base64 too so callers can pass CLI or older payloads
         return new Uint8Array(Base64StdDecode(normalized))
     }
+}
+
+/** Encodes bytes using unpadded base64url, which is the wire format */
+export function bytesToBase64Url(bytes: ArrayBuffer | Uint8Array): string {
+    return Base64UrlEncode(toArrayBuffer(bytes))
 }
 
 /** Returns an owned `ArrayBuffer`, copying when the input is a `Uint8Array` view. */

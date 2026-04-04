@@ -13,16 +13,11 @@ import {
     v2SetPasswordCanary,
 } from '../lib/v2-api'
 import type { V2PendingRequestItem, V2SessionResponse } from '../lib/v2-types'
-import {
-    bytesToB64url,
-    b64urlToBytes,
-    computePrfSalt,
-    encryptPasswordCanary,
-    verifyPasswordCanary,
-} from '../lib/v2-crypto'
+import { computePrfSalt, encryptPasswordCanary, verifyPasswordCanary } from '../lib/crypto'
 import { webauthnLoginWithPrf, webauthnRegister } from '../lib/webauthn'
 import LoadingSpinner from './LoadingSpinner.svelte'
-import V2PendingItem from './V2PendingItem.svelte'
+import PendingItem from './PendingItem.svelte'
+import { base64UrlToBytes, bytesToBase64Url } from '../lib/utils'
 
 type UIState = 'boot' | 'auth' | 'password' | 'ready'
 
@@ -61,7 +56,7 @@ async function initialize() {
         session = sess
         const stored = sessionStorage.getItem(sessionStoragePrfKey)
         if (stored) {
-            prfSecret = b64urlToBytes(stored)
+            prfSecret = base64UrlToBytes(stored)
             uiState = 'ready'
             startListStream()
             return
@@ -87,7 +82,7 @@ async function initialize() {
 
 function setPrfSecret(v: Uint8Array) {
     prfSecret = v
-    sessionStorage.setItem(sessionStoragePrfKey, bytesToB64url(v))
+    sessionStorage.setItem(sessionStoragePrfKey, bytesToBase64Url(v))
 }
 
 async function doRegister() {
@@ -131,7 +126,7 @@ async function doLogin(internalCall = false) {
     }
     try {
         const begin = await v2LoginBegin()
-        const prfSalt = await computePrfSalt(b64urlToBytes(begin.basePrfSalt), password.trim() || undefined)
+        const prfSalt = await computePrfSalt(base64UrlToBytes(begin.basePrfSalt), password.trim() || undefined)
         const assertion = await webauthnLoginWithPrf({
             challenge: begin.challenge,
             prfSalt,
@@ -448,7 +443,7 @@ function sortedItems() {
                     {:else}
                         <div class="space-y-3">
                             {#each sortedItems() as item (item.state)}
-                                <V2PendingItem
+                                <PendingItem
                                     {item}
                                     {prfSecret}
                                     {password}
