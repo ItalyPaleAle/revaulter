@@ -203,6 +203,11 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 			r.Use(s.MiddlewareCountMetrics)
 		}
 		r.Use(loggerMw)
+
+		// Add a handler for OPTIONS or the CORS middleware won't work
+		r.OPTIONS("/*path", func(c *gin.Context) {
+			c.Status(http.StatusNoContent)
+		})
 	}
 
 	// Add routes
