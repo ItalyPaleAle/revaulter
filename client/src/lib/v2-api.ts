@@ -91,8 +91,11 @@ export async function v2Cancel(state: string) {
     return res.data
 }
 
+/** Validates that an object represents a correct V2PendingRequestItem */
 function isV2PendingRequestItem(v: unknown): v is V2PendingRequestItem {
-    if (typeof v !== 'object' || v === null) return false
+    if (typeof v !== 'object' || v === null) {
+        return false
+    }
     const obj = v as Record<string, unknown>
     return typeof obj.state === 'string' && typeof obj.status === 'string'
 }
