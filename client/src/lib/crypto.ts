@@ -202,8 +202,7 @@ class InfoObj {
     }
 }
 
-/** Derives the AES key used to encrypt and verify the password canary value.
- *  Uses Argon2id for key stretching so brute-forcing the canary is expensive. */
+/** Derives the AES key used to encrypt and verify the password canary value. */
 async function deriveCanaryKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
     const keyBytes = await argon2id({
         password,

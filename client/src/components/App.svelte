@@ -246,7 +246,6 @@ function startListStream() {
             }
             const msg = err instanceof Error ? err.message : String(err)
             if (msg.includes('401')) {
-            
                 prfSecret = null
                 session = null
                 uiState = 'auth'
