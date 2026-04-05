@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -70,9 +72,9 @@ type CreateRequestInput struct {
 }
 
 type RequestStore struct {
-	db   *DB
-	aead cipher.AEAD
-	log  *slog.Logger
+	db         *DB
+	payloadKey []byte
+	log        *slog.Logger
 }
 
 func NewRequestStore(ctx context.Context, db *DB, payloadKey []byte, logger *slog.Logger) (*RequestStore, error) {
@@ -83,22 +85,17 @@ func NewRequestStore(ctx context.Context, db *DB, payloadKey []byte, logger *slo
 		return nil, fmt.Errorf("invalid DB payload key length: got %d, want 32", len(payloadKey))
 	}
 
-	block, err := aes.NewCipher(payloadKey)
-	if err != nil {
-		return nil, err
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
 	if logger == nil {
 		logger = slog.Default()
 	}
-	s := &RequestStore{db: db, aead: aead, log: logger}
+	s := &RequestStore{
+		db:         db,
+		payloadKey: payloadKey,
+		log:        logger,
+	}
 
 	// Perform migrations
-	err = s.migrate(ctx)
+	err := s.migrate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform migrations: %w", err)
 	}
@@ -195,15 +192,19 @@ func (s *RequestStore) CreateRequest(ctx context.Context, in CreateRequestInput)
 	expires := in.ExpiresAt.Unix()
 	switch s.db.Backend {
 	case BackendSQLite:
-		_, err = s.db.SQLite.ExecContext(ctx, `INSERT INTO v2_requests
+		_, err = s.db.SQLite.ExecContext(ctx,
+			`INSERT INTO v2_requests
 			(state, status, operation, target_user, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, payload_ciphertext, payload_nonce)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			in.State, string(V2RequestStatusPending), in.Operation, in.Body.TargetUser, in.Body.KeyLabel, in.Body.Algorithm, in.RequestorIP, note, now, expires, now, payloadCiphertext, payloadNonce)
+			in.State, string(V2RequestStatusPending), in.Operation, in.Body.TargetUser, in.Body.KeyLabel, in.Body.Algorithm, in.RequestorIP, note, now, expires, now, payloadCiphertext, payloadNonce,
+		)
 	case BackendPostgres:
-		_, err = s.db.Postgres.Exec(ctx, `INSERT INTO v2_requests
+		_, err = s.db.Postgres.Exec(ctx,
+			`INSERT INTO v2_requests
 			(state, status, operation, target_user, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, payload_ciphertext, payload_nonce)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-			in.State, string(V2RequestStatusPending), in.Operation, in.Body.TargetUser, in.Body.KeyLabel, in.Body.Algorithm, in.RequestorIP, note, now, expires, now, payloadCiphertext, payloadNonce)
+			in.State, string(V2RequestStatusPending), in.Operation, in.Body.TargetUser, in.Body.KeyLabel, in.Body.Algorithm, in.RequestorIP, note, now, expires, now, payloadCiphertext, payloadNonce,
+		)
 	default:
 		err = errors.New("unsupported backend")
 	}
@@ -229,27 +230,41 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 		PayloadCiphertext, PayloadNonce                                              []byte
 		ResultCiphertext, ResultNonce                                                []byte
 	}
-	var row rowT
-	var err error
+	var (
+		row rowT
+		err error
+	)
 	switch s.db.Backend {
 	case BackendSQLite:
-		err = s.db.SQLite.QueryRowContext(ctx, `SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at,updated_at,payload_ciphertext,payload_nonce,result_ciphertext,result_nonce FROM v2_requests WHERE state = ?`, state).
-			Scan(&row.State, &row.Status, &row.Operation, &row.TargetUser, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.PayloadCiphertext, &row.PayloadNonce, &row.ResultCiphertext, &row.ResultNonce)
+		err = s.db.SQLite.
+			QueryRowContext(ctx,
+				`SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at,updated_at,payload_ciphertext,payload_nonce,result_ciphertext,result_nonce FROM v2_requests WHERE state = ?`,
+				state,
+			).
+			Scan(
+				&row.State, &row.Status, &row.Operation, &row.TargetUser, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.PayloadCiphertext, &row.PayloadNonce, &row.ResultCiphertext, &row.ResultNonce,
+			)
 	case BackendPostgres:
-		err = s.db.Postgres.QueryRow(ctx, `SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at,updated_at,payload_ciphertext,payload_nonce,result_ciphertext,result_nonce FROM v2_requests WHERE state = $1`, state).
-			Scan(&row.State, &row.Status, &row.Operation, &row.TargetUser, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.PayloadCiphertext, &row.PayloadNonce, &row.ResultCiphertext, &row.ResultNonce)
+		err = s.db.Postgres.
+			QueryRow(ctx,
+				`SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at,updated_at,payload_ciphertext,payload_nonce,result_ciphertext,result_nonce FROM v2_requests WHERE state = $1`,
+				state,
+			).
+			Scan(
+				&row.State, &row.Status, &row.Operation, &row.TargetUser, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.PayloadCiphertext, &row.PayloadNonce, &row.ResultCiphertext, &row.ResultNonce,
+			)
 	default:
 		return nil, errors.New("unsupported backend")
 	}
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	} else if err != nil {
 		return nil, err
 	}
 
 	var body protocolv2.RequestCreateBody
-	if err = s.openJSON("request-payload", row.State, row.PayloadCiphertext, row.PayloadNonce, &body); err != nil {
+	err = s.openJSON("request-payload", row.State, row.PayloadCiphertext, row.PayloadNonce, &body)
+	if err != nil {
 		return nil, err
 	}
 	rec := &V2RequestRecord{
@@ -268,7 +283,8 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 	}
 	if len(row.ResultCiphertext) > 0 && len(row.ResultNonce) > 0 {
 		var env protocolv2.ResponseEnvelope
-		if err = s.openJSON("request-result", row.State, row.ResultCiphertext, row.ResultNonce, &env); err != nil {
+		err = s.openJSON("request-result", row.State, row.ResultCiphertext, row.ResultNonce, &env)
+		if err != nil {
 			return nil, err
 		}
 		rec.ResponseEnvelope = &env
@@ -281,32 +297,44 @@ func (s *RequestStore) ListPending(ctx context.Context) ([]V2RequestListItem, er
 	var out []V2RequestListItem
 	switch s.db.Backend {
 	case BackendSQLite:
-		rows, err := s.db.SQLite.QueryContext(ctx, `SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = ? ORDER BY created_at ASC`, string(V2RequestStatusPending))
+		rows, err := s.db.SQLite.QueryContext(ctx,
+			`SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = ? ORDER BY created_at ASC`,
+			string(V2RequestStatusPending),
+		)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
+
 		for rows.Next() {
 			var item V2RequestListItem
-			if err := rows.Scan(&item.State, &item.Status, &item.Operation, &item.TargetUser, &item.KeyLabel, &item.Algorithm, &item.Requestor, &item.Note, &item.Date, &item.Expiry); err != nil {
+			err = rows.Scan(&item.State, &item.Status, &item.Operation, &item.TargetUser, &item.KeyLabel, &item.Algorithm, &item.Requestor, &item.Note, &item.Date, &item.Expiry)
+			if err != nil {
 				return nil, err
 			}
 			out = append(out, item)
 		}
+
 		return out, rows.Err()
 	case BackendPostgres:
-		rows, err := s.db.Postgres.Query(ctx, `SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = $1 ORDER BY created_at ASC`, string(V2RequestStatusPending))
+		rows, err := s.db.Postgres.Query(ctx,
+			`SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = $1 ORDER BY created_at ASC`,
+			string(V2RequestStatusPending),
+		)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
+
 		for rows.Next() {
 			var item V2RequestListItem
-			if err := rows.Scan(&item.State, &item.Status, &item.Operation, &item.TargetUser, &item.KeyLabel, &item.Algorithm, &item.Requestor, &item.Note, &item.Date, &item.Expiry); err != nil {
+			err = rows.Scan(&item.State, &item.Status, &item.Operation, &item.TargetUser, &item.KeyLabel, &item.Algorithm, &item.Requestor, &item.Note, &item.Date, &item.Expiry)
+			if err != nil {
 				return nil, err
 			}
 			out = append(out, item)
 		}
+
 		return out, rows.Err()
 	default:
 		return nil, errors.New("unsupported backend")
@@ -321,16 +349,20 @@ func (s *RequestStore) CompleteRequest(ctx context.Context, state string, env pr
 	now := time.Now().Unix()
 	switch s.db.Backend {
 	case BackendSQLite:
-		res, err := s.db.SQLite.ExecContext(ctx, `UPDATE v2_requests SET status = ?, updated_at = ?, result_ciphertext = ?, result_nonce = ? WHERE state = ? AND status = ? AND expires_at >= ?`,
-			string(V2RequestStatusCompleted), now, ct, nonce, state, string(V2RequestStatusPending), now)
+		res, err := s.db.SQLite.ExecContext(ctx,
+			`UPDATE v2_requests SET status = ?, updated_at = ?, result_ciphertext = ?, result_nonce = ? WHERE state = ? AND status = ? AND expires_at >= ?`,
+			string(V2RequestStatusCompleted), now, ct, nonce, state, string(V2RequestStatusPending), now,
+		)
 		if err != nil {
 			return false, err
 		}
 		n, _ := res.RowsAffected()
 		return n > 0, nil
 	case BackendPostgres:
-		tag, err := s.db.Postgres.Exec(ctx, `UPDATE v2_requests SET status = $1, updated_at = $2, result_ciphertext = $3, result_nonce = $4 WHERE state = $5 AND status = $6 AND expires_at >= $7`,
-			string(V2RequestStatusCompleted), now, ct, nonce, state, string(V2RequestStatusPending), now)
+		tag, err := s.db.Postgres.Exec(ctx,
+			`UPDATE v2_requests SET status = $1, updated_at = $2, result_ciphertext = $3, result_nonce = $4 WHERE state = $5 AND status = $6 AND expires_at >= $7`,
+			string(V2RequestStatusCompleted), now, ct, nonce, state, string(V2RequestStatusPending), now,
+		)
 		if err != nil {
 			return false, err
 		}
@@ -344,14 +376,20 @@ func (s *RequestStore) CancelRequest(ctx context.Context, state string) (bool, e
 	now := time.Now().Unix()
 	switch s.db.Backend {
 	case BackendSQLite:
-		res, err := s.db.SQLite.ExecContext(ctx, `UPDATE v2_requests SET status = ?, updated_at = ? WHERE state = ? AND status = ?`, string(V2RequestStatusCanceled), now, state, string(V2RequestStatusPending))
+		res, err := s.db.SQLite.ExecContext(ctx,
+			`UPDATE v2_requests SET status = ?, updated_at = ? WHERE state = ? AND status = ?`,
+			string(V2RequestStatusCanceled), now, state, string(V2RequestStatusPending),
+		)
 		if err != nil {
 			return false, err
 		}
 		n, _ := res.RowsAffected()
 		return n > 0, nil
 	case BackendPostgres:
-		tag, err := s.db.Postgres.Exec(ctx, `UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4`, string(V2RequestStatusCanceled), now, state, string(V2RequestStatusPending))
+		tag, err := s.db.Postgres.Exec(ctx,
+			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4`,
+			string(V2RequestStatusCanceled), now, state, string(V2RequestStatusPending),
+		)
 		if err != nil {
 			return false, err
 		}
@@ -365,12 +403,16 @@ func (s *RequestStore) MarkExpired(ctx context.Context, state string) error {
 	now := time.Now().Unix()
 	switch s.db.Backend {
 	case BackendSQLite:
-		_, err := s.db.SQLite.ExecContext(ctx, `UPDATE v2_requests SET status = ?, updated_at = ? WHERE state = ? AND status = ? AND expires_at < ?`,
-			string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now)
+		_, err := s.db.SQLite.ExecContext(ctx,
+			`UPDATE v2_requests SET status = ?, updated_at = ? WHERE state = ? AND status = ? AND expires_at < ?`,
+			string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now,
+		)
 		return err
 	case BackendPostgres:
-		_, err := s.db.Postgres.Exec(ctx, `UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4 AND expires_at < $5`,
-			string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now)
+		_, err := s.db.Postgres.Exec(ctx,
+			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4 AND expires_at < $5`,
+			string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now,
+		)
 		return err
 	default:
 		return errors.New("unsupported backend")
@@ -381,12 +423,16 @@ func (s *RequestStore) ExpirePending(ctx context.Context, now time.Time) error {
 	n := now.Unix()
 	switch s.db.Backend {
 	case BackendSQLite:
-		_, err := s.db.SQLite.ExecContext(ctx, `UPDATE v2_requests SET status = ?, updated_at = ? WHERE status = ? AND expires_at < ?`,
-			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n)
+		_, err := s.db.SQLite.ExecContext(ctx,
+			`UPDATE v2_requests SET status = ?, updated_at = ? WHERE status = ? AND expires_at < ?`,
+			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
+		)
 		return err
 	case BackendPostgres:
-		_, err := s.db.Postgres.Exec(ctx, `UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4`,
-			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n)
+		_, err := s.db.Postgres.Exec(ctx,
+			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4`,
+			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
+		)
 		return err
 	default:
 		return errors.New("unsupported backend")
@@ -471,26 +517,67 @@ func (s *RequestStore) ExpirePendingAndReturnStates(ctx context.Context, now tim
 	}
 }
 
+// deriveOperationAEAD derives a per-operation AES-256-GCM AEAD from the payload using HKDF-SHA256
+// Each unique (kind, id) pair gets its own derived key, achieving key binding and eliminating the AES-GCM nonce-collision risk across operations that would exist if a single key were reused with random nonces
+func (s *RequestStore) deriveOperationAEAD(kind string, id string) (cipher.AEAD, error) {
+	// Derive a new key using HKDF
+	info := "revaulter|" + kind + "|" + id
+	opKey, err := hkdf.Key(sha256.New, s.payloadKey, nil, info, 32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive operation key: %w", err)
+	}
+
+	// Create the AES-GCM cipher
+	block, err := aes.NewCipher(opKey)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
 func (s *RequestStore) sealJSON(kind string, id string, v any) (ciphertext []byte, nonce []byte, err error) {
+	// Encode to JSON
 	plain, err := json.Marshal(v)
 	if err != nil {
 		return nil, nil, err
 	}
-	nonce = make([]byte, s.aead.NonceSize())
+
+	// Derive a key for this specific operation
+	aead, err := s.deriveOperationAEAD(kind, id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Generate a random nonce
+	nonce = make([]byte, aead.NonceSize())
 	_, err = io.ReadFull(rand.Reader, nonce)
 	if err != nil {
 		return nil, nil, err
 	}
-	aad := []byte("revaulter-v2|" + kind + "|" + id)
-	ciphertext = s.aead.Seal(nil, nonce, plain, aad)
+
+	// Encrypt the message
+	ciphertext = aead.Seal(nil, nonce, plain, nil)
 	return ciphertext, nonce, nil
 }
 
 func (s *RequestStore) openJSON(kind string, id string, ciphertext []byte, nonce []byte, out any) error {
-	aad := []byte("revaulter-v2|" + kind + "|" + id)
-	plain, err := s.aead.Open(nil, nonce, ciphertext, aad)
+	// Derive a key for this specific operation
+	aead, err := s.deriveOperationAEAD(kind, id)
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(plain, out)
+
+	// Decrypt the message
+	plain, err := aead.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return err
+	}
+
+	// Decode from JSON
+	err = json.Unmarshal(plain, out)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
