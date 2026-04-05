@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
@@ -16,12 +17,14 @@ import (
 
 func decryptV2ResponseEnvelope(state string, priv *ecdh.PrivateKey, env *protocolv2.ResponseEnvelope) ([]byte, error) {
 	if priv == nil {
-		return nil, fmt.Errorf("missing client transport private key")
+		return nil, errors.New("missing client transport private key")
 	}
 	if env == nil {
-		return nil, fmt.Errorf("missing responseEnvelope")
+		return nil, errors.New("missing responseEnvelope")
 	}
-	if err := validateV2EnvelopeForCLI(env); err != nil {
+
+	err := validateV2EnvelopeForCLI(env)
+	if err != nil {
 		return nil, err
 	}
 
@@ -51,10 +54,15 @@ func decryptV2ResponseEnvelope(state string, priv *ecdh.PrivateKey, env *protoco
 	if err != nil {
 		return nil, fmt.Errorf("invalid nonce: %w", err)
 	}
+	if len(nonce) != aead.NonceSize() {
+		return nil, errors.New("invalid nonce: bad size")
+	}
+
 	ciphertext, err := utils.DecodeBase64String(env.Ciphertext)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ciphertext: %w", err)
 	}
+
 	var aad []byte
 	if env.AAD != "" {
 		aad, err = utils.DecodeBase64String(env.AAD)
@@ -82,9 +90,12 @@ func validateV2EnvelopeForCLI(env *protocolv2.ResponseEnvelope) error {
 	if env.TransportAlg != "ecdh-p256+a256gcm" {
 		return fmt.Errorf("unsupported transportAlg: %s", env.TransportAlg)
 	}
-	if err := env.BrowserEphemeralPublicKey.ValidatePublic(); err != nil {
+
+	err := env.BrowserEphemeralPublicKey.ValidatePublic()
+	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -93,11 +104,13 @@ func formatV2DecryptedPayload(state string, plain []byte) (json.RawMessage, erro
 	if json.Unmarshal(plain, &v) == nil && json.Valid(plain) {
 		return json.RawMessage(plain), nil
 	}
+
 	// Fallback: bytes -> JSON object with base64 payload
 	out := map[string]any{
 		"state": state,
 		"data":  base64.RawStdEncoding.EncodeToString(plain),
 	}
+
 	b, err := json.Marshal(out)
 	return json.RawMessage(b), err
 }

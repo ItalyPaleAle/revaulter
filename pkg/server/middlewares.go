@@ -62,8 +62,8 @@ func (s *Server) getRequestID(c *gin.Context) (string, error) {
 	return v, nil
 }
 
-// RequestKeyMiddleware is a middleware that asserts that the Authorization header contains the shared requestKey
-func (s *Server) RequestKeyMiddleware() gin.HandlerFunc {
+// MiddlewareRequestKey is a middleware that asserts that the Authorization header contains the shared requestKey
+func (s *Server) MiddlewareRequestKey() gin.HandlerFunc {
 	// Get the requestKey
 	conf := config.Get().RequestKey
 	if conf == "" {
@@ -89,4 +89,9 @@ func (s *Server) RequestKeyMiddleware() gin.HandlerFunc {
 			return
 		}
 	}
+}
+
+// MiddlewareNoCache is a middleware that disables caching on clients and CDNs
+func (s *Server) MiddlewareNoCache(c *gin.Context) {
+	c.Header("Cache-Control", "no-cache")
 }

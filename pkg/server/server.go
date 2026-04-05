@@ -51,7 +51,7 @@ type Server struct {
 	// Subscribers for v2 pending request list updates
 	v2Pubsub *broker.Broker[*v2db.V2RequestListItem]
 	// v2 subscriptions to watch request status changes
-	v2Subs map[string]chan struct{}
+	subs map[string]chan struct{}
 
 	// v2 database and request store
 	db           *v2db.DB
@@ -103,7 +103,7 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		v2Subs:   map[string]chan struct{}{},
+		subs:     map[string]chan struct{}{},
 		v2Pubsub: broker.NewBroker[*v2db.V2RequestListItem](),
 		webhook:  opts.Webhook,
 		metrics:  opts.Metrics,
@@ -199,10 +199,14 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 		if s.tracer != nil {
 			r.Use(otelgin.Middleware(buildinfo.AppName, otelgin.WithTracerProvider(s.tracer)))
 		}
+
 		r.Use(s.MiddlewareRequestId)
+		r.Use(s.MiddlewareNoCache)
+
 		if s.metrics != nil {
 			r.Use(s.MiddlewareCountMetrics)
 		}
+
 		r.Use(loggerMw)
 	}
 
@@ -229,7 +233,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	addStandardMiddlewares(v2RouteGroup)
 
 	v2RequestGroup := v2RouteGroup.Group("/request")
-	v2RequestGroup.Use(allowIpMw, s.RequestKeyMiddleware())
+	v2RequestGroup.Use(allowIpMw, s.MiddlewareRequestKey())
 	v2RequestGroup.POST("/encrypt", s.RouteV2RequestCreate("encrypt"))
 	v2RequestGroup.POST("/decrypt", s.RouteV2RequestCreate("decrypt"))
 	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
@@ -415,8 +419,8 @@ func (s *Server) startAppServer(ctx context.Context) error {
 					}
 					s.lock.Lock()
 					for _, st := range states {
-						s.notifyV2Subscriber(st)
-						s.publishV2ListItem(&v2db.V2RequestListItem{State: st, Status: "removed"})
+						s.notifySubscriber(st)
+						s.publishListItem(&v2db.V2RequestListItem{State: st, Status: "removed"})
 					}
 					s.lock.Unlock()
 				}

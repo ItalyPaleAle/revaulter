@@ -166,12 +166,7 @@ export async function deriveOperationKeyBytes(params: {
 
     // If a password is present, mix it in as HKDF salt so the derived key depends on both factors
     const salt = params.password ? new TextEncoder().encode(params.password) : new Uint8Array()
-    const infoObj = {
-        v: 1,
-        targetUser: params.targetUser,
-        keyLabel: params.keyLabel,
-        algorithm: params.algorithm,
-    }
+    const infoObj = new InfoObj(params.targetUser, params.keyLabel, params.algorithm)
 
     // Bind the key to the logical key identity so encrypt/decrypt requests derive the same bytes
     const bits = await crypto.subtle.deriveBits(
@@ -179,12 +174,31 @@ export async function deriveOperationKeyBytes(params: {
             name: 'HKDF',
             hash: 'SHA-256',
             salt: asBuf(salt),
-            info: new TextEncoder().encode(JSON.stringify(infoObj)),
+            info: new TextEncoder().encode(infoObj.serialize()),
         },
         ikm,
         256
     )
     return new Uint8Array(bits)
+}
+
+class InfoObj {
+    private v = 1
+    public targetUser: string
+    public keyLabel: string
+    public algorithm: string
+
+    constructor(targetUser: string, keyLabel: string, algorithm: string) {
+        this.targetUser = targetUser
+        this.keyLabel = keyLabel
+        this.algorithm = algorithm
+    }
+
+    public serialize(): string {
+        // Build a canonical info string that is deterministic across implementations
+        // Fields are sorted alphabetically and separated by newlines; no JSON serialization dependency
+        return `algorithm=${this.algorithm}\nkeyLabel=${this.keyLabel}\ntargetUser=${this.targetUser}\nv=${this.v}`
+    }
 }
 
 /** Derives the AES key used to encrypt and verify the password canary value. */

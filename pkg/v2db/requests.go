@@ -82,6 +82,7 @@ func NewRequestStore(ctx context.Context, db *DB, payloadKey []byte, logger *slo
 	if len(payloadKey) != 32 {
 		return nil, fmt.Errorf("invalid DB payload key length: got %d, want 32", len(payloadKey))
 	}
+
 	block, err := aes.NewCipher(payloadKey)
 	if err != nil {
 		return nil, err
@@ -90,13 +91,18 @@ func NewRequestStore(ctx context.Context, db *DB, payloadKey []byte, logger *slo
 	if err != nil {
 		return nil, err
 	}
+
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &RequestStore{db: db, aead: aead, log: logger}
-	if err := s.migrate(ctx); err != nil {
-		return nil, err
+
+	// Perform migrations
+	err = s.migrate(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform migrations: %w", err)
 	}
+
 	return s, nil
 }
 
@@ -391,59 +397,88 @@ func (s *RequestStore) ExpirePendingAndReturnStates(ctx context.Context, now tim
 	n := now.Unix()
 	switch s.db.Backend {
 	case BackendSQLite:
-		rows, err := s.db.SQLite.QueryContext(ctx, `SELECT state FROM v2_requests WHERE status = ? AND expires_at < ?`,
-			string(V2RequestStatusPending), n)
+		tx, err := s.db.SQLite.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer tx.Rollback()
+
+		rows, err := tx.QueryContext(ctx,
+			`SELECT state FROM v2_requests WHERE status = ? AND expires_at < ?`,
+			string(V2RequestStatusPending), n,
+		)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
+
 		var states []string
 		for rows.Next() {
 			var st string
-			if err := rows.Scan(&st); err != nil {
+			err = rows.Scan(&st)
+			if err != nil {
 				return nil, err
 			}
 			states = append(states, st)
 		}
-		if err := rows.Err(); err != nil {
+
+		err = rows.Err()
+		if err != nil {
 			return nil, err
 		}
+
 		if len(states) == 0 {
 			return nil, nil
 		}
-		if _, err := s.db.SQLite.ExecContext(ctx, `UPDATE v2_requests SET status = ?, updated_at = ? WHERE status = ? AND expires_at < ?`,
-			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n); err != nil {
+
+		_, err = tx.ExecContext(ctx,
+			`UPDATE v2_requests SET status = ?, updated_at = ? WHERE status = ? AND expires_at < ?`,
+			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
+		)
+		if err != nil {
 			return nil, err
 		}
+
+		err = tx.Commit()
+		if err != nil {
+			return nil, fmt.Errorf("failed to commit transaction: %w", err)
+		}
+
 		return states, nil
 	case BackendPostgres:
-		rows, err := s.db.Postgres.Query(ctx, `UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4 RETURNING state`,
-			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n)
+		rows, err := s.db.Postgres.Query(ctx,
+			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4 RETURNING state`,
+			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
+		)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
+
 		var states []string
 		for rows.Next() {
 			var st string
-			if err := rows.Scan(&st); err != nil {
+			err = rows.Scan(&st)
+			if err != nil {
 				return nil, err
 			}
 			states = append(states, st)
 		}
+
 		return states, rows.Err()
 	default:
 		return nil, errors.New("unsupported backend")
 	}
 }
 
-func (s *RequestStore) sealJSON(kind, id string, v any) (ciphertext []byte, nonce []byte, err error) {
+func (s *RequestStore) sealJSON(kind string, id string, v any) (ciphertext []byte, nonce []byte, err error) {
 	plain, err := json.Marshal(v)
 	if err != nil {
 		return nil, nil, err
 	}
 	nonce = make([]byte, s.aead.NonceSize())
-	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+	_, err = io.ReadFull(rand.Reader, nonce)
+	if err != nil {
 		return nil, nil, err
 	}
 	aad := []byte("revaulter-v2|" + kind + "|" + id)
@@ -451,7 +486,7 @@ func (s *RequestStore) sealJSON(kind, id string, v any) (ciphertext []byte, nonc
 	return ciphertext, nonce, nil
 }
 
-func (s *RequestStore) openJSON(kind, id string, ciphertext, nonce []byte, out any) error {
+func (s *RequestStore) openJSON(kind string, id string, ciphertext []byte, nonce []byte, out any) error {
 	aad := []byte("revaulter-v2|" + kind + "|" + id)
 	plain, err := s.aead.Open(nil, nonce, ciphertext, aad)
 	if err != nil {

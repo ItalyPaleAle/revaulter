@@ -87,7 +87,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			"state":   state,
 			"pending": true,
 		})
-		s.publishV2ListItem(&v2db.V2RequestListItem{
+		s.publishListItem(&v2db.V2RequestListItem{
 			State:      state,
 			Status:     string(v2db.V2RequestStatusPending),
 			Operation:  operation,
@@ -162,17 +162,17 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 
 		// Pending: wait for notification or timeout/disconnect.
 		s.lock.Lock()
-		watch := s.subscribeToV2State(state)
+		watch := s.subscribeState(state)
 		s.lock.Unlock()
 		select {
 		case <-watch:
 			s.lock.Lock()
-			s.unsubscribeToV2State(state, watch)
+			s.unsubscribeState(state, watch)
 			s.lock.Unlock()
 			continue
 		case <-c.Request.Context().Done():
 			s.lock.Lock()
-			s.unsubscribeToV2State(state, watch)
+			s.unsubscribeState(state, watch)
 			s.lock.Unlock()
 			c.JSON(http.StatusAccepted, protocolv2.RequestResultResponse{
 				State:   rec.State,
@@ -181,7 +181,7 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 			return
 		case <-time.After(250 * time.Millisecond):
 			s.lock.Lock()
-			s.unsubscribeToV2State(state, watch)
+			s.unsubscribeState(state, watch)
 			s.lock.Unlock()
 		}
 	}
@@ -293,10 +293,10 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			return
 		}
 		s.lock.Lock()
-		s.notifyV2Subscriber(req.State)
+		s.notifySubscriber(req.State)
 		s.lock.Unlock()
 		c.JSON(http.StatusOK, gin.H{"canceled": true})
-		s.publishV2ListItem(&v2db.V2RequestListItem{
+		s.publishListItem(&v2db.V2RequestListItem{
 			State:  req.State,
 			Status: "removed",
 		})
@@ -338,10 +338,10 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 	s.lock.Lock()
-	s.notifyV2Subscriber(req.State)
+	s.notifySubscriber(req.State)
 	s.lock.Unlock()
 	c.JSON(http.StatusOK, gin.H{"confirmed": true})
-	s.publishV2ListItem(&v2db.V2RequestListItem{
+	s.publishListItem(&v2db.V2RequestListItem{
 		State:  req.State,
 		Status: "removed",
 	})

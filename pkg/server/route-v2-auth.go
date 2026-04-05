@@ -326,6 +326,7 @@ func (s *Server) RouteV2AuthSession(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
 		return
 	}
+
 	c.JSON(http.StatusOK, v2AuthSessionResponse{
 		Authenticated: true,
 		Username:      username.(string),
