@@ -242,13 +242,17 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 		}
 	}
 
+	// Rate limiters for request creation and authentication endpoints
+	requestRateLimiter := MiddlewareRateLimit(10) // 10 req/s for CLI request creation
+	authRateLimiter := MiddlewareRateLimit(5)     // 5 req/s for auth endpoints
+
 	// v2 routes (WebAuthn + browser crypto flow)
 	v2RouteGroup := s.appRouter.Group("/v2")
 	addStandardMiddlewares(v2RouteGroup)
 
 	// Request group is API-to-server (not browser-originated), so no CSRF middleware
 	v2RequestGroup := v2RouteGroup.Group("/request")
-	v2RequestGroup.Use(allowIpMw, s.MiddlewareRequestKey())
+	v2RequestGroup.Use(allowIpMw, s.MiddlewareRequestKey(), requestRateLimiter)
 	v2RequestGroup.POST("/encrypt", s.RouteV2RequestCreate("encrypt"))
 	v2RequestGroup.POST("/decrypt", s.RouteV2RequestCreate("decrypt"))
 	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
@@ -261,7 +265,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
 
 	v2AuthGroup := v2RouteGroup.Group("/auth")
-	v2AuthGroup.Use(csrfMw)
+	v2AuthGroup.Use(csrfMw, authRateLimiter)
 	v2AuthGroup.POST("/register/begin", s.RouteV2AuthRegisterBegin)
 	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
