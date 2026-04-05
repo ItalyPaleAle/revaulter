@@ -521,6 +521,29 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 	}
 	username := discoveredUser.name
 
+	// Detect possible cloned authenticator by comparing the returned sign count
+	// with the stored value. If the stored count was non-zero but the new count
+	// is not strictly greater, the credential may have been cloned.
+	credIDEncoded := base64.RawURLEncoding.EncodeToString(cred.ID)
+	for _, stored := range discoveredUser.credentials {
+		if base64.RawURLEncoding.EncodeToString(stored.ID) == credIDEncoded {
+			storedCount := stored.Authenticator.SignCount
+			newCount := cred.Authenticator.SignCount
+			if storedCount > 0 && newCount <= storedCount {
+				logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
+					"Possible cloned authenticator: sign count did not increase",
+					slog.String("username", username),
+					slog.String("credential_id", credIDEncoded),
+					slog.Uint64("stored_sign_count", uint64(storedCount)),
+					slog.Uint64("new_sign_count", uint64(newCount)),
+					slog.String("client_ip", c.ClientIP()),
+				)
+				return nil, "", NewResponseError(http.StatusForbidden, "Authenticator sign count anomaly detected — possible credential cloning")
+			}
+			break
+		}
+	}
+
 	sess, err := s.authStore.Login(c.Request.Context(), v2db.LoginInput{
 		Username:     username,
 		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
