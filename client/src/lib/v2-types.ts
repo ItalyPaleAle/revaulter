@@ -80,16 +80,9 @@ export type V2LoginBeginResponse = {
 
 export type V2LoginFinishResponse = {
     authenticated: boolean
-    passwordRequired?: boolean
     username?: string
     session?: V2AuthSessionInfo
     passwordCanary?: string
-    challengeId?: string
-    challenge?: string
-    expiresAt?: number
-    mode?: string
-    options?: unknown
-    basePrfSalt?: string
 }
 
 export type V2SessionResponse = {

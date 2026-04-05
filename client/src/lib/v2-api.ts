@@ -49,18 +49,6 @@ export async function v2LoginFinish(args: { challengeId: string; credential: unk
     return res.data
 }
 
-/** Completes the second login step after the server has requested a password-gated PRF assertion */
-export async function v2LoginPasswordFinish(args: { username: string; challengeId: string; credential: unknown }) {
-    const res = await Request<V2LoginFinishResponse>('/v2/auth/login/password/finish', {
-        postData: {
-            username: args.username,
-            challengeId: args.challengeId,
-            credential: args.credential,
-        },
-    })
-    return res.data
-}
-
 /** Stores the password canary for the currently authenticated user session */
 export async function v2SetPasswordCanary(canary: string) {
     const res = await Request<{ ok: boolean }>('/v2/auth/password-canary', { postData: { canary } })

@@ -39,22 +39,12 @@ type v2AuthLoginFinishRequest struct {
 	Credential  json.RawMessage `json:"credential"`
 }
 
-type v2AuthLoginPasswordFinishRequest struct {
-	Username    string          `json:"username"`
-	ChallengeID string          `json:"challengeId"`
-	Credential  json.RawMessage `json:"credential"`
-}
-
 type v2RegisterChallengePayload struct {
 	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
 }
 
 type v2LoginChallengePayload struct {
 	Challenge       string                   `json:"challenge,omitempty"`
-	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
-}
-
-type v2PasswordLoginChallengePayload struct {
 	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
 }
 
@@ -90,17 +80,10 @@ type v2AuthLoginBeginResponse struct {
 }
 
 type v2AuthLoginFinishResponse struct {
-	Authenticated    bool               `json:"authenticated"`
-	PasswordRequired bool               `json:"passwordRequired,omitempty"`
-	Username         string             `json:"username,omitempty"`
-	Session          *v2AuthSessionInfo `json:"session,omitempty"`
-	PasswordCanary   string             `json:"passwordCanary,omitempty"`
-	ChallengeID      string             `json:"challengeId,omitempty"`
-	Challenge        string             `json:"challenge,omitempty"`
-	ExpiresAt        int64              `json:"expiresAt,omitempty"`
-	Mode             string             `json:"mode,omitempty"`
-	Options          any                `json:"options,omitempty"`
-	BasePrfSalt      string             `json:"basePrfSalt,omitempty"`
+	Authenticated  bool               `json:"authenticated"`
+	Username       string             `json:"username,omitempty"`
+	Session        *v2AuthSessionInfo `json:"session,omitempty"`
+	PasswordCanary string             `json:"passwordCanary,omitempty"`
 }
 
 type v2AuthSetPasswordCanaryRequest struct {
@@ -297,33 +280,6 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	if user != nil && user.PasswordCanary != "" {
-		passwordStep, err := s.beginPasswordLogin(c, username)
-		if err != nil {
-			AbortWithErrorJSON(c, err)
-			return
-		}
-
-		logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User completed passkey step",
-			slog.String("username", username),
-			slog.String("client_ip", c.ClientIP()),
-		)
-
-		c.JSON(http.StatusOK, v2AuthLoginFinishResponse{
-			Authenticated:    false,
-			PasswordRequired: true,
-			Username:         username,
-			PasswordCanary:   user.PasswordCanary,
-			ChallengeID:      passwordStep.ChallengeID,
-			Challenge:        passwordStep.Challenge,
-			ExpiresAt:        passwordStep.ExpiresAt,
-			Mode:             passwordStep.Mode,
-			Options:          passwordStep.Options,
-			BasePrfSalt:      passwordStep.BasePrfSalt,
-		})
-		return
-	}
-
 	err = s.setV2SessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -342,58 +298,11 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 			TTL:      int(time.Until(sess.ExpiresAt).Seconds()),
 		},
 	}
+	if user != nil && user.PasswordCanary != "" {
+		resp.PasswordCanary = user.PasswordCanary
+	}
 
 	c.JSON(http.StatusOK, resp)
-}
-
-func (s *Server) RouteV2AuthLoginPasswordFinish(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
-		return
-	}
-
-	var req v2AuthLoginPasswordFinishRequest
-	err := c.ShouldBindJSON(&req)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
-		return
-	}
-
-	req.Username = normalizeUsername(req.Username)
-	if req.Username == "" || req.ChallengeID == "" || len(req.Credential) == 0 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing required login fields"))
-		return
-	}
-
-	sess, err := s.v2LoginPasswordFinish(c, req)
-	if err != nil {
-		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Password-step login failed",
-			slog.String("username", req.Username),
-			slog.String("client_ip", c.ClientIP()),
-		)
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	err = s.setV2SessionCookie(c, sess)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged in",
-		slog.String("username", req.Username),
-		slog.String("client_ip", c.ClientIP()),
-	)
-
-	c.JSON(http.StatusOK, v2AuthLoginFinishResponse{
-		Authenticated: true,
-		Username:      req.Username,
-		Session: &v2AuthSessionInfo{
-			Username: req.Username,
-			TTL:      int(time.Until(sess.ExpiresAt).Seconds()),
-		},
-	})
 }
 
 func (s *Server) RouteV2AuthSetPasswordCanary(c *gin.Context) {
@@ -621,10 +530,6 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 		return nil, "", nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 	}
 
-	if user.PasswordCanary != "" {
-		return nil, discoveredUser.name, user, nil
-	}
-
 	sess, err := s.createLoginSession(c.Request.Context(), discoveredUser.name, cred)
 	if err != nil {
 		if errors.Is(err, v2db.ErrInvalidLogin) {
@@ -634,88 +539,6 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 	}
 
 	return sess, discoveredUser.name, user, nil
-}
-
-func (s *Server) v2LoginPasswordFinish(c *gin.Context, req v2AuthLoginPasswordFinishRequest) (*v2db.AuthSession, error) {
-	if s.webAuthn == nil {
-		return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
-	}
-
-	var payload v2PasswordLoginChallengePayload
-	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login-password", req.Username, &payload)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, NewResponseError(http.StatusConflict, "Password-step login challenge is invalid or expired")
-	}
-	if payload.WebAuthnSession == nil {
-		return nil, NewResponseError(http.StatusConflict, "Password-step login challenge is missing WebAuthn session data")
-	}
-
-	userRecord, err := s.v2LoadWebAuthnUser(c.Request.Context(), req.Username)
-	if err != nil {
-		return nil, err
-	}
-	if userRecord == nil {
-		return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
-	}
-
-	waReq, err := newJSONHTTPRequest(c, req.Credential)
-	if err != nil {
-		return nil, err
-	}
-
-	cred, err := s.webAuthn.FinishLogin(userRecord, *payload.WebAuthnSession, waReq)
-	if err != nil {
-		return nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
-	}
-
-	err = s.validateAuthenticatorSignCount(c, userRecord, cred)
-	if err != nil {
-		return nil, err
-	}
-
-	sess, err := s.createLoginSession(c.Request.Context(), req.Username, cred)
-	if errors.Is(err, v2db.ErrInvalidLogin) {
-		return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
-	}
-	return sess, err
-}
-
-func (s *Server) beginPasswordLogin(c *gin.Context, username string) (*v2AuthLoginBeginResponse, error) {
-	userRecord, err := s.v2LoadWebAuthnUser(c.Request.Context(), username)
-	if err != nil {
-		return nil, err
-	}
-	if userRecord == nil {
-		return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
-	}
-
-	assertion, session, err := s.webAuthn.BeginLogin(userRecord,
-		webauthnlib.WithAssertionExtensions(protocol.AuthenticationExtensions{
-			"prf": map[string]any{},
-		}),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "login-password", username, session.Challenge, session.Expires, v2PasswordLoginChallengePayload{
-		WebAuthnSession: session,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return &v2AuthLoginBeginResponse{
-		ChallengeID: ch.ID,
-		Challenge:   session.Challenge,
-		ExpiresAt:   ch.ExpiresAt.Unix(),
-		Mode:        "webauthn",
-		Options:     assertion,
-		BasePrfSalt: config.Get().GetPRFSalt(),
-	}, nil
 }
 
 func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2WebAuthnUser, cred *webauthnlib.Credential) error {

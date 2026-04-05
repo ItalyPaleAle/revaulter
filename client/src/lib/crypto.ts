@@ -133,24 +133,6 @@ export async function decryptTransportEnvelope(
 }
 
 /**
- * Computes the PRF salt used during WebAuthn PRF evaluation. When a password is
- * present, it is mixed in with HMAC so the effective salt changes per password.
- */
-export async function computePrfSalt(basePrfSalt: Uint8Array, password?: string): Promise<Uint8Array> {
-    if (!password) {
-        return basePrfSalt
-    }
-
-    // Use the server-provided base salt as the HMAC key and the password as the message
-    const key = await crypto.subtle.importKey('raw', asBuf(basePrfSalt), { name: 'HMAC', hash: 'SHA-256' }, false, [
-        'sign',
-    ])
-
-    const sig = await crypto.subtle.sign('HMAC', key, asBuf(new TextEncoder().encode(password)))
-    return new Uint8Array(sig)
-}
-
-/**
  * Derives the logical operation key bytes used for application crypto such as
  * AES-GCM encryption/decryption. The derived key is bound to the target user,
  * key label, algorithm, and optionally the password.

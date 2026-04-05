@@ -3,14 +3,13 @@ import { onMount } from 'svelte'
 
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
 import PendingItem from '$components/PendingItem.svelte'
-import { computePrfSalt, encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
+import { encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
 import { ResponseNotOkError } from '$lib/request'
 import { base64UrlToBytes } from '$lib/utils'
 import {
     v2ListStream,
     v2LoginBegin,
     v2LoginFinish,
-    v2LoginPasswordFinish,
     v2Logout,
     v2RegisterBegin,
     v2RegisterFinish,
@@ -22,15 +21,6 @@ import { webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
 
 type UIState = 'boot' | 'signin' | 'signup' | 'password-login' | 'password-setup' | 'ready'
 
-type PendingPasswordLogin = {
-    username: string
-    passwordCanary: string
-    challengeId: string
-    challenge: string
-    options?: unknown
-    basePrfSalt: string
-}
-
 let uiState = $state<UIState>('boot')
 let authBusy = $state(false)
 let authError = $state<string | null>(null)
@@ -41,10 +31,10 @@ let username = $state('')
 let displayName = $state('')
 let passwordInput = $state('')
 let activePassword = $state('')
+let loginPasswordCanary = $state<string | null>(null)
 
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
-let pendingPasswordLogin = $state<PendingPasswordLogin | null>(null)
 
 let items = $state<Record<string, V2PendingRequestItem>>({})
 let listConnected = $state(false)
@@ -108,8 +98,8 @@ function clearLocalAuthState() {
     teardownListStream()
     session = null
     prfSecret = null
-    pendingPasswordLogin = null
     activePassword = ''
+    loginPasswordCanary = null
 }
 
 function enterReadyView() {
@@ -122,23 +112,30 @@ function enterReadyView() {
 function openSignIn() {
     authError = null
     passwordInput = ''
-    pendingPasswordLogin = null
+    loginPasswordCanary = null
     uiState = 'signin'
 }
 
 function openSignup() {
     authError = null
     passwordInput = ''
-    pendingPasswordLogin = null
+    loginPasswordCanary = null
     uiState = 'signup'
+}
+
+async function returnToSignIn() {
+    if (session) {
+        await doLogout()
+        return
+    }
+    openSignIn()
 }
 
 async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-required'> {
     const begin = await v2LoginBegin()
-    const prfSalt = await computePrfSalt(base64UrlToBytes(begin.basePrfSalt))
     const assertion = await webauthnLoginWithPrf({
         challenge: begin.challenge,
-        prfSalt,
+        prfSalt: base64UrlToBytes(begin.basePrfSalt),
         options: begin.options,
     })
     const finish = await v2LoginFinish({
@@ -149,29 +146,6 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
         },
     })
 
-    if (finish.passwordRequired) {
-        if (
-            !finish.username ||
-            !finish.passwordCanary ||
-            !finish.challengeId ||
-            !finish.challenge ||
-            !finish.basePrfSalt
-        ) {
-            throw new Error('Server requested password verification but returned an incomplete challenge')
-        }
-
-        clearLocalAuthState()
-        pendingPasswordLogin = {
-            username: finish.username,
-            passwordCanary: finish.passwordCanary,
-            challengeId: finish.challengeId,
-            challenge: finish.challenge,
-            options: finish.options,
-            basePrfSalt: finish.basePrfSalt,
-        }
-        return 'password-required'
-    }
-
     if (!finish.authenticated || !finish.session) {
         throw new Error('Login did not complete')
     }
@@ -181,53 +155,31 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
 
     session = toSessionResponse(finish.session)
     setPrfSecret(assertion.prfSecret)
-    pendingPasswordLogin = null
     activePassword = ''
+    loginPasswordCanary = finish.passwordCanary ?? null
+
+    if (finish.passwordCanary) {
+        return 'password-required'
+    }
     return 'authenticated'
 }
 
-async function finishPasswordLoginStep(password: string) {
-    const pending = pendingPasswordLogin
+async function unlockWithPassword(password: string) {
     const trimmedPassword = password.trim()
-
-    if (!pending) {
-        throw new Error('Password verification is not active')
+    if (!loginPasswordCanary) {
+        throw new Error('Password unlock is not active')
     }
     if (trimmedPassword === '') {
         throw new Error('Password is required')
     }
 
-    const passwordMatches = await verifyPasswordCanary(trimmedPassword, pending.passwordCanary)
+    const passwordMatches = await verifyPasswordCanary(trimmedPassword, loginPasswordCanary)
     if (!passwordMatches) {
         throw new Error('Incorrect password')
     }
 
-    const prfSalt = await computePrfSalt(base64UrlToBytes(pending.basePrfSalt), trimmedPassword)
-    const assertion = await webauthnLoginWithPrf({
-        challenge: pending.challenge,
-        prfSalt,
-        options: pending.options,
-    })
-    const finish = await v2LoginPasswordFinish({
-        username: pending.username,
-        challengeId: pending.challengeId,
-        credential: (assertion.raw as { credential?: unknown })?.credential ?? {
-            id: assertion.id,
-            signCount: assertion.signCount,
-        },
-    })
-
-    if (!finish.authenticated || !finish.session) {
-        throw new Error('Login did not complete')
-    }
-    if (!assertion.prfSecret || assertion.prfSecret.length === 0) {
-        throw new Error('Authenticator did not return PRF output')
-    }
-
-    session = toSessionResponse(finish.session)
-    setPrfSecret(assertion.prfSecret)
     activePassword = trimmedPassword
-    pendingPasswordLogin = null
+    loginPasswordCanary = null
 }
 
 async function doLogin() {
@@ -245,6 +197,7 @@ async function doLogin() {
 
         enterReadyView()
     } catch (err) {
+        clearLocalAuthState()
         authError = err instanceof Error ? err.message : String(err)
         uiState = 'signin'
     } finally {
@@ -282,6 +235,7 @@ async function doRegister() {
         passwordInput = ''
         uiState = 'password-setup'
     } catch (err) {
+        clearLocalAuthState()
         if (err instanceof ResponseNotOkError && err.statusCode === 403) {
             signupDisabled = true
             authError = err.message || 'Account creation is disabled on this server.'
@@ -301,7 +255,7 @@ async function doFinishPasswordLogin() {
     authError = null
 
     try {
-        await finishPasswordLoginStep(passwordInput)
+        await unlockWithPassword(passwordInput)
         enterReadyView()
     } catch (err) {
         authError = err instanceof Error ? err.message : String(err)
@@ -332,13 +286,8 @@ async function doSetPassword() {
     try {
         const canary = await encryptPasswordCanary(trimmedPassword)
         await v2SetPasswordCanary(canary)
-
-        const outcome = await beginPasskeyLoginStep()
-        if (outcome !== 'password-required') {
-            throw new Error('Password confirmation did not start correctly')
-        }
-
-        await finishPasswordLoginStep(trimmedPassword)
+        activePassword = trimmedPassword
+        loginPasswordCanary = null
         enterReadyView()
     } catch (err) {
         authError = err instanceof Error ? err.message : String(err)
@@ -439,7 +388,7 @@ function authHeadline() {
         case 'signup':
             return 'Create a new account'
         case 'password-login':
-            return 'Enter your password'
+            return 'Unlock with your password'
         case 'password-setup':
             return 'Add a password'
         default:
@@ -452,9 +401,9 @@ function authBodyCopy() {
         case 'signup':
             return 'Register a new Revaulter user with a resident passkey. You can add an optional password after registration.'
         case 'password-login':
-            return 'Your passkey was accepted. This account also uses a password before session issuance.'
+            return 'Your session is active. Enter the password to unlock local cryptographic operations in this browser.'
         case 'password-setup':
-            return 'Passwords are optional. If you set one now, Revaulter will require it after passkey authentication on future sign-ins.'
+            return 'Passwords are optional. If you set one now, Revaulter will ask for it after future passkey sign-ins before unlocking local keys.'
         default:
             return ''
     }
@@ -606,7 +555,7 @@ function authBodyCopy() {
                                 Create account with passkey
                             </button>
                         </form>
-                    {:else if uiState === 'password-login' && pendingPasswordLogin}
+                    {:else if uiState === 'password-login' && loginPasswordCanary}
                         <form
                             class="space-y-4"
                             onsubmit={(e) => {
@@ -615,7 +564,7 @@ function authBodyCopy() {
                             }}
                         >
                             <div class="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-300">
-                                Completing sign-in for <span class="font-mono text-slate-950 dark:text-white">{pendingPasswordLogin.username}</span>
+                                Unlocking local keys for <span class="font-mono text-slate-950 dark:text-white">{session?.username}</span>
                             </div>
 
                             <div class="space-y-2">
@@ -635,7 +584,7 @@ function authBodyCopy() {
                                 disabled={authBusy}
                             >
                                 {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                                Continue with password
+                                Unlock local keys
                             </button>
                         </form>
                     {:else if uiState === 'password-setup'}
@@ -712,7 +661,9 @@ function authBodyCopy() {
                     <button
                         type="button"
                         class="mt-4 inline-flex items-center justify-center rounded-full border border-slate-300 bg-white/70 px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-white dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-950"
-                        onclick={openSignIn}
+                        onclick={() => {
+                            void returnToSignIn()
+                        }}
                     >
                         Back to sign in
                     </button>
