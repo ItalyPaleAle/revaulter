@@ -173,8 +173,33 @@ func isNotModified(c *gin.Context) bool {
 }
 
 func setPageSecurityHeaders(w http.ResponseWriter) {
-	// Set the CSP header and the legacy X-Frame-Options
-	w.Header().Set("Content-Security-Policy", `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'`)
+	// Content-Security-Policy:
+	//   default-src 'none'  — deny everything not explicitly allowed
+	//   script-src 'self'   — JS only from same origin (Vite/SRI bundles)
+	//   style-src 'self'    — CSS only from same origin (Tailwind bundle)
+	//   img-src 'self'      — images from same origin
+	//   font-src 'self'     — fonts from same origin
+	//   connect-src 'self'  — fetch/XHR/WebSocket to same origin only
+	//   manifest-src 'self' — PWA manifest from same origin
+	//   worker-src 'self'   — service worker (VitePWA sw.js) from same origin
+	//   frame-ancestors 'none' — equivalent to X-Frame-Options: DENY but CSP level 2+
+	//   base-uri 'none'     — prevent <base> tag injection that would reroute relative URLs
+	//   form-action 'none'  — no HTML form submissions (SPA, all interaction is via fetch)
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'none'; "+
+			"script-src 'self'; "+
+			"style-src 'self'; "+
+			"img-src 'self'; "+
+			"font-src 'self'; "+
+			"connect-src 'self'; "+
+			"manifest-src 'self'; "+
+			"worker-src 'self'; "+
+			"frame-ancestors 'none'; "+
+			"base-uri 'none'; "+
+			"form-action 'none'",
+	)
+
+	// Legacy clickjacking protection for browsers that don't support CSP frame-ancestors
 	w.Header().Set("X-Frame-Options", "DENY")
 
 	// Disable FLOC
