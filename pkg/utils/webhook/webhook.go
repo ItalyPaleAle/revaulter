@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +50,10 @@ func NewWebhook() Webhook {
 func newWebhookWithClock(clock kclock.Clock) Webhook {
 	httpClient := &http.Client{
 		Timeout: webhookTimeout,
+		// Disable automatic redirect following to prevent SSRF via redirects to internal IPs
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 	// Update the transport for the HTTP client to include tracing information
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
@@ -56,6 +62,64 @@ func newWebhookWithClock(clock kclock.Clock) Webhook {
 		clock:      clock,
 		httpClient: httpClient,
 	}
+}
+
+// validateWebhookURL checks that the webhook URL uses an allowed scheme (http/https)
+// and does not resolve to a private/internal IP address to prevent SSRF attacks.
+func validateWebhookURL(webhookUrl string) error {
+	parsed, err := url.Parse(webhookUrl)
+	if err != nil {
+		return fmt.Errorf("invalid webhook URL: %w", err)
+	}
+
+	// Only allow http and https schemes
+	switch parsed.Scheme {
+	case "http", "https":
+		// OK
+	default:
+		return fmt.Errorf("webhook URL has disallowed scheme %q: only http and https are permitted", parsed.Scheme)
+	}
+
+	// Resolve the hostname and check all returned IPs
+	host := parsed.Hostname()
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		return fmt.Errorf("failed to resolve webhook host %q: %w", host, err)
+	}
+
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if isPrivateIP(ip) {
+			return fmt.Errorf("webhook URL resolves to private/internal IP %s: blocked for SSRF prevention", ipStr)
+		}
+	}
+
+	return nil
+}
+
+// isPrivateIP returns true if the IP is in a private, loopback, link-local, or
+// otherwise non-routable range.
+func isPrivateIP(ip net.IP) bool {
+	privateRanges := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"169.254.0.0/16",
+		"::1/128",
+		"fc00::/7",
+		"fe80::/10",
+	}
+	for _, cidr := range privateRanges {
+		_, network, _ := net.ParseCIDR(cidr)
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetBaseURL sets the baseURL in the object
@@ -68,6 +132,11 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 	cfg := config.Get()
 
 	webhookUrl := cfg.WebhookUrl
+
+	// Validate the webhook URL to prevent SSRF attacks
+	if err := validateWebhookURL(webhookUrl); err != nil {
+		return fmt.Errorf("webhook URL validation failed: %w", err)
+	}
 
 	// Retry up to 3 times
 	const attempts = 3
