@@ -10,13 +10,25 @@ import (
 )
 
 const (
-	headerSessionTTL        = "x-session-ttl"
-	sessionCookieName       = "_s"
-	contextKeySessionID     = "SessionID"
-	contextKeyUserID        = "UserID"
-	contextKeyUsername      = "Username"
-	contextKeySessionExpiry = "SessionExpiry"
+	headerSessionTTL = "x-session-ttl"
+	// __Host- prefix enforces Secure, no Domain, Path=/ — prevents cookie tossing from subdomains.
+	// On insecure connections (localhost dev), fall back to the unprefixed name.
+	sessionCookieNameSecure   = "__Host-_s"
+	sessionCookieNameInsecure = "_s"
+	contextKeySessionID       = "SessionID"
+	contextKeyUserID          = "UserID"
+	contextKeyUsername        = "Username"
+	contextKeySessionExpiry   = "SessionExpiry"
 )
+
+// sessionCookieFor returns the appropriate cookie name and path for the connection.
+// __Host- cookies require Secure=true and Path="/".
+func sessionCookieFor(c *gin.Context) (name, path string) {
+	if secureCookie(c) {
+		return sessionCookieNameSecure, "/"
+	}
+	return sessionCookieNameInsecure, "/v2"
+}
 
 func (s *Server) V2SessionMiddleware(required bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -27,7 +39,12 @@ func (s *Server) V2SessionMiddleware(required bool) gin.HandlerFunc {
 			return
 		}
 
-		sessID, ttl, err := getSecureCookieEncryptedJWT(c, sessionCookieName)
+		cookieName, _ := sessionCookieFor(c)
+		sessID, ttl, err := getSecureCookieEncryptedJWT(c, cookieName)
+		if (err != nil || sessID == "") && cookieName == sessionCookieNameSecure {
+			// Fall back to the old cookie name for clients that still have it
+			sessID, ttl, err = getSecureCookieEncryptedJWT(c, sessionCookieNameInsecure)
+		}
 		if err != nil || sessID == "" {
 			if err != nil {
 				_ = c.Error(fmt.Errorf("cookie error: %w", err))

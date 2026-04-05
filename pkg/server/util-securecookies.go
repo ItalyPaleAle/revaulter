@@ -116,8 +116,8 @@ func setSecureCookie(c *gin.Context, name string, plaintextValue string, expirat
 		return fmt.Errorf("cookie value exceeds the 4KB limit: %d", len(cookieValue))
 	}
 
-	// Set the cookie
-	c.SetCookie(name, string(cookieValue), int(expiration.Seconds()), path, c.Request.URL.Host, secureCookie, httpOnly)
+	// Set the cookie — __Host- prefixed cookies must not include a Domain attribute
+	c.SetCookie(name, string(cookieValue), int(expiration.Seconds()), path, "", secureCookie, httpOnly)
 
 	return nil
 }

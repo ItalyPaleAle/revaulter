@@ -350,8 +350,14 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 		}
 	}
 
+	cookieName, cookiePath := sessionCookieFor(c)
+	isSecure := secureCookie(c)
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(sessionCookieName, "", -1, "/v2", c.Request.URL.Host, secureCookie(c), true)
+	c.SetCookie(cookieName, "", -1, cookiePath, "", isSecure, true)
+	// Also clear the old insecure cookie name in case it still exists
+	if cookieName == sessionCookieNameSecure {
+		c.SetCookie(sessionCookieNameInsecure, "", -1, "/v2", "", isSecure, true)
+	}
 
 	c.JSON(http.StatusOK, v2AuthLogoutResponse{LoggedOut: true})
 }
@@ -366,8 +372,9 @@ func (s *Server) setV2SessionCookie(c *gin.Context, sess *v2db.AuthSession) erro
 		ttl = time.Second
 	}
 
+	cookieName, cookiePath := sessionCookieFor(c)
 	c.SetSameSite(http.SameSiteLaxMode)
-	return setSecureCookie(c, sessionCookieName, sess.ID, ttl, "/v2", secureCookie(c), true, serializeSecureCookieEncryptedJWT)
+	return setSecureCookie(c, cookieName, sess.ID, ttl, cookiePath, secureCookie(c), true, serializeSecureCookieEncryptedJWT)
 }
 
 func secureCookie(c *gin.Context) bool {

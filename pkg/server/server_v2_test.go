@@ -572,11 +572,12 @@ func seedV2SessionCookie(t *testing.T, srv *Server, username string, displayName
 	})
 	require.NoError(t, err)
 
-	cookieValue, err := serializeSecureCookieEncryptedJWT(sessionCookieName, sess.ID, time.Until(sess.ExpiresAt))
+	// Tests run over plain HTTP, so use the insecure cookie name
+	cookieValue, err := serializeSecureCookieEncryptedJWT(sessionCookieNameInsecure, sess.ID, time.Until(sess.ExpiresAt))
 	require.NoError(t, err)
 
 	return &http.Cookie{
-		Name:  sessionCookieName,
+		Name:  sessionCookieNameInsecure,
 		Value: cookieValue,
 		Path:  "/v2",
 	}
