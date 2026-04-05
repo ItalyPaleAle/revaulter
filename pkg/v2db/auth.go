@@ -133,7 +133,7 @@ func (s *AuthStore) migrationSQLite(ctx context.Context, conn *sql.Conn) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS v2_admin_credentials (
 			id TEXT PRIMARY KEY,
-			admin_id TEXT NOT NULL,
+			admin_id TEXT NOT NULL REFERENCES v2_admins(id) ON DELETE CASCADE,
 			credential_id TEXT NOT NULL UNIQUE,
 			public_key TEXT NOT NULL,
 			sign_count INTEGER NOT NULL,
@@ -149,12 +149,12 @@ func (s *AuthStore) migrationSQLite(ctx context.Context, conn *sql.Conn) error {
 			used_at INTEGER
 		)`,
 		`CREATE TABLE IF NOT EXISTS v2_auth_challenge_payloads (
-			challenge_id TEXT PRIMARY KEY,
+			challenge_id TEXT PRIMARY KEY REFERENCES v2_auth_challenges(id) ON DELETE CASCADE,
 			session_data TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS v2_admin_sessions (
 			id TEXT PRIMARY KEY,
-			admin_id TEXT NOT NULL,
+			admin_id TEXT NOT NULL REFERENCES v2_admins(id) ON DELETE CASCADE,
 			username TEXT NOT NULL,
 			expires_at INTEGER NOT NULL,
 			created_at INTEGER NOT NULL,
@@ -186,7 +186,7 @@ func (s *AuthStore) migrationPostgres(ctx context.Context) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS v2_admin_credentials (
 			id text PRIMARY KEY,
-			admin_id text NOT NULL,
+			admin_id text NOT NULL REFERENCES v2_admins(id) ON DELETE CASCADE,
 			credential_id text NOT NULL UNIQUE,
 			public_key text NOT NULL,
 			sign_count bigint NOT NULL,
@@ -202,12 +202,12 @@ func (s *AuthStore) migrationPostgres(ctx context.Context) error {
 			used_at bigint
 		)`,
 		`CREATE TABLE IF NOT EXISTS v2_auth_challenge_payloads (
-			challenge_id text PRIMARY KEY,
+			challenge_id text PRIMARY KEY REFERENCES v2_auth_challenges(id) ON DELETE CASCADE,
 			session_data text NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS v2_admin_sessions (
 			id text PRIMARY KEY,
-			admin_id text NOT NULL,
+			admin_id text NOT NULL REFERENCES v2_admins(id) ON DELETE CASCADE,
 			username text NOT NULL,
 			expires_at bigint NOT NULL,
 			created_at bigint NOT NULL,
