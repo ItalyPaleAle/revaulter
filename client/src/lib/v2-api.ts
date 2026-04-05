@@ -105,8 +105,7 @@ function isV2PendingRequestItem(v: unknown): v is V2PendingRequestItem {
  * incrementally so the UI can update in real time without polling.
  */
 export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | null, void, unknown> {
-    // Abort the streaming connection after 5 minutes of inactivity to prevent
-    // hanging connections from leaking resources.
+    // Abort the streaming connection after 5 minutes of inactivity to prevent hanging connections from leaking resources
     const controller = new AbortController()
     const connectionTimeout = 5 * 60 * 1000 // 5 minutes
     let timer = setTimeout(() => controller.abort(), connectionTimeout)

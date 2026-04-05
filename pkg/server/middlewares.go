@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/ratelimit"
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
@@ -94,4 +95,14 @@ func (s *Server) MiddlewareRequestKey() gin.HandlerFunc {
 // MiddlewareNoCache is a middleware that disables caching on clients and CDNs
 func (s *Server) MiddlewareNoCache(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
+}
+
+// MiddlewareRateLimit returns a Gin middleware that enforces a global request-per-second limit using a leaky-bucket algorithm.
+// Requests that exceed the limit receive HTTP 429 Too Many Requests.
+func MiddlewareRateLimit(rps int) gin.HandlerFunc {
+	limiter := ratelimit.New(rps, ratelimit.WithoutSlack)
+	return func(c *gin.Context) {
+		limiter.Take()
+		c.Next()
+	}
 }

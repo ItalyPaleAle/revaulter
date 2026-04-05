@@ -64,8 +64,7 @@ func newWebhookWithClock(clock kclock.Clock) Webhook {
 	}
 }
 
-// validateWebhookURL checks that the webhook URL uses an allowed scheme (http/https)
-// and does not resolve to a private/internal IP address to prevent SSRF attacks.
+// validateWebhookURL checks that the webhook URL uses an allowed scheme (http/https) and does not resolve to a private/internal IP address to prevent SSRF attacks
 func validateWebhookURL(webhookUrl string) error {
 	parsed, err := url.Parse(webhookUrl)
 	if err != nil {
@@ -128,13 +127,13 @@ func (w *webhookClient) SetBaseURL(val string) {
 }
 
 // SendWebhook sends the notification
-func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (err error) {
+func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) error {
 	cfg := config.Get()
-
 	webhookUrl := cfg.WebhookUrl
 
 	// Validate the webhook URL to prevent SSRF attacks
-	if err := validateWebhookURL(webhookUrl); err != nil {
+	err := validateWebhookURL(webhookUrl)
+	if err != nil {
 		return fmt.Errorf("webhook URL validation failed: %w", err)
 	}
 
@@ -247,7 +246,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 	return err
 }
 
-func (w *webhookClient) getLink(data *WebhookRequest) string {
+func (w *webhookClient) getLink() string {
 	if w.baseURL != "" {
 		return w.baseURL
 	}
@@ -320,73 +319,40 @@ type WebhookRequest struct {
 }
 
 func (w *webhookClient) formatPlainMessage(data *WebhookRequest) string {
-	if data != nil && data.Flow == "v2" {
-		var note string
-		if data.Note != "" {
-			note = "\n\nNote: " + data.Note
-		}
-		return fmt.Sprintf(
-			`Received a v2 request to %s using key label **%s** for user **%s** (algorithm **%s**).
+	var note string
+	if data.Note != "" {
+		note = "\n\nNote: " + data.Note
+	}
+	return fmt.Sprintf(
+		`Received a request to %s using key label **%s** for user **%s** (algorithm **%s**).
 
 Open Revaulter: %s
 
 (Request ID: %s - Client IP: %s)%s`,
-			data.OperationName,
-			data.KeyLabel,
-			data.TargetUser,
-			data.Algorithm,
-			w.getLink(data),
-			data.StateId,
-			data.Requestor,
-			note,
-		)
-	}
-
-	return fmt.Sprintf(
-		`Received a request to %s a message using key **%s** in vault **%s**.
-
-Confirm request: %s
-
-(Request ID: %s - Client IP: %s)`,
 		data.OperationName,
-		data.KeyId,
-		data.Vault,
-		w.getLink(data),
+		data.KeyLabel,
+		data.TargetUser,
+		data.Algorithm,
+		w.getLink(),
 		data.StateId,
 		data.Requestor,
+		note,
 	)
 }
 
 func (w *webhookClient) formatSlackMessage(data *WebhookRequest) string {
-	if data != nil && data.Flow == "v2" {
-		var note string
-		if data.Note != "" {
-			note = "Note: *" + data.Note + "*\n"
-		}
-		return fmt.Sprintf(
-			"Received a v2 request to %s using key label **%s** for user **%s** (algorithm **%s**).\n%s[Open Revaulter](%s)\n`(Request ID: %s - Client IP: %s)`",
-			data.OperationName,
-			data.KeyLabel,
-			data.TargetUser,
-			data.Algorithm,
-			note,
-			w.getLink(data),
-			data.StateId,
-			data.Requestor,
-		)
-	}
-
 	var note string
 	if data.Note != "" {
 		note = "Note: *" + data.Note + "*\n"
 	}
 	return fmt.Sprintf(
-		"Received a request to %s a message using key **%s** in vault **%s**.\n%s[Confirm request](%s)\n`(Request ID: %s - Client IP: %s)`",
+		"Received a request to %s using key label **%s** for user **%s** (algorithm **%s**).\n%s[Open Revaulter](%s)\n`(Request ID: %s - Client IP: %s)`",
 		data.OperationName,
-		data.KeyId,
-		data.Vault,
+		data.KeyLabel,
+		data.TargetUser,
+		data.Algorithm,
 		note,
-		w.getLink(data),
+		w.getLink(),
 		data.StateId,
 		data.Requestor,
 	)

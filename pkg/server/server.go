@@ -228,14 +228,16 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 		return err
 	}
 
-	// CSRF protection for browser-facing endpoints using stdlib CrossOriginProtection.
-	// This rejects cross-origin requests on state-changing methods (POST, PUT, DELETE, etc.)
-	// by checking the Sec-Fetch-Site and Origin headers.
+	// CSRF protection for browser-facing endpoints.
+	// This rejects cross-origin requests on state-changing methods (POST, PUT, DELETE, etc) by checking the Sec-Fetch-Site and Origin headers
 	cop := http.NewCrossOriginProtection()
 	csrfMw := func(c *gin.Context) {
-		cop.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			c.Next()
-		})).ServeHTTP(c.Writer, c.Request)
+		cop.
+			Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c.Next()
+			})).
+			ServeHTTP(c.Writer, c.Request)
+
 		// If CrossOriginProtection rejected the request, abort the Gin chain
 		if c.Writer.Status() == http.StatusForbidden {
 			c.Abort()
@@ -243,7 +245,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	}
 
 	// Rate limiters for request creation and authentication endpoints
-	requestRateLimiter := MiddlewareRateLimit(10) // 10 req/s for CLI request creation
+	requestRateLimiter := MiddlewareRateLimit(20) // 20 req/s for CLI request creation
 	authRateLimiter := MiddlewareRateLimit(5)     // 5 req/s for auth endpoints
 
 	// v2 routes (WebAuthn + browser crypto flow)
