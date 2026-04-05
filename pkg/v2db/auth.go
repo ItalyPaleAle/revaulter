@@ -788,6 +788,53 @@ func insertSessionPgx(ctx context.Context, tx pgx.Tx, userID, username string, t
 	return sess, err
 }
 
+// CleanupExpired deletes expired/used challenges (and their payloads) and revoked sessions
+// that are older than 10 minutes past their expiry or revocation.
+func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
+	cutoff := now.Add(-10 * time.Minute).Unix()
+	switch s.db.Backend {
+	case BackendSQLite:
+		// Delete challenge payloads for expired/used challenges
+		_, err := s.db.SQLite.ExecContext(ctx,
+			`DELETE FROM v2_auth_challenge_payloads WHERE challenge_id IN (SELECT id FROM v2_auth_challenges WHERE expires_at < ? OR used_at IS NOT NULL)`,
+			cutoff)
+		if err != nil {
+			return err
+		}
+		// Delete expired/used challenges
+		_, err = s.db.SQLite.ExecContext(ctx,
+			`DELETE FROM v2_auth_challenges WHERE expires_at < ? OR used_at IS NOT NULL`,
+			cutoff)
+		if err != nil {
+			return err
+		}
+		// Delete expired or revoked sessions
+		_, err = s.db.SQLite.ExecContext(ctx,
+			`DELETE FROM v2_admin_sessions WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)`,
+			cutoff, cutoff)
+		return err
+	case BackendPostgres:
+		_, err := s.db.Postgres.Exec(ctx,
+			`DELETE FROM v2_auth_challenge_payloads WHERE challenge_id IN (SELECT id FROM v2_auth_challenges WHERE expires_at < $1 OR used_at IS NOT NULL)`,
+			cutoff)
+		if err != nil {
+			return err
+		}
+		_, err = s.db.Postgres.Exec(ctx,
+			`DELETE FROM v2_auth_challenges WHERE expires_at < $1 OR used_at IS NOT NULL`,
+			cutoff)
+		if err != nil {
+			return err
+		}
+		_, err = s.db.Postgres.Exec(ctx,
+			`DELETE FROM v2_admin_sessions WHERE expires_at < $1 OR (revoked_at IS NOT NULL AND revoked_at < $2)`,
+			cutoff, cutoff)
+		return err
+	default:
+		return errors.New("unsupported backend")
+	}
+}
+
 func isErrNoRows(err error) bool {
 	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows)
 }

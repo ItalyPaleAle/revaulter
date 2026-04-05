@@ -560,6 +560,32 @@ func (s *RequestStore) sealJSON(kind string, id string, v any) (ciphertext []byt
 	return ciphertext, nonce, nil
 }
 
+// CleanupOldRecords deletes non-pending requests that expired more than 10 minutes ago.
+func (s *RequestStore) CleanupOldRecords(ctx context.Context, now time.Time) (int64, error) {
+	cutoff := now.Add(-10 * time.Minute).Unix()
+	switch s.db.Backend {
+	case BackendSQLite:
+		res, err := s.db.SQLite.ExecContext(ctx,
+			`DELETE FROM v2_requests WHERE status != ? AND expires_at < ?`,
+			string(V2RequestStatusPending), cutoff)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		return n, nil
+	case BackendPostgres:
+		tag, err := s.db.Postgres.Exec(ctx,
+			`DELETE FROM v2_requests WHERE status != $1 AND expires_at < $2`,
+			string(V2RequestStatusPending), cutoff)
+		if err != nil {
+			return 0, err
+		}
+		return tag.RowsAffected(), nil
+	default:
+		return 0, errors.New("unsupported backend")
+	}
+}
+
 func (s *RequestStore) openJSON(kind string, id string, ciphertext []byte, nonce []byte, out any) error {
 	// Derive a key for this specific operation
 	aead, err := s.deriveOperationAEAD(kind, id)

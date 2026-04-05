@@ -428,6 +428,35 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		}()
 	}
 
+	// Background cleanup of expired records every 60 seconds.
+	if s.requestStore != nil || s.authStore != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			cleanupTicker := time.NewTicker(60 * time.Second)
+			defer cleanupTicker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case now := <-cleanupTicker.C:
+					if s.requestStore != nil {
+						if n, err := s.requestStore.CleanupOldRecords(ctx, now); err != nil {
+							log.WarnContext(ctx, "v2 request cleanup failed", slog.Any("error", err))
+						} else if n > 0 {
+							log.InfoContext(ctx, "v2 request cleanup", slog.Int64("deleted", n))
+						}
+					}
+					if s.authStore != nil {
+						if err := s.authStore.CleanupExpired(ctx, now); err != nil {
+							log.WarnContext(ctx, "v2 auth cleanup failed", slog.Any("error", err))
+						}
+					}
+				}
+			}
+		}()
+	}
+
 	return nil
 }
 
