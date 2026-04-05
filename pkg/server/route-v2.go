@@ -363,15 +363,24 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 		return NewResponseError(http.StatusBadRequest, "Invalid operation")
 	}
 
-	// Check required fields
+	// Check required fields and enforce length limits
 	if body.TargetUser == "" {
 		return NewResponseError(http.StatusBadRequest, "missing parameter 'targetUser'")
+	}
+	if len(body.TargetUser) > 128 {
+		return NewResponseError(http.StatusBadRequest, "parameter 'targetUser' cannot be longer than 128 characters")
 	}
 	if body.KeyLabel == "" {
 		return NewResponseError(http.StatusBadRequest, "missing parameter 'keyLabel'")
 	}
+	if len(body.KeyLabel) > 128 {
+		return NewResponseError(http.StatusBadRequest, "parameter 'keyLabel' cannot be longer than 128 characters")
+	}
 	if body.Algorithm == "" {
 		return NewResponseError(http.StatusBadRequest, "missing parameter 'algorithm'")
+	}
+	if len(body.Algorithm) > 64 {
+		return NewResponseError(http.StatusBadRequest, "parameter 'algorithm' cannot be longer than 64 characters")
 	}
 	if body.Value == "" {
 		return NewResponseError(http.StatusBadRequest, "missing parameter 'value'")
