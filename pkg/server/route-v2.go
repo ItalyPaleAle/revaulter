@@ -56,7 +56,12 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
-		timeout := parseV2Timeout(body.Timeout)
+		timeout := parseRequestTimeout(body.Timeout)
+		if timeout > 24*time.Hour {
+			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid request: timeout must not be more than 24 hours"))
+			return
+		}
+
 		now := time.Now()
 		id, err := uuid.NewRandom()
 		if err != nil {
@@ -482,17 +487,24 @@ func validateV2ResponseEnvelope(env protocolv2.ResponseEnvelope) error {
 	return nil
 }
 
-func parseV2Timeout(raw string) time.Duration {
+func parseRequestTimeout(raw string) time.Duration {
+	cfg := config.Get()
+
 	if raw == "" {
-		return config.Get().RequestTimeout
+		return cfg.RequestTimeout
 	}
-	if rawInt, err := strconv.Atoi(raw); err == nil && rawInt > 0 {
+
+	rawInt, err := strconv.Atoi(raw)
+	if err == nil && rawInt > 0 {
 		return time.Duration(rawInt) * time.Second
 	}
-	if d, err := time.ParseDuration(raw); err == nil && d >= time.Second {
+
+	d, err := time.ParseDuration(raw)
+	if err == nil && d >= time.Second {
 		return d
 	}
-	return config.Get().RequestTimeout
+
+	return cfg.RequestTimeout
 }
 
 func (s *Server) routeV2APIListStream(c *gin.Context) {
@@ -501,13 +513,16 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
 	usernameAny, _ := c.Get(contextKeyUsername)
 	username, _ := usernameAny.(string)
 
-	c.Header("content-type", ndJSONContentType)
+	c.Header("Content-Type", ndJSONContentType)
 	c.Status(http.StatusOK)
+
 	enc := json.NewEncoder(c.Writer)
 	enc.SetEscapeHTML(false)
+
 	sent := false
 	known := map[string]v2db.V2RequestListItem{}
 	for _, item := range list {
@@ -518,20 +533,25 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 		known[item.State] = item
 		sent = true
 	}
+
 	events, err := s.v2Pubsub.Subscribe()
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 	defer s.v2Pubsub.Unsubscribe(events)
+
 	if !sent {
 		_, _ = c.Writer.Write([]byte{'\n'})
 	}
+
 	c.Writer.Flush()
 	flushTicker := time.NewTicker(100 * time.Millisecond)
 	defer flushTicker.Stop()
+
 	reconcileTicker := time.NewTicker(2 * time.Second)
 	defer reconcileTicker.Stop()
+
 	hasData := false
 	for {
 		select {
@@ -545,23 +565,29 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 			if username != "" && msg.TargetUser != "" && msg.TargetUser != username {
 				continue
 			}
+
 			_ = enc.Encode(msg)
+
 			if msg.Status == "removed" {
 				delete(known, msg.State)
 			} else if msg.State != "" {
 				known[msg.State] = *msg
 			}
+
 			hasData = true
+
 		case <-flushTicker.C:
 			if hasData {
 				c.Writer.Flush()
 				hasData = false
 			}
+
 		case <-reconcileTicker.C:
 			curList, err := s.requestStore.ListPending(c.Request.Context())
 			if err != nil {
 				continue
 			}
+
 			current := map[string]v2db.V2RequestListItem{}
 			for _, item := range curList {
 				if username != "" && item.TargetUser != username {
@@ -574,13 +600,16 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 					hasData = true
 				}
 			}
+
 			for state := range known {
-				if _, ok := current[state]; !ok {
+				_, ok := current[state]
+				if !ok {
 					_ = enc.Encode(&v2db.V2RequestListItem{State: state, Status: "removed"})
 					hasData = true
 				}
 			}
 			known = current
+
 		case <-c.Request.Context().Done():
 			return
 		}

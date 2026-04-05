@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	location "github.com/gin-contrib/location/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
@@ -106,7 +107,7 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
-	req.Username = normalizeV2Username(req.Username)
+	req.Username = normalizeUsername(req.Username)
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
 	if req.Username == "" || req.DisplayName == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "username and displayName are required"))
@@ -174,7 +175,7 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	req.Username = normalizeV2Username(req.Username)
+	req.Username = normalizeUsername(req.Username)
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
 
 	if req.Username == "" || req.DisplayName == "" || req.ChallengeID == "" || len(req.Credential) == 0 {
@@ -337,12 +338,16 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
 		return
 	}
+
 	sessID, _ := c.Get(contextKeySessionID)
-	if id, _ := sessID.(string); id != "" {
+	id, _ := sessID.(string)
+	if id != "" {
 		_ = s.authStore.RevokeSession(c.Request.Context(), id)
 	}
-	secureCookie := config.Get().ForceSecureCookies || c.Request.URL.Scheme == "https:"
-	c.SetCookie(sessionCookieName, "", -1, "/v2", c.Request.URL.Host, secureCookie, true)
+
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(sessionCookieName, "", -1, "/v2", c.Request.URL.Host, secureCookie(c), true)
+
 	c.JSON(http.StatusOK, v2AuthLogoutResponse{LoggedOut: true})
 }
 
@@ -350,15 +355,22 @@ func (s *Server) setV2SessionCookie(c *gin.Context, sess *v2db.AuthSession) erro
 	if sess == nil {
 		return NewResponseError(http.StatusInternalServerError, "session is nil")
 	}
+
 	ttl := time.Until(sess.ExpiresAt)
 	if ttl < time.Second {
 		ttl = time.Second
 	}
-	secureCookie := config.Get().ForceSecureCookies || c.Request.URL.Scheme == "https:"
-	return setSecureCookie(c, sessionCookieName, sess.ID, ttl, "/v2", secureCookie, true, serializeSecureCookieEncryptedJWT)
+
+	c.SetSameSite(http.SameSiteLaxMode)
+	return setSecureCookie(c, sessionCookieName, sess.ID, ttl, "/v2", secureCookie(c), true, serializeSecureCookieEncryptedJWT)
 }
 
-func normalizeV2Username(u string) string {
+func secureCookie(c *gin.Context) bool {
+	url := location.Get(c)
+	return url.Scheme == "https" || config.Get().ForceSecureCookies
+}
+
+func normalizeUsername(u string) string {
 	return strings.ToLower(strings.TrimSpace(u))
 }
 

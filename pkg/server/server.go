@@ -10,11 +10,11 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	location "github.com/gin-contrib/location/v2"
 	"github.com/gin-gonic/gin"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	slogkit "github.com/italypaleale/go-kit/slog"
@@ -185,10 +185,14 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	// Create the Gin router and add various middlewares
 	s.appRouter = gin.New()
 	s.appRouter.Use(gin.Recovery())
-	s.appRouter.Use(s.MiddlewareMaxBodySize(20 << 10)) // 20KB
+	s.appRouter.Use(s.MiddlewareMaxBodySize(200 << 10)) // 200KB
+	s.appRouter.Use(location.Default())
 
-	// Configure the trusted IP header and proxies
-	s.configureTrustedProxies()
+	// Configure the trusted proxies
+	err = s.configureTrustedProxies()
+	if err != nil {
+		return err
+	}
 
 	loggerMw := s.MiddlewareLogger(log)
 	addStandardMiddlewares := func(r gin.IRoutes) {
@@ -252,17 +256,19 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	return nil
 }
 
-func (s *Server) configureTrustedProxies() {
-	// Configure the trusted IP header
-	trustedIPHeader := config.Get().TrustedForwardedIPHeader
-	if trustedIPHeader != "" {
-		// If there's a trusted IP header, the app is behind a proxy, so we trust all addresses for the proxy
-		_ = s.appRouter.SetTrustedProxies([]string{"0.0.0.0/0", "::/0"})
-		s.appRouter.RemoteIPHeaders = strings.Split(trustedIPHeader, ",")
-	} else {
+func (s *Server) configureTrustedProxies() error {
+	trustedProxies := config.Get().TrustedProxies
+	if len(trustedProxies) == 0 {
 		// Set Gin to not trust any proxy
-		_ = s.appRouter.SetTrustedProxies(nil)
+		trustedProxies = nil
 	}
+
+	err := s.appRouter.SetTrustedProxies(trustedProxies)
+	if err != nil {
+		return fmt.Errorf("error setting trusted proxies in server: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Server) getBaseURL() string {
@@ -342,6 +348,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		MaxHeaderBytes:    1 << 20,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
 	if s.tlsConfig != nil {
 		// Using TLS
 		s.appSrv.Handler = s.appRouter
@@ -370,6 +377,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		slog.Bool("tls", s.tlsConfig != nil),
 		slog.String("url", s.getBaseURL()),
 	)
+
 	go func() {
 		defer s.appListener.Close()
 

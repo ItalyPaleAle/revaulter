@@ -6,8 +6,6 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -24,37 +22,16 @@ import (
 const staticBaseDir = "dist"
 
 func (s *Server) serveClient() []gin.HandlerFunc {
-	// Option used during development to proxy to another server (such as a dev server)
-	clientProxyServer := config.Get().Dev.ClientProxyServer
-
-	if clientProxyServer == "" {
-		return []gin.HandlerFunc{
-			// Add cache-control header for static assets to cache for 30 days
-			addClientCacheHeaders(30 * 86400),
-			func(c *gin.Context) {
-				if !prepareStaticResponse(c) {
-					return
-				}
-
-				// Serve the request from the embedded FS
-				serveStaticFiles(c, c.Request.URL.Path, client.StaticFS)
-			},
-		}
-	}
-
-	u, err := url.Parse(clientProxyServer)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to parse value for 'dev.clientProxyServer': %v", err))
-	}
-	proxy := proxyStaticFilesFunc(u)
 	return []gin.HandlerFunc{
+		// Add cache-control header for static assets to cache for 30 days
+		addClientCacheHeaders(30 * 86400),
 		func(c *gin.Context) {
 			if !prepareStaticResponse(c) {
 				return
 			}
 
-			// Serve the request from the proxy
-			proxy.ServeHTTP(c.Writer, c.Request)
+			// Serve the request from the embedded FS
+			serveStaticFiles(c, c.Request.URL.Path, client.StaticFS)
 		},
 	}
 }
@@ -144,17 +121,6 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 	}
 
 	http.ServeContent(c.Writer, c.Request, stat.Name(), stat.ModTime(), fseek)
-}
-
-// Returns a proxy that serves static files proxying from another server
-func proxyStaticFilesFunc(upstream *url.URL) *httputil.ReverseProxy {
-	proxy := httputil.NewSingleHostReverseProxy(upstream)
-	proxy.Director = func(req *http.Request) {
-		req.Host = upstream.Host
-		req.URL.Scheme = upstream.Scheme
-		req.URL.Host = upstream.Host
-	}
-	return proxy
 }
 
 func addClientCacheHeaders(cacheMaxAge int64) func(c *gin.Context) {

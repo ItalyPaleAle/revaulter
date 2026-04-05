@@ -560,7 +560,7 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 func seedV2SessionCookie(t *testing.T, srv *Server, username string, displayName string) *http.Cookie {
 	t.Helper()
 
-	username = normalizeV2Username(username)
+	username = normalizeUsername(username)
 	sess, err := srv.authStore.RegisterUser(t.Context(), v2db.RegisterUserInput{
 		Username:       username,
 		DisplayName:    displayName,

@@ -179,6 +179,7 @@ func (s *AuthStore) migrationPostgres(ctx context.Context) error {
 			display_name text NOT NULL,
 			status text NOT NULL,
 			webauthn_user_id text NOT NULL DEFAULT '',
+			password_canary text NOT NULL DEFAULT '',
 			created_at bigint NOT NULL,
 			updated_at bigint NOT NULL
 		)`,

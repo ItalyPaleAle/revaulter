@@ -101,13 +101,9 @@ type Config struct {
 	// +default 5m
 	RequestTimeout time.Duration `env:"REQUESTTIMEOUT" yaml:"requestTimeout"`
 
-	// String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Revaulter is served through a proxy service and/or CDN.
-	// This option should not be set if the application is exposed directly, without a proxy or CDN.
-	// Common values include:
-	//
-	// - `X-Forwarded-For,X-Real-Ip`: `X-Forwarded-For` is the [de-facto standard](https://http.dev/x-forwarded-for) set by proxies; some set `X-Real-Ip`
-	// - `CF-Connecting-IP`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/reference/http-request-headers/#cf-connecting-ip)
-	TrustedForwardedIPHeader string `env:"TRUSTEDFORWARDEDIPHEADER" yaml:"trustedForwardedIPHeader"`
+	// List of IPs or CIDRs of trusted proxies, which enables trusting the X-Forwarded-* headers
+	// For example, `10.0.0.0/8`
+	TrustedProxies []string `env:"TRUSTEDPROXIES" yaml:"trustedProxies"`
 
 	// If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
 	// +default false
@@ -153,8 +149,6 @@ type Config struct {
 
 // Dev includes options using during development only
 type Dev struct {
-	ClientProxyServer string
-
 	// If true, disables caching on the client
 	DisableClientCache bool
 }
@@ -230,6 +224,7 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	if c.RequestTimeout < time.Second {
 		return errors.New("config entry key 'requestTimeout' is invalid: must be greater than 1s")
 	}
+
 	return nil
 }
 
