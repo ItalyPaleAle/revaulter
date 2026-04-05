@@ -291,6 +291,13 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be canceled"))
 			return
 		}
+		log := logging.LogFromContext(c.Request.Context())
+		usernameAny, _ := c.Get(contextKeyUsername)
+		log.InfoContext(c.Request.Context(), "Request canceled",
+			slog.String("state", req.State),
+			slog.Any("username", usernameAny),
+			slog.String("client_ip", c.ClientIP()),
+		)
 		s.lock.Lock()
 		s.notifySubscriber(req.State)
 		s.lock.Unlock()
@@ -332,6 +339,15 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	if !ok {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be confirmed"))
 		return
+	}
+	{
+		log := logging.LogFromContext(c.Request.Context())
+		usernameAny, _ := c.Get(contextKeyUsername)
+		log.InfoContext(c.Request.Context(), "Request confirmed",
+			slog.String("state", req.State),
+			slog.Any("username", usernameAny),
+			slog.String("client_ip", c.ClientIP()),
+		)
 	}
 	s.lock.Lock()
 	s.notifySubscriber(req.State)

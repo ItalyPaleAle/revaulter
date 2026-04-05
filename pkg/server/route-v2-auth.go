@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
@@ -190,9 +192,18 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 
 	sess, err := s.v2RegisterFinish(c, req)
 	if err != nil {
+		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "User registration failed",
+			slog.String("username", req.Username),
+			slog.String("client_ip", c.ClientIP()),
+		)
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
+	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User registered",
+		slog.String("username", req.Username),
+		slog.String("client_ip", c.ClientIP()),
+	)
 
 	err = s.setV2SessionCookie(c, sess)
 	if err != nil {
@@ -261,9 +272,18 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	}
 	sess, username, err := s.v2LoginFinish(c, req)
 	if err != nil {
+		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Login failed",
+			slog.String("client_ip", c.ClientIP()),
+		)
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
+	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged in",
+		slog.String("username", username),
+		slog.String("client_ip", c.ClientIP()),
+	)
+
 	if err := s.setV2SessionCookie(c, sess); err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -340,6 +360,9 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 		return
 	}
 
+	username, _ := c.Get(contextKeyUsername)
+	usernameStr, _ := username.(string)
+
 	sessID, _ := c.Get(contextKeySessionID)
 	id, _ := sessID.(string)
 	if id != "" {
@@ -349,6 +372,11 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 			return
 		}
 	}
+
+	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged out",
+		slog.String("username", usernameStr),
+		slog.String("client_ip", c.ClientIP()),
+	)
 
 	cookieName, cookiePath := sessionCookieFor(c)
 	isSecure := secureCookie(c)
