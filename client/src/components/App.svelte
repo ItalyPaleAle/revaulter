@@ -17,11 +17,9 @@ import { computePrfSalt, encryptPasswordCanary, verifyPasswordCanary } from '$li
 import { webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
 import PendingItem from '$components/PendingItem.svelte'
-import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
+import { base64UrlToBytes } from '$lib/utils'
 
 type UIState = 'boot' | 'auth' | 'password' | 'ready'
-
-const sessionStoragePrfKey = 'revaulter:v2:prf'
 
 let uiState = $state<UIState>('boot')
 let authBusy = $state(false)
@@ -54,13 +52,8 @@ async function initialize() {
     try {
         const sess = await v2Session()
         session = sess
-        const stored = sessionStorage.getItem(sessionStoragePrfKey)
-        if (stored) {
-            prfSecret = base64UrlToBytes(stored)
-            uiState = 'ready'
-            startListStream()
-            return
-        }
+        // PRF secret is kept only in memory; if we have a session but no secret,
+        // the user must re-authenticate to re-derive it.
         uiState = 'auth'
         authError = 'Session exists but local PRF material is missing. Sign in again to continue.'
     } catch (err) {
@@ -82,7 +75,6 @@ async function initialize() {
 
 function setPrfSecret(v: Uint8Array) {
     prfSecret = v
-    sessionStorage.setItem(sessionStoragePrfKey, bytesToBase64Url(v))
 }
 
 async function doRegister() {
@@ -208,7 +200,7 @@ async function doLogout() {
     } catch {
         // Ignore and clear local state anyway.
     }
-    sessionStorage.removeItem(sessionStoragePrfKey)
+
     session = null
     prfSecret = null
     items = {}
@@ -254,7 +246,7 @@ function startListStream() {
             }
             const msg = err instanceof Error ? err.message : String(err)
             if (msg.includes('401')) {
-                sessionStorage.removeItem(sessionStoragePrfKey)
+            
                 prfSecret = null
                 session = null
                 uiState = 'auth'
