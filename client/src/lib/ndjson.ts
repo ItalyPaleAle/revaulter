@@ -6,7 +6,10 @@ License: MIT
 
 // reader comes from:
 // fetch('/api').then(response => response.body.getReader())
-export default async function* gen<T>(reader: ReadableStreamDefaultReader): AsyncGenerator<T, void> {
+export default async function* gen<T>(
+    reader: ReadableStreamDefaultReader,
+    validate: (v: unknown) => v is T
+): AsyncGenerator<T, void> {
     const matcher = /\r?\n/
     const decoder = new TextDecoder()
     let buf = ''
@@ -18,7 +21,10 @@ export default async function* gen<T>(reader: ReadableStreamDefaultReader): Asyn
 
         if (done) {
             if (buf.length > 0) {
-                yield JSON.parse(buf)
+                const parsed: unknown = JSON.parse(buf)
+                if (validate(parsed)) {
+                    yield parsed
+                }
             }
             return
         }
@@ -37,7 +43,10 @@ export default async function* gen<T>(reader: ReadableStreamDefaultReader): Asyn
             for (const i of parts) {
                 // Ignore empty records
                 if (i.length) {
-                    yield JSON.parse(i)
+                    const parsed: unknown = JSON.parse(i)
+                    if (validate(parsed)) {
+                        yield parsed
+                    }
                 }
             }
         }

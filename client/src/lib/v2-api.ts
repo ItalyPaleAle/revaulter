@@ -91,6 +91,12 @@ export async function v2Cancel(state: string) {
     return res.data
 }
 
+function isV2PendingRequestItem(v: unknown): v is V2PendingRequestItem {
+    if (typeof v !== 'object' || v === null) return false
+    const obj = v as Record<string, unknown>
+    return typeof obj.state === 'string' && typeof obj.status === 'string'
+}
+
 /**
  * Streams pending request list updates over NDJSON. The server emits full list items
  * incrementally so the UI can update in real time without polling.
@@ -107,7 +113,7 @@ export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | nul
     }
 
     // Decode the response body as a stream of newline-delimited JSON objects
-    const gen = ndjson<V2PendingRequestItem>(res.body.getReader())
+    const gen = ndjson<V2PendingRequestItem>(res.body.getReader(), isV2PendingRequestItem)
     while (true) {
         const { done, value } = await gen.next()
         if (done) {
