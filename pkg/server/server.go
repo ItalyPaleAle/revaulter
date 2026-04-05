@@ -228,23 +228,40 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 		return err
 	}
 
+	// CSRF protection for browser-facing endpoints using stdlib CrossOriginProtection.
+	// This rejects cross-origin requests on state-changing methods (POST, PUT, DELETE, etc.)
+	// by checking the Sec-Fetch-Site and Origin headers.
+	cop := http.NewCrossOriginProtection()
+	csrfMw := func(c *gin.Context) {
+		cop.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c.Next()
+		})).ServeHTTP(c.Writer, c.Request)
+		// If CrossOriginProtection rejected the request, abort the Gin chain
+		if c.Writer.Status() == http.StatusForbidden {
+			c.Abort()
+		}
+	}
+
 	// v2 routes (WebAuthn + browser crypto flow)
 	v2RouteGroup := s.appRouter.Group("/v2")
 	addStandardMiddlewares(v2RouteGroup)
 
+	// Request group is API-to-server (not browser-originated), so no CSRF middleware
 	v2RequestGroup := v2RouteGroup.Group("/request")
 	v2RequestGroup.Use(allowIpMw, s.MiddlewareRequestKey())
 	v2RequestGroup.POST("/encrypt", s.RouteV2RequestCreate("encrypt"))
 	v2RequestGroup.POST("/decrypt", s.RouteV2RequestCreate("decrypt"))
 	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
 
+	// API and auth groups are browser-facing, apply CSRF protection
 	v2APIGroup := v2RouteGroup.Group("/api")
-	v2APIGroup.Use(s.V2SessionMiddleware(true))
+	v2APIGroup.Use(csrfMw, s.V2SessionMiddleware(true))
 	v2APIGroup.GET("/list", s.RouteV2APIList)
 	v2APIGroup.GET("/request/:state", s.RouteV2APIRequestGet)
 	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
 
 	v2AuthGroup := v2RouteGroup.Group("/auth")
+	v2AuthGroup.Use(csrfMw)
 	v2AuthGroup.POST("/register/begin", s.RouteV2AuthRegisterBegin)
 	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
