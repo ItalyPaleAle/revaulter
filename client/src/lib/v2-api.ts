@@ -105,11 +105,24 @@ function isV2PendingRequestItem(v: unknown): v is V2PendingRequestItem {
  * incrementally so the UI can update in real time without polling.
  */
 export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | null, void, unknown> {
+    // Abort the streaming connection after 5 minutes of inactivity to prevent
+    // hanging connections from leaking resources.
+    const controller = new AbortController()
+    const connectionTimeout = 5 * 60 * 1000 // 5 minutes
+    let timer = setTimeout(() => controller.abort(), connectionTimeout)
+
+    // Reset the timeout whenever we receive data
+    const resetTimer = () => {
+        clearTimeout(timer)
+        timer = setTimeout(() => controller.abort(), connectionTimeout)
+    }
+
     // Request the streaming list endpoint explicitly as NDJSON and keep credentials attached.
     const res = await fetch('/v2/api/list', {
         headers: new Headers({ accept: 'application/x-ndjson' }),
         credentials: 'same-origin',
         cache: 'no-store',
+        signal: controller.signal,
     })
     if (!res.ok || !res.body) {
         throw new Error(`Failed list stream: ${res.status}`)
@@ -117,13 +130,20 @@ export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | nul
 
     // Decode the response body as a stream of newline-delimited JSON objects
     const gen = ndjson<V2PendingRequestItem>(res.body.getReader(), isV2PendingRequestItem)
-    while (true) {
-        const { done, value } = await gen.next()
-        if (done) {
-            break
-        }
+    try {
+        while (true) {
+            const { done, value } = await gen.next()
+            if (done) {
+                break
+            }
 
-        // Yield `null` for empty keepalive frames so callers can distinguish them if needed
-        yield value ?? null
+            // Reset the inactivity timeout each time we receive a frame
+            resetTimer()
+
+            // Yield `null` for empty keepalive frames so callers can distinguish them if needed
+            yield value ?? null
+        }
+    } finally {
+        clearTimeout(timer)
     }
 }
