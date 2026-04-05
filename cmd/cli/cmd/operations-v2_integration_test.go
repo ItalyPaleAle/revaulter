@@ -23,10 +23,11 @@ import (
 type testV2Flags struct {
 	server string
 	body   []byte
+	alg    string
 }
 
 func (f *testV2Flags) BindToCommand(_ *cobra.Command) {}
-func (f *testV2Flags) Validate() error                  { return nil }
+func (f *testV2Flags) Validate() error                { return nil }
 func (f *testV2Flags) RequestBody(clientTransportKey protocolv2.ECP256PublicJWK) ([]byte, error) {
 	var req v2OperationRequest
 	if err := json.Unmarshal(f.body, &req); err != nil {
@@ -35,9 +36,10 @@ func (f *testV2Flags) RequestBody(clientTransportKey protocolv2.ECP256PublicJWK)
 	req.ClientTransportKey = clientTransportKey
 	return json.Marshal(req)
 }
-func (f *testV2Flags) GetServer() string                         { return f.server }
-func (f *testV2Flags) GetRequestKey() string                     { return "" }
-func (f *testV2Flags) GetConnectionOptions() (bool, bool)        { return false, false }
+func (f *testV2Flags) GetServer() string                  { return f.server }
+func (f *testV2Flags) GetRequestKey() string              { return "" }
+func (f *testV2Flags) GetAlgorithm() string               { return f.alg }
+func (f *testV2Flags) GetConnectionOptions() (bool, bool) { return false, false }
 
 func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 	var createSeen atomic.Bool
@@ -82,7 +84,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 			nonce := make([]byte, aead.NonceSize())
 			_, err = rand.Read(nonce)
 			require.NoError(t, err)
-			aad := []byte(`{"state":"` + state + `"}`)
+			aad := buildTransportAAD(state, "encrypt", "aes-gcm-256")
 			ct := aead.Seal(nil, nonce, plainResp, aad)
 			browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
 			require.NoError(t, err)
@@ -96,7 +98,6 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 					BrowserEphemeralPublicKey: browserJWK,
 					Nonce:                     base64.RawURLEncoding.EncodeToString(nonce),
 					Ciphertext:                base64.RawURLEncoding.EncodeToString(ct),
-					AAD:                       base64.RawURLEncoding.EncodeToString(aad),
 					ResultType:                "bytes",
 				},
 			}))
@@ -119,6 +120,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 		flags: &testV2Flags{
 			server: srv.URL,
 			body:   flagsBody,
+			alg:    "aes-gcm-256",
 		},
 	}
 	kp, err := newV2TransportKeyPair()
@@ -126,7 +128,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 	gotState, err := impl.createRequest(context.Background(), srv.Client(), kp.Public)
 	require.NoError(t, err)
 	require.Equal(t, state, gotState)
-	got, err := impl.getResult(context.Background(), srv.Client(), gotState, kp.Private)
+	got, err := impl.getResult(context.Background(), srv.Client(), gotState, kp.Private, buildTransportAAD(gotState, "encrypt", "aes-gcm-256"))
 	require.NoError(t, err)
 	require.JSONEq(t, string(plainResp), string(got))
 	require.True(t, createSeen.Load())
@@ -140,11 +142,11 @@ func TestV2OperationCmdGetResultFailed(t *testing.T) {
 		}))
 	}))
 	defer srv.Close()
-	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, body: []byte(`{}`)}}
+	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, body: []byte(`{}`), alg: "aes-gcm-256"}}
 
 	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
 	require.NoError(t, err)
-	_, err = impl.getResult(context.Background(), srv.Client(), "s1", clientPriv)
+	_, err = impl.getResult(context.Background(), srv.Client(), "s1", clientPriv, buildTransportAAD("s1", "", "aes-gcm-256"))
 	require.ErrorContains(t, err, "canceled, denied, or failed")
 }
 
@@ -166,11 +168,11 @@ func TestV2OperationCmdGetResultStateMismatch(t *testing.T) {
 		}))
 	}))
 	defer srv.Close()
-	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, body: []byte(`{}`)}}
+	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, body: []byte(`{}`), alg: "aes-gcm-256"}}
 
 	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
 	require.NoError(t, err)
-	_, err = impl.getResult(context.Background(), srv.Client(), "expected", clientPriv)
+	_, err = impl.getResult(context.Background(), srv.Client(), "expected", clientPriv, buildTransportAAD("expected", "", "aes-gcm-256"))
 	require.ErrorContains(t, err, "response state mismatch")
 }
 
@@ -193,10 +195,10 @@ func TestV2OperationCmdGetResultRejectsMalformedEnvelope(t *testing.T) {
 		}))
 	}))
 	defer srv.Close()
-	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, body: []byte(`{}`)}}
+	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, body: []byte(`{}`), alg: "aes-gcm-256"}}
 
 	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
 	require.NoError(t, err)
-	_, err = impl.getResult(context.Background(), srv.Client(), "s1", clientPriv)
+	_, err = impl.getResult(context.Background(), srv.Client(), "s1", clientPriv, buildTransportAAD("s1", "", "aes-gcm-256"))
 	require.Error(t, err)
 }

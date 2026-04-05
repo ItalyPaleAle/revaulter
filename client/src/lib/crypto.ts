@@ -183,6 +183,25 @@ export async function deriveOperationKeyBytes(params: {
     return new Uint8Array(bits)
 }
 
+class TransportAADInfo {
+    private v = 1
+    public state: string
+    public operation: 'encrypt' | 'decrypt'
+    public algorithm: string
+
+    constructor(state: string, operation: 'encrypt' | 'decrypt', algorithm: string) {
+        this.state = state
+        this.operation = operation
+        this.algorithm = algorithm
+    }
+
+    public serialize(): string {
+        // Keep the transport AAD format deterministic across browser and CLI implementations
+        // This avoids relying on JSON field ordering when binding the response envelope
+        return `algorithm=${this.algorithm}\noperation=${this.operation}\nstate=${this.state}\nv=${this.v}`
+    }
+}
+
 class InfoObj {
     private v = 1
     public targetUser: string
@@ -200,6 +219,13 @@ class InfoObj {
         // Fields are sorted alphabetically and separated by newlines; no JSON serialization dependency
         return `algorithm=${this.algorithm}\nkeyLabel=${this.keyLabel}\ntargetUser=${this.targetUser}\nv=${this.v}`
     }
+}
+
+/**
+ * Builds the canonical AES-GCM additional authenticated data used for transport response envelopes shared between the browser and the CLI
+ */
+export function buildTransportAAD(state: string, operation: 'encrypt' | 'decrypt', algorithm: string): Uint8Array {
+    return new TextEncoder().encode(new TransportAADInfo(state, operation, algorithm).serialize())
 }
 
 /** Derives the AES key used to encrypt and verify the password canary value. */

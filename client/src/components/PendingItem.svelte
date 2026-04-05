@@ -2,6 +2,7 @@
 import { formatDistanceToNowStrict } from 'date-fns'
 
 import {
+    buildTransportAAD,
     deriveOperationKeyBytes,
     encryptTransportEnvelope,
     performAesGcmOperation,
@@ -159,14 +160,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
             throw new Error(`Unsupported operation: ${req.operation}`)
     }
 
-    const transportAAD = new TextEncoder().encode(
-        JSON.stringify({
-            v: 1,
-            state: req.state,
-            operation: req.operation,
-            algorithm: req.algorithm,
-        })
-    )
+    const transportAAD = buildTransportAAD(req.state, req.operation, req.algorithm)
     return encryptTransportEnvelope(req.state, req.request.clientTransportKey, resultPlain, transportAAD)
 }
 

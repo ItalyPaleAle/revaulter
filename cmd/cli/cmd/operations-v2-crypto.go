@@ -17,13 +17,8 @@ import (
 
 // Constructs the AAD that the browser binds into the AES-GCM tag during encryption
 func buildTransportAAD(state, operation, algorithm string) []byte {
-	aad, _ := json.Marshal(map[string]any{
-		"v":         1,
-		"state":     state,
-		"operation": operation,
-		"algorithm": algorithm,
-	})
-	return aad
+	// Keep the transport AAD serialization deterministic and independent from JSON key ordering so browser and CLI always bind the same AES-GCM tag bytes
+	return fmt.Appendf(nil, "algorithm=%s\noperation=%s\nstate=%s\nv=1", algorithm, operation, state)
 }
 
 func decryptV2ResponseEnvelope(state string, priv *ecdh.PrivateKey, env *protocolv2.ResponseEnvelope, aad []byte) ([]byte, error) {
