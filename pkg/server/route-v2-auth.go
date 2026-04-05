@@ -382,10 +382,6 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	isSecure := secureCookie(c)
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(cookieName, "", -1, cookiePath, "", isSecure, true)
-	// Also clear the old insecure cookie name in case it still exists
-	if cookieName == sessionCookieNameSecure {
-		c.SetCookie(sessionCookieNameInsecure, "", -1, "/v2", "", isSecure, true)
-	}
 
 	c.JSON(http.StatusOK, v2AuthLogoutResponse{LoggedOut: true})
 }
@@ -519,20 +515,23 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 	if discoveredUser == nil {
 		return nil, "", NewResponseError(http.StatusUnauthorized, "Invalid login")
 	}
-	username := discoveredUser.name
 
-	// Detect possible cloned authenticator by comparing the returned sign count
-	// with the stored value. If the stored count was non-zero but the new count
-	// is not strictly greater, the credential may have been cloned.
-	credIDEncoded := base64.RawURLEncoding.EncodeToString(cred.ID)
-	for _, stored := range discoveredUser.credentials {
-		if base64.RawURLEncoding.EncodeToString(stored.ID) == credIDEncoded {
+	// Detect possible cloned authenticator by comparing the returned sign count with the stored value.
+	// If the stored count was non-zero but the new count is not strictly greater, the credential may have been cloned.
+	// Note: Some authenticators do not report a counter, which is always 0.
+	newCount := cred.Authenticator.SignCount
+	if newCount > 0 {
+		credIDEncoded := base64.RawURLEncoding.EncodeToString(cred.ID)
+		for _, stored := range discoveredUser.credentials {
+			if base64.RawURLEncoding.EncodeToString(stored.ID) != credIDEncoded {
+				continue
+			}
+
 			storedCount := stored.Authenticator.SignCount
-			newCount := cred.Authenticator.SignCount
 			if storedCount > 0 && newCount <= storedCount {
 				logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
 					"Possible cloned authenticator: sign count did not increase",
-					slog.String("username", username),
+					slog.String("username", discoveredUser.name),
 					slog.String("credential_id", credIDEncoded),
 					slog.Uint64("stored_sign_count", uint64(storedCount)),
 					slog.Uint64("new_sign_count", uint64(newCount)),
@@ -545,17 +544,18 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 	}
 
 	sess, err := s.authStore.Login(c.Request.Context(), v2db.LoginInput{
-		Username:     username,
+		Username:     discoveredUser.name,
 		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
 		SignCount:    int64(cred.Authenticator.SignCount),
 		SessionTTL:   config.Get().SessionTimeout,
 	})
-
 	if errors.Is(err, v2db.ErrInvalidLogin) {
 		return nil, "", NewResponseError(http.StatusUnauthorized, "Invalid login")
+	} else if err != nil {
+		return nil, "", err
 	}
 
-	return sess, username, err
+	return sess, discoveredUser.name, nil
 }
 
 func newJSONHTTPRequest(c *gin.Context, raw json.RawMessage) (*http.Request, error) {
