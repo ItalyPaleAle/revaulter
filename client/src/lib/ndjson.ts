@@ -9,7 +9,7 @@ License: MIT
 export default async function* gen<T>(
     reader: ReadableStreamDefaultReader,
     validate: (v: unknown) => v is T
-): AsyncGenerator<T, void> {
+): AsyncGenerator<T | null, void> {
     const matcher = /\r?\n/
     const decoder = new TextDecoder()
     let buf = ''
@@ -22,9 +22,9 @@ export default async function* gen<T>(
         if (done) {
             if (buf.length > 0) {
                 const parsed: unknown = JSON.parse(buf)
-                if (validate(parsed)) {
-                    yield parsed
-                }
+
+                // If the message isn't valid, we consider it as a keepalive one and yield null
+                yield validate(parsed) ? parsed : null
             }
             return
         }
@@ -44,9 +44,9 @@ export default async function* gen<T>(
                 // Ignore empty records
                 if (i.length) {
                     const parsed: unknown = JSON.parse(i)
-                    if (validate(parsed)) {
-                        yield parsed
-                    }
+
+                    // If the message isn't valid, we consider it as a keepalive one and yield null
+                    yield validate(parsed) ? parsed : null
                 }
             }
         }

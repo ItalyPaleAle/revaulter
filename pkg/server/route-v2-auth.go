@@ -101,34 +101,47 @@ type v2AuthLogoutResponse struct {
 }
 
 func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
-		return
-	}
-	var req v2AuthRegisterBeginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
-		return
-	}
-	req.Username = normalizeUsername(req.Username)
-	req.DisplayName = strings.TrimSpace(req.DisplayName)
-	if req.Username == "" || req.DisplayName == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "username and displayName are required"))
-		return
-	}
-	if config.Get().DisableSignup {
+	cfg := config.Get()
+
+	if cfg.DisableSignup {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Account creation is disabled"))
 		return
 	}
-	if existing, err := s.authStore.GetUserByUsername(c.Request.Context(), req.Username); err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	} else if existing != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Username already exists"))
+
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
 		return
 	}
 	if s.webAuthn == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server"))
+		return
+	}
+
+	var req v2AuthRegisterBeginRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+
+	req.Username = normalizeUsername(req.Username)
+	if req.Username == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "username is required"))
+		return
+	}
+
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	if req.DisplayName == "" {
+		// Default to username
+		req.DisplayName = req.Username
+	}
+
+	existing, err := s.authStore.GetUserByUsername(c.Request.Context(), req.Username)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	} else if existing != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Username already exists"))
 		return
 	}
 
@@ -137,6 +150,7 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
 	creation, session, err := s.webAuthn.BeginRegistration(user,
 		webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
 		webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
@@ -147,6 +161,7 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
 	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "register", req.Username, session.Challenge, session.Expires, v2RegisterChallengePayload{
 		WebAuthnSession: session,
 	})
@@ -154,6 +169,7 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
 	c.JSON(http.StatusOK, v2AuthRegisterBeginResponse{
 		ChallengeID: ch.ID,
 		Challenge:   session.Challenge,
@@ -162,18 +178,25 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		ExpiresAt:   ch.ExpiresAt.Unix(),
 		Mode:        "webauthn",
 		Options:     creation,
-		BasePrfSalt: config.Get().GetPRFSalt(),
+		BasePrfSalt: cfg.GetPRFSalt(),
 	})
 }
 
 func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
+	cfg := config.Get()
+	if cfg.DisableSignup {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Account creation is disabled"))
+		return
+	}
+
 	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
 		return
 	}
 
 	var req v2AuthRegisterFinishRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
@@ -183,11 +206,6 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 
 	if req.Username == "" || req.DisplayName == "" || req.ChallengeID == "" || len(req.Credential) == 0 {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing required registration fields"))
-		return
-	}
-
-	if config.Get().DisableSignup {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Account creation is disabled"))
 		return
 	}
 
@@ -223,7 +241,7 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 
 func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
 		return
 	}
 	if s.webAuthn == nil {
@@ -259,11 +277,13 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 
 func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
 		return
 	}
+
 	var req v2AuthLoginFinishRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
@@ -271,6 +291,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing required login fields"))
 		return
 	}
+
 	sess, username, user, err := s.v2LoginFinish(c, req)
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Login failed",
@@ -290,6 +311,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		slog.String("username", username),
 		slog.String("client_ip", c.ClientIP()),
 	)
+
 	resp := v2AuthLoginFinishResponse{
 		Authenticated: true,
 		Username:      username,
@@ -298,6 +320,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 			TTL:      int(time.Until(sess.ExpiresAt).Seconds()),
 		},
 	}
+
 	if user != nil && user.PasswordCanary != "" {
 		resp.PasswordCanary = user.PasswordCanary
 	}
@@ -307,9 +330,10 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 
 func (s *Server) RouteV2AuthSetPasswordCanary(c *gin.Context) {
 	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
 		return
 	}
+
 	username, _ := c.Get(contextKeyUsername)
 	usernameStr, _ := username.(string)
 	if usernameStr == "" {
@@ -357,7 +381,7 @@ func (s *Server) RouteV2AuthSession(c *gin.Context) {
 
 func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
 		return
 	}
 

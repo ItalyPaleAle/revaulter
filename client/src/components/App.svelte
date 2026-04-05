@@ -537,12 +537,11 @@ function authBodyCopy() {
                             </div>
 
                             <div class="space-y-2">
-                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-displayname">Display name</label>
+                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-displayname">Display name (optional)</label>
                                 <input
                                     id="v2-displayname"
                                     class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
-                                    bind:value={displayName}
-                                    required
+                                    bind:value={displayName} placeholder={username}
                                 />
                             </div>
 

@@ -521,7 +521,8 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 	defer s.v2Pubsub.Unsubscribe(events)
 
 	if !sent {
-		_, _ = c.Writer.Write([]byte{'\n'})
+		// Send an empty message
+		_, _ = c.Writer.Write([]byte("{}\n"))
 	}
 
 	c.Writer.Flush()
