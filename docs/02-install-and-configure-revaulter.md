@@ -33,7 +33,6 @@ Required:
 Recommended:
 
 - `baseUrl`
-- `origins`
 - `tlsPath` (or `tlsCertPEM` + `tlsKeyPEM`)
 - `requestKey`
 - `allowedIps`

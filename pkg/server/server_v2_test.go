@@ -62,10 +62,10 @@ func TestMain(m *testing.M) {
 func TestServerV2RequestLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN": tmpDir + "/v2-req.db",
-		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN":     tmpDir + "/v2-req.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -200,10 +200,10 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 func TestServerV2PublicSignup(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN": tmpDir + "/v2-users.db",
-		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN":     tmpDir + "/v2-users.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -246,11 +246,11 @@ func TestServerV2PublicSignup(t *testing.T) {
 func TestServerV2DisableSignup(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":   tmpDir + "/v2-disable-signup.db",
-		"secretKey":     "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":       fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":       []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		"disableSignup": true,
+		"databaseDSN":     tmpDir + "/v2-disable-signup.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"disableSignup":   true,
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -275,10 +275,10 @@ func TestServerV2DisableSignup(t *testing.T) {
 func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN": tmpDir + "/v2-security.db",
-		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN":     tmpDir + "/v2-security.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -439,10 +439,10 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 func TestServerV2RegisterRequiresWebAuthn(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN": tmpDir + "/v2-register-requires-webauthn.db",
-		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN":     tmpDir + "/v2-register-requires-webauthn.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
@@ -467,10 +467,10 @@ func TestServerV2RegisterRequiresWebAuthn(t *testing.T) {
 func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN": tmpDir + "/v2-webhook.db",
-		"secretKey":   "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":     fmt.Sprintf("https://localhost:%d", testServerPort),
-		"origins":     []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		"databaseDSN":     tmpDir + "/v2-webhook.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
 	}))
 
 	webhookRequests := make(chan *webhook.WebhookRequest, 1)

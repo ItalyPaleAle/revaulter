@@ -77,6 +77,13 @@ export default defineConfig(({ mode }) => {
         },
         server: {
             port: 3000,
+            proxy: {
+                // Proxy API routes for development
+                '/v2': {
+                    target: 'http://localhost:8080',
+                    changeOrigin: true,
+                },
+            },
         },
     }
 })

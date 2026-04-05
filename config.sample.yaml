@@ -95,7 +95,7 @@ secretKey:
 
 ## webauthnOrigins (list of strings)
 ## Description:
-##   Allowed origins for WebAuthn auth. If empty, falls back to `baseUrl` and `origins` (excluding `*`).
+##   Allowed origins for WebAuthn auth. If empty, falls back to `baseUrl`.
 #webauthnOrigins: 
 
 ## disableSignup (boolean)
@@ -103,12 +103,6 @@ secretKey:
 ##   Disable creation of new user accounts.
 ## Default: false
 #disableSignup: 
-
-## origins (list of strings)
-## Description:
-##   Lists of origins that are allowed for CORS. This should be a list of all URLs users can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
-## Default: equal to the value of `baseUrl`
-#origins: 
 
 ## sessionTimeout (duration)
 ## Description:
@@ -180,4 +174,3 @@ secretKey:
 ##   If true, emits logs formatted as JSON, otherwise uses a text-based structured log format.
 ## Default: false if a TTY is attached (e.g. in development); true otherwise.
 #logAsJson: 
-

@@ -4,7 +4,6 @@ go 1.26.1
 
 require (
 	github.com/caarlos0/env/v11 v11.4.0
-	github.com/gin-contrib/cors v1.7.7
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-webauthn/webauthn v0.16.2
 	github.com/google/uuid v1.6.0

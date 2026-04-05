@@ -60,9 +60,12 @@ func (s *Server) initStore(log *slog.Logger) error {
 	return nil
 }
 
+// initWebAuthn builds the relying-party configuration used for all v2 WebAuthn registration and login ceremonies
+// It derives the RP ID from config when needed, normalizes the allowed origins, and enables related-origin requests when extra WebAuthn origins are explicitly configured
 func (s *Server) initWebAuthn() (*webauthnlib.WebAuthn, error) {
 	cfg := config.Get()
 
+	// Prefer an explicit RP ID, otherwise derive it from the configured base URL hostname
 	rpID := strings.ToLower(strings.TrimSpace(cfg.WebAuthnRPID))
 	if rpID == "" {
 		base, err := url.Parse(cfg.BaseUrl)
@@ -76,47 +79,41 @@ func (s *Server) initWebAuthn() (*webauthnlib.WebAuthn, error) {
 		return nil, errors.New("cannot determine WebAuthn RP ID: configuration values for 'webauthnRpId' and 'baseUrl' are both empty")
 	}
 
-	origins := make([]string, 0, 1+len(cfg.Origins)+len(cfg.WebAuthnOrigins))
+	// The base URL is always a valid relying-party origin when present
+	origins := make([]string, 0, 1+len(cfg.WebAuthnOrigins))
 	if strings.TrimSpace(cfg.BaseUrl) != "" {
 		origins = append(origins, strings.TrimRight(cfg.BaseUrl, "/"))
 	}
+
+	// Additional configured WebAuthn origins are accepted both as RP origins and as related top-level origins for related-origin requests
+	topOrigins := make([]string, 0, len(cfg.WebAuthnOrigins))
 	for _, origin := range cfg.WebAuthnOrigins {
 		origin = strings.TrimSpace(origin)
-		if origin == "" {
-			continue
-		}
-		origins = append(origins, strings.TrimRight(origin, "/"))
-	}
-	for _, origin := range cfg.Origins {
-		origin = strings.TrimSpace(origin)
+		// Ignore wildcards
 		if origin == "" || origin == "*" {
 			continue
 		}
-		origins = append(origins, strings.TrimRight(origin, "/"))
-	}
-	topOrigins := make([]string, 0, len(cfg.Origins))
-	for _, origin := range cfg.Origins {
-		origin = strings.TrimSpace(origin)
-		if origin == "" || origin == "*" {
-			continue
-		}
-		topOrigins = append(topOrigins, strings.TrimRight(origin, "/"))
+		origin = strings.TrimRight(origin, "/")
+		origins = append(origins, origin)
+		topOrigins = append(topOrigins, origin)
 	}
 
+	// Remove duplicates after normalization so the WebAuthn library receives a clean list
 	filtered := dedupeOrigins(origins)
 	if len(filtered) == 0 {
 		return nil, errors.New("no valid WebAuthn origins configured")
 	}
 
+	// RPOrigins controls the normal origin checks for WebAuthn ceremonies
 	waCfg := &webauthnlib.Config{
 		RPID:          rpID,
 		RPDisplayName: cfg.WebAuthnRPName,
 		RPOrigins:     filtered,
 	}
 
+	// Enable explicit top-origin verification for Related Origin Requests when extra WebAuthn origins are configured
 	filteredTopOrigins := dedupeOrigins(topOrigins)
 	if len(filteredTopOrigins) > 0 {
-		// When explicit origins are configured, allow WebAuthn related-origin requests from those top-level origins
 		waCfg.RPTopOrigins = filteredTopOrigins
 		waCfg.RPTopOriginVerificationMode = protocol.TopOriginExplicitVerificationMode
 	}

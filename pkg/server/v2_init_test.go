@@ -13,11 +13,11 @@ import (
 
 func TestInitWebAuthnAddsRelatedOriginRequestsFromConfiguredOrigins(t *testing.T) {
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"baseUrl":         "https://auth.example.com",
-		"webauthnRpId":    "example.com",
-		"webauthnRpName":  "Revaulter",
-		"webauthnOrigins": []string{"https://auth.example.com"},
-		"origins": []string{
+		"baseUrl":        "https://auth.example.com",
+		"webauthnRpId":   "example.com",
+		"webauthnRpName": "Revaulter",
+		"webauthnOrigins": []string{
+			"https://auth.example.com",
 			"https://console.example.com",
 			"https://console.example.com/",
 			"https://admin.example.com",
@@ -33,6 +33,7 @@ func TestInitWebAuthnAddsRelatedOriginRequestsFromConfiguredOrigins(t *testing.T
 		"https://admin.example.com",
 	}, wa.Config.RPOrigins)
 	require.Equal(t, []string{
+		"https://auth.example.com",
 		"https://console.example.com",
 		"https://admin.example.com",
 	}, wa.Config.RPTopOrigins)
@@ -44,7 +45,9 @@ func TestInitWebAuthnIgnoresWildcardOriginsForRelatedOriginRequests(t *testing.T
 		"baseUrl":        "https://auth.example.com",
 		"webauthnRpId":   "example.com",
 		"webauthnRpName": "Revaulter",
-		"origins":        []string{"*"},
+		"webauthnOrigins": []string{
+			"*",
+		},
 	}))
 
 	wa, err := (&Server{}).initWebAuthn()

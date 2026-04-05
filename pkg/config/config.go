@@ -75,29 +75,29 @@ type Config struct {
 	// +required
 	SecretKey string `env:"SECRETKEY" yaml:"secretKey"`
 
-	// WebAuthn RP ID for authentication. If empty, derived from `baseUrl`.
+	// WebAuthn RP ID for authentication.
+	// If empty, derived from `baseUrl`.
 	WebAuthnRPID string `env:"WEBAUTHNRPID" yaml:"webauthnRpId"`
 
 	// WebAuthn RP display name for authentication.
 	// +default "Revaulter"
 	WebAuthnRPName string `env:"WEBAUTHNRPNAME" yaml:"webauthnRpName"`
 
-	// Allowed origins for WebAuthn auth. If empty, falls back to `baseUrl` and `origins` (excluding `*`).
+	// Allowed origins for WebAuthn auth.
+	// If empty, falls back to `baseUrl`
 	WebAuthnOrigins []string `env:"WEBAUTHNORIGINS" yaml:"webauthnOrigins"`
 
 	// Disable creation of new user accounts.
 	// +default false
 	DisableSignup bool `env:"DISABLESIGNUP" yaml:"disableSignup"`
 
-	// Lists of origins that are allowed for CORS. This should be a list of all URLs users can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
-	// +default equal to the value of `baseUrl`
-	Origins []string `env:"ORIGINS" yaml:"origins"`
-
-	// Timeout for sessions before having to authenticate again, as a Go duration. This cannot be more than 1 hour.
+	// Timeout for sessions before having to authenticate again, as a Go duration.
+	// This cannot be more than 1 hour.
 	// +default 5m
 	SessionTimeout time.Duration `env:"SESSIONTIMEOUT" yaml:"sessionTimeout"`
 
-	// Default timeout for v2 request operations, as a Go duration. This is the default value, and can be overridden in each request.
+	// Default timeout for v2 request operations, as a Go duration.
+	// This is the default value, and can be overridden in each request.
 	// +default 5m
 	RequestTimeout time.Duration `env:"REQUESTTIMEOUT" yaml:"requestTimeout"`
 

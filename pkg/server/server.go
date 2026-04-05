@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	slogkit "github.com/italypaleale/go-kit/slog"
@@ -192,9 +191,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	s.configureTrustedProxies()
 
 	loggerMw := s.MiddlewareLogger(log)
-	corsMw := cors.New(s.getCorsConfig())
 	addStandardMiddlewares := func(r gin.IRoutes) {
-		r.Use(corsMw)
 		if s.tracer != nil {
 			r.Use(otelgin.Middleware(buildinfo.AppName, otelgin.WithTracerProvider(s.tracer)))
 		}
@@ -203,11 +200,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 			r.Use(s.MiddlewareCountMetrics)
 		}
 		r.Use(loggerMw)
-
-		// Add a handler for OPTIONS or the CORS middleware won't work
-		r.OPTIONS("/*path", func(c *gin.Context) {
-			c.Status(http.StatusNoContent)
-		})
 	}
 
 	// Add routes
@@ -258,46 +250,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	s.appRouter.NoRoute(s.serveClient()...)
 
 	return nil
-}
-
-func (s *Server) getCorsConfig() cors.Config {
-	corsConfig := cors.Config{
-		AllowMethods: []string{
-			http.MethodGet,
-			http.MethodPost,
-			http.MethodHead,
-			http.MethodOptions,
-		},
-		AllowHeaders: []string{
-			"Authorization",
-			"Origin",
-			"Content-Length",
-			"Content-Type",
-			"Cookie",
-		},
-		ExposeHeaders: []string{
-			"Retry-After",
-			"Content-Type",
-		},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
-	}
-
-	// Check if we are restricting the origins for CORS
-	origins := config.Get().Origins
-	switch {
-	case len(origins) == 0 || (len(origins) == 1 && origins[0] == ""):
-		// Default is baseUrl
-		corsConfig.AllowAllOrigins = false
-		corsConfig.AllowOrigins = []string{s.getBaseURL()}
-	case len(origins) == 1 && origins[0] == "*":
-		corsConfig.AllowAllOrigins = true
-	default:
-		corsConfig.AllowAllOrigins = false
-		corsConfig.AllowOrigins = origins
-	}
-
-	return corsConfig
 }
 
 func (s *Server) configureTrustedProxies() {

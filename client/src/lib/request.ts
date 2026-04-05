@@ -29,9 +29,6 @@ export type Response<T> = {
  * Performs API requests.
  */
 export async function Request<T>(url: string, options: RequestOptions = {}): Promise<Response<T>> {
-    // URL prefix
-    const reqUrl = (import.meta.env.VITE_URL_PREFIX || '') + url
-
     // Set the options
     const reqOptions: RequestInit = {
         method: 'GET',
@@ -80,7 +77,7 @@ export async function Request<T>(url: string, options: RequestOptions = {}): Pro
 
     // Make the request
     try {
-        let p = fetch(reqUrl, reqOptions)
+        let p = fetch(url, reqOptions)
         if (timeout !== null) {
             p = timeoutPromise(p, timeout)
         }

@@ -97,7 +97,7 @@ export async function v2Cancel(state: string) {
  */
 export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | null, void, unknown> {
     // Request the streaming list endpoint explicitly as NDJSON and keep credentials attached.
-    const res = await fetch(`${import.meta.env.VITE_URL_PREFIX || ''}/v2/api/list`, {
+    const res = await fetch('/v2/api/list', {
         headers: new Headers({ accept: 'application/x-ndjson' }),
         credentials: 'same-origin',
         cache: 'no-store',
