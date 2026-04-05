@@ -1,3 +1,4 @@
+import { argon2id } from 'hash-wasm'
 import type { EcP256PublicJwk, V2ResponseEnvelope } from '$lib/v2-types'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 
@@ -201,51 +202,47 @@ class InfoObj {
     }
 }
 
-/** Derives the AES key used to encrypt and verify the password canary value. */
-async function deriveCanaryKey(password: string): Promise<CryptoKey> {
-    // Treat the password as HKDF input keying material to get a stable canary key
-    const ikm = await crypto.subtle.importKey('raw', asBuf(new TextEncoder().encode(password)), 'HKDF', false, [
-        'deriveKey',
-    ])
+/** Derives the AES key used to encrypt and verify the password canary value.
+ *  Uses Argon2id for key stretching so brute-forcing the canary is expensive. */
+async function deriveCanaryKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+    const keyBytes = await argon2id({
+        password,
+        salt,
+        parallelism: 1,
+        iterations: 3,
+        memorySize: 65536, // 64 MiB
+        hashLength: 32,
+        outputType: 'binary',
+    })
 
-    return crypto.subtle.deriveKey(
-        {
-            name: 'HKDF',
-            hash: 'SHA-256',
-            salt: new Uint8Array(),
-            info: new TextEncoder().encode('revaulter/v2/password-canary'),
-        },
-        ikm,
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['encrypt', 'decrypt']
-    )
+    return crypto.subtle.importKey('raw', asBuf(keyBytes), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
 }
 
 /** Encrypts a fixed canary string so the client can later verify a password locally. */
 export async function encryptPasswordCanary(password: string): Promise<string> {
-    const key = await deriveCanaryKey(password)
+    const salt = crypto.getRandomValues(new Uint8Array(16))
+    const key = await deriveCanaryKey(password, salt)
     const nonce = crypto.getRandomValues(new Uint8Array(12))
     const plaintext = new TextEncoder().encode('revaulter-password-ok')
 
     // AES-GCM output already contains the authentication tag appended to the ciphertext
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: asBuf(nonce) }, key, asBuf(plaintext))
 
-    // Persist the canary as `nonce.ciphertext`, both encoded as base64url
-    return `${bytesToBase64Url(nonce)}.${bytesToBase64Url(ct)}`
+    // Persist the canary as `salt.nonce.ciphertext`, all encoded as base64url
+    return `${bytesToBase64Url(salt)}.${bytesToBase64Url(nonce)}.${bytesToBase64Url(ct)}`
 }
 
 /** Verifies that a password can decrypt the stored canary without authentication failure. */
 export async function verifyPasswordCanary(password: string, canary: string): Promise<boolean> {
     const parts = canary.split('.')
-    if (parts.length !== 2) {
+    if (parts.length !== 3) {
         return false
     }
     try {
-        // Split the serialized canary back into nonce and combined ciphertext+tag
-        const nonce = base64UrlToBytes(parts[0])
-        const ct = base64UrlToBytes(parts[1])
-        const key = await deriveCanaryKey(password)
+        const salt = base64UrlToBytes(parts[0])
+        const nonce = base64UrlToBytes(parts[1])
+        const ct = base64UrlToBytes(parts[2])
+        const key = await deriveCanaryKey(password, salt)
 
         // We do not need to inspect the plaintext here: AES-GCM auth failure is enough to reject the password
         await crypto.subtle.decrypt({ name: 'AES-GCM', iv: asBuf(nonce) }, key, asBuf(ct))
