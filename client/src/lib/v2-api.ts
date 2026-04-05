@@ -1,7 +1,9 @@
 import ndjson from '$lib/ndjson'
 import { Request } from '$lib/request'
 import type {
+    V2AuthSessionInfo,
     V2LoginBeginResponse,
+    V2LoginFinishResponse,
     V2PendingRequestItem,
     V2RegisterBeginResponse,
     V2RequestDetail,
@@ -24,7 +26,7 @@ export async function v2RegisterFinish(args: {
     challengeId: string
     credential: unknown
 }) {
-    const res = await Request<{ registered: boolean; session: V2SessionResponse }>('/v2/auth/register/finish', {
+    const res = await Request<{ registered: boolean; session: V2AuthSessionInfo }>('/v2/auth/register/finish', {
         postData: args,
     })
     return res.data
@@ -38,8 +40,20 @@ export async function v2LoginBegin() {
 
 /** Finishes login by posting the WebAuthn assertion back to the server */
 export async function v2LoginFinish(args: { challengeId: string; credential: unknown }) {
-    const res = await Request<{ authenticated: boolean; session: V2SessionResponse }>('/v2/auth/login/finish', {
+    const res = await Request<V2LoginFinishResponse>('/v2/auth/login/finish', {
         postData: {
+            challengeId: args.challengeId,
+            credential: args.credential,
+        },
+    })
+    return res.data
+}
+
+/** Completes the second login step after the server has requested a password-gated PRF assertion */
+export async function v2LoginPasswordFinish(args: { username: string; challengeId: string; credential: unknown }) {
+    const res = await Request<V2LoginFinishResponse>('/v2/auth/login/password/finish', {
+        postData: {
+            username: args.username,
             challengeId: args.challengeId,
             credential: args.credential,
         },

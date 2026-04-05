@@ -1,25 +1,35 @@
 <script lang="ts">
 import { onMount } from 'svelte'
 
+import LoadingSpinner from '$components/LoadingSpinner.svelte'
+import PendingItem from '$components/PendingItem.svelte'
+import { computePrfSalt, encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
 import { ResponseNotOkError } from '$lib/request'
+import { base64UrlToBytes } from '$lib/utils'
 import {
     v2ListStream,
     v2LoginBegin,
     v2LoginFinish,
+    v2LoginPasswordFinish,
     v2Logout,
     v2RegisterBegin,
     v2RegisterFinish,
     v2Session,
     v2SetPasswordCanary,
 } from '$lib/v2-api'
-import type { V2PendingRequestItem, V2SessionResponse } from '$lib/v2-types'
-import { computePrfSalt, encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
+import type { V2AuthSessionInfo, V2PendingRequestItem, V2SessionResponse } from '$lib/v2-types'
 import { webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
-import LoadingSpinner from '$components/LoadingSpinner.svelte'
-import PendingItem from '$components/PendingItem.svelte'
-import { base64UrlToBytes } from '$lib/utils'
 
-type UIState = 'boot' | 'auth' | 'password' | 'ready'
+type UIState = 'boot' | 'signin' | 'signup' | 'password-login' | 'password-setup' | 'ready'
+
+type PendingPasswordLogin = {
+    username: string
+    passwordCanary: string
+    challengeId: string
+    challenge: string
+    options?: unknown
+    basePrfSalt: string
+}
 
 let uiState = $state<UIState>('boot')
 let authBusy = $state(false)
@@ -29,10 +39,13 @@ let signupDisabled = $state(false)
 
 let username = $state('')
 let displayName = $state('')
-let password = $state('')
+let passwordInput = $state('')
+let activePassword = $state('')
 
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
+let pendingPasswordLogin = $state<PendingPasswordLogin | null>(null)
+
 let items = $state<Record<string, V2PendingRequestItem>>({})
 let listConnected = $state(false)
 let stopStream: (() => void) | null = null
@@ -40,8 +53,7 @@ let stopStream: (() => void) | null = null
 onMount(() => {
     void initialize()
     return () => {
-        stopStream?.()
-        stopStream = null
+        teardownListStream()
     }
 })
 
@@ -50,26 +62,35 @@ async function initialize() {
     pageError = null
 
     try {
-        const sess = await v2Session()
-        session = sess
-        // PRF secret is kept only in memory; if we have a session but no secret,
-        // the user must re-authenticate to re-derive it.
-        uiState = 'auth'
-        authError = 'Session exists but local PRF material is missing. Sign in again to continue.'
+        await v2Session()
+
+        // Sessions survive page reloads, but the PRF secret is intentionally kept in memory only.
+        clearLocalAuthState()
+        authError = 'Session exists but local key material is missing. Sign in again to continue.'
+        uiState = 'signin'
     } catch (err) {
         if (err instanceof ResponseNotOkError) {
             if (err.statusCode === 401) {
-                uiState = 'auth'
+                uiState = 'signin'
                 return
             }
             if (err.statusCode === 503) {
                 pageError = 'v2 is not configured on this server.'
-                uiState = 'auth'
+                uiState = 'signin'
                 return
             }
         }
+
         pageError = err instanceof Error ? err.message : String(err)
-        uiState = 'auth'
+        uiState = 'signin'
+    }
+}
+
+function toSessionResponse(authSession: V2AuthSessionInfo): V2SessionResponse {
+    return {
+        authenticated: true,
+        username: authSession.username,
+        ttl: authSession.ttl,
     }
 }
 
@@ -77,10 +98,165 @@ function setPrfSecret(v: Uint8Array) {
     prfSecret = v
 }
 
+function teardownListStream() {
+    stopStream?.()
+    stopStream = null
+    listConnected = false
+}
+
+function clearLocalAuthState() {
+    teardownListStream()
+    session = null
+    prfSecret = null
+    pendingPasswordLogin = null
+    activePassword = ''
+}
+
+function enterReadyView() {
+    uiState = 'ready'
+    passwordInput = ''
+    authError = null
+    startListStream()
+}
+
+function openSignIn() {
+    authError = null
+    passwordInput = ''
+    pendingPasswordLogin = null
+    uiState = 'signin'
+}
+
+function openSignup() {
+    authError = null
+    passwordInput = ''
+    pendingPasswordLogin = null
+    uiState = 'signup'
+}
+
+async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-required'> {
+    const begin = await v2LoginBegin()
+    const prfSalt = await computePrfSalt(base64UrlToBytes(begin.basePrfSalt))
+    const assertion = await webauthnLoginWithPrf({
+        challenge: begin.challenge,
+        prfSalt,
+        options: begin.options,
+    })
+    const finish = await v2LoginFinish({
+        challengeId: begin.challengeId,
+        credential: (assertion.raw as { credential?: unknown })?.credential ?? {
+            id: assertion.id,
+            signCount: assertion.signCount,
+        },
+    })
+
+    if (finish.passwordRequired) {
+        if (
+            !finish.username ||
+            !finish.passwordCanary ||
+            !finish.challengeId ||
+            !finish.challenge ||
+            !finish.basePrfSalt
+        ) {
+            throw new Error('Server requested password verification but returned an incomplete challenge')
+        }
+
+        clearLocalAuthState()
+        pendingPasswordLogin = {
+            username: finish.username,
+            passwordCanary: finish.passwordCanary,
+            challengeId: finish.challengeId,
+            challenge: finish.challenge,
+            options: finish.options,
+            basePrfSalt: finish.basePrfSalt,
+        }
+        return 'password-required'
+    }
+
+    if (!finish.authenticated || !finish.session) {
+        throw new Error('Login did not complete')
+    }
+    if (!assertion.prfSecret || assertion.prfSecret.length === 0) {
+        throw new Error('Authenticator did not return PRF output')
+    }
+
+    session = toSessionResponse(finish.session)
+    setPrfSecret(assertion.prfSecret)
+    pendingPasswordLogin = null
+    activePassword = ''
+    return 'authenticated'
+}
+
+async function finishPasswordLoginStep(password: string) {
+    const pending = pendingPasswordLogin
+    const trimmedPassword = password.trim()
+
+    if (!pending) {
+        throw new Error('Password verification is not active')
+    }
+    if (trimmedPassword === '') {
+        throw new Error('Password is required')
+    }
+
+    const passwordMatches = await verifyPasswordCanary(trimmedPassword, pending.passwordCanary)
+    if (!passwordMatches) {
+        throw new Error('Incorrect password')
+    }
+
+    const prfSalt = await computePrfSalt(base64UrlToBytes(pending.basePrfSalt), trimmedPassword)
+    const assertion = await webauthnLoginWithPrf({
+        challenge: pending.challenge,
+        prfSalt,
+        options: pending.options,
+    })
+    const finish = await v2LoginPasswordFinish({
+        username: pending.username,
+        challengeId: pending.challengeId,
+        credential: (assertion.raw as { credential?: unknown })?.credential ?? {
+            id: assertion.id,
+            signCount: assertion.signCount,
+        },
+    })
+
+    if (!finish.authenticated || !finish.session) {
+        throw new Error('Login did not complete')
+    }
+    if (!assertion.prfSecret || assertion.prfSecret.length === 0) {
+        throw new Error('Authenticator did not return PRF output')
+    }
+
+    session = toSessionResponse(finish.session)
+    setPrfSecret(assertion.prfSecret)
+    activePassword = trimmedPassword
+    pendingPasswordLogin = null
+}
+
+async function doLogin() {
+    authBusy = true
+    authError = null
+    pageError = null
+
+    try {
+        const outcome = await beginPasskeyLoginStep()
+        if (outcome === 'password-required') {
+            passwordInput = ''
+            uiState = 'password-login'
+            return
+        }
+
+        enterReadyView()
+    } catch (err) {
+        authError = err instanceof Error ? err.message : String(err)
+        uiState = 'signin'
+    } finally {
+        authBusy = false
+    }
+}
+
 async function doRegister() {
     authBusy = true
     authError = null
     pageError = null
+
     try {
         const begin = await v2RegisterBegin(username, displayName)
         const cred = await webauthnRegister({
@@ -95,13 +271,22 @@ async function doRegister() {
             challengeId: begin.challengeId,
             credential: (cred.raw as { credential?: unknown })?.credential ?? cred,
         })
-        // Re-login to collect PRF material (registration attestation does not yield PRF output).
-        await doLogin(true)
+
+        const outcome = await beginPasskeyLoginStep()
+        if (outcome === 'password-required') {
+            passwordInput = ''
+            uiState = 'password-login'
+            return
+        }
+
+        passwordInput = ''
+        uiState = 'password-setup'
     } catch (err) {
         if (err instanceof ResponseNotOkError && err.statusCode === 403) {
             signupDisabled = true
-        }
-        if (err instanceof ResponseNotOkError && err.statusCode === 409) {
+            authError = err.message || 'Account creation is disabled on this server.'
+            uiState = 'signin'
+        } else if (err instanceof ResponseNotOkError && err.statusCode === 409) {
             authError = err.message || 'Username already exists'
         } else {
             authError = err instanceof Error ? err.message : String(err)
@@ -111,80 +296,50 @@ async function doRegister() {
     }
 }
 
-async function doLogin(internalCall = false) {
-    if (!internalCall) {
-        authBusy = true
-        authError = null
-    }
-    try {
-        const begin = await v2LoginBegin()
-        const prfSalt = await computePrfSalt(base64UrlToBytes(begin.basePrfSalt), password.trim() || undefined)
-        const assertion = await webauthnLoginWithPrf({
-            challenge: begin.challenge,
-            prfSalt,
-            options: begin.options,
-        })
-        const finish = await v2LoginFinish({
-            challengeId: begin.challengeId,
-            credential: (assertion.raw as { credential?: unknown })?.credential ?? {
-                id: assertion.id,
-                signCount: assertion.signCount,
-            },
-        })
-        session = finish.session
-        if (!assertion.prfSecret || assertion.prfSecret.length === 0) {
-            throw new Error('Authenticator did not return PRF output')
-        }
+async function doFinishPasswordLogin() {
+    authBusy = true
+    authError = null
 
-        // If user has a canary, verify the password is correct
-        const canary = (finish as Record<string, unknown>).passwordCanary as string | undefined
-        if (canary) {
-            const ok = await verifyPasswordCanary(password, canary)
-            if (!ok) {
-                throw new Error('Incorrect password')
-            }
-        }
-        setPrfSecret(assertion.prfSecret)
-        authError = null
-        if (internalCall) {
-            // After first registration — prompt to set a password
-            uiState = 'password'
-        } else {
-            uiState = 'ready'
-            startListStream()
-        }
+    try {
+        await finishPasswordLoginStep(passwordInput)
+        enterReadyView()
     } catch (err) {
         authError = err instanceof Error ? err.message : String(err)
-        if (!internalCall) {
-            uiState = 'auth'
-        }
     } finally {
-        if (!internalCall) {
-            authBusy = false
-        }
+        authBusy = false
     }
 }
 
 async function doSetPassword() {
-    if (!prfSecret || password.trim() === '') {
-        // Skip — go straight to ready
-        uiState = 'ready'
-        startListStream()
+    const trimmedPassword = passwordInput.trim()
+
+    if (!prfSecret) {
+        clearLocalAuthState()
+        authError = 'Missing local key material. Sign in again to continue.'
+        uiState = 'signin'
         return
     }
+
+    if (trimmedPassword === '') {
+        activePassword = ''
+        enterReadyView()
+        return
+    }
+
     authBusy = true
     authError = null
+
     try {
-        // Create canary so future logins can verify the password
-        const canary = await encryptPasswordCanary(password)
+        const canary = await encryptPasswordCanary(trimmedPassword)
         await v2SetPasswordCanary(canary)
-        // Re-login with the password baked into the PRF salt so prfSecret is correct
-        await doLogin(true)
-        if (uiState === 'password') {
-            // doLogin(true) would set uiState='password' again — override to ready
-            uiState = 'ready'
-            startListStream()
+
+        const outcome = await beginPasskeyLoginStep()
+        if (outcome !== 'password-required') {
+            throw new Error('Password confirmation did not start correctly')
         }
+
+        await finishPasswordLoginStep(trimmedPassword)
+        enterReadyView()
     } catch (err) {
         authError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -193,25 +348,25 @@ async function doSetPassword() {
 }
 
 async function doLogout() {
-    stopStream?.()
-    stopStream = null
+    teardownListStream()
     try {
         await v2Logout()
     } catch {
-        // Ignore and clear local state anyway.
+        // Ignore logout failures and still clear the local session state.
     }
 
-    session = null
-    prfSecret = null
+    clearLocalAuthState()
     items = {}
-    listConnected = false
-    uiState = 'auth'
+    passwordInput = ''
+    authError = null
+    uiState = 'signin'
 }
 
 function startListStream() {
     if (stopStream) {
         return
     }
+
     let stopped = false
     stopStream = () => {
         stopped = true
@@ -244,13 +399,13 @@ function startListStream() {
             if (stopped) {
                 return
             }
+
             const msg = err instanceof Error ? err.message : String(err)
             if (msg.includes('401')) {
-                prfSecret = null
-                session = null
-                uiState = 'auth'
-
+                clearLocalAuthState()
+                items = {}
                 authError = 'Session expired. Sign in again.'
+                uiState = 'signin'
                 return
             }
             pageError = msg
@@ -278,169 +433,291 @@ function removeItem(state: string) {
 function sortedItems() {
     return Object.values(items).sort((a, b) => a.date - b.date)
 }
+
+function authHeadline() {
+    switch (uiState) {
+        case 'signup':
+            return 'Create a new account'
+        case 'password-login':
+            return 'Enter your password'
+        case 'password-setup':
+            return 'Add a password'
+        default:
+            return 'Sign in with your passkey'
+    }
+}
+
+function authBodyCopy() {
+    switch (uiState) {
+        case 'signup':
+            return 'Register a new Revaulter user with a resident passkey. You can add an optional password after registration.'
+        case 'password-login':
+            return 'Your passkey was accepted. This account also uses a password before session issuance.'
+        case 'password-setup':
+            return 'Passwords are optional. If you set one now, Revaulter will require it after passkey authentication on future sign-ins.'
+        default:
+            return ''
+    }
+}
 </script>
 
-<div class="max-w-5xl mx-auto p-4 md:p-6">
-    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/70 shadow-sm">
-        <div class="border-b border-slate-200 dark:border-slate-700 px-5 py-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <div>
-                <h1 class="text-xl font-semibold text-slate-900 dark:text-white">Revaulter v2</h1>
-            </div>
-            {#if session}
-                <div class="flex flex-col items-start gap-2 md:items-end">
-                    <div class="text-sm text-slate-700 dark:text-slate-200">
-                        Signed in as <span class="font-mono">{session.username}</span>
+<div class="min-h-screen bg-[radial-gradient(circle_at_top,rgba(14,165,233,0.12),transparent_28%),linear-gradient(180deg,#f8fafc_0%,#eef2ff_44%,#ffffff_100%)] dark:bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.15),transparent_24%),linear-gradient(180deg,#020617_0%,#0f172a_48%,#020617_100%)]">
+    {#if uiState === 'ready'}
+        <div class="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
+            <header class="rounded-4xl border border-white/70 bg-white/75 p-5 shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/70">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div class="space-y-3">
+                        <div class="space-y-2">
+                            <h1 class="font-serif text-3xl text-slate-950 dark:text-white md:text-4xl">Pending approvals</h1>
+                            <p class="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
+                                Review inbound encrypt and decrypt operations for <span class="font-mono text-slate-900 dark:text-slate-100">{session?.username}</span>.
+                            </p>
+                        </div>
                     </div>
-                    <button class="rounded border border-slate-300 dark:border-slate-600 px-3 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800" onclick={doLogout}>
-                        Sign out
-                    </button>
-                </div>
-            {/if}
-        </div>
 
-        <div class="p-5 space-y-4">
+                    <div class="flex flex-col items-start gap-3 rounded-3xl border border-slate-200/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-200">
+                        <div>
+                            Signed in as <span class="font-mono text-slate-950 dark:text-white">{session?.username}</span>
+                        </div>
+                        <button
+                            class="inline-flex items-center justify-center rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+                            onclick={doLogout}
+                        >
+                            Sign out
+                        </button>
+                    </div>
+                </div>
+            </header>
+
             {#if pageError}
-                <div class="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
+                <div class="rounded-3xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
                     {pageError}
                 </div>
             {/if}
 
-            {#if uiState === 'boot'}
-                <div class="text-sm text-slate-700 dark:text-slate-200"><LoadingSpinner /> Initializing…</div>
-            {:else if uiState === 'auth' || !prfSecret}
-                <div class="space-y-4">
+            <section class="rounded-4xl border border-white/70 bg-white/80 p-5 shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/70">
+                <div class="mb-5 flex flex-col gap-3 rounded-3xl border border-slate-200/80 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-900/70 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <div class="text-sm font-medium text-slate-900 dark:text-white">Assigned requests</div>
+                        <div class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                            Requests stream to this page in real time. Confirm only if the input and target user look correct.
+                        </div>
+                    </div>
+                    <div class="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+                        {#if listConnected}Live stream connected{:else}Connecting…{/if}
+                    </div>
+                </div>
+
+                {#if sortedItems().length === 0}
+                    <div class="rounded-3xl border border-dashed border-slate-300/90 bg-white/70 px-6 py-12 text-center dark:border-slate-700 dark:bg-slate-950/40">
+                        {#if listConnected}
+                            <div class="text-base font-medium text-slate-900 dark:text-white">No pending requests</div>
+                            <div class="mt-2 text-sm text-slate-500 dark:text-slate-400">New approvals will appear here as soon as they are assigned to you.</div>
+                        {:else}
+                            <div class="flex items-center justify-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                                <LoadingSpinner size="1rem" />
+                                Waiting for updates…
+                            </div>
+                        {/if}
+                    </div>
+                {:else}
+                    <div class="space-y-3">
+                        {#each sortedItems() as item (item.state)}
+                            {#if prfSecret}
+                                <PendingItem
+                                    {item}
+                                    {prfSecret}
+                                    password={activePassword}
+                                    onRemoved={removeItem}
+                                />
+                            {/if}
+                        {/each}
+                    </div>
+                {/if}
+            </section>
+        </div>
+    {:else}
+        <div class="mx-auto flex min-h-screen w-full max-w-5xl items-center justify-center px-4 py-10 md:px-6">
+            <section class="mx-auto flex w-full max-w-md flex-col items-stretch justify-center">
+                <div class="rounded-4xl border border-white/80 bg-white/85 p-6 shadow-[0_35px_90px_-45px_rgba(15,23,42,0.55)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/80 md:p-8">
+                    <div class="mb-6 space-y-3">
+                        <div class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 lg:hidden">
+                            Revaulter v2
+                        </div>
+                        <div class="space-y-2">
+                            <h2 class="font-serif text-3xl text-slate-950 dark:text-white">{authHeadline()}</h2>
+                            {#if authBodyCopy()}
+                                <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">{authBodyCopy()}</p>
+                            {/if}
+                        </div>
+                    </div>
+
+                    {#if pageError}
+                        <div class="mb-4 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+                            {pageError}
+                        </div>
+                    {/if}
+
                     {#if authError}
-                        <div class="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
+                        <div class="mb-4 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
                             {authError}
                         </div>
                     {/if}
-                    <div class="grid gap-4 lg:grid-cols-2">
-                        <form
-                            class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-950/30 space-y-3"
-                            onsubmit={(e) => {
-                                e.preventDefault()
-                                if (!authBusy) void doLogin()
-                            }}
-                        >
-                            <div>
-                                <h2 class="font-semibold text-slate-900 dark:text-white">Sign In</h2>
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-password-login">Password (if set)</label>
-                                <input id="v2-password-login" type="password" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={password} />
-                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave empty if you haven't set a password.</p>
-                            </div>
-                            <button type="submit" class="w-full rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50" disabled={authBusy}>
-                                {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                                Sign In with Passkey
-                            </button>
-                        </form>
 
+                    {#if uiState === 'boot'}
+                        <div class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
+                            <LoadingSpinner size="1rem" />
+                            Initializing…
+                        </div>
+                    {:else if uiState === 'signup'}
                         <form
-                            class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3"
+                            class="space-y-4"
                             onsubmit={(e) => {
                                 e.preventDefault()
                                 if (!authBusy && !signupDisabled) void doRegister()
                             }}
                         >
-                            <div>
-                                <h2 class="font-semibold text-slate-900 dark:text-white">Create Account</h2>
-                                <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                    Register a new account with a passkey. This is disabled when the server sets <span class="font-mono">disableSignup</span>.
-                                </p>
+                            <div class="space-y-2">
+                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-username">Username</label>
+                                <input
+                                    id="v2-username"
+                                    class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
+                                    bind:value={username}
+                                    required
+                                />
                             </div>
+
+                            <div class="space-y-2">
+                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-displayname">Display name</label>
+                                <input
+                                    id="v2-displayname"
+                                    class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
+                                    bind:value={displayName}
+                                    required
+                                />
+                            </div>
+
+                            <button
+                                type="submit"
+                                class="inline-flex w-full items-center justify-center gap-2 rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
+                                disabled={authBusy || signupDisabled}
+                            >
+                                {#if authBusy}<LoadingSpinner size="1rem" />{/if}
+                                Create account with passkey
+                            </button>
+                        </form>
+                    {:else if uiState === 'password-login' && pendingPasswordLogin}
+                        <form
+                            class="space-y-4"
+                            onsubmit={(e) => {
+                                e.preventDefault()
+                                if (!authBusy) void doFinishPasswordLogin()
+                            }}
+                        >
+                            <div class="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-300">
+                                Completing sign-in for <span class="font-mono text-slate-950 dark:text-white">{pendingPasswordLogin.username}</span>
+                            </div>
+
+                            <div class="space-y-2">
+                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-password-login">Password</label>
+                                <input
+                                    id="v2-password-login"
+                                    type="password"
+                                    class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
+                                    bind:value={passwordInput}
+                                    required
+                                />
+                            </div>
+
+                            <button
+                                type="submit"
+                                class="inline-flex w-full items-center justify-center gap-2 rounded-full bg-sky-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={authBusy}
+                            >
+                                {#if authBusy}<LoadingSpinner size="1rem" />{/if}
+                                Continue with password
+                            </button>
+                        </form>
+                    {:else if uiState === 'password-setup'}
+                        <form
+                            class="space-y-4"
+                            onsubmit={(e) => {
+                                e.preventDefault()
+                                if (!authBusy) void doSetPassword()
+                            }}
+                        >
+                            <div class="space-y-2">
+                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-password-setup">Password</label>
+                                <input
+                                    id="v2-password-setup"
+                                    type="password"
+                                    class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
+                                    bind:value={passwordInput}
+                                />
+                            </div>
+
+                            <div class="flex flex-col gap-3 sm:flex-row">
+                                <button
+                                    type="submit"
+                                    class="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-sky-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                    disabled={authBusy}
+                                >
+                                    {#if authBusy}<LoadingSpinner size="1rem" />{/if}
+                                    Save password
+                                </button>
+                                <button
+                                    type="button"
+                                    class="inline-flex flex-1 items-center justify-center rounded-full border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+                                    onclick={() => {
+                                        activePassword = ''
+                                        enterReadyView()
+                                    }}
+                                >
+                                    Skip password
+                                </button>
+                            </div>
+                        </form>
+                    {:else}
+                        <div class="space-y-4">
+                            <button
+                                type="button"
+                                class="inline-flex w-full items-center justify-center gap-2 rounded-full bg-sky-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={authBusy}
+                                onclick={() => {
+                                    if (!authBusy) void doLogin()
+                                }}
+                            >
+                                {#if authBusy}<LoadingSpinner size="1rem" />{/if}
+                                Continue with passkey
+                            </button>
+
                             {#if signupDisabled}
-                                <div class="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                                <div class="rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-200">
                                     Account creation is disabled on this server.
                                 </div>
                             {/if}
-                            <div>
-                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-username">Username</label>
-                                <input id="v2-username" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={username} required />
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-displayname">Display name</label>
-                                <input id="v2-displayname" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={displayName} required />
-                            </div>
-                            <button type="submit" class="w-full rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white disabled:opacity-50" disabled={authBusy || signupDisabled}>
-                                {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                                Create Account
-                            </button>
-                        </form>
-                    </div>
-                </div>
-            {:else if uiState === 'password'}
-                <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-slate-50 dark:bg-slate-950/30 space-y-4">
-                    <div>
-                        <h2 class="font-semibold text-slate-900 dark:text-white">Set a Password (Optional)</h2>
-                        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                            Optionally set a password to add a second factor for encrypt/decrypt operations. You can skip this step.
-                        </p>
-                    </div>
-                    {#if authError}
-                        <div class="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
-                            {authError}
                         </div>
                     {/if}
-                    <form
-                        class="space-y-3"
-                        onsubmit={(e) => {
-                            e.preventDefault()
-                            if (!authBusy) void doSetPassword()
-                        }}
-                    >
-                        <div>
-                            <label class="block text-sm font-medium text-slate-800 dark:text-slate-200 mb-1" for="v2-password">Password</label>
-                            <input id="v2-password" type="password" class="w-full rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2" bind:value={password} />
-                        </div>
-                        <div class="flex gap-2">
-                            <button type="submit" class="rounded bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50" disabled={authBusy}>
-                                {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                                Set Password and Continue
-                            </button>
-                            <button
-                                type="button"
-                                class="rounded border border-slate-300 dark:border-slate-600 px-3 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-800"
-                                onclick={() => { uiState = 'ready'; startListStream() }}
-                            >
-                                Skip
-                            </button>
-                        </div>
-                    </form>
                 </div>
-            {:else}
-                <div class="space-y-4">
-                    <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between rounded-xl border border-slate-200 dark:border-slate-700 p-3">
-                        <div class="text-sm text-slate-700 dark:text-slate-200">
-                            Pending requests for <span class="font-mono">{session?.username}</span>
-                        </div>
-                        <div class="text-xs text-slate-500 dark:text-slate-400">
-                            {#if listConnected}Live stream connected{:else}Connecting…{/if}
-                        </div>
-                    </div>
 
-                    {#if sortedItems().length === 0}
-                        <div class="rounded-xl border border-slate-200 dark:border-slate-700 p-6 text-sm text-slate-600 dark:text-slate-300">
-                            {#if listConnected}
-                                No pending requests assigned to you.
-                            {:else}
-                                <LoadingSpinner size="1rem" /> Waiting for updates…
-                            {/if}
-                        </div>
-                    {:else}
-                        <div class="space-y-3">
-                            {#each sortedItems() as item (item.state)}
-                                <PendingItem
-                                    {item}
-                                    {prfSecret}
-                                    {password}
-                                    onRemoved={removeItem}
-                                />
-                            {/each}
-                        </div>
-                    {/if}
-                </div>
-            {/if}
+                {#if uiState === 'signin' && !signupDisabled}
+                    <button
+                        type="button"
+                        class="mt-4 inline-flex items-center justify-center rounded-full border border-slate-300 bg-white/70 px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-white dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-950"
+                        onclick={openSignup}
+                    >
+                        Create a new account
+                    </button>
+                {:else if uiState !== 'signin'}
+                    <button
+                        type="button"
+                        class="mt-4 inline-flex items-center justify-center rounded-full border border-slate-300 bg-white/70 px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-white dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-950"
+                        onclick={openSignIn}
+                    >
+                        Back to sign in
+                    </button>
+                {/if}
+            </section>
         </div>
-    </div>
+    {/if}
 </div>

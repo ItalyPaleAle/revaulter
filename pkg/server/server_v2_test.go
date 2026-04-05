@@ -389,17 +389,10 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	}, aliceCookie)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
-	// Reject response envelope with mismatched AAD binding.
+	// Reject response envelope with malformed transport fields.
 	browserPriv, err := ecdh.P256().GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
-	require.NoError(t, err)
-	badAAD, err := json.Marshal(map[string]any{
-		"v":         1,
-		"state":     "wrong-state",
-		"operation": "encrypt",
-		"algorithm": "aes-gcm-256",
-	})
 	require.NoError(t, err)
 	res, _ = doPostJSON(t, "/v2/api/confirm", map[string]any{
 		"state":   state,
@@ -409,9 +402,8 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 			"browserEphemeralPublicKey": map[string]any{
 				"kty": browserJWK.Kty, "crv": browserJWK.Crv, "x": browserJWK.X, "y": browserJWK.Y,
 			},
-			"nonce":      base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
+			"nonce":      "!!!!",
 			"ciphertext": base64.RawURLEncoding.EncodeToString([]byte("ciphertext+tag")),
-			"aad":        base64.RawURLEncoding.EncodeToString(badAAD),
 		},
 	}, aliceCookie)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
@@ -572,14 +564,13 @@ func seedV2SessionCookie(t *testing.T, srv *Server, username string, displayName
 	})
 	require.NoError(t, err)
 
-	// Tests run over plain HTTP, so use the insecure cookie name
-	cookieValue, err := serializeSecureCookieEncryptedJWT(sessionCookieNameInsecure, sess.ID, time.Until(sess.ExpiresAt))
+	cookieValue, err := serializeSecureCookieEncryptedJWT(sessionCookieNameSecure, sess.ID, time.Until(sess.ExpiresAt))
 	require.NoError(t, err)
 
 	return &http.Cookie{
-		Name:  sessionCookieNameInsecure,
+		Name:  sessionCookieNameSecure,
 		Value: cookieValue,
-		Path:  "/v2",
+		Path:  "/",
 	}
 }
 

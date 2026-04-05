@@ -39,12 +39,22 @@ type v2AuthLoginFinishRequest struct {
 	Credential  json.RawMessage `json:"credential"`
 }
 
+type v2AuthLoginPasswordFinishRequest struct {
+	Username    string          `json:"username"`
+	ChallengeID string          `json:"challengeId"`
+	Credential  json.RawMessage `json:"credential"`
+}
+
 type v2RegisterChallengePayload struct {
 	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
 }
 
 type v2LoginChallengePayload struct {
 	Challenge       string                   `json:"challenge,omitempty"`
+	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
+}
+
+type v2PasswordLoginChallengePayload struct {
 	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
 }
 
@@ -80,9 +90,17 @@ type v2AuthLoginBeginResponse struct {
 }
 
 type v2AuthLoginFinishResponse struct {
-	Authenticated  bool               `json:"authenticated"`
-	Session        *v2AuthSessionInfo `json:"session,omitempty"`
-	PasswordCanary string             `json:"passwordCanary,omitempty"`
+	Authenticated    bool               `json:"authenticated"`
+	PasswordRequired bool               `json:"passwordRequired,omitempty"`
+	Username         string             `json:"username,omitempty"`
+	Session          *v2AuthSessionInfo `json:"session,omitempty"`
+	PasswordCanary   string             `json:"passwordCanary,omitempty"`
+	ChallengeID      string             `json:"challengeId,omitempty"`
+	Challenge        string             `json:"challenge,omitempty"`
+	ExpiresAt        int64              `json:"expiresAt,omitempty"`
+	Mode             string             `json:"mode,omitempty"`
+	Options          any                `json:"options,omitempty"`
+	BasePrfSalt      string             `json:"basePrfSalt,omitempty"`
 }
 
 type v2AuthSetPasswordCanaryRequest struct {
@@ -270,7 +288,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing required login fields"))
 		return
 	}
-	sess, username, err := s.v2LoginFinish(c, req)
+	sess, username, user, err := s.v2LoginFinish(c, req)
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Login failed",
 			slog.String("client_ip", c.ClientIP()),
@@ -279,29 +297,103 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
+	if user != nil && user.PasswordCanary != "" {
+		passwordStep, err := s.beginPasswordLogin(c, username)
+		if err != nil {
+			AbortWithErrorJSON(c, err)
+			return
+		}
+
+		logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User completed passkey step",
+			slog.String("username", username),
+			slog.String("client_ip", c.ClientIP()),
+		)
+
+		c.JSON(http.StatusOK, v2AuthLoginFinishResponse{
+			Authenticated:    false,
+			PasswordRequired: true,
+			Username:         username,
+			PasswordCanary:   user.PasswordCanary,
+			ChallengeID:      passwordStep.ChallengeID,
+			Challenge:        passwordStep.Challenge,
+			ExpiresAt:        passwordStep.ExpiresAt,
+			Mode:             passwordStep.Mode,
+			Options:          passwordStep.Options,
+			BasePrfSalt:      passwordStep.BasePrfSalt,
+		})
+		return
+	}
+
+	err = s.setV2SessionCookie(c, sess)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
 	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged in",
 		slog.String("username", username),
 		slog.String("client_ip", c.ClientIP()),
 	)
-
-	if err := s.setV2SessionCookie(c, sess); err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
 	resp := v2AuthLoginFinishResponse{
 		Authenticated: true,
+		Username:      username,
 		Session: &v2AuthSessionInfo{
 			Username: username,
 			TTL:      int(time.Until(sess.ExpiresAt).Seconds()),
 		},
 	}
 
-	user, _ := s.authStore.GetUserByUsername(c.Request.Context(), username)
-	if user != nil && user.PasswordCanary != "" {
-		resp.PasswordCanary = user.PasswordCanary
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Server) RouteV2AuthLoginPasswordFinish(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "v2 auth is not configured"))
+		return
 	}
 
-	c.JSON(http.StatusOK, resp)
+	var req v2AuthLoginPasswordFinishRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+
+	req.Username = normalizeUsername(req.Username)
+	if req.Username == "" || req.ChallengeID == "" || len(req.Credential) == 0 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing required login fields"))
+		return
+	}
+
+	sess, err := s.v2LoginPasswordFinish(c, req)
+	if err != nil {
+		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Password-step login failed",
+			slog.String("username", req.Username),
+			slog.String("client_ip", c.ClientIP()),
+		)
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	err = s.setV2SessionCookie(c, sess)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged in",
+		slog.String("username", req.Username),
+		slog.String("client_ip", c.ClientIP()),
+	)
+
+	c.JSON(http.StatusOK, v2AuthLoginFinishResponse{
+		Authenticated: true,
+		Username:      req.Username,
+		Session: &v2AuthSessionInfo{
+			Username: req.Username,
+			TTL:      int(time.Until(sess.ExpiresAt).Seconds()),
+		},
+	})
 }
 
 func (s *Server) RouteV2AuthSetPasswordCanary(c *gin.Context) {
@@ -461,21 +553,21 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 	return sess, err
 }
 
-func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v2db.AuthSession, string, error) {
+func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v2db.AuthSession, string, *v2db.User, error) {
 	if s.webAuthn == nil {
-		return nil, "", NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
+		return nil, "", nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 	}
 
 	var payload v2LoginChallengePayload
 	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", "", &payload)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	if !ok {
-		return nil, "", NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
+		return nil, "", nil, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
 	}
 	if payload.WebAuthnSession == nil {
-		return nil, "", NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
+		return nil, "", nil, NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
 	}
 
 	// FinishDiscoverableLogin identifies the user from the credential's userHandle
@@ -504,58 +596,168 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 
 	waReq, err := newJSONHTTPRequest(c, req.Credential)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	cred, err := s.webAuthn.FinishDiscoverableLogin(handler, *payload.WebAuthnSession, waReq)
 	if err != nil {
-		return nil, "", NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
+		return nil, "", nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
 	}
 
 	if discoveredUser == nil {
-		return nil, "", NewResponseError(http.StatusUnauthorized, "Invalid login")
+		return nil, "", nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 	}
 
+	err = s.validateAuthenticatorSignCount(c, discoveredUser, cred)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	user, err := s.authStore.GetUserByUsername(c.Request.Context(), discoveredUser.name)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if user == nil || user.Status != "active" {
+		return nil, "", nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+	}
+
+	if user.PasswordCanary != "" {
+		return nil, discoveredUser.name, user, nil
+	}
+
+	sess, err := s.createLoginSession(c.Request.Context(), discoveredUser.name, cred)
+	if err != nil {
+		if errors.Is(err, v2db.ErrInvalidLogin) {
+			return nil, "", nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+		}
+		return nil, "", nil, err
+	}
+
+	return sess, discoveredUser.name, user, nil
+}
+
+func (s *Server) v2LoginPasswordFinish(c *gin.Context, req v2AuthLoginPasswordFinishRequest) (*v2db.AuthSession, error) {
+	if s.webAuthn == nil {
+		return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
+	}
+
+	var payload v2PasswordLoginChallengePayload
+	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login-password", req.Username, &payload)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, NewResponseError(http.StatusConflict, "Password-step login challenge is invalid or expired")
+	}
+	if payload.WebAuthnSession == nil {
+		return nil, NewResponseError(http.StatusConflict, "Password-step login challenge is missing WebAuthn session data")
+	}
+
+	userRecord, err := s.v2LoadWebAuthnUser(c.Request.Context(), req.Username)
+	if err != nil {
+		return nil, err
+	}
+	if userRecord == nil {
+		return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+	}
+
+	waReq, err := newJSONHTTPRequest(c, req.Credential)
+	if err != nil {
+		return nil, err
+	}
+
+	cred, err := s.webAuthn.FinishLogin(userRecord, *payload.WebAuthnSession, waReq)
+	if err != nil {
+		return nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
+	}
+
+	err = s.validateAuthenticatorSignCount(c, userRecord, cred)
+	if err != nil {
+		return nil, err
+	}
+
+	sess, err := s.createLoginSession(c.Request.Context(), req.Username, cred)
+	if errors.Is(err, v2db.ErrInvalidLogin) {
+		return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+	}
+	return sess, err
+}
+
+func (s *Server) beginPasswordLogin(c *gin.Context, username string) (*v2AuthLoginBeginResponse, error) {
+	userRecord, err := s.v2LoadWebAuthnUser(c.Request.Context(), username)
+	if err != nil {
+		return nil, err
+	}
+	if userRecord == nil {
+		return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+	}
+
+	assertion, session, err := s.webAuthn.BeginLogin(userRecord,
+		webauthnlib.WithAssertionExtensions(protocol.AuthenticationExtensions{
+			"prf": map[string]any{},
+		}),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "login-password", username, session.Challenge, session.Expires, v2PasswordLoginChallengePayload{
+		WebAuthnSession: session,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &v2AuthLoginBeginResponse{
+		ChallengeID: ch.ID,
+		Challenge:   session.Challenge,
+		ExpiresAt:   ch.ExpiresAt.Unix(),
+		Mode:        "webauthn",
+		Options:     assertion,
+		BasePrfSalt: config.Get().GetPRFSalt(),
+	}, nil
+}
+
+func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2WebAuthnUser, cred *webauthnlib.Credential) error {
 	// Detect possible cloned authenticator by comparing the returned sign count with the stored value.
 	// If the stored count was non-zero but the new count is not strictly greater, the credential may have been cloned.
 	// Note: Some authenticators do not report a counter, which is always 0.
 	newCount := cred.Authenticator.SignCount
-	if newCount > 0 {
-		credIDEncoded := base64.RawURLEncoding.EncodeToString(cred.ID)
-		for _, stored := range discoveredUser.credentials {
-			if base64.RawURLEncoding.EncodeToString(stored.ID) != credIDEncoded {
-				continue
-			}
-
-			storedCount := stored.Authenticator.SignCount
-			if storedCount > 0 && newCount <= storedCount {
-				logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
-					"Possible cloned authenticator: sign count did not increase",
-					slog.String("username", discoveredUser.name),
-					slog.String("credential_id", credIDEncoded),
-					slog.Uint64("stored_sign_count", uint64(storedCount)),
-					slog.Uint64("new_sign_count", uint64(newCount)),
-					slog.String("client_ip", c.ClientIP()),
-				)
-				return nil, "", NewResponseError(http.StatusForbidden, "Authenticator sign count anomaly detected — possible credential cloning")
-			}
-			break
-		}
+	if newCount == 0 {
+		return nil
 	}
 
-	sess, err := s.authStore.Login(c.Request.Context(), v2db.LoginInput{
-		Username:     discoveredUser.name,
+	credIDEncoded := base64.RawURLEncoding.EncodeToString(cred.ID)
+	for _, stored := range userRecord.credentials {
+		if base64.RawURLEncoding.EncodeToString(stored.ID) != credIDEncoded {
+			continue
+		}
+
+		storedCount := stored.Authenticator.SignCount
+		if storedCount > 0 && newCount <= storedCount {
+			logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
+				"Possible cloned authenticator: sign count did not increase",
+				slog.String("username", userRecord.name),
+				slog.String("credential_id", credIDEncoded),
+				slog.Uint64("stored_sign_count", uint64(storedCount)),
+				slog.Uint64("new_sign_count", uint64(newCount)),
+				slog.String("client_ip", c.ClientIP()),
+			)
+			return NewResponseError(http.StatusForbidden, "Authenticator sign count anomaly detected — possible credential cloning")
+		}
+		break
+	}
+
+	return nil
+}
+
+func (s *Server) createLoginSession(ctx context.Context, username string, cred *webauthnlib.Credential) (*v2db.AuthSession, error) {
+	return s.authStore.Login(ctx, v2db.LoginInput{
+		Username:     username,
 		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
 		SignCount:    int64(cred.Authenticator.SignCount),
 		SessionTTL:   config.Get().SessionTimeout,
 	})
-	if errors.Is(err, v2db.ErrInvalidLogin) {
-		return nil, "", NewResponseError(http.StatusUnauthorized, "Invalid login")
-	} else if err != nil {
-		return nil, "", err
-	}
-
-	return sess, discoveredUser.name, nil
 }
 
 func newJSONHTTPRequest(c *gin.Context, raw json.RawMessage) (*http.Request, error) {

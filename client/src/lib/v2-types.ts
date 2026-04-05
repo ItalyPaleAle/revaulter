@@ -64,6 +64,11 @@ export type V2RegisterBeginResponse = {
     basePrfSalt: string
 }
 
+export type V2AuthSessionInfo = {
+    username: string
+    ttl: number
+}
+
 export type V2LoginBeginResponse = {
     challengeId: string
     challenge: string
@@ -71,6 +76,20 @@ export type V2LoginBeginResponse = {
     mode: string
     options?: unknown
     basePrfSalt: string
+}
+
+export type V2LoginFinishResponse = {
+    authenticated: boolean
+    passwordRequired?: boolean
+    username?: string
+    session?: V2AuthSessionInfo
+    passwordCanary?: string
+    challengeId?: string
+    challenge?: string
+    expiresAt?: number
+    mode?: string
+    options?: unknown
+    basePrfSalt?: string
 }
 
 export type V2SessionResponse = {
