@@ -15,9 +15,7 @@ import (
 	"github.com/italypaleale/revaulter/pkg/utils"
 )
 
-// buildTransportAAD constructs the AAD that the browser binds into the AES-GCM
-// tag during encryption. Both sides derive it from request metadata independently
-// so it is never transmitted in the envelope.
+// Constructs the AAD that the browser binds into the AES-GCM tag during encryption
 func buildTransportAAD(state, operation, algorithm string) []byte {
 	aad, _ := json.Marshal(map[string]any{
 		"v":         1,

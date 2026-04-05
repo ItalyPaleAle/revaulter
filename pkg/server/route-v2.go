@@ -306,7 +306,8 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing responseEnvelope"))
 		return
 	}
-	if err := validateV2ResponseEnvelope(*req.ResponseEnvelope); err != nil {
+	err := validateV2ResponseEnvelope(*req.ResponseEnvelope)
+	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid responseEnvelope: %v", err))
 		return
 	}
@@ -321,10 +322,6 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	}
 	if !s.v2AuthorizeTargetUser(c, rec.TargetUser) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
-		return
-	}
-	if err := validateV2ResponseEnvelopeBinding(*req.ResponseEnvelope, rec); err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid responseEnvelope binding: %v", err))
 		return
 	}
 	ok, err := s.requestStore.CompleteRequest(c.Request.Context(), req.State, *req.ResponseEnvelope)
@@ -344,16 +341,6 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		State:  req.State,
 		Status: "removed",
 	})
-}
-
-// validateV2ResponseEnvelopeBinding is a no-op since AAD is now derived
-// independently by both sides from request metadata, not transmitted in the
-// envelope. The server does not decrypt the envelope so it has nothing to check.
-func validateV2ResponseEnvelopeBinding(_ protocolv2.ResponseEnvelope, rec *v2db.V2RequestRecord) error {
-	if rec == nil {
-		return NewResponseError(http.StatusBadRequest, "request is missing")
-	}
-	return nil
 }
 
 func (s *Server) v2AuthorizeTargetUser(c *gin.Context, targetUser string) bool {

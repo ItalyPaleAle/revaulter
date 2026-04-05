@@ -95,8 +95,7 @@ export async function encryptTransportEnvelope(
         asBuf(plaintext) as BufferSource
     )
 
-    // Return the encrypted response in the API envelope format expected by clients.
-    // AAD is not included — both sides derive it from request metadata independently.
+    // Return the encrypted response in the API envelope format expected by clients
     return {
         transportAlg: 'ecdh-p256+a256gcm',
         browserEphemeralPublicKey: eph.publicKeyJwk,
@@ -109,7 +108,6 @@ export async function encryptTransportEnvelope(
 /**
  * Decrypts a transport envelope using the requester's private transport key.
  * The same request `state` must be supplied so HKDF derives the matching AES key.
- * AAD must be provided by the caller (derived from request metadata), not from the envelope.
  */
 export async function decryptTransportEnvelope(
     state: string,
