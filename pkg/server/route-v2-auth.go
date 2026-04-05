@@ -343,7 +343,10 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	sessID, _ := c.Get(contextKeySessionID)
 	id, _ := sessID.(string)
 	if id != "" {
-		_ = s.authStore.RevokeSession(c.Request.Context(), id)
+		if err := s.authStore.RevokeSession(c.Request.Context(), id); err != nil {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Failed to revoke session"))
+			return
+		}
 	}
 
 	c.SetSameSite(http.SameSiteLaxMode)
