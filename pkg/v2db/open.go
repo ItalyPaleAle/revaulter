@@ -88,7 +88,7 @@ func ensureSQLiteDir(path string) error {
 	if dir == "." || dir == "" {
 		return nil
 	}
-	return os.MkdirAll(dir, 0o755)
+	return os.MkdirAll(dir, 0o700)
 }
 
 func configureSQLite(ctx context.Context, db *sql.DB) error {
