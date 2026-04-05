@@ -65,7 +65,8 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to start operation: %w", err)
 	}
 
-	res, err := o.getResult(cmd.Context(), httpClient, state, kp.Private)
+	aad := buildTransportAAD(state, o.Operation, o.flags.GetAlgorithm())
+	res, err := o.getResult(cmd.Context(), httpClient, state, kp.Private, aad)
 	if err != nil {
 		return fmt.Errorf("failed to get response: %w", err)
 	}
@@ -99,7 +100,7 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 	return res.State, nil
 }
 
-func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client, state string, priv any) (json.RawMessage, error) {
+func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client, state string, priv any, aad []byte) (json.RawMessage, error) {
 	clientPriv, ok := priv.(*ecdh.PrivateKey)
 	if !ok || clientPriv == nil {
 		return nil, errors.New("invalid client private key")
@@ -127,7 +128,7 @@ func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client,
 	if !res.Done || res.ResponseEnvelope == nil {
 		return nil, errors.New("missing encrypted response envelope")
 	}
-	plain, err := decryptV2ResponseEnvelope(state, clientPriv, res.ResponseEnvelope)
+	plain, err := decryptV2ResponseEnvelope(state, clientPriv, res.ResponseEnvelope, aad)
 	if err != nil {
 		return nil, err
 	}

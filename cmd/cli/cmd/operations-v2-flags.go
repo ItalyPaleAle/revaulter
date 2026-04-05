@@ -48,6 +48,7 @@ func (f *v2OperationFlagsBase) Validate() error {
 
 func (f *v2OperationFlagsBase) GetServer() string                  { return f.Server }
 func (f *v2OperationFlagsBase) GetRequestKey() string              { return f.SecretKey }
+func (f *v2OperationFlagsBase) GetAlgorithm() string               { return f.Algorithm }
 func (f *v2OperationFlagsBase) GetConnectionOptions() (bool, bool) { return f.Insecure, f.NoH2C }
 
 func (f *v2OperationFlagsBase) AddBaseRequestFields(data *v2OperationRequest, keyJWK protocolv2.ECP256PublicJWK) {
@@ -65,6 +66,7 @@ type v2OperationFlags interface {
 	RequestBody(clientTransportKey protocolv2.ECP256PublicJWK) ([]byte, error)
 	GetServer() string
 	GetRequestKey() string
+	GetAlgorithm() string
 	GetConnectionOptions() (insecure bool, noh2c bool)
 }
 

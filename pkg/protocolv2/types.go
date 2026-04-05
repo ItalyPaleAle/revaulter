@@ -21,7 +21,6 @@ type ResponseEnvelope struct {
 	BrowserEphemeralPublicKey ECP256PublicJWK `json:"browserEphemeralPublicKey"`
 	Nonce                     string          `json:"nonce"`
 	Ciphertext                string          `json:"ciphertext"`
-	AAD                       string          `json:"aad,omitempty"`
 	ResultType                string          `json:"resultType,omitempty"`
 }
 

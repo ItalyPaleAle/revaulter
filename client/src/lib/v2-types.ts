@@ -10,7 +10,6 @@ export type V2ResponseEnvelope = {
     browserEphemeralPublicKey: EcP256PublicJwk
     nonce: string
     ciphertext: string
-    aad?: string
     resultType?: string
 }
 

@@ -15,7 +15,20 @@ import (
 	"github.com/italypaleale/revaulter/pkg/utils"
 )
 
-func decryptV2ResponseEnvelope(state string, priv *ecdh.PrivateKey, env *protocolv2.ResponseEnvelope) ([]byte, error) {
+// buildTransportAAD constructs the AAD that the browser binds into the AES-GCM
+// tag during encryption. Both sides derive it from request metadata independently
+// so it is never transmitted in the envelope.
+func buildTransportAAD(state, operation, algorithm string) []byte {
+	aad, _ := json.Marshal(map[string]any{
+		"v":         1,
+		"state":     state,
+		"operation": operation,
+		"algorithm": algorithm,
+	})
+	return aad
+}
+
+func decryptV2ResponseEnvelope(state string, priv *ecdh.PrivateKey, env *protocolv2.ResponseEnvelope, aad []byte) ([]byte, error) {
 	if priv == nil {
 		return nil, errors.New("missing client transport private key")
 	}
@@ -61,14 +74,6 @@ func decryptV2ResponseEnvelope(state string, priv *ecdh.PrivateKey, env *protoco
 	ciphertext, err := utils.DecodeBase64String(env.Ciphertext)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ciphertext: %w", err)
-	}
-
-	var aad []byte
-	if env.AAD != "" {
-		aad, err = utils.DecodeBase64String(env.AAD)
-		if err != nil {
-			return nil, fmt.Errorf("invalid aad: %w", err)
-		}
 	}
 
 	plain, err := aead.Open(nil, nonce, ciphertext, aad)

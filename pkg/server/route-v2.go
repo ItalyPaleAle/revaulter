@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -347,40 +346,12 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	})
 }
 
-func validateV2ResponseEnvelopeBinding(env protocolv2.ResponseEnvelope, rec *v2db.V2RequestRecord) error {
+// validateV2ResponseEnvelopeBinding is a no-op since AAD is now derived
+// independently by both sides from request metadata, not transmitted in the
+// envelope. The server does not decrypt the envelope so it has nothing to check.
+func validateV2ResponseEnvelopeBinding(_ protocolv2.ResponseEnvelope, rec *v2db.V2RequestRecord) error {
 	if rec == nil {
 		return NewResponseError(http.StatusBadRequest, "request is missing")
-	}
-	if env.AAD == "" {
-		return nil
-	}
-	aadRaw, err := utils.DecodeBase64String(env.AAD)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid aad format")
-	}
-	type transportAAD struct {
-		V         int    `json:"v"`
-		State     string `json:"state"`
-		Operation string `json:"operation"`
-		Algorithm string `json:"algorithm"`
-	}
-	var aad transportAAD
-	dec := json.NewDecoder(bytes.NewReader(aadRaw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&aad); err != nil {
-		return nil
-	}
-	if aad.V != 0 && aad.V != 1 {
-		return NewResponseError(http.StatusBadRequest, "unsupported aad version")
-	}
-	if aad.State != "" && aad.State != rec.State {
-		return NewResponseError(http.StatusBadRequest, "aad state mismatch")
-	}
-	if aad.Operation != "" && aad.Operation != rec.Operation {
-		return NewResponseError(http.StatusBadRequest, "aad operation mismatch")
-	}
-	if aad.Algorithm != "" && aad.Algorithm != rec.Algorithm {
-		return NewResponseError(http.StatusBadRequest, "aad algorithm mismatch")
 	}
 	return nil
 }
@@ -479,10 +450,6 @@ func validateV2ResponseEnvelope(env protocolv2.ResponseEnvelope) error {
 	_, err = utils.DecodeBase64String(env.Ciphertext)
 	if err != nil {
 		return NewResponseError(http.StatusBadRequest, "invalid ciphertext format")
-	}
-	_, err = utils.DecodeBase64String(env.AAD)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid aad format")
 	}
 	return nil
 }
