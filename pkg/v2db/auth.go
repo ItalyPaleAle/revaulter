@@ -14,10 +14,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-
-	"github.com/italypaleale/go-sql-utils/migrations"
-	pgmigrations "github.com/italypaleale/go-sql-utils/migrations/postgres"
-	sqlitemigrations "github.com/italypaleale/go-sql-utils/migrations/sqlite"
 )
 
 type AuthStore struct {
@@ -73,156 +69,21 @@ type LoginInput struct {
 	SessionTTL   time.Duration
 }
 
-func NewAuthStore(ctx context.Context, db *DB, logger *slog.Logger) (*AuthStore, error) {
-	return NewAuthStoreWithPayloadKey(ctx, db, nil, logger)
+func NewAuthStore(db *DB, logger *slog.Logger) (*AuthStore, error) {
+	return NewAuthStoreWithPayloadKey(db, nil, logger)
 }
 
-func NewAuthStoreWithPayloadKey(ctx context.Context, db *DB, _ []byte, logger *slog.Logger) (*AuthStore, error) {
+func NewAuthStoreWithPayloadKey(db *DB, _ []byte, logger *slog.Logger) (*AuthStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
+
 	s := &AuthStore{db: db, log: logger}
-	if err := s.migrate(ctx); err != nil {
-		return nil, err
-	}
+
 	return s, nil
-}
-
-func (s *AuthStore) migrate(ctx context.Context) error {
-	switch s.db.Backend {
-	case BackendSQLite:
-		m := &sqlitemigrations.Migrations{
-			Pool:              s.db.SQLite,
-			MetadataTableName: "metadata",
-			MetadataKey:       "migrations",
-		}
-		return m.Perform(ctx, []migrations.MigrationFn{
-			func(ctx context.Context) error {
-				return s.migrationSQLite(ctx, m.GetConn())
-			},
-		}, s.log)
-	case BackendPostgres:
-		m := pgmigrations.Migrations{
-			DB:                s.db.Postgres,
-			MetadataTableName: "metadata",
-			MetadataKey:       "migrations",
-		}
-		return m.Perform(ctx, []migrations.MigrationFn{s.migrationPostgres}, s.log)
-	default:
-		return errors.New("unsupported backend")
-	}
-}
-
-func (s *AuthStore) migrationSQLite(ctx context.Context, conn *sql.Conn) error {
-	if conn == nil {
-		return errors.New("sqlite migration connection is nil")
-	}
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS v2_admins (
-			id TEXT PRIMARY KEY,
-			username TEXT NOT NULL UNIQUE,
-			display_name TEXT NOT NULL,
-			status TEXT NOT NULL,
-			webauthn_user_id TEXT NOT NULL DEFAULT '',
-			password_canary TEXT NOT NULL DEFAULT '',
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS v2_admin_credentials (
-			id TEXT PRIMARY KEY,
-			admin_id TEXT NOT NULL REFERENCES v2_admins(id) ON DELETE CASCADE,
-			credential_id TEXT NOT NULL UNIQUE,
-			public_key TEXT NOT NULL,
-			sign_count INTEGER NOT NULL,
-			created_at INTEGER NOT NULL,
-			last_used_at INTEGER NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS v2_auth_challenges (
-			id TEXT PRIMARY KEY,
-			kind TEXT NOT NULL,
-			username TEXT NOT NULL,
-			challenge TEXT NOT NULL,
-			expires_at INTEGER NOT NULL,
-			used_at INTEGER
-		)`,
-		`CREATE TABLE IF NOT EXISTS v2_auth_challenge_payloads (
-			challenge_id TEXT PRIMARY KEY REFERENCES v2_auth_challenges(id) ON DELETE CASCADE,
-			session_data TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS v2_admin_sessions (
-			id TEXT PRIMARY KEY,
-			admin_id TEXT NOT NULL REFERENCES v2_admins(id) ON DELETE CASCADE,
-			username TEXT NOT NULL,
-			expires_at INTEGER NOT NULL,
-			created_at INTEGER NOT NULL,
-			last_seen_at INTEGER NOT NULL,
-			revoked_at INTEGER
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_auth_challenges_lookup ON v2_auth_challenges(kind, username, expires_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_admin_sessions_lookup ON v2_admin_sessions(username, expires_at)`,
-	}
-	for _, stmt := range stmts {
-		if _, err := conn.ExecContext(ctx, stmt); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *AuthStore) migrationPostgres(ctx context.Context) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS v2_admins (
-			id text PRIMARY KEY,
-			username text NOT NULL UNIQUE,
-			display_name text NOT NULL,
-			status text NOT NULL,
-			webauthn_user_id text NOT NULL DEFAULT '',
-			password_canary text NOT NULL DEFAULT '',
-			created_at bigint NOT NULL,
-			updated_at bigint NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS v2_admin_credentials (
-			id text PRIMARY KEY,
-			admin_id text NOT NULL REFERENCES v2_admins(id) ON DELETE CASCADE,
-			credential_id text NOT NULL UNIQUE,
-			public_key text NOT NULL,
-			sign_count bigint NOT NULL,
-			created_at bigint NOT NULL,
-			last_used_at bigint NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS v2_auth_challenges (
-			id text PRIMARY KEY,
-			kind text NOT NULL,
-			username text NOT NULL,
-			challenge text NOT NULL,
-			expires_at bigint NOT NULL,
-			used_at bigint
-		)`,
-		`CREATE TABLE IF NOT EXISTS v2_auth_challenge_payloads (
-			challenge_id text PRIMARY KEY REFERENCES v2_auth_challenges(id) ON DELETE CASCADE,
-			session_data text NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS v2_admin_sessions (
-			id text PRIMARY KEY,
-			admin_id text NOT NULL REFERENCES v2_admins(id) ON DELETE CASCADE,
-			username text NOT NULL,
-			expires_at bigint NOT NULL,
-			created_at bigint NOT NULL,
-			last_seen_at bigint NOT NULL,
-			revoked_at bigint
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_auth_challenges_lookup ON v2_auth_challenges(kind, username, expires_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_v2_admin_sessions_lookup ON v2_admin_sessions(username, expires_at)`,
-	}
-	for _, stmt := range stmts {
-		if _, err := s.db.Postgres.Exec(ctx, stmt); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {

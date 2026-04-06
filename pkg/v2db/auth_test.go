@@ -1,7 +1,6 @@
 package v2db
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -9,12 +8,15 @@ import (
 )
 
 func TestAuthStoreRegisterUserAndLoginSQLite(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
+
 	conn, _, err := Open(ctx, t.TempDir()+"/auth.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	store, err := NewAuthStore(ctx, conn, nil)
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
 	require.NoError(t, err)
 
 	n, err := store.CountUsers(ctx)

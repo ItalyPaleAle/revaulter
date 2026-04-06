@@ -1,7 +1,6 @@
 package v2db
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -11,16 +10,19 @@ import (
 )
 
 func TestRequestStoreSQLiteLifecycle(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
+
 	conn, _, err := Open(ctx, t.TempDir()+"/test.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
 
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
-	store, err := NewRequestStore(ctx, conn, key, nil)
+	store, err := NewRequestStore(conn, key, nil)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -81,12 +83,15 @@ func TestRequestStoreSQLiteLifecycle(t *testing.T) {
 }
 
 func TestRequestStoreSQLiteCancel(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
+
 	conn, _, err := Open(ctx, t.TempDir()+"/test.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	store, err := NewRequestStore(ctx, conn, bytes32(7), nil)
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewRequestStore(conn, bytes32(7), nil)
 	require.NoError(t, err)
 
 	err = store.CreateRequest(ctx, CreateRequestInput{
@@ -119,12 +124,15 @@ func TestRequestStoreSQLiteCancel(t *testing.T) {
 }
 
 func TestRequestStoreSQLiteExpirePendingAndReturnStates(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
+
 	conn, _, err := Open(ctx, t.TempDir()+"/test.db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	store, err := NewRequestStore(ctx, conn, bytes32(9), nil)
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewRequestStore(conn, bytes32(9), nil)
 	require.NoError(t, err)
 
 	now := time.Now().UTC()

@@ -27,21 +27,27 @@ func (s *Server) initStore(log *slog.Logger) error {
 		return errors.New("databaseDSN configured but secretKey was not parsed")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	connCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	db, _, err := v2db.Open(ctx, cfg.DatabaseDSN)
+	db, _, err := v2db.Open(connCtx, cfg.DatabaseDSN)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
-	authStore, err := v2db.NewAuthStore(ctx, db, log)
+	err = v2db.RunMigrations(context.Background(), db, log)
+	if err != nil {
+		_ = db.Close()
+		return fmt.Errorf("failed to run database migrations: %w", err)
+	}
+
+	authStore, err := v2db.NewAuthStore(db, log)
 	if err != nil {
 		_ = db.Close()
 		return fmt.Errorf("failed to initialize auth store: %w", err)
 	}
 
-	store, err := v2db.NewRequestStore(ctx, db, key, log)
+	store, err := v2db.NewRequestStore(db, key, log)
 	if err != nil {
 		_ = db.Close()
 		return fmt.Errorf("failed to initialize request store: %w", err)

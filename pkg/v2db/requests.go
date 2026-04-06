@@ -15,9 +15,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/italypaleale/go-sql-utils/migrations"
-	pgmigrations "github.com/italypaleale/go-sql-utils/migrations/postgres"
-	sqlitemigrations "github.com/italypaleale/go-sql-utils/migrations/sqlite"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
@@ -77,7 +74,7 @@ type RequestStore struct {
 	log        *slog.Logger
 }
 
-func NewRequestStore(ctx context.Context, db *DB, payloadKey []byte, logger *slog.Logger) (*RequestStore, error) {
+func NewRequestStore(db *DB, payloadKey []byte, logger *slog.Logger) (*RequestStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
@@ -94,91 +91,7 @@ func NewRequestStore(ctx context.Context, db *DB, payloadKey []byte, logger *slo
 		log:        logger,
 	}
 
-	// Perform migrations
-	err := s.migrate(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to perform migrations: %w", err)
-	}
-
 	return s, nil
-}
-
-func (s *RequestStore) migrate(ctx context.Context) error {
-	switch s.db.Backend {
-	case BackendSQLite:
-		m := &sqlitemigrations.Migrations{
-			Pool:              s.db.SQLite,
-			MetadataTableName: "_revaulter_v2_migrations",
-			MetadataKey:       "requests",
-		}
-		return m.Perform(ctx, []migrations.MigrationFn{
-			func(ctx context.Context) error {
-				return s.migrationCreateRequestsTableSQLite(ctx, m.GetConn())
-			},
-		}, s.log)
-	case BackendPostgres:
-		m := pgmigrations.Migrations{
-			DB:                s.db.Postgres,
-			MetadataTableName: "_revaulter_v2_migrations",
-			MetadataKey:       "requests",
-		}
-		return m.Perform(ctx, []migrations.MigrationFn{s.migrationCreateRequestsTablePostgres}, s.log)
-	default:
-		return errors.New("unsupported backend")
-	}
-}
-
-func (s *RequestStore) migrationCreateRequestsTableSQLite(ctx context.Context, conn *sql.Conn) error {
-	if conn == nil {
-		return errors.New("sqlite migration connection is nil")
-	}
-	_, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS v2_requests (
-			state TEXT PRIMARY KEY,
-			status TEXT NOT NULL,
-			operation TEXT NOT NULL,
-			target_user TEXT NOT NULL,
-			key_label TEXT NOT NULL,
-			algorithm TEXT NOT NULL,
-			requestor_ip TEXT NOT NULL,
-			note TEXT NOT NULL,
-			created_at INTEGER NOT NULL,
-			expires_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL,
-			payload_ciphertext BLOB NOT NULL,
-			payload_nonce BLOB NOT NULL,
-			result_ciphertext BLOB,
-			result_nonce BLOB
-		)`)
-	if err != nil {
-		return err
-	}
-	_, _ = conn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_v2_requests_status_expires ON v2_requests(status, expires_at)`)
-	return nil
-}
-
-func (s *RequestStore) migrationCreateRequestsTablePostgres(ctx context.Context) error {
-	_, err := s.db.Postgres.Exec(ctx, `CREATE TABLE IF NOT EXISTS v2_requests (
-			state text PRIMARY KEY,
-			status text NOT NULL,
-			operation text NOT NULL,
-			target_user text NOT NULL,
-			key_label text NOT NULL,
-			algorithm text NOT NULL,
-			requestor_ip text NOT NULL,
-			note text NOT NULL,
-			created_at bigint NOT NULL,
-			expires_at bigint NOT NULL,
-			updated_at bigint NOT NULL,
-			payload_ciphertext bytea NOT NULL,
-			payload_nonce bytea NOT NULL,
-			result_ciphertext bytea,
-			result_nonce bytea
-		)`)
-	if err != nil {
-		return err
-	}
-	_, _ = s.db.Postgres.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_v2_requests_status_expires ON v2_requests(status, expires_at)`)
-	return nil
 }
 
 func (s *RequestStore) CreateRequest(ctx context.Context, in CreateRequestInput) error {
