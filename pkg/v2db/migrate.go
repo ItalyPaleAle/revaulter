@@ -43,11 +43,11 @@ func RunMigrations(ctx context.Context, conn *DB, logger *slog.Logger) error {
 		logger = slog.Default()
 	}
 
-	switch conn.Backend {
+	switch conn.kind {
 	case BackendPostgres:
-		return runPostgresMigrations(ctx, conn.Postgres, logger)
+		return runPostgresMigrations(ctx, conn.pgx, logger)
 	case BackendSQLite:
-		return runSQLiteMigrations(ctx, conn.SQLite, logger)
+		return runSQLiteMigrations(ctx, conn.sql, logger)
 	default:
 		return errors.New("unsupported backend")
 	}

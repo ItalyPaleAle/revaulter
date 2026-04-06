@@ -9,10 +9,7 @@ import (
 
 func TestAuthStoreRegisterUserAndLoginSQLite(t *testing.T) {
 	ctx := t.Context()
-
-	conn, _, err := Open(ctx, t.TempDir()+"/auth.db")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
+	conn := newTestDatabase(t)
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 

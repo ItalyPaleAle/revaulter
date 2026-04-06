@@ -85,8 +85,8 @@ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/italypaleale/go-kit v0.0.0-20260326154118-cba072650bb2 h1:hYxykAgY7gkox09qRTSiebziW/rA9ppFKlGJDzHvn9Y=
 github.com/italypaleale/go-kit v0.0.0-20260326154118-cba072650bb2/go.mod h1:feCelYlSjdDx0QzOSX+YWzzNpHSplZa85raQZYSmC9M=
-github.com/italypaleale/go-sql-utils v0.1.0 h1:QsHMbbfWZ8BgJyuHWvc72T0p1yyIKAmZSWNe5tkG41A=
-github.com/italypaleale/go-sql-utils v0.1.0/go.mod h1:XdmQASGeb8XhhLjOjm2XATjIf3pltzk/U/DQEdE2gHY=
+github.com/italypaleale/go-sql-utils v0.2.0 h1:ZiNJ7fCciLi3K0Y3XSCbunUEQyyEDx9+ujkfAxgI1/M=
+github.com/italypaleale/go-sql-utils v0.2.0/go.mod h1:KPhTLxNq3MOEhT1ggC5fT6Hen0zHbOOQcFuOZGG+NV0=
 github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 h1:D/V0gu4zQ3cL2WKeVNVM4r2gLxGGf6McLwgXzRTo2RQ=
 github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6/go.mod h1:a/s9Lp5W7n/DD0VrVoyJ00FbP2ytTPDVOivvn2bMlds=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=

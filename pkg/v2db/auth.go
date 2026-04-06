@@ -87,18 +87,8 @@ func NewAuthStoreWithPayloadKey(db *DB, _ []byte, logger *slog.Logger) (*AuthSto
 }
 
 func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
-	var (
-		n   int
-		err error
-	)
-	switch s.db.Backend {
-	case BackendSQLite:
-		err = s.db.SQLite.QueryRowContext(ctx, `SELECT COUNT(*) FROM v2_admins`).Scan(&n)
-	case BackendPostgres:
-		err = s.db.Postgres.QueryRow(ctx, `SELECT COUNT(*) FROM v2_admins`).Scan(&n)
-	default:
-		err = errors.New("unsupported backend")
-	}
+	var n int
+	err := s.db.db.QueryRow(ctx, `SELECT COUNT(*) FROM v2_admins`).Scan(&n)
 	return n, err
 }
 
@@ -107,12 +97,12 @@ func (s *AuthStore) GetUserByWebAuthnUserID(ctx context.Context, webAuthnUserID 
 		a   User
 		err error
 	)
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE webauthn_user_id = ?`, webAuthnUserID).
+		err = s.db.sql.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE webauthn_user_id = ?`, webAuthnUserID).
 			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID, &a.PasswordCanary)
 	case BackendPostgres:
-		err = s.db.Postgres.QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE webauthn_user_id = $1`, webAuthnUserID).
+		err = s.db.pgx.QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE webauthn_user_id = $1`, webAuthnUserID).
 			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID, &a.PasswordCanary)
 	default:
 		err = errors.New("unsupported backend")
@@ -132,12 +122,12 @@ func (s *AuthStore) GetUserByUsername(ctx context.Context, username string) (*Us
 		a   User
 		err error
 	)
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		err = s.db.SQLite.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE username = ?`, username).
+		err = s.db.sql.QueryRowContext(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE username = ?`, username).
 			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID, &a.PasswordCanary)
 	case BackendPostgres:
-		err = s.db.Postgres.QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE username = $1`, username).
+		err = s.db.pgx.QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE username = $1`, username).
 			Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID, &a.PasswordCanary)
 	default:
 		err = errors.New("unsupported backend")
@@ -151,12 +141,12 @@ func (s *AuthStore) GetUserByUsername(ctx context.Context, username string) (*Us
 }
 
 func (s *AuthStore) SetPasswordCanary(ctx context.Context, username, canary string) error {
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		_, err := s.db.SQLite.ExecContext(ctx, `UPDATE v2_admins SET password_canary = ? WHERE username = ?`, canary, username)
+		_, err := s.db.sql.ExecContext(ctx, `UPDATE v2_admins SET password_canary = ? WHERE username = ?`, canary, username)
 		return err
 	case BackendPostgres:
-		_, err := s.db.Postgres.Exec(ctx, `UPDATE v2_admins SET password_canary = $1 WHERE username = $2`, canary, username)
+		_, err := s.db.pgx.Exec(ctx, `UPDATE v2_admins SET password_canary = $1 WHERE username = $2`, canary, username)
 		return err
 	default:
 		return errors.New("unsupported backend")
@@ -164,9 +154,9 @@ func (s *AuthStore) SetPasswordCanary(ctx context.Context, username, canary stri
 }
 
 func (s *AuthStore) ListCredentialIDs(ctx context.Context, username string) ([]string, error) {
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		rows, err := s.db.SQLite.QueryContext(ctx, `SELECT c.credential_id FROM v2_admin_credentials c INNER JOIN v2_admins a ON a.id = c.admin_id WHERE a.username = ? ORDER BY c.created_at ASC`, username)
+		rows, err := s.db.sql.QueryContext(ctx, `SELECT c.credential_id FROM v2_admin_credentials c INNER JOIN v2_admins a ON a.id = c.admin_id WHERE a.username = ? ORDER BY c.created_at ASC`, username)
 		if err != nil {
 			return nil, err
 		}
@@ -182,7 +172,7 @@ func (s *AuthStore) ListCredentialIDs(ctx context.Context, username string) ([]s
 		}
 		return out, rows.Err()
 	case BackendPostgres:
-		rows, err := s.db.Postgres.Query(ctx, `SELECT c.credential_id FROM v2_admin_credentials c INNER JOIN v2_admins a ON a.id = c.admin_id WHERE a.username = $1 ORDER BY c.created_at ASC`, username)
+		rows, err := s.db.pgx.Query(ctx, `SELECT c.credential_id FROM v2_admin_credentials c INNER JOIN v2_admins a ON a.id = c.admin_id WHERE a.username = $1 ORDER BY c.created_at ASC`, username)
 		if err != nil {
 			return nil, err
 		}
@@ -203,9 +193,9 @@ func (s *AuthStore) ListCredentialIDs(ctx context.Context, username string) ([]s
 }
 
 func (s *AuthStore) ListCredentials(ctx context.Context, username string) ([]AuthCredentialRecord, error) {
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		rows, err := s.db.SQLite.QueryContext(ctx, `SELECT c.credential_id, c.public_key, c.sign_count
+		rows, err := s.db.sql.QueryContext(ctx, `SELECT c.credential_id, c.public_key, c.sign_count
 			FROM v2_admin_credentials c
 			INNER JOIN v2_admins a ON a.id = c.admin_id
 			WHERE a.username = ?
@@ -225,7 +215,7 @@ func (s *AuthStore) ListCredentials(ctx context.Context, username string) ([]Aut
 		}
 		return out, rows.Err()
 	case BackendPostgres:
-		rows, err := s.db.Postgres.Query(ctx, `SELECT c.credential_id, c.public_key, c.sign_count
+		rows, err := s.db.pgx.Query(ctx, `SELECT c.credential_id, c.public_key, c.sign_count
 			FROM v2_admin_credentials c
 			INNER JOIN v2_admins a ON a.id = c.admin_id
 			WHERE a.username = $1
@@ -296,9 +286,9 @@ func (s *AuthStore) BeginChallengeWithPayload(ctx context.Context, kind, usernam
 }
 
 func (s *AuthStore) insertChallenge(ctx context.Context, rec *AuthChallenge, payload []byte) error {
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		tx, err := s.db.SQLite.BeginTx(ctx, nil)
+		tx, err := s.db.sql.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
@@ -328,7 +318,7 @@ func (s *AuthStore) insertChallenge(ctx context.Context, rec *AuthChallenge, pay
 		}
 
 	case BackendPostgres:
-		tx, err := s.db.Postgres.Begin(ctx)
+		tx, err := s.db.pgx.Begin(ctx)
 		if err != nil {
 			return err
 		}
@@ -364,9 +354,9 @@ func (s *AuthStore) insertChallenge(ctx context.Context, rec *AuthChallenge, pay
 
 func (s *AuthStore) ConsumeChallenge(ctx context.Context, id, kind, username string) (bool, error) {
 	now := time.Now().Unix()
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		res, err := s.db.SQLite.ExecContext(ctx,
+		res, err := s.db.sql.ExecContext(ctx,
 			`UPDATE v2_auth_challenges SET used_at = ? WHERE id = ? AND kind = ? AND username = ? AND used_at IS NULL AND expires_at >= ?`,
 			now, id, kind, username, now,
 		)
@@ -376,7 +366,7 @@ func (s *AuthStore) ConsumeChallenge(ctx context.Context, id, kind, username str
 		n, _ := res.RowsAffected()
 		return n == 1, nil
 	case BackendPostgres:
-		tag, err := s.db.Postgres.Exec(ctx,
+		tag, err := s.db.pgx.Exec(ctx,
 			`UPDATE v2_auth_challenges SET used_at = $1 WHERE id = $2 AND kind = $3 AND username = $4 AND used_at IS NULL AND expires_at >= $5`,
 			now, id, kind, username, now,
 		)
@@ -398,13 +388,13 @@ func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind, usern
 		return true, nil
 	}
 	var payload string
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		err = s.db.SQLite.
+		err = s.db.sql.
 			QueryRowContext(ctx, `SELECT session_data FROM v2_auth_challenge_payloads WHERE challenge_id = ?`, id).
 			Scan(&payload)
 	case BackendPostgres:
-		err = s.db.Postgres.
+		err = s.db.pgx.
 			QueryRow(ctx, `SELECT session_data FROM v2_auth_challenge_payloads WHERE challenge_id = $1`, id).
 			Scan(&payload)
 	default:
@@ -424,7 +414,7 @@ func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind, usern
 }
 
 func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*AuthSession, error) {
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
 		return s.registerUserSQLite(ctx, in)
 	case BackendPostgres:
@@ -435,7 +425,7 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 }
 
 func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, error) {
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
 		return s.loginSQLite(ctx, in)
 	case BackendPostgres:
@@ -451,13 +441,13 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 		err                             error
 		expiresAt, createdAt, revokedAt sql.NullInt64
 	)
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		err = s.db.SQLite.
+		err = s.db.sql.
 			QueryRowContext(ctx, `SELECT id, admin_id, username, expires_at, created_at, revoked_at FROM v2_admin_sessions WHERE id = ?`, id).
 			Scan(&sess.ID, &sess.UserID, &sess.Username, &expiresAt, &createdAt, &revokedAt)
 	case BackendPostgres:
-		err = s.db.Postgres.
+		err = s.db.pgx.
 			QueryRow(ctx, `SELECT id, admin_id, username, expires_at, created_at, revoked_at FROM v2_admin_sessions WHERE id = $1`, id).
 			Scan(&sess.ID, &sess.UserID, &sess.Username, &expiresAt, &createdAt, &revokedAt)
 	default:
@@ -484,12 +474,12 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 
 func (s *AuthStore) RevokeSession(ctx context.Context, id string) error {
 	now := time.Now().Unix()
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		_, err := s.db.SQLite.ExecContext(ctx, `UPDATE v2_admin_sessions SET revoked_at = ? WHERE id = ?`, now, id)
+		_, err := s.db.sql.ExecContext(ctx, `UPDATE v2_admin_sessions SET revoked_at = ? WHERE id = ?`, now, id)
 		return err
 	case BackendPostgres:
-		_, err := s.db.Postgres.Exec(ctx, `UPDATE v2_admin_sessions SET revoked_at = $1 WHERE id = $2`, now, id)
+		_, err := s.db.pgx.Exec(ctx, `UPDATE v2_admin_sessions SET revoked_at = $1 WHERE id = $2`, now, id)
 		return err
 	default:
 		return errors.New("unsupported backend")
@@ -498,12 +488,12 @@ func (s *AuthStore) RevokeSession(ctx context.Context, id string) error {
 
 func (s *AuthStore) touchSession(ctx context.Context, id string) error {
 	now := time.Now().Unix()
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
-		_, err := s.db.SQLite.ExecContext(ctx, `UPDATE v2_admin_sessions SET last_seen_at = ? WHERE id = ?`, now, id)
+		_, err := s.db.sql.ExecContext(ctx, `UPDATE v2_admin_sessions SET last_seen_at = ? WHERE id = ?`, now, id)
 		return err
 	case BackendPostgres:
-		_, err := s.db.Postgres.Exec(ctx, `UPDATE v2_admin_sessions SET last_seen_at = $1 WHERE id = $2`, now, id)
+		_, err := s.db.pgx.Exec(ctx, `UPDATE v2_admin_sessions SET last_seen_at = $1 WHERE id = $2`, now, id)
 		return err
 	default:
 		return errors.New("unsupported backend")
@@ -511,7 +501,7 @@ func (s *AuthStore) touchSession(ctx context.Context, id string) error {
 }
 
 func (s *AuthStore) registerUserSQLite(ctx context.Context, in RegisterUserInput) (*AuthSession, error) {
-	tx, err := s.db.SQLite.BeginTx(ctx, nil)
+	tx, err := s.db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +543,7 @@ func (s *AuthStore) registerUserSQLite(ctx context.Context, in RegisterUserInput
 }
 
 func (s *AuthStore) registerUserPostgres(ctx context.Context, in RegisterUserInput) (*AuthSession, error) {
-	tx, err := s.db.Postgres.Begin(ctx)
+	tx, err := s.db.pgx.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -599,7 +589,7 @@ func (s *AuthStore) registerUserPostgres(ctx context.Context, in RegisterUserInp
 }
 
 func (s *AuthStore) loginSQLite(ctx context.Context, in LoginInput) (*AuthSession, error) {
-	tx, err := s.db.SQLite.BeginTx(ctx, nil)
+	tx, err := s.db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -634,7 +624,7 @@ func (s *AuthStore) loginSQLite(ctx context.Context, in LoginInput) (*AuthSessio
 }
 
 func (s *AuthStore) loginPostgres(ctx context.Context, in LoginInput) (*AuthSession, error) {
-	tx, err := s.db.Postgres.Begin(ctx)
+	tx, err := s.db.pgx.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -711,11 +701,11 @@ func insertSessionPgx(ctx context.Context, tx pgx.Tx, userID, username string, t
 // CleanupExpired deletes expired/used challenges and revoked sessions that are older than 10 minutes past their expiry or revocation
 func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 	cutoff := now.Add(-10 * time.Minute).Unix()
-	switch s.db.Backend {
+	switch s.db.kind {
 	case BackendSQLite:
 		// Delete expired/used challenges
 		// This also causes the deletion of payload challenges because of the foreign key reference
-		_, err := s.db.SQLite.ExecContext(ctx,
+		_, err := s.db.sql.ExecContext(ctx,
 			`DELETE FROM v2_auth_challenges WHERE expires_at < ? OR used_at IS NOT NULL`,
 			cutoff,
 		)
@@ -724,7 +714,7 @@ func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 		}
 
 		// Delete expired or revoked sessions
-		_, err = s.db.SQLite.ExecContext(ctx,
+		_, err = s.db.sql.ExecContext(ctx,
 			`DELETE FROM v2_admin_sessions WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)`,
 			cutoff, cutoff,
 		)
@@ -734,7 +724,7 @@ func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 	case BackendPostgres:
 		// Delete expired/used challenges
 		// This also causes the deletion of payload challenges because of the foreign key reference
-		_, err := s.db.Postgres.Exec(ctx,
+		_, err := s.db.pgx.Exec(ctx,
 			`DELETE FROM v2_auth_challenges WHERE expires_at < $1 OR used_at IS NOT NULL`,
 			cutoff,
 		)
@@ -743,7 +733,7 @@ func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 		}
 
 		// Delete expired or revoked sessions
-		_, err = s.db.Postgres.Exec(ctx,
+		_, err = s.db.pgx.Exec(ctx,
 			`DELETE FROM v2_admin_sessions WHERE expires_at < $1 OR (revoked_at IS NOT NULL AND revoked_at < $2)`,
 			cutoff, cutoff,
 		)

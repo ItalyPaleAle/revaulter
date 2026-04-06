@@ -9,7 +9,7 @@ require (
 	github.com/go-webauthn/webauthn v0.16.2
 	github.com/google/uuid v1.6.0
 	github.com/italypaleale/go-kit v0.0.0-20260326154118-cba072650bb2
-	github.com/italypaleale/go-sql-utils v0.1.0
+	github.com/italypaleale/go-sql-utils v0.2.0
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/jinzhu/copier v0.4.0
 	github.com/lestrrat-go/jwx/v2 v2.1.6

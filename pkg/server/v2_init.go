@@ -30,7 +30,7 @@ func (s *Server) initStore(log *slog.Logger) error {
 	connCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	db, _, err := v2db.Open(connCtx, cfg.DatabaseDSN)
+	db, err := v2db.Open(connCtx, cfg.DatabaseDSN)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

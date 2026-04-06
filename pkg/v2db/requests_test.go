@@ -11,10 +11,7 @@ import (
 
 func TestRequestStoreSQLiteLifecycle(t *testing.T) {
 	ctx := t.Context()
-
-	conn, _, err := Open(ctx, t.TempDir()+"/test.db")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
+	conn := newTestDatabase(t)
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
@@ -84,10 +81,7 @@ func TestRequestStoreSQLiteLifecycle(t *testing.T) {
 
 func TestRequestStoreSQLiteCancel(t *testing.T) {
 	ctx := t.Context()
-
-	conn, _, err := Open(ctx, t.TempDir()+"/test.db")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
+	conn := newTestDatabase(t)
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
@@ -125,10 +119,7 @@ func TestRequestStoreSQLiteCancel(t *testing.T) {
 
 func TestRequestStoreSQLiteExpirePendingAndReturnStates(t *testing.T) {
 	ctx := t.Context()
-
-	conn, _, err := Open(ctx, t.TempDir()+"/test.db")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
+	conn := newTestDatabase(t)
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 

@@ -5,112 +5,91 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/italypaleale/go-sql-utils/adapter"
+	postgresadapter "github.com/italypaleale/go-sql-utils/adapter/postgres"
+	sqladapter "github.com/italypaleale/go-sql-utils/adapter/sql"
+	sqliteutils "github.com/italypaleale/go-sql-utils/sqlite"
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "modernc.org/sqlite"
+)
+
+type BackendKind string
+
+const (
+	BackendSQLite   BackendKind = "sqlite"
+	BackendPostgres BackendKind = "postgres"
 )
 
 type DB struct {
-	Backend  BackendKind
-	SQLite   *sql.DB
-	Postgres *pgxpool.Pool
+	kind BackendKind
+	db   adapter.DatabaseConn
+	sql  *sql.DB
+	pgx  *pgxpool.Pool
 }
 
 func (db *DB) Close() error {
-	switch db.Backend {
-	case BackendPostgres:
-		if db.Postgres != nil {
-			db.Postgres.Close()
+	// Close the connection
+	if db.sql != nil {
+		err := db.sql.Close()
+		if err != nil {
+			return fmt.Errorf("error closing database connection: %w", err)
 		}
-		return nil
-	case BackendSQLite:
-		if db.SQLite != nil {
-			return db.SQLite.Close()
-		}
-		return nil
-	default:
-		return nil
+		db.sql = nil
 	}
+
+	if db.pgx != nil {
+		db.pgx.Close()
+		db.pgx = nil
+	}
+
+	db.db = nil
+
+	return nil
 }
 
-func Open(ctx context.Context, rawDSN string) (*DB, ParsedDSN, error) {
-	parsed, err := InferDSN(rawDSN)
-	if err != nil {
-		return nil, ParsedDSN{}, err
+// Open the connection
+func Open(ctx context.Context, connString string) (*DB, error) {
+	connString = strings.TrimSpace(connString)
+	if connString == "" {
+		return nil, errors.New("connection string is empty")
 	}
 
-	switch parsed.Backend {
-	case BackendPostgres:
-		cfg, err := pgxpool.ParseConfig(parsed.PostgresDSN)
+	switch {
+	// Postgres connection strings begin with "postgres://" or "postgresql://"
+	case strings.HasPrefix(connString, "postgres://"), strings.HasPrefix(connString, "postgresql://"):
+		cfg, err := pgxpool.ParseConfig(connString)
 		if err != nil {
-			return nil, ParsedDSN{}, fmt.Errorf("invalid postgres DSN: %w", err)
+			return nil, fmt.Errorf("invalid Postgres connection string: %w", err)
 		}
 		if cfg.ConnConfig.ConnectTimeout == 0 {
 			cfg.ConnConfig.ConnectTimeout = 10 * time.Second
 		}
-		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		conn, err := pgxpool.NewWithConfig(ctx, cfg)
 		if err != nil {
-			return nil, ParsedDSN{}, err
+			return nil, fmt.Errorf("failed to connect to Postgres: %w", err)
 		}
-		return &DB{Backend: BackendPostgres, Postgres: pool}, parsed, nil
-	case BackendSQLite:
-		if err := ensureSQLiteDir(parsed.SQLitePath); err != nil {
-			return nil, ParsedDSN{}, err
-		}
-		sqldb, err := sql.Open("sqlite", parsed.SQLitePath)
-		if err != nil {
-			return nil, ParsedDSN{}, err
-		}
-		if err := configureSQLite(ctx, sqldb); err != nil {
-			_ = sqldb.Close()
-			return nil, ParsedDSN{}, err
-		}
-		return &DB{Backend: BackendSQLite, SQLite: sqldb}, parsed, nil
+		return &DB{
+			kind: BackendPostgres,
+			pgx:  conn,
+			db:   postgresadapter.AdaptPgxConn(conn),
+		}, nil
+
+	// Default to sqlite
 	default:
-		return nil, ParsedDSN{}, errors.New("unsupported backend")
+		conn, err := sqliteutils.Connect(sqliteutils.ConnectOpts{
+			ConnString: connString,
+			Logger:     slog.Default().With(slog.String("component", "sqliteutils")),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to open SQLite database: %w", err)
+		}
+		return &DB{
+			kind: BackendSQLite,
+			sql:  conn,
+			db:   sqladapter.AdaptDatabaseSQLConn(conn),
+		}, nil
 	}
-}
-
-func ensureSQLiteDir(path string) error {
-	if path == "" {
-		return errors.New("sqlite path is empty")
-	}
-	// Skip special in-memory modes.
-	if path == ":memory:" || strings.HasPrefix(path, "file::memory:") {
-		return nil
-	}
-
-	dir := filepath.Dir(path)
-	if dir == "." || dir == "" {
-		return nil
-	}
-	return os.MkdirAll(dir, 0o700)
-}
-
-func configureSQLite(ctx context.Context, db *sql.DB) error {
-	if db == nil {
-		return errors.New("sqlite db is nil")
-	}
-	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys=ON;"); err != nil {
-		return fmt.Errorf("failed to enable SQLite foreign_keys: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout=5000;"); err != nil {
-		return fmt.Errorf("failed to set SQLite busy_timeout: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, "PRAGMA synchronous=NORMAL;"); err != nil {
-		return fmt.Errorf("failed to set SQLite synchronous mode: %w", err)
-	}
-
-	var mode string
-	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL;").Scan(&mode); err != nil {
-		return fmt.Errorf("failed to enable SQLite WAL: %w", err)
-	}
-	if !strings.EqualFold(mode, "wal") {
-		return fmt.Errorf("failed to enable SQLite WAL: journal_mode=%q", mode)
-	}
-	return nil
 }
