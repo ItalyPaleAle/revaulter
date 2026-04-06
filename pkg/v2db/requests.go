@@ -7,15 +7,12 @@ import (
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
@@ -103,24 +100,12 @@ func (s *RequestStore) CreateRequest(ctx context.Context, in CreateRequestInput)
 	note := in.Body.Note
 	now := in.CreatedAt.Unix()
 	expires := in.ExpiresAt.Unix()
-	switch s.db.kind {
-	case BackendSQLite:
-		_, err = s.db.sql.ExecContext(ctx,
-			`INSERT INTO v2_requests
+	_, err = s.db.db.Exec(ctx,
+		`INSERT INTO v2_requests
 			(state, status, operation, target_user, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, payload_ciphertext, payload_nonce)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			in.State, string(V2RequestStatusPending), in.Operation, in.Body.TargetUser, in.Body.KeyLabel, in.Body.Algorithm, in.RequestorIP, note, now, expires, now, payloadCiphertext, payloadNonce,
-		)
-	case BackendPostgres:
-		_, err = s.db.pgx.Exec(ctx,
-			`INSERT INTO v2_requests
-			(state, status, operation, target_user, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, payload_ciphertext, payload_nonce)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-			in.State, string(V2RequestStatusPending), in.Operation, in.Body.TargetUser, in.Body.KeyLabel, in.Body.Algorithm, in.RequestorIP, note, now, expires, now, payloadCiphertext, payloadNonce,
-		)
-	default:
-		err = errors.New("unsupported backend")
-	}
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		in.State, string(V2RequestStatusPending), in.Operation, in.Body.TargetUser, in.Body.KeyLabel, in.Body.Algorithm, in.RequestorIP, note, now, expires, now, payloadCiphertext, payloadNonce,
+	)
 	return err
 }
 
@@ -143,33 +128,17 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 		PayloadCiphertext, PayloadNonce                                              []byte
 		ResultCiphertext, ResultNonce                                                []byte
 	}
-	var (
-		row rowT
-		err error
-	)
-	switch s.db.kind {
-	case BackendSQLite:
-		err = s.db.sql.
-			QueryRowContext(ctx,
-				`SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at,updated_at,payload_ciphertext,payload_nonce,result_ciphertext,result_nonce FROM v2_requests WHERE state = ?`,
-				state,
-			).
-			Scan(
-				&row.State, &row.Status, &row.Operation, &row.TargetUser, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.PayloadCiphertext, &row.PayloadNonce, &row.ResultCiphertext, &row.ResultNonce,
-			)
-	case BackendPostgres:
-		err = s.db.pgx.
-			QueryRow(ctx,
-				`SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at,updated_at,payload_ciphertext,payload_nonce,result_ciphertext,result_nonce FROM v2_requests WHERE state = $1`,
-				state,
-			).
-			Scan(
-				&row.State, &row.Status, &row.Operation, &row.TargetUser, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.PayloadCiphertext, &row.PayloadNonce, &row.ResultCiphertext, &row.ResultNonce,
-			)
-	default:
-		return nil, errors.New("unsupported backend")
-	}
-	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows) {
+	var row rowT
+
+	err := s.db.db.
+		QueryRow(ctx,
+			`SELECT state ,status ,operation ,target_user ,key_label ,algorithm ,requestor_ip ,note ,created_at ,expires_at ,updated_at ,payload_ciphertext ,payload_nonce ,result_ciphertext ,result_nonce FROM v2_requests WHERE state = $1`,
+			state,
+		).
+		Scan(
+			&row.State, &row.Status, &row.Operation, &row.TargetUser, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.PayloadCiphertext, &row.PayloadNonce, &row.ResultCiphertext, &row.ResultNonce,
+		)
+	if s.db.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -180,6 +149,7 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 	if err != nil {
 		return nil, err
 	}
+
 	rec := &V2RequestRecord{
 		State:       row.State,
 		Status:      V2RequestStatus(row.Status),
@@ -194,6 +164,7 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 		UpdatedAt:   time.Unix(row.UpdatedAt, 0),
 		RequestBody: body,
 	}
+
 	if len(row.ResultCiphertext) > 0 && len(row.ResultNonce) > 0 {
 		var env protocolv2.ResponseEnvelope
 		err = s.openJSON("request-result", row.State, row.ResultCiphertext, row.ResultNonce, &env)
@@ -208,50 +179,25 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 func (s *RequestStore) ListPending(ctx context.Context) ([]V2RequestListItem, error) {
 	_ = s.ExpirePending(ctx, time.Now())
 	var out []V2RequestListItem
-	switch s.db.kind {
-	case BackendSQLite:
-		rows, err := s.db.sql.QueryContext(ctx,
-			`SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = ? ORDER BY created_at ASC`,
-			string(V2RequestStatusPending),
-		)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var item V2RequestListItem
-			err = rows.Scan(&item.State, &item.Status, &item.Operation, &item.TargetUser, &item.KeyLabel, &item.Algorithm, &item.Requestor, &item.Note, &item.Date, &item.Expiry)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, item)
-		}
-
-		return out, rows.Err()
-	case BackendPostgres:
-		rows, err := s.db.pgx.Query(ctx,
-			`SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = $1 ORDER BY created_at ASC`,
-			string(V2RequestStatusPending),
-		)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var item V2RequestListItem
-			err = rows.Scan(&item.State, &item.Status, &item.Operation, &item.TargetUser, &item.KeyLabel, &item.Algorithm, &item.Requestor, &item.Note, &item.Date, &item.Expiry)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, item)
-		}
-
-		return out, rows.Err()
-	default:
-		return nil, errors.New("unsupported backend")
+	rows, err := s.db.db.Query(ctx,
+		`SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = $1 ORDER BY created_at ASC`,
+		string(V2RequestStatusPending),
+	)
+	if err != nil {
+		return nil, err
 	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var item V2RequestListItem
+		err = rows.Scan(&item.State, &item.Status, &item.Operation, &item.TargetUser, &item.KeyLabel, &item.Algorithm, &item.Requestor, &item.Note, &item.Date, &item.Expiry)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+
+	return out, rows.Err()
 }
 
 func (s *RequestStore) CompleteRequest(ctx context.Context, state string, env protocolv2.ResponseEnvelope) (bool, error) {
@@ -259,175 +205,70 @@ func (s *RequestStore) CompleteRequest(ctx context.Context, state string, env pr
 	if err != nil {
 		return false, err
 	}
+
 	now := time.Now().Unix()
-	switch s.db.kind {
-	case BackendSQLite:
-		res, err := s.db.sql.ExecContext(ctx,
-			`UPDATE v2_requests SET status = ?, updated_at = ?, result_ciphertext = ?, result_nonce = ? WHERE state = ? AND status = ? AND expires_at >= ?`,
-			string(V2RequestStatusCompleted), now, ct, nonce, state, string(V2RequestStatusPending), now,
-		)
-		if err != nil {
-			return false, err
-		}
-		n, _ := res.RowsAffected()
-		return n > 0, nil
-	case BackendPostgres:
-		tag, err := s.db.pgx.Exec(ctx,
-			`UPDATE v2_requests SET status = $1, updated_at = $2, result_ciphertext = $3, result_nonce = $4 WHERE state = $5 AND status = $6 AND expires_at >= $7`,
-			string(V2RequestStatusCompleted), now, ct, nonce, state, string(V2RequestStatusPending), now,
-		)
-		if err != nil {
-			return false, err
-		}
-		return tag.RowsAffected() > 0, nil
-	default:
-		return false, errors.New("unsupported backend")
+	affected, err := s.db.db.Exec(ctx,
+		`UPDATE v2_requests SET status = $1, updated_at = $2, result_ciphertext = $3, result_nonce = $4 WHERE state = $5 AND status = $6 AND expires_at >= $7`,
+		string(V2RequestStatusCompleted), now, ct, nonce, state, string(V2RequestStatusPending), now,
+	)
+	if err != nil {
+		return false, err
 	}
+	return affected > 0, nil
 }
 
 func (s *RequestStore) CancelRequest(ctx context.Context, state string) (bool, error) {
 	now := time.Now().Unix()
-	switch s.db.kind {
-	case BackendSQLite:
-		res, err := s.db.sql.ExecContext(ctx,
-			`UPDATE v2_requests SET status = ?, updated_at = ? WHERE state = ? AND status = ?`,
-			string(V2RequestStatusCanceled), now, state, string(V2RequestStatusPending),
-		)
-		if err != nil {
-			return false, err
-		}
-		n, _ := res.RowsAffected()
-		return n > 0, nil
-	case BackendPostgres:
-		tag, err := s.db.pgx.Exec(ctx,
-			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4`,
-			string(V2RequestStatusCanceled), now, state, string(V2RequestStatusPending),
-		)
-		if err != nil {
-			return false, err
-		}
-		return tag.RowsAffected() > 0, nil
-	default:
-		return false, errors.New("unsupported backend")
+	affected, err := s.db.db.Exec(ctx,
+		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4`,
+		string(V2RequestStatusCanceled), now, state, string(V2RequestStatusPending),
+	)
+	if err != nil {
+		return false, err
 	}
+	return affected > 0, nil
 }
 
 func (s *RequestStore) MarkExpired(ctx context.Context, state string) error {
 	now := time.Now().Unix()
-	switch s.db.kind {
-	case BackendSQLite:
-		_, err := s.db.sql.ExecContext(ctx,
-			`UPDATE v2_requests SET status = ?, updated_at = ? WHERE state = ? AND status = ? AND expires_at < ?`,
-			string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now,
-		)
-		return err
-	case BackendPostgres:
-		_, err := s.db.pgx.Exec(ctx,
-			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4 AND expires_at < $5`,
-			string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now,
-		)
-		return err
-	default:
-		return errors.New("unsupported backend")
-	}
+	_, err := s.db.db.Exec(ctx,
+		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4 AND expires_at < $5`,
+		string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now,
+	)
+	return err
 }
 
 func (s *RequestStore) ExpirePending(ctx context.Context, now time.Time) error {
 	n := now.Unix()
-	switch s.db.kind {
-	case BackendSQLite:
-		_, err := s.db.sql.ExecContext(ctx,
-			`UPDATE v2_requests SET status = ?, updated_at = ? WHERE status = ? AND expires_at < ?`,
-			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
-		)
-		return err
-	case BackendPostgres:
-		_, err := s.db.pgx.Exec(ctx,
-			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4`,
-			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
-		)
-		return err
-	default:
-		return errors.New("unsupported backend")
-	}
+	_, err := s.db.db.Exec(ctx,
+		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4`,
+		string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
+	)
+	return err
 }
 
 func (s *RequestStore) ExpirePendingAndReturnStates(ctx context.Context, now time.Time) ([]string, error) {
 	n := now.Unix()
-	switch s.db.kind {
-	case BackendSQLite:
-		tx, err := s.db.sql.BeginTx(ctx, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to begin transaction: %w", err)
-		}
-		defer tx.Rollback()
-
-		rows, err := tx.QueryContext(ctx,
-			`SELECT state FROM v2_requests WHERE status = ? AND expires_at < ?`,
-			string(V2RequestStatusPending), n,
-		)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-
-		var states []string
-		for rows.Next() {
-			var st string
-			err = rows.Scan(&st)
-			if err != nil {
-				return nil, err
-			}
-			states = append(states, st)
-		}
-
-		err = rows.Err()
-		if err != nil {
-			return nil, err
-		}
-
-		if len(states) == 0 {
-			return nil, nil
-		}
-
-		_, err = tx.ExecContext(ctx,
-			`UPDATE v2_requests SET status = ?, updated_at = ? WHERE status = ? AND expires_at < ?`,
-			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		err = tx.Commit()
-		if err != nil {
-			return nil, fmt.Errorf("failed to commit transaction: %w", err)
-		}
-
-		return states, nil
-	case BackendPostgres:
-		rows, err := s.db.pgx.Query(ctx,
-			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4 RETURNING state`,
-			string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
-		)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-
-		var states []string
-		for rows.Next() {
-			var st string
-			err = rows.Scan(&st)
-			if err != nil {
-				return nil, err
-			}
-			states = append(states, st)
-		}
-
-		return states, rows.Err()
-	default:
-		return nil, errors.New("unsupported backend")
+	rows, err := s.db.db.Query(ctx,
+		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4 RETURNING state`,
+		string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
+	)
+	if err != nil {
+		return nil, err
 	}
+	defer rows.Close()
+
+	var states []string
+	for rows.Next() {
+		var st string
+		err = rows.Scan(&st)
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, st)
+	}
+
+	return states, rows.Err()
 }
 
 // deriveOperationAEAD derives a per-operation AES-256-GCM AEAD from the payload using HKDF-SHA256
@@ -476,27 +317,13 @@ func (s *RequestStore) sealJSON(kind string, id string, v any) (ciphertext []byt
 // CleanupOldRecords deletes non-pending requests that expired more than 10 minutes ago.
 func (s *RequestStore) CleanupOldRecords(ctx context.Context, now time.Time) (int64, error) {
 	cutoff := now.Add(-10 * time.Minute).Unix()
-	switch s.db.kind {
-	case BackendSQLite:
-		res, err := s.db.sql.ExecContext(ctx,
-			`DELETE FROM v2_requests WHERE status != ? AND expires_at < ?`,
-			string(V2RequestStatusPending), cutoff)
-		if err != nil {
-			return 0, err
-		}
-		n, _ := res.RowsAffected()
-		return n, nil
-	case BackendPostgres:
-		tag, err := s.db.pgx.Exec(ctx,
-			`DELETE FROM v2_requests WHERE status != $1 AND expires_at < $2`,
-			string(V2RequestStatusPending), cutoff)
-		if err != nil {
-			return 0, err
-		}
-		return tag.RowsAffected(), nil
-	default:
-		return 0, errors.New("unsupported backend")
+	affected, err := s.db.db.Exec(ctx,
+		`DELETE FROM v2_requests WHERE status != $1 AND expires_at < $2`,
+		string(V2RequestStatusPending), cutoff)
+	if err != nil {
+		return 0, err
 	}
+	return affected, nil
 }
 
 func (s *RequestStore) openJSON(kind string, id string, ciphertext []byte, nonce []byte, out any) error {

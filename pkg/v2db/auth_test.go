@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAuthStoreRegisterUserAndLoginSQLite(t *testing.T) {
+func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
 
@@ -65,6 +65,11 @@ func TestAuthStoreRegisterUserAndLoginSQLite(t *testing.T) {
 	require.NotNil(t, loginSess)
 	require.NotEqual(t, sess.ID, loginSess.ID)
 
+	creds, err := store.ListCredentials(ctx, "alice")
+	require.NoError(t, err)
+	require.Len(t, creds, 1)
+	require.EqualValues(t, 2, creds[0].SignCount)
+
 	got, err := store.GetSession(ctx, loginSess.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
@@ -75,4 +80,32 @@ func TestAuthStoreRegisterUserAndLoginSQLite(t *testing.T) {
 	got, err = store.GetSession(ctx, loginSess.ID)
 	require.NoError(t, err)
 	require.Nil(t, got)
+}
+
+func TestAuthStoreLoginInvalidCredential(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	_, err = store.RegisterUser(ctx, RegisterUserInput{
+		Username:     "alice",
+		DisplayName:  "Alice",
+		CredentialID: "cred-1",
+		PublicKey:    `{"kty":"EC"}`,
+		SignCount:    1,
+		SessionTTL:   time.Minute,
+	})
+	require.NoError(t, err)
+
+	_, err = store.Login(ctx, LoginInput{
+		Username:     "alice",
+		CredentialID: "cred-missing",
+		SignCount:    2,
+		SessionTTL:   time.Minute,
+	})
+	require.ErrorIs(t, err, ErrInvalidLogin)
 }

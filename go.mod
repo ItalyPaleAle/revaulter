@@ -6,10 +6,10 @@ require (
 	github.com/caarlos0/env/v11 v11.4.0
 	github.com/gin-contrib/location/v2 v2.0.1
 	github.com/gin-gonic/gin v1.12.0
-	github.com/go-webauthn/webauthn v0.16.2
+	github.com/go-webauthn/webauthn v0.16.3
 	github.com/google/uuid v1.6.0
 	github.com/italypaleale/go-kit v0.0.0-20260326154118-cba072650bb2
-	github.com/italypaleale/go-sql-utils v0.2.0
+	github.com/italypaleale/go-sql-utils v0.2.1
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/jinzhu/copier v0.4.0
 	github.com/lestrrat-go/jwx/v2 v2.1.6
@@ -34,7 +34,6 @@ require (
 	golang.org/x/net v0.52.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
-	modernc.org/sqlite v1.48.1
 )
 
 require (
@@ -129,4 +128,5 @@ require (
 	modernc.org/libc v1.70.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
+	modernc.org/sqlite v1.48.1 // indirect
 )

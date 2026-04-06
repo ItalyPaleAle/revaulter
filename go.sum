@@ -54,8 +54,8 @@ github.com/go-playground/validator/v10 v10.30.2 h1:JiFIMtSSHb2/XBUbWM4i/MpeQm9ZK
 github.com/go-playground/validator/v10 v10.30.2/go.mod h1:mAf2pIOVXjTEBrwUMGKkCWKKPs9NheYGabeB04txQSc=
 github.com/go-viper/mapstructure/v2 v2.5.0 h1:vM5IJoUAy3d7zRSVtIwQgBj7BiWtMPfmPEgAXnvj1Ro=
 github.com/go-viper/mapstructure/v2 v2.5.0/go.mod h1:oJDH3BJKyqBA2TXFhDsKDGDTlndYOZ6rGS0BRZIxGhM=
-github.com/go-webauthn/webauthn v0.16.2 h1:n116UuvIa7nUVGFP2hO9U24gBqhJTcmbU3ph0wgVzFM=
-github.com/go-webauthn/webauthn v0.16.2/go.mod h1:R2xjJxSPat5PYKg5r6cUmqXgbHtbv4GmF6uGkqFMLNI=
+github.com/go-webauthn/webauthn v0.16.3 h1:RorP0c6VbaKP0i0Jxf/vAf7EFb2lmdLW8GLKITeaN5A=
+github.com/go-webauthn/webauthn v0.16.3/go.mod h1:R2xjJxSPat5PYKg5r6cUmqXgbHtbv4GmF6uGkqFMLNI=
 github.com/go-webauthn/x v0.2.2 h1:zIiipvMbr48CXi5RG0XdBJR94kd8I5LfzHPb/q+YYmk=
 github.com/go-webauthn/x v0.2.2/go.mod h1:IpJ5qyWB9NRhLX3C7gIfjTU7RZLXEP6kzFkoVSE7Fz4=
 github.com/goccy/go-json v0.10.6 h1:p8HrPJzOakx/mn/bQtjgNjdTcN+/S6FcG2CTtQOrHVU=
@@ -85,8 +85,8 @@ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/italypaleale/go-kit v0.0.0-20260326154118-cba072650bb2 h1:hYxykAgY7gkox09qRTSiebziW/rA9ppFKlGJDzHvn9Y=
 github.com/italypaleale/go-kit v0.0.0-20260326154118-cba072650bb2/go.mod h1:feCelYlSjdDx0QzOSX+YWzzNpHSplZa85raQZYSmC9M=
-github.com/italypaleale/go-sql-utils v0.2.0 h1:ZiNJ7fCciLi3K0Y3XSCbunUEQyyEDx9+ujkfAxgI1/M=
-github.com/italypaleale/go-sql-utils v0.2.0/go.mod h1:KPhTLxNq3MOEhT1ggC5fT6Hen0zHbOOQcFuOZGG+NV0=
+github.com/italypaleale/go-sql-utils v0.2.1 h1:lT940VYouBqIChkpTmREYtBtjk6KeyyfjRT3eexwo74=
+github.com/italypaleale/go-sql-utils v0.2.1/go.mod h1:KPhTLxNq3MOEhT1ggC5fT6Hen0zHbOOQcFuOZGG+NV0=
 github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 h1:D/V0gu4zQ3cL2WKeVNVM4r2gLxGGf6McLwgXzRTo2RQ=
 github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6/go.mod h1:a/s9Lp5W7n/DD0VrVoyJ00FbP2ytTPDVOivvn2bMlds=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=

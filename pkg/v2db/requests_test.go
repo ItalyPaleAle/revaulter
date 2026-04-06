@@ -9,7 +9,7 @@ import (
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 
-func TestRequestStoreSQLiteLifecycle(t *testing.T) {
+func TestRequestStoreLifecycle(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
 
@@ -79,7 +79,7 @@ func TestRequestStoreSQLiteLifecycle(t *testing.T) {
 	require.Equal(t, "ecdh-p256+a256gcm", rec.ResponseEnvelope.TransportAlg)
 }
 
-func TestRequestStoreSQLiteCancel(t *testing.T) {
+func TestRequestStoreCancel(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
 
@@ -117,7 +117,7 @@ func TestRequestStoreSQLiteCancel(t *testing.T) {
 	require.Equal(t, V2RequestStatusCanceled, rec.Status)
 }
 
-func TestRequestStoreSQLiteExpirePendingAndReturnStates(t *testing.T) {
+func TestRequestStoreExpirePendingAndReturnStates(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
 
