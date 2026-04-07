@@ -2,8 +2,8 @@ import path from 'node:path'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
-import { VitePWA } from 'vite-plugin-pwa'
 import { analyzer } from 'vite-bundle-analyzer'
+import { VitePWA } from 'vite-plugin-pwa'
 import sri from 'vite-plugin-sri-gen'
 
 export default defineConfig(({ mode }) => {
@@ -71,6 +71,7 @@ export default defineConfig(({ mode }) => {
                     assetFileNames: '[name].[hash].[ext]',
                     manualChunks: {
                         lib: ['svelte', 'date-fns'],
+                        crypto: ['hash-wasm', 'arraybuffer-encoding']
                     },
                 },
             },

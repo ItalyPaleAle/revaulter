@@ -648,10 +648,12 @@ func newJSONHTTPRequest(c *gin.Context, raw json.RawMessage) (*http.Request, err
 	if len(raw) == 0 || !json.Valid(raw) {
 		return nil, NewResponseError(http.StatusBadRequest, "credential payload must be valid JSON")
 	}
+
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, c.Request.URL.String(), bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}
+
 	req.Header = make(http.Header)
 	req.Header.Set("Content-Type", "application/json")
 	return req, nil
@@ -666,7 +668,8 @@ type v2WebAuthnUser struct {
 
 func newV2WebAuthnUserForRegistration(userID string, displayName string) (*v2WebAuthnUser, error) {
 	id := make([]byte, 32)
-	if _, err := rand.Read(id); err != nil {
+	_, err := rand.Read(id)
+	if err != nil {
 		return nil, err
 	}
 

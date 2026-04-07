@@ -1,6 +1,6 @@
 import { argon2id } from 'hash-wasm'
-import type { EcP256PublicJwk, V2ResponseEnvelope } from '$lib/v2-types'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
+import type { EcP256PublicJwk, V2ResponseEnvelope } from '$lib/v2-types'
 
 /**
  * Generates an ephemeral ECDH P-256 key pair for transport encryption and exports

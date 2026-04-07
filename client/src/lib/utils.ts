@@ -1,5 +1,5 @@
-import { Decode as Base64UrlDecode, Encode as Base64UrlEncode } from 'arraybuffer-encoding/base64/url'
 import { Decode as Base64StdDecode } from 'arraybuffer-encoding/base64/standard'
+import { Decode as Base64UrlDecode, Encode as Base64UrlEncode } from 'arraybuffer-encoding/base64/url'
 
 /**
  * Returns a Promise that resolves after a certain amount of time, in ms
