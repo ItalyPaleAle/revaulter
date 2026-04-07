@@ -5,7 +5,9 @@ import Button from '$components/Button.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
 
 import {
+    buildRequestEncAAD,
     buildTransportAAD,
+    decryptRequestPayload,
     deriveOperationKeyBytes,
     encryptTransportEnvelope,
     performAesGcmOperation,
@@ -95,6 +97,18 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
         throw new Error(`Unsupported algorithm: ${req.algorithm}`)
     }
 
+    // Decrypt the E2EE request payload
+    const requestEncAAD = buildRequestEncAAD(req.algorithm, req.keyLabel, req.operation)
+    const input = await decryptRequestPayload({
+        userId: req.userId,
+        prfSecret,
+        password: password.trim() || undefined,
+        cliEphemeralPublicKey: req.encryptedRequest.cliEphemeralPublicKey,
+        nonce: req.encryptedRequest.nonce,
+        ciphertext: req.encryptedRequest.ciphertext,
+        aad: requestEncAAD,
+    })
+
     const operationKey = await deriveOperationKeyBytes({
         userId: req.userId,
         keyLabel: req.keyLabel,
@@ -103,9 +117,8 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
         password: password.trim() || undefined,
     })
 
-    const input = req.request
     const value = base64UrlToBytes(input.value)
-    const aad = base64UrlToBytes(input.additionalData)
+    const aad = input.additionalData ? base64UrlToBytes(input.additionalData) : new Uint8Array()
 
     let resultPlain: Uint8Array
     switch (req.operation) {
@@ -134,11 +147,11 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
         }
 
         case 'decrypt': {
-            const nonce = base64UrlToBytes(input.nonce)
+            const nonce = input.nonce ? base64UrlToBytes(input.nonce) : new Uint8Array()
             if (nonce.length === 0) {
                 throw new Error('Missing nonce for decrypt')
             }
-            const tag = base64UrlToBytes(input.tag)
+            const tag = input.tag ? base64UrlToBytes(input.tag) : new Uint8Array()
             if (tag.length === 0) {
                 throw new Error('Missing authentication tag for decrypt')
             }
@@ -165,7 +178,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
     }
 
     const transportAAD = buildTransportAAD(req.state, req.operation, req.algorithm)
-    return encryptTransportEnvelope(req.state, req.request.clientTransportKey, resultPlain, transportAAD)
+    return encryptTransportEnvelope(req.state, input.clientTransportKey, resultPlain, transportAAD)
 }
 
 function operationTitle(op: V2PendingRequestItem['operation']) {
@@ -202,7 +215,7 @@ function expiresIn(item: V2PendingRequestItem) {
                 Expires {expiresIn(item)} · <span class="font-mono">{item.state}</span>
             </div>
             {#if detailOpen && detail}
-                <pre class="mt-3 max-h-64 overflow-auto rounded-[1rem] bg-slate-950 px-3 py-3 text-xs text-slate-100 dark:bg-black/60">{JSON.stringify(detail.request, null, 2)}</pre>
+                <pre class="mt-3 max-h-64 overflow-auto rounded-2xl bg-slate-950 px-3 py-3 text-xs text-slate-100 dark:bg-black/60">{JSON.stringify(detail.encryptedRequest, null, 2)}</pre>
             {/if}
         </div>
 

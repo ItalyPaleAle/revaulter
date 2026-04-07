@@ -2,15 +2,8 @@ package v2db
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/hkdf"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
 	"time"
 
@@ -39,7 +32,9 @@ type V2RequestRecord struct {
 	ExpiresAt   time.Time
 	UpdatedAt   time.Time
 
-	RequestBody      protocolv2.RequestCreateBody
+	// EncryptedRequest is the E2EE envelope JSON (opaque to the server).
+	EncryptedRequest string
+	// ResponseEnvelope is the E2EE response envelope JSON (opaque to the server).
 	ResponseEnvelope *protocolv2.ResponseEnvelope
 }
 
@@ -61,51 +56,44 @@ type CreateRequestInput struct {
 	UserID      string
 	Operation   string
 	RequestorIP string
+	KeyLabel    string
+	Algorithm   string
+	Note        string
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
-	Body        protocolv2.RequestCreateBody
+	// EncryptedRequest is the JSON-serialized RequestEncEnvelope.
+	EncryptedRequest string
 }
 
 type RequestStore struct {
-	db         *DB
-	payloadKey []byte
-	log        *slog.Logger
+	db  *DB
+	log *slog.Logger
 }
 
-func NewRequestStore(db *DB, payloadKey []byte, logger *slog.Logger) (*RequestStore, error) {
+func NewRequestStore(db *DB, logger *slog.Logger) (*RequestStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
-	}
-	if len(payloadKey) != 32 {
-		return nil, fmt.Errorf("invalid DB payload key length: got %d, want 32", len(payloadKey))
 	}
 
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &RequestStore{
-		db:         db,
-		payloadKey: payloadKey,
-		log:        logger,
+		db:  db,
+		log: logger,
 	}
 
 	return s, nil
 }
 
 func (s *RequestStore) CreateRequest(ctx context.Context, in CreateRequestInput) error {
-	payloadCiphertext, payloadNonce, err := s.sealJSON("request-payload", in.State, in.Body)
-	if err != nil {
-		return err
-	}
-
-	note := in.Body.Note
 	now := in.CreatedAt.Unix()
 	expires := in.ExpiresAt.Unix()
-	_, err = s.db.db.Exec(ctx,
+	_, err := s.db.db.Exec(ctx,
 		`INSERT INTO v2_requests
-			(state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, payload_ciphertext, payload_nonce)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-		in.State, string(V2RequestStatusPending), in.Operation, in.UserID, in.Body.KeyLabel, in.Body.Algorithm, in.RequestorIP, note, now, expires, now, payloadCiphertext, payloadNonce,
+			(state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, encrypted_request)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		in.State, string(V2RequestStatusPending), in.Operation, in.UserID, in.KeyLabel, in.Algorithm, in.RequestorIP, in.Note, now, expires, now, in.EncryptedRequest,
 	)
 	return err
 }
@@ -126,18 +114,18 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 	type rowT struct {
 		State, Status, Operation, UserID, KeyLabel, Algorithm, RequestorIP, Note string
 		CreatedAt, ExpiresAt, UpdatedAt                                          int64
-		PayloadCiphertext, PayloadNonce                                          []byte
-		ResultCiphertext, ResultNonce                                            []byte
+		EncryptedRequest                                                         string
+		EncryptedResult                                                          string
 	}
 	var row rowT
 
 	err := s.db.db.
 		QueryRow(ctx,
-			`SELECT state ,status ,operation ,user_id ,key_label ,algorithm ,requestor_ip ,note ,created_at ,expires_at ,updated_at ,payload_ciphertext ,payload_nonce ,result_ciphertext ,result_nonce FROM v2_requests WHERE state = $1`,
+			`SELECT state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, encrypted_request, encrypted_result FROM v2_requests WHERE state = $1`,
 			state,
 		).
 		Scan(
-			&row.State, &row.Status, &row.Operation, &row.UserID, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.PayloadCiphertext, &row.PayloadNonce, &row.ResultCiphertext, &row.ResultNonce,
+			&row.State, &row.Status, &row.Operation, &row.UserID, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.EncryptedRequest, &row.EncryptedResult,
 		)
 	if s.db.db.IsNoRowsError(err) {
 		return nil, nil
@@ -145,30 +133,24 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 		return nil, err
 	}
 
-	var body protocolv2.RequestCreateBody
-	err = s.openJSON("request-payload", row.State, row.PayloadCiphertext, row.PayloadNonce, &body)
-	if err != nil {
-		return nil, err
-	}
-
 	rec := &V2RequestRecord{
-		State:       row.State,
-		Status:      V2RequestStatus(row.Status),
-		Operation:   row.Operation,
-		UserID:      row.UserID,
-		KeyLabel:    row.KeyLabel,
-		Algorithm:   row.Algorithm,
-		RequestorIP: row.RequestorIP,
-		Note:        row.Note,
-		CreatedAt:   time.Unix(row.CreatedAt, 0),
-		ExpiresAt:   time.Unix(row.ExpiresAt, 0),
-		UpdatedAt:   time.Unix(row.UpdatedAt, 0),
-		RequestBody: body,
+		State:            row.State,
+		Status:           V2RequestStatus(row.Status),
+		Operation:        row.Operation,
+		UserID:           row.UserID,
+		KeyLabel:         row.KeyLabel,
+		Algorithm:        row.Algorithm,
+		RequestorIP:      row.RequestorIP,
+		Note:             row.Note,
+		CreatedAt:        time.Unix(row.CreatedAt, 0),
+		ExpiresAt:        time.Unix(row.ExpiresAt, 0),
+		UpdatedAt:        time.Unix(row.UpdatedAt, 0),
+		EncryptedRequest: row.EncryptedRequest,
 	}
 
-	if len(row.ResultCiphertext) > 0 && len(row.ResultNonce) > 0 {
+	if row.EncryptedResult != "" {
 		var env protocolv2.ResponseEnvelope
-		err = s.openJSON("request-result", row.State, row.ResultCiphertext, row.ResultNonce, &env)
+		err = json.Unmarshal([]byte(row.EncryptedResult), &env)
 		if err != nil {
 			return nil, err
 		}
@@ -202,15 +184,15 @@ func (s *RequestStore) ListPending(ctx context.Context) ([]V2RequestListItem, er
 }
 
 func (s *RequestStore) CompleteRequest(ctx context.Context, state string, env protocolv2.ResponseEnvelope) (bool, error) {
-	ct, nonce, err := s.sealJSON("request-result", state, env)
+	envJSON, err := json.Marshal(env)
 	if err != nil {
 		return false, err
 	}
 
 	now := time.Now().Unix()
 	affected, err := s.db.db.Exec(ctx,
-		`UPDATE v2_requests SET status = $1, updated_at = $2, result_ciphertext = $3, result_nonce = $4 WHERE state = $5 AND status = $6 AND expires_at >= $7`,
-		string(V2RequestStatusCompleted), now, ct, nonce, state, string(V2RequestStatusPending), now,
+		`UPDATE v2_requests SET status = $1, updated_at = $2, encrypted_result = $3 WHERE state = $4 AND status = $5 AND expires_at >= $6`,
+		string(V2RequestStatusCompleted), now, string(envJSON), state, string(V2RequestStatusPending), now,
 	)
 	if err != nil {
 		return false, err
@@ -272,49 +254,6 @@ func (s *RequestStore) ExpirePendingAndReturnStates(ctx context.Context, now tim
 	return states, rows.Err()
 }
 
-// deriveOperationAEAD derives a per-operation AES-256-GCM AEAD from the payload using HKDF-SHA256
-// Each unique (kind, id) pair gets its own derived key, achieving key binding and eliminating the AES-GCM nonce-collision risk across operations that would exist if a single key were reused with random nonces
-func (s *RequestStore) deriveOperationAEAD(kind string, id string) (cipher.AEAD, error) {
-	// Derive a new key using HKDF
-	info := "revaulter|" + kind + "|" + id
-	opKey, err := hkdf.Key(sha256.New, s.payloadKey, nil, info, 32)
-	if err != nil {
-		return nil, fmt.Errorf("failed to derive operation key: %w", err)
-	}
-
-	// Create the AES-GCM cipher
-	block, err := aes.NewCipher(opKey)
-	if err != nil {
-		return nil, err
-	}
-	return cipher.NewGCM(block)
-}
-
-func (s *RequestStore) sealJSON(kind string, id string, v any) (ciphertext []byte, nonce []byte, err error) {
-	// Encode to JSON
-	plain, err := json.Marshal(v)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Derive a key for this specific operation
-	aead, err := s.deriveOperationAEAD(kind, id)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Generate a random nonce
-	nonce = make([]byte, aead.NonceSize())
-	_, err = io.ReadFull(rand.Reader, nonce)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Encrypt the message
-	ciphertext = aead.Seal(nil, nonce, plain, nil)
-	return ciphertext, nonce, nil
-}
-
 // CleanupOldRecords deletes non-pending requests that expired more than 10 minutes ago.
 func (s *RequestStore) CleanupOldRecords(ctx context.Context, now time.Time) (int64, error) {
 	cutoff := now.Add(-10 * time.Minute).Unix()
@@ -325,26 +264,4 @@ func (s *RequestStore) CleanupOldRecords(ctx context.Context, now time.Time) (in
 		return 0, err
 	}
 	return affected, nil
-}
-
-func (s *RequestStore) openJSON(kind string, id string, ciphertext []byte, nonce []byte, out any) error {
-	// Derive a key for this specific operation
-	aead, err := s.deriveOperationAEAD(kind, id)
-	if err != nil {
-		return err
-	}
-
-	// Decrypt the message
-	plain, err := aead.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return err
-	}
-
-	// Decode from JSON
-	err = json.Unmarshal(plain, out)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }

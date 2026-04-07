@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -46,24 +45,22 @@ func (f *v2OperationFlagsBase) Validate() error {
 
 func (f *v2OperationFlagsBase) GetServer() string                  { return f.Server }
 func (f *v2OperationFlagsBase) GetRequestKey() string              { return f.RequestKey }
+func (f *v2OperationFlagsBase) GetKeyLabel() string                { return f.KeyLabel }
 func (f *v2OperationFlagsBase) GetAlgorithm() string               { return f.Algorithm }
+func (f *v2OperationFlagsBase) GetTimeout() string                 { return f.Timeout.String() }
+func (f *v2OperationFlagsBase) GetNote() string                    { return f.Note }
 func (f *v2OperationFlagsBase) GetConnectionOptions() (bool, bool) { return f.Insecure, f.NoH2C }
-
-func (f *v2OperationFlagsBase) AddBaseRequestFields(data *v2OperationRequest, keyJWK protocolv2.ECP256PublicJWK) {
-	data.KeyLabel = f.KeyLabel
-	data.Algorithm = f.Algorithm
-	data.Timeout = f.Timeout.String()
-	data.Note = f.Note
-	data.ClientTransportKey = keyJWK
-}
 
 type v2OperationFlags interface {
 	BindToCommand(cmd *cobra.Command)
 	Validate() error
-	RequestBody(clientTransportKey protocolv2.ECP256PublicJWK) ([]byte, error)
+	InnerPayload(clientTransportKey protocolv2.ECP256PublicJWK) protocolv2.RequestPayloadInner
 	GetServer() string
 	GetRequestKey() string
+	GetKeyLabel() string
 	GetAlgorithm() string
+	GetTimeout() string
+	GetNote() string
 	GetConnectionOptions() (insecure bool, noh2c bool)
 }
 
@@ -82,14 +79,13 @@ func (f *v2OperationFlagsEncrypt) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data (base64-encoded)")
 }
 
-func (f *v2OperationFlagsEncrypt) RequestBody(clientTransportKey protocolv2.ECP256PublicJWK) ([]byte, error) {
-	data := v2OperationRequest{
-		Value:          f.Value.String(),
-		Nonce:          f.Nonce.String(),
-		AdditionalData: f.AdditionalData.String(),
+func (f *v2OperationFlagsEncrypt) InnerPayload(clientTransportKey protocolv2.ECP256PublicJWK) protocolv2.RequestPayloadInner {
+	return protocolv2.RequestPayloadInner{
+		Value:              f.Value.String(),
+		Nonce:              f.Nonce.String(),
+		AdditionalData:     f.AdditionalData.String(),
+		ClientTransportKey: clientTransportKey,
 	}
-	f.AddBaseRequestFields(&data, clientTransportKey)
-	return json.Marshal(data)
 }
 
 type v2OperationFlagsDecrypt struct {
@@ -109,13 +105,12 @@ func (f *v2OperationFlagsDecrypt) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data (base64-encoded)")
 }
 
-func (f *v2OperationFlagsDecrypt) RequestBody(clientTransportKey protocolv2.ECP256PublicJWK) ([]byte, error) {
-	data := v2OperationRequest{
-		Value:          f.Value.String(),
-		Tag:            f.Tag.String(),
-		Nonce:          f.Nonce.String(),
-		AdditionalData: f.AdditionalData.String(),
+func (f *v2OperationFlagsDecrypt) InnerPayload(clientTransportKey protocolv2.ECP256PublicJWK) protocolv2.RequestPayloadInner {
+	return protocolv2.RequestPayloadInner{
+		Value:              f.Value.String(),
+		Tag:                f.Tag.String(),
+		Nonce:              f.Nonce.String(),
+		AdditionalData:     f.AdditionalData.String(),
+		ClientTransportKey: clientTransportKey,
 	}
-	f.AddBaseRequestFields(&data, clientTransportKey)
-	return json.Marshal(data)
 }

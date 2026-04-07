@@ -22,13 +22,15 @@ type AuthStore struct {
 }
 
 type User struct {
-	ID             string
-	DisplayName    string
-	Status         string
-	WebAuthnUserID string
-	PasswordCanary string
-	RequestKey     string
-	AllowedIPs     []string
+	ID               string
+	DisplayName      string
+	Status           string
+	WebAuthnUserID   string
+	PasswordCanary   string
+	RequestKey       string
+	RequestEncPubkey string
+	AllowedIPs       []string
+	Ready            bool
 }
 
 type AuthSession struct {
@@ -92,16 +94,18 @@ func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
+const userSelectCols = `id, display_name, status, webauthn_user_id, password_canary, request_key, request_enc_pubkey, allowed_ips, ready`
+
 func (s *AuthStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
-	return s.getUser(ctx, `SELECT id, display_name, status, webauthn_user_id, password_canary, request_key, allowed_ips FROM v2_users WHERE id = $1`, userID)
+	return s.getUser(ctx, `SELECT `+userSelectCols+` FROM v2_users WHERE id = $1`, userID)
 }
 
 func (s *AuthStore) GetUserByWebAuthnUserID(ctx context.Context, webAuthnUserID string) (*User, error) {
-	return s.getUser(ctx, `SELECT id, display_name, status, webauthn_user_id, password_canary, request_key, allowed_ips FROM v2_users WHERE webauthn_user_id = $1`, webAuthnUserID)
+	return s.getUser(ctx, `SELECT `+userSelectCols+` FROM v2_users WHERE webauthn_user_id = $1`, webAuthnUserID)
 }
 
 func (s *AuthStore) GetUserByRequestKey(ctx context.Context, requestKey string) (*User, error) {
-	return s.getUser(ctx, `SELECT id, display_name, status, webauthn_user_id, password_canary, request_key, allowed_ips FROM v2_users WHERE request_key = $1`, requestKey)
+	return s.getUser(ctx, `SELECT `+userSelectCols+` FROM v2_users WHERE request_key = $1`, requestKey)
 }
 
 func (s *AuthStore) getUser(ctx context.Context, query string, arg string) (*User, error) {
@@ -110,7 +114,7 @@ func (s *AuthStore) getUser(ctx context.Context, query string, arg string) (*Use
 		allowedIPsCSV string
 	)
 	err := s.db.db.QueryRow(ctx, query, arg).
-		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.PasswordCanary, &user.RequestKey, &allowedIPsCSV)
+		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.PasswordCanary, &user.RequestKey, &user.RequestEncPubkey, &allowedIPsCSV, &user.Ready)
 	if s.db.db.IsNoRowsError(err) {
 		return nil, nil
 	}
@@ -390,10 +394,16 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 	return &sess, nil
 }
 
-func (s *AuthStore) SetPasswordCanary(ctx context.Context, userID, canary string) error {
+var ErrAlreadyFinalized = errors.New("account already finalized")
+
+// FinalizeSignup marks the account as ready, stores the request encryption
+// public key, and optionally sets the password canary. It can only be called
+// once (when ready = false).
+func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, canary, requestEncPubkey string) error {
+	now := time.Now().UTC().Unix()
 	affected, err := s.db.db.Exec(ctx,
-		`UPDATE v2_users SET password_canary = $1, updated_at = $2 WHERE id = $3 AND password_canary = ''`,
-		canary, time.Now().UTC().Unix(), userID,
+		`UPDATE v2_users SET password_canary = $1, request_enc_pubkey = $2, ready = true, updated_at = $3 WHERE id = $4 AND ready = false`,
+		canary, requestEncPubkey, now, userID,
 	)
 	if err != nil {
 		return err
@@ -406,12 +416,24 @@ func (s *AuthStore) SetPasswordCanary(ctx context.Context, userID, canary string
 	if err != nil {
 		return err
 	}
-
 	if user == nil {
 		return ErrUserNotFound
 	}
+	return ErrAlreadyFinalized
+}
 
-	return ErrPasswordAlreadySet
+// CleanupUnreadyUsers deletes user accounts that were created more than 24 hours ago but never finalized (ready = false)
+// Cascade delete removes associated credentials and sessions
+func (s *AuthStore) CleanupUnreadyUsers(ctx context.Context, now time.Time) error {
+	cutoff := now.Add(-24 * time.Hour).Unix()
+	_, err := s.db.db.Exec(ctx,
+		`DELETE FROM v2_users WHERE ready = false AND created_at < $1`,
+		cutoff,
+	)
+	if err != nil {
+		return fmt.Errorf("error cleaning up unready users: %w", err)
+	}
+	return nil
 }
 
 func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowedIPs []string) ([]string, error) {

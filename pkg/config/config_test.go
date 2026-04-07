@@ -104,16 +104,6 @@ func TestValidateConfig(t *testing.T) {
 	})
 }
 
-func TestSetSecretKey(t *testing.T) {
-	t.Cleanup(SetTestConfig(map[string]any{
-		"secretKey": "hello-world",
-	}))
-
-	err := config.SetSecretKey(nil)
-	require.NoError(t, err)
-	assert.Equal(t, "99e165b3c1a3cad19c40957829c7358446e096443d87a20a6fca2cae1f5f9d27", hex.EncodeToString(config.GetSecretKey()))
-}
-
 func TestSetTokenSigningKey(t *testing.T) {
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, nil))

@@ -15,10 +15,6 @@ func TestRequestStoreLifecycle(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	key := make([]byte, 32)
-	for i := range key {
-		key[i] = byte(i + 1)
-	}
 	authStore, err := NewAuthStore(conn, nil)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
@@ -32,29 +28,21 @@ func TestRequestStoreLifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	store, err := NewRequestStore(conn, key, nil)
+	store, err := NewRequestStore(conn, nil)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	body := protocolv2.RequestCreateBody{
-		KeyLabel:  "boot-disk",
-		Algorithm: "aes-gcm-256",
-		Value:     "aGVsbG8",
-		ClientTransportKey: protocolv2.ECP256PublicJWK{
-			Kty: "EC", Crv: "P-256",
-			X: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-			Y: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-		},
-	}
 
 	err = store.CreateRequest(ctx, CreateRequestInput{
-		State:       "state-1",
-		UserID:      "user-1",
-		Operation:   "encrypt",
-		RequestorIP: "127.0.0.1",
-		CreatedAt:   now,
-		ExpiresAt:   now.Add(5 * time.Minute),
-		Body:        body,
+		State:            "state-1",
+		UserID:           "user-1",
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "boot-disk",
+		Algorithm:        "aes-gcm-256",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(5 * time.Minute),
+		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
 	})
 	require.NoError(t, err)
 
@@ -68,7 +56,7 @@ func TestRequestStoreLifecycle(t *testing.T) {
 	require.NotNil(t, rec)
 	require.Equal(t, V2RequestStatusPending, rec.Status)
 	require.Equal(t, "user-1", rec.UserID)
-	require.Equal(t, "aGVsbG8", rec.RequestBody.Value)
+	require.Contains(t, rec.EncryptedRequest, "cliEphemeralPublicKey")
 	require.Nil(t, rec.ResponseEnvelope)
 
 	ok, err := store.CompleteRequest(ctx, "state-1", protocolv2.ResponseEnvelope{
@@ -111,26 +99,19 @@ func TestRequestStoreCancel(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	store, err := NewRequestStore(conn, bytes32(7), nil)
+	store, err := NewRequestStore(conn, nil)
 	require.NoError(t, err)
 
 	err = store.CreateRequest(ctx, CreateRequestInput{
-		State:       "state-2",
-		UserID:      "user-2",
-		Operation:   "decrypt",
-		RequestorIP: "127.0.0.1",
-		CreatedAt:   time.Now(),
-		ExpiresAt:   time.Now().Add(time.Minute),
-		Body: protocolv2.RequestCreateBody{
-			KeyLabel:  "x",
-			Algorithm: "aes-gcm-256",
-			Value:     "aGVsbG8",
-			ClientTransportKey: protocolv2.ECP256PublicJWK{
-				Kty: "EC", Crv: "P-256",
-				X: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-				Y: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-			},
-		},
+		State:            "state-2",
+		UserID:           "user-2",
+		Operation:        "decrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "x",
+		Algorithm:        "aes-gcm-256",
+		CreatedAt:        time.Now(),
+		ExpiresAt:        time.Now().Add(time.Minute),
+		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"t","y":"t"},"nonce":"n","ciphertext":"c"}`,
 	})
 	require.NoError(t, err)
 
@@ -162,39 +143,32 @@ func TestRequestStoreExpirePendingAndReturnStates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	store, err := NewRequestStore(conn, bytes32(9), nil)
+	store, err := NewRequestStore(conn, nil)
 	require.NoError(t, err)
 
 	now := time.Now().UTC()
-	mkBody := func() protocolv2.RequestCreateBody {
-		return protocolv2.RequestCreateBody{
-			KeyLabel:  "k",
-			Algorithm: "aes-gcm-256",
-			Value:     "aGVsbG8",
-			ClientTransportKey: protocolv2.ECP256PublicJWK{
-				Kty: "EC", Crv: "P-256",
-				X: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-				Y: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-			},
-		}
-	}
+	encReq := `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"t","y":"t"},"nonce":"n","ciphertext":"c"}`
 	require.NoError(t, store.CreateRequest(ctx, CreateRequestInput{
-		State:       "expired-1",
-		UserID:      "user-1",
-		Operation:   "encrypt",
-		RequestorIP: "127.0.0.1",
-		CreatedAt:   now.Add(-2 * time.Second),
-		ExpiresAt:   now.Add(-1 * time.Second),
-		Body:        mkBody(),
+		State:            "expired-1",
+		UserID:           "user-1",
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "k",
+		Algorithm:        "aes-gcm-256",
+		CreatedAt:        now.Add(-2 * time.Second),
+		ExpiresAt:        now.Add(-1 * time.Second),
+		EncryptedRequest: encReq,
 	}))
 	require.NoError(t, store.CreateRequest(ctx, CreateRequestInput{
-		State:       "pending-1",
-		UserID:      "user-1",
-		Operation:   "encrypt",
-		RequestorIP: "127.0.0.1",
-		CreatedAt:   now,
-		ExpiresAt:   now.Add(time.Minute),
-		Body:        mkBody(),
+		State:            "pending-1",
+		UserID:           "user-1",
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "k",
+		Algorithm:        "aes-gcm-256",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(time.Minute),
+		EncryptedRequest: encReq,
 	}))
 
 	expired, err := store.ExpirePendingAndReturnStates(ctx, now)
@@ -210,12 +184,4 @@ func TestRequestStoreExpirePendingAndReturnStates(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 	require.Equal(t, V2RequestStatusPending, rec.Status)
-}
-
-func bytes32(seed byte) []byte {
-	b := make([]byte, 32)
-	for i := range b {
-		b[i] = seed + byte(i)
-	}
-	return b
 }

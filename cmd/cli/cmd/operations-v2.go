@@ -76,11 +76,42 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 	return enc.Encode(res)
 }
 
-func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Client, pub protocolv2.ECP256PublicJWK) (string, error) {
-	body, err := o.flags.RequestBody(pub)
+func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Client, transportPub protocolv2.ECP256PublicJWK) (string, error) {
+	// Fetch the user's static ECDH public key
+	pubkey, err := o.fetchUserPubkey(ctx, httpClient)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch user public key: %w", err)
+	}
+
+	// Build the inner payload (sensitive fields)
+	innerPayload := o.flags.InnerPayload(transportPub)
+
+	// Build AAD from plaintext metadata
+	aad := buildRequestEncAAD(o.flags.GetAlgorithm(), o.flags.GetKeyLabel(), o.Operation)
+
+	// Encrypt the inner payload
+	cliEphPub, nonce, ciphertext, err := encryptV2RequestPayload(pubkey, innerPayload, aad)
+	if err != nil {
+		return "", fmt.Errorf("failed to encrypt request payload: %w", err)
+	}
+
+	// Build the outer request body
+	outerBody := v2OperationRequest{
+		KeyLabel:              o.flags.GetKeyLabel(),
+		Algorithm:             o.flags.GetAlgorithm(),
+		Timeout:               o.flags.GetTimeout(),
+		Note:                  o.flags.GetNote(),
+		RequestEncAlg:         "ecdh-p256+a256gcm",
+		CliEphemeralPublicKey: cliEphPub,
+		EncryptedPayloadNonce: nonce,
+		EncryptedPayload:      ciphertext,
+	}
+
+	body, err := json.Marshal(outerBody)
 	if err != nil {
 		return "", err
 	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.flags.GetServer()+"/v2/request/"+o.flags.GetRequestKey()+"/"+o.Operation, bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -95,6 +126,21 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 		return "", errors.New("invalid create response")
 	}
 	return res.State, nil
+}
+
+func (o *v2OperationCmd) fetchUserPubkey(ctx context.Context, httpClient *http.Client) (*ecdh.PublicKey, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.flags.GetServer()+"/v2/request/"+o.flags.GetRequestKey()+"/pubkey", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var pubkeyJWK protocolv2.ECP256PublicJWK
+	err = doJSONRequest(httpClient, req, &pubkeyJWK)
+	if err != nil {
+		return nil, err
+	}
+
+	return pubkeyJWK.ToECDHPublicKey()
 }
 
 func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client, state string, priv any, aad []byte) (json.RawMessage, error) {

@@ -1,6 +1,6 @@
 import { argon2id } from 'hash-wasm'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
-import type { EcP256PublicJwk, V2ResponseEnvelope } from '$lib/v2-types'
+import type { EcP256PublicJwk, V2RequestPayloadInner, V2ResponseEnvelope } from '$lib/v2-types'
 
 /**
  * Generates an ephemeral ECDH P-256 key pair for transport encryption and exports
@@ -327,4 +327,142 @@ export function splitAesGcmCiphertextAndTag(ciphertextWithTag: Uint8Array, tagLe
         data: ciphertextWithTag.slice(0, ciphertextWithTag.length - tagLen),
         tag: ciphertextWithTag.slice(ciphertextWithTag.length - tagLen),
     }
+}
+
+/**
+ * Reduces arbitrary-length hash output to a valid P-256 private scalar in [1, n-1].
+ *
+ * Implements the procedure from FIPS 186-5, appendix A.2.1 ("Key Pair Generation by Testing Candidates"): interpret the input as a big-endian integer, compute `(value mod (n-1)) + 1`, and encode the result as a 32-byte big-endian octet string.
+ *
+ * The caller should supply at least 48 bytes (384 bits) of input so the modular bias is bounded by ~2^-128, which is cryptographically negligible.
+ */
+function hashToP256Scalar(hash: Uint8Array): Uint8Array {
+    // P-256 curve order
+    const P256_ORDER = BigInt('0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551')
+
+    let num = BigInt(0)
+    for (const b of hash) {
+        num = (num << BigInt(8)) | BigInt(b)
+    }
+    const scalar = (num % (P256_ORDER - BigInt(1))) + BigInt(1)
+
+    const out = new Uint8Array(32)
+    let tmp = scalar
+    for (let i = 31; i >= 0; i--) {
+        out[i] = Number(tmp & BigInt(0xff))
+        tmp >>= BigInt(8)
+    }
+    return out
+}
+
+/**
+ * Derives a deterministic ECDH P-256 key pair from the user's PRF secret
+ * (and optional password) for request payload encryption. The browser stores
+ * this key's public half on the server so the CLI can encrypt request payloads.
+ */
+export async function deriveRequestEncKeyPair(params: {
+    userId: string
+    prfSecret: Uint8Array
+    password?: string
+}): Promise<{ privateKey: CryptoKey; publicKeyJwk: EcP256PublicJwk }> {
+    const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret), 'HKDF', false, ['deriveBits'])
+
+    const salt = params.password ? new TextEncoder().encode(params.password) : new Uint8Array()
+    const info = new TextEncoder().encode(`revaulter/v2/requestEncKey\nuserId=${params.userId}\nv=1`)
+
+    // Derive 48 bytes (384 bits) so hashToP256Scalar has enough input to keep modular bias negligible
+    const rawBits = await crypto.subtle.deriveBits(
+        { name: 'HKDF', hash: 'SHA-256', salt: asBuf(salt), info: asBuf(info) },
+        ikm,
+        384
+    )
+
+    const scalarBytes = hashToP256Scalar(new Uint8Array(rawBits))
+
+    // Import as ECDH private key via JWK — the browser computes the public point from the scalar
+    const privateKey = await crypto.subtle.importKey(
+        'jwk',
+        { kty: 'EC', crv: 'P-256', d: bytesToBase64Url(scalarBytes) },
+        { name: 'ECDH', namedCurve: 'P-256' },
+        true,
+        ['deriveBits']
+    )
+
+    // Export the public key as JWK
+    const jwk = (await crypto.subtle.exportKey('jwk', privateKey)) as JsonWebKey
+    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) {
+        throw new Error('Failed to export request encryption public key as P-256 JWK')
+    }
+
+    return {
+        privateKey,
+        publicKeyJwk: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y },
+    }
+}
+
+/**
+ * Builds the canonical AAD used when encrypting/decrypting request payloads.
+ * This binds the plaintext metadata to the E2EE ciphertext so tampering with
+ * keyLabel, algorithm, or operation causes decryption to fail.
+ */
+export function buildRequestEncAAD(algorithm: string, keyLabel: string, operation: string): Uint8Array {
+    return new TextEncoder().encode(`algorithm=${algorithm}\nkeyLabel=${keyLabel}\noperation=${operation}\nv=1`)
+}
+
+/**
+ * Decrypts an E2EE request payload envelope using the browser's static ECDH key.
+ */
+export async function decryptRequestPayload(params: {
+    userId: string
+    prfSecret: Uint8Array
+    password?: string
+    cliEphemeralPublicKey: EcP256PublicJwk
+    nonce: string
+    ciphertext: string
+    aad: Uint8Array
+}): Promise<V2RequestPayloadInner> {
+    // Derive the static ECDH private key
+    const { privateKey } = await deriveRequestEncKeyPair({
+        userId: params.userId,
+        prfSecret: params.prfSecret,
+        password: params.password,
+    })
+
+    // Import the CLI's ephemeral public key
+    const peerKey = await crypto.subtle.importKey(
+        'jwk',
+        params.cliEphemeralPublicKey as JsonWebKey,
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        []
+    )
+
+    // ECDH shared secret
+    const sharedBits = await crypto.subtle.deriveBits({ name: 'ECDH', public: peerKey }, privateKey, 256)
+
+    // HKDF to derive AES-256-GCM key
+    const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey'])
+    const aesKey = await crypto.subtle.deriveKey(
+        {
+            name: 'HKDF',
+            hash: 'SHA-256',
+            salt: new Uint8Array(),
+            info: new TextEncoder().encode('revaulter/v2/request-enc'),
+        },
+        hkdfKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['decrypt']
+    )
+
+    // Decrypt
+    const nonce = base64UrlToBytes(params.nonce)
+    const ct = base64UrlToBytes(params.ciphertext)
+    const plain = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: asBuf(nonce), additionalData: asBuf(params.aad) },
+        aesKey,
+        asBuf(ct)
+    )
+
+    return JSON.parse(new TextDecoder().decode(plain)) as V2RequestPayloadInner
 }

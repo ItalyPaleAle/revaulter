@@ -61,6 +61,10 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request key not found"))
 			return
 		}
+		if !user.Ready {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusPreconditionFailed, "User account setup is not complete"))
+			return
+		}
 		if !clientIPAllowed(c.ClientIP(), user.AllowedIPs) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "This client's IP is not allowed to perform this request"))
 			return
@@ -93,14 +97,28 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 		}
 		state := id.String()
 
+		encEnvelope := protocolv2.RequestEncEnvelope{
+			CliEphemeralPublicKey: body.CliEphemeralPublicKey,
+			Nonce:                 body.EncryptedPayloadNonce,
+			Ciphertext:            body.EncryptedPayload,
+		}
+		encEnvelopeJSON, err := json.Marshal(encEnvelope)
+		if err != nil {
+			AbortWithErrorJSON(c, err)
+			return
+		}
+
 		err = s.requestStore.CreateRequest(c.Request.Context(), v2db.CreateRequestInput{
-			State:       state,
-			UserID:      user.ID,
-			Operation:   operation,
-			RequestorIP: c.ClientIP(),
-			CreatedAt:   now,
-			ExpiresAt:   now.Add(timeout),
-			Body:        body,
+			State:            state,
+			UserID:           user.ID,
+			Operation:        operation,
+			RequestorIP:      c.ClientIP(),
+			KeyLabel:         body.KeyLabel,
+			Algorithm:        body.Algorithm,
+			Note:             body.Note,
+			CreatedAt:        now,
+			ExpiresAt:        now.Add(timeout),
+			EncryptedRequest: string(encEnvelopeJSON),
 		})
 		if err != nil {
 			AbortWithErrorJSON(c, err)
@@ -150,6 +168,35 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			log.InfoContext(webhookCtx, "Sent webhook notification")
 		}()
 	}
+}
+
+func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	requestKey := c.Param("requestKey")
+	if requestKey == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing request key"))
+		return
+	}
+
+	user, err := s.authStore.GetUserByRequestKey(c.Request.Context(), requestKey)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if user == nil || user.Status != "active" || !user.Ready {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request key not found or user setup is not complete"))
+		return
+	}
+	if user.RequestEncPubkey == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusPreconditionFailed, "User has not configured request encryption key"))
+		return
+	}
+
+	c.Data(http.StatusOK, "application/json", []byte(user.RequestEncPubkey))
 }
 
 func (s *Server) RouteV2RequestResult(c *gin.Context) {
@@ -263,18 +310,22 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 		return
 	}
+	var encReq json.RawMessage
+	if rec.EncryptedRequest != "" {
+		encReq = json.RawMessage(rec.EncryptedRequest)
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"state":     rec.State,
-		"status":    rec.Status,
-		"operation": rec.Operation,
-		"userId":    rec.UserID,
-		"keyLabel":  rec.KeyLabel,
-		"algorithm": rec.Algorithm,
-		"requestor": rec.RequestorIP,
-		"date":      rec.CreatedAt.Unix(),
-		"expiry":    rec.ExpiresAt.Unix(),
-		"note":      rec.Note,
-		"request":   rec.RequestBody,
+		"state":            rec.State,
+		"status":           rec.Status,
+		"operation":        rec.Operation,
+		"userId":           rec.UserID,
+		"keyLabel":         rec.KeyLabel,
+		"algorithm":        rec.Algorithm,
+		"requestor":        rec.RequestorIP,
+		"date":             rec.CreatedAt.Unix(),
+		"expiry":           rec.ExpiresAt.Unix(),
+		"note":             rec.Note,
+		"encryptedRequest": encReq,
 	})
 }
 
@@ -414,27 +465,6 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 	if len(body.Algorithm) > 64 {
 		return NewResponseError(http.StatusBadRequest, "parameter 'algorithm' cannot be longer than 64 characters")
 	}
-	if body.Value == "" {
-		return NewResponseError(http.StatusBadRequest, "missing parameter 'value'")
-	}
-
-	// Validate base64-encoded fields
-	_, err := utils.DecodeBase64String(body.Value)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid 'value' format")
-	}
-	_, err = utils.DecodeBase64String(body.Nonce)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid 'nonce' format")
-	}
-	_, err = utils.DecodeBase64String(body.Tag)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid 'tag' format")
-	}
-	_, err = utils.DecodeBase64String(body.AdditionalData)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid 'additionalData' format")
-	}
 
 	// Validate optional note
 	if body.Note != "" && noteValidate.MatchString(body.Note) {
@@ -444,10 +474,27 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 		return NewResponseError(http.StatusBadRequest, "parameter 'note' cannot be longer than 40 characters")
 	}
 
-	// Validate the client transport key
-	err = body.ClientTransportKey.ValidatePublic()
+	// Validate E2EE envelope fields
+	if body.RequestEncAlg != "ecdh-p256+a256gcm" {
+		return NewResponseError(http.StatusBadRequest, "unsupported requestEncAlg")
+	}
+	err := body.CliEphemeralPublicKey.ValidatePublic()
 	if err != nil {
-		return err
+		return NewResponseErrorf(http.StatusBadRequest, "invalid cliEphemeralPublicKey: %v", err)
+	}
+	if body.EncryptedPayloadNonce == "" {
+		return NewResponseError(http.StatusBadRequest, "missing encryptedPayloadNonce")
+	}
+	_, err = utils.DecodeBase64String(body.EncryptedPayloadNonce)
+	if err != nil {
+		return NewResponseError(http.StatusBadRequest, "invalid encryptedPayloadNonce format")
+	}
+	if body.EncryptedPayload == "" {
+		return NewResponseError(http.StatusBadRequest, "missing encryptedPayload")
+	}
+	_, err = utils.DecodeBase64String(body.EncryptedPayload)
+	if err != nil {
+		return NewResponseError(http.StatusBadRequest, "invalid encryptedPayload format")
 	}
 
 	return nil

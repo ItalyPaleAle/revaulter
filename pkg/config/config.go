@@ -152,7 +152,6 @@ type internal struct {
 	tokenSigningKeyParsed     []byte
 	cookieEncryptionKeyParsed jwk.Key
 	cookieSigningKeyParsed    jwk.Key
-	secretKey                 []byte
 	prfSalt                   string // base64-encoded
 }
 
@@ -169,11 +168,6 @@ func (c *Config) GetCookieEncryptionKey() jwk.Key {
 // GetCookieSigningKey returns the (parsed) cookie signing key
 func (c *Config) GetCookieSigningKey() jwk.Key {
 	return c.internal.cookieSigningKeyParsed
-}
-
-// GetSecretKey returns the parsed secret key
-func (c *Config) GetSecretKey() []byte {
-	return c.internal.secretKey
 }
 
 // GetPRFSalt returns the PRF salt
@@ -232,12 +226,6 @@ func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
 		return fmt.Errorf("failed to derive PRF salt: %w", err)
 	}
 	c.internal.prfSalt = base64.RawURLEncoding.EncodeToString(prfSalt)
-
-	// Use HKDF to derive the 256-bit secret key
-	c.internal.secretKey, err = hkdf.Key(sha256.New, []byte(c.SecretKey), nil, "revaulter-secret-key", 32)
-	if err != nil {
-		return fmt.Errorf("failed to derive secret key: %w", err)
-	}
 
 	return nil
 }

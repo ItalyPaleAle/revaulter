@@ -22,11 +22,6 @@ func (s *Server) initStore(log *slog.Logger) error {
 		return nil
 	}
 
-	key := cfg.GetSecretKey()
-	if len(key) == 0 {
-		return errors.New("databaseDSN configured but secretKey was not parsed")
-	}
-
 	connCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -47,7 +42,7 @@ func (s *Server) initStore(log *slog.Logger) error {
 		return fmt.Errorf("failed to initialize auth store: %w", err)
 	}
 
-	store, err := v2db.NewRequestStore(db, key, log)
+	store, err := v2db.NewRequestStore(db, log)
 	if err != nil {
 		_ = db.Close()
 		return fmt.Errorf("failed to initialize request store: %w", err)

@@ -5,7 +5,9 @@ CREATE TABLE IF NOT EXISTS v2_users (
 	webauthn_user_id TEXT NOT NULL,
 	password_canary TEXT NOT NULL DEFAULT '',
 	request_key TEXT NOT NULL,
+	request_enc_pubkey TEXT NOT NULL DEFAULT '',
 	allowed_ips TEXT NOT NULL DEFAULT '',
+	ready INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
@@ -63,10 +65,8 @@ CREATE TABLE IF NOT EXISTS v2_requests (
 	created_at INTEGER NOT NULL,
 	expires_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL,
-	payload_ciphertext BLOB NOT NULL,
-	payload_nonce BLOB NOT NULL,
-	result_ciphertext BLOB,
-	result_nonce BLOB
+	encrypted_request TEXT NOT NULL DEFAULT '',
+	encrypted_result TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_v2_requests_status_expires ON v2_requests(status, expires_at);

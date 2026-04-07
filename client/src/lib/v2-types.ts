@@ -16,13 +16,26 @@ export type V2ResponseEnvelope = {
 export type V2RequestCreateBody = {
     keyLabel: string
     algorithm: string
+    timeout?: string
+    note?: string
+    requestEncAlg: string
+    cliEphemeralPublicKey: EcP256PublicJwk
+    encryptedPayloadNonce: string
+    encryptedPayload: string
+}
+
+export type V2RequestPayloadInner = {
     value: string
     nonce?: string
     tag?: string
     additionalData?: string
-    timeout?: string
-    note?: string
     clientTransportKey: EcP256PublicJwk
+}
+
+export type V2RequestEncEnvelope = {
+    cliEphemeralPublicKey: EcP256PublicJwk
+    nonce: string
+    ciphertext: string
 }
 
 export type V2PendingRequestItem = {
@@ -49,7 +62,7 @@ export type V2RequestDetail = {
     date: number
     expiry: number
     note?: string
-    request: V2RequestCreateBody
+    encryptedRequest: V2RequestEncEnvelope
 }
 
 export type V2RegisterBeginResponse = {

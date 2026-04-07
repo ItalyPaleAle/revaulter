@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/v2db"
 )
@@ -86,8 +87,9 @@ type v2AuthLoginFinishResponse struct {
 	PasswordCanary string             `json:"passwordCanary,omitempty"`
 }
 
-type v2AuthSetPasswordCanaryRequest struct {
-	Canary string `json:"canary"`
+type v2AuthFinalizeSignupRequest struct {
+	RequestEncPubkey json.RawMessage `json:"requestEncPubkey"`
+	Canary           string          `json:"canary,omitempty"`
 }
 
 type v2AuthAllowedIPsRequest struct {
@@ -298,7 +300,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-func (s *Server) RouteV2AuthSetPasswordCanary(c *gin.Context) {
+func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 	if s.authStore == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
 		return
@@ -310,20 +312,41 @@ func (s *Server) RouteV2AuthSetPasswordCanary(c *gin.Context) {
 		return
 	}
 
-	var req v2AuthSetPasswordCanaryRequest
+	var req v2AuthFinalizeSignupRequest
 	err := c.ShouldBindJSON(&req)
-	if err != nil || req.Canary == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "canary is required"))
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
-	if len(req.Canary) > 512 {
+	if len(req.RequestEncPubkey) == 0 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "requestEncPubkey is required"))
+		return
+	}
+
+	// Validate the public key is a valid P-256 JWK
+	var pubkey protocolv2.ECP256PublicJWK
+	err = json.Unmarshal(req.RequestEncPubkey, &pubkey)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid requestEncPubkey"))
+		return
+	}
+	err = pubkey.ValidatePublic()
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid requestEncPubkey: %v", err))
+		return
+	}
+
+	if req.Canary != "" && len(req.Canary) > 512 {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "canary is too large"))
 		return
 	}
 
-	err = s.authStore.SetPasswordCanary(c.Request.Context(), userID, req.Canary)
-	if errors.Is(err, v2db.ErrPasswordAlreadySet) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Password is already set for this user"))
+	err = s.authStore.FinalizeSignup(c.Request.Context(), userID, req.Canary, string(req.RequestEncPubkey))
+	if errors.Is(err, v2db.ErrAlreadyFinalized) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Account is already finalized"))
+		return
+	} else if errors.Is(err, v2db.ErrUserNotFound) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
 		return
 	} else if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -556,7 +579,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 		if hErr != nil {
 			return nil, hErr
 		}
-		if user == nil || user.Status != "active" {
+		if user == nil || user.Status != "active" || !user.Ready {
 			return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 		}
 

@@ -251,6 +251,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2RequestGroup.Use(requestRateLimiter)
 	v2RequestGroup.POST("/:requestKey/encrypt", s.RouteV2RequestCreate("encrypt"))
 	v2RequestGroup.POST("/:requestKey/decrypt", s.RouteV2RequestCreate("decrypt"))
+	v2RequestGroup.GET("/:requestKey/pubkey", s.RouteV2RequestPubkey)
 	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
 
 	// API and auth groups are browser-facing, apply CSRF protection
@@ -267,7 +268,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
 	v2AuthGroup.POST("/login/finish", s.RouteV2AuthLoginFinish)
 	v2AuthGroup.GET("/session", s.MiddlewareSession(true), s.RouteV2AuthSession)
-	v2AuthGroup.POST("/password-canary", s.MiddlewareSession(true), s.RouteV2AuthSetPasswordCanary)
+	v2AuthGroup.POST("/finalize-signup", s.MiddlewareSession(true), s.RouteV2AuthFinalizeSignup)
 	v2AuthGroup.POST("/allowed-ips", s.MiddlewareSession(true), s.RouteV2AuthAllowedIPs)
 	v2AuthGroup.POST("/regenerate-request-key", s.MiddlewareSession(true), s.RouteV2AuthRequestKeyRegenerate)
 	v2AuthGroup.POST("/logout", s.MiddlewareSession(true), s.RouteV2AuthLogout)
@@ -460,15 +461,21 @@ func (s *Server) startAppServer(ctx context.Context) error {
 					return
 				case now := <-cleanupTicker.C:
 					if s.requestStore != nil {
-						if n, err := s.requestStore.CleanupOldRecords(ctx, now); err != nil {
-							log.WarnContext(ctx, "v2 request cleanup failed", slog.Any("error", err))
+						n, err := s.requestStore.CleanupOldRecords(ctx, now)
+						if err != nil {
+							log.WarnContext(ctx, "request cleanup failed", slog.Any("error", err))
 						} else if n > 0 {
-							log.InfoContext(ctx, "v2 request cleanup", slog.Int64("deleted", n))
+							log.InfoContext(ctx, "request cleanup", slog.Int64("deleted", n))
 						}
 					}
 					if s.authStore != nil {
-						if err := s.authStore.CleanupExpired(ctx, now); err != nil {
-							log.WarnContext(ctx, "v2 auth cleanup failed", slog.Any("error", err))
+						err := s.authStore.CleanupExpired(ctx, now)
+						if err != nil {
+							log.WarnContext(ctx, "auth cleanup failed", slog.Any("error", err))
+						}
+						err = s.authStore.CleanupUnreadyUsers(ctx, now)
+						if err != nil {
+							log.WarnContext(ctx, "user cleanup failed", slog.Any("error", err))
 						}
 					}
 				}

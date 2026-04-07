@@ -1,6 +1,7 @@
 import ndjson from '$lib/ndjson'
 import { Request } from '$lib/request'
 import type {
+    EcP256PublicJwk,
     V2AuthSessionInfo,
     V2LoginBeginResponse,
     V2LoginFinishResponse,
@@ -44,9 +45,13 @@ export async function v2LoginFinish(args: { challengeId: string; credential: unk
     return res.data
 }
 
-/** Stores the password canary for the currently authenticated user session */
-export async function v2SetPasswordCanary(canary: string) {
-    const res = await Request<{ ok: boolean }>('/v2/auth/password-canary', { postData: { canary } })
+/** Finalizes the signup by storing the request encryption public key and optional password canary */
+export async function v2FinalizeSignup(requestEncPubkey: EcP256PublicJwk, canary?: string) {
+    const body: Record<string, unknown> = { requestEncPubkey }
+    if (canary) {
+        body.canary = canary
+    }
+    const res = await Request<{ ok: boolean }>('/v2/auth/finalize-signup', { postData: body })
     return res.data
 }
 

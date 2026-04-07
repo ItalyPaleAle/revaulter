@@ -5,10 +5,11 @@ import AuthAccessView from '$components/AuthAccessView.svelte'
 import AuthSetupView from '$components/AuthSetupView.svelte'
 import ReadyView from '$components/ReadyView.svelte'
 
-import { encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
+import { deriveRequestEncKeyPair, encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
 import { ResponseNotOkError } from '$lib/request'
 import { base64UrlToBytes } from '$lib/utils'
 import {
+    v2FinalizeSignup,
     v2ListStream,
     v2LoginBegin,
     v2LoginFinish,
@@ -16,9 +17,8 @@ import {
     v2RegenerateRequestKey,
     v2RegisterBegin,
     v2RegisterFinish,
-    v2SetAllowedIPs,
     v2Session,
-    v2SetPasswordCanary,
+    v2SetAllowedIPs,
 } from '$lib/v2-api'
 import type { V2AuthSessionInfo, V2PendingRequestItem, V2SessionResponse } from '$lib/v2-types'
 import { webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
@@ -293,16 +293,10 @@ async function doFinishPasswordLogin() {
 async function doSetPassword() {
     const trimmedPassword = passwordInput.trim()
 
-    if (!prfSecret) {
+    if (!prfSecret || !session) {
         clearLocalAuthState()
         authError = 'Missing local key material. Sign in again to continue.'
         uiState = 'signin'
-        return
-    }
-
-    if (trimmedPassword === '') {
-        activePassword = ''
-        enterReadyView()
         return
     }
 
@@ -310,8 +304,19 @@ async function doSetPassword() {
     authError = null
 
     try {
-        const canary = await encryptPasswordCanary(trimmedPassword)
-        await v2SetPasswordCanary(canary)
+        const password = trimmedPassword || undefined
+        const { publicKeyJwk } = await deriveRequestEncKeyPair({
+            userId: session.userId,
+            prfSecret,
+            password,
+        })
+
+        let canary: string | undefined
+        if (trimmedPassword) {
+            canary = await encryptPasswordCanary(trimmedPassword)
+        }
+
+        await v2FinalizeSignup(publicKeyJwk, canary)
         activePassword = trimmedPassword
         loginPasswordCanary = null
         enterReadyView()
@@ -502,9 +507,28 @@ function allowedIpsSummary() {
             onRegister={doRegister}
             onReturnToSignIn={returnToSignIn}
             onSetPassword={doSetPassword}
-            onSkipPassword={() => {
-                activePassword = ''
-                enterReadyView()
+            onSkipPassword={async () => {
+                if (!prfSecret || !session) {
+                    clearLocalAuthState()
+                    authError = 'Missing local key material, sign in again to continue'
+                    uiState = 'signin'
+                    return
+                }
+                authBusy = true
+                authError = null
+                try {
+                    const { publicKeyJwk } = await deriveRequestEncKeyPair({
+                        userId: session.userId,
+                        prfSecret,
+                    })
+                    await v2FinalizeSignup(publicKeyJwk)
+                    activePassword = ''
+                    enterReadyView()
+                } catch (err) {
+                    authError = err instanceof Error ? err.message : String(err)
+                } finally {
+                    authBusy = false
+                }
             }}
             pageError={pageError}
             passwordInput={passwordInput}
