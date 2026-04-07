@@ -101,5 +101,69 @@ const { icon, title, size = '12' }: Props = $props()
         <IconContainer {title} {size}>
             <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
         </IconContainer>
+    {:else if icon == 'settings'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M14 17H5" />
+            <path d="M19 7h-9" />
+            <circle cx="17" cy="17" r="3" />
+            <circle cx="7" cy="7" r="3" />
+        </IconContainer>
+    {:else if icon == 'key-round'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M15.5 14.5 18 17l4-4" />
+            <circle cx="7.5" cy="15.5" r="5.5" />
+        </IconContainer>
+    {:else if icon == 'refresh-cw'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M21 12a9 9 0 0 0-15.5-6.36L3 8" />
+            <path d="M3 3v5h5" />
+            <path d="M3 12a9 9 0 0 0 15.5 6.36L21 16" />
+            <path d="M16 16h5v5" />
+        </IconContainer>
+    {:else if icon == 'shield'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+        </IconContainer>
+    {:else if icon == 'log-out'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <path d="M16 17l5-5-5-5" />
+            <path d="M21 12H9" />
+        </IconContainer>
+    {:else if icon == 'x'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+        </IconContainer>
     {/if}
 </i>

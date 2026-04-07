@@ -2,11 +2,7 @@
 
 :root {
     color-scheme: light dark;
-    font-family:
-        "Avenir Next",
-        "Segoe UI",
-        "Helvetica Neue",
-        sans-serif;
+    font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
     --app-bg:
         radial-gradient(circle at top left, rgba(250, 204, 21, 0.2), transparent 28%),
         radial-gradient(circle at 88% 14%, rgba(14, 165, 233, 0.2), transparent 22%),
@@ -39,7 +35,7 @@ body {
 }
 
 body::before {
-    content: '';
+    content: "";
     position: fixed;
     inset: 0;
     pointer-events: none;
@@ -51,6 +47,18 @@ body::before {
     opacity: 0.16;
 }
 
+body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+        radial-gradient(circle at 12% 22%, rgba(251, 191, 36, 0.16), transparent 20%),
+        radial-gradient(circle at 84% 18%, rgba(56, 189, 248, 0.16), transparent 20%),
+        radial-gradient(circle at 72% 84%, rgba(244, 114, 182, 0.14), transparent 18%);
+    opacity: 0.9;
+}
+
 @media (prefers-color-scheme: dark) {
     body::before {
         background-image:
@@ -58,19 +66,22 @@ body::before {
             linear-gradient(90deg, rgba(148, 163, 184, 0.1) 1px, transparent 1px);
         opacity: 0.2;
     }
+
+    body::after {
+        background:
+            radial-gradient(circle at 12% 22%, rgba(251, 191, 36, 0.08), transparent 18%),
+            radial-gradient(circle at 84% 18%, rgba(56, 189, 248, 0.12), transparent 18%),
+            radial-gradient(circle at 72% 84%, rgba(244, 114, 182, 0.1), transparent 18%);
+        opacity: 1;
+    }
 }
 
 h1,
 h2,
 h3,
 h4,
-[data-display='serif'] {
-    font-family:
-        "Iowan Old Style",
-        "Palatino Linotype",
-        "Book Antiqua",
-        "URW Palladio L",
-        serif;
+[data-display="serif"] {
+    font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", "URW Palladio L", serif;
     letter-spacing: -0.03em;
 }
 

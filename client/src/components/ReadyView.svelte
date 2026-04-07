@@ -1,8 +1,10 @@
 <script lang="ts">
 import Button from '$components/Button.svelte'
+import Icon from '$components/Icon.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
 import Modal from '$components/Modal.svelte'
 import PendingItem from '$components/PendingItem.svelte'
+import SettingsPanel from '$components/SettingsPanel.svelte'
 
 import type { V2PendingRequestItem } from '$lib/v2-types'
 
@@ -51,11 +53,48 @@ let {
     settingsError,
     settingsSuccess,
 }: Props = $props()
+
+let settingsPanelOpen = $state(false)
+
+function toggleSettingsPanel() {
+    settingsPanelOpen = !settingsPanelOpen
+}
+
+function closeSettingsPanel() {
+    settingsPanelOpen = false
+}
+
+function openAllowedIpsFromPanel() {
+    closeSettingsPanel()
+    onOpenAllowedIpsModal()
+}
+
+function logoutFromPanel() {
+    closeSettingsPanel()
+    void onLogout()
+}
+
+$effect(() => {
+    if (!settingsPanelOpen) {
+        return
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+            closeSettingsPanel()
+        }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+        document.removeEventListener('keydown', handleKeyDown)
+    }
+})
 </script>
 
 <div class="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-4 py-6 md:px-6 md:py-8">
-    <header class="relative overflow-hidden rounded-[2rem] border border-white/65 bg-white/48 p-5 shadow-[0_8px_26px_-20px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/42">
-        <div class="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(90deg,rgba(251,191,36,0.18),rgba(14,165,233,0.16),rgba(244,114,182,0.16))] opacity-90 blur-2xl dark:opacity-60"></div>
+    <header class="rounded-4xl border border-white/85 bg-white/92 p-5 shadow-[0_8px_26px_-20px_rgba(15,23,42,0.22)] dark:border-white/10 dark:bg-slate-950/88">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div class="space-y-3">
                 <div class="space-y-2">
@@ -66,12 +105,14 @@ let {
                 </div>
             </div>
 
-            <div class="flex flex-col items-start gap-3 border-l border-slate-200/80 pl-0 text-sm text-slate-700 dark:border-white/10 dark:text-slate-200 lg:pl-6">
-                <div>
-                    Signed in as <span class="font-mono text-slate-950 dark:text-white">{sessionLabel}</span>
-                </div>
-                <Button variant="outline" onclick={onLogout}>
-                    Sign out
+            <div class="relative flex justify-end lg:justify-start">
+                <Button
+                    variant="icon"
+                    size="icon"
+                    ariaLabel="Open security settings"
+                    onclick={toggleSettingsPanel}
+                >
+                    <Icon icon="settings" title="Security settings" size="5" />
                 </Button>
             </div>
         </div>
@@ -83,7 +124,7 @@ let {
         </div>
     {/if}
 
-    <section class="relative overflow-hidden rounded-[2rem] border border-white/65 bg-white/46 p-5 shadow-[0_8px_26px_-20px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/42">
+    <section class="rounded-4xl border border-white/85 bg-white/92 p-5 shadow-[0_8px_26px_-20px_rgba(15,23,42,0.22)] dark:border-white/10 dark:bg-slate-950/88">
         <div class="mb-5 flex flex-col gap-3 border-b border-slate-200/80 pb-4 dark:border-white/10 md:flex-row md:items-center md:justify-between">
             <div>
                 <div class="text-sm font-medium uppercase tracking-[0.18em] text-slate-700 dark:text-slate-200">Assigned requests</div>
@@ -120,55 +161,6 @@ let {
                         />
                     {/if}
                 {/each}
-            </div>
-        {/if}
-    </section>
-
-    <section class="relative overflow-hidden rounded-[2rem] border border-white/65 bg-white/46 p-5 shadow-[0_8px_26px_-20px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/42">
-        <div class="mb-4 border-b border-slate-200/80 pb-4 dark:border-white/10">
-            <div class="text-sm font-medium uppercase tracking-[0.18em] text-slate-700 dark:text-slate-200">Security settings</div>
-        </div>
-        <div class="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
-            <div class="space-y-3">
-                <div class="text-sm font-medium text-slate-900 dark:text-white">Request key</div>
-                <div class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center">
-                    <div class="min-w-0 flex-1 rounded-[1.35rem] bg-white/60 px-4 py-3 font-mono text-sm text-slate-900 ring-1 ring-slate-200/80 dark:bg-white/6 dark:text-slate-100 dark:ring-white/10">
-                        <div class="overflow-x-auto whitespace-nowrap">{requestKey}</div>
-                    </div>
-                    <Button
-                        variant="outline"
-                        onclick={onRegenerateRequestKey}
-                        disabled={settingsBusy}
-                    >
-                        Regenerate request key
-                    </Button>
-                </div>
-            </div>
-
-            <div class="space-y-3 border-t border-slate-200/80 pt-6 dark:border-white/10 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
-                <div class="text-sm font-medium text-slate-900 dark:text-white">Allowed IPs</div>
-                <div class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center">
-                    <p class="min-w-0 flex-1 text-sm text-slate-600 dark:text-slate-300">
-                        {allowedIpsSummary}
-                    </p>
-                    <Button
-                        variant="neutral"
-                        onclick={onOpenAllowedIpsModal}
-                        disabled={settingsBusy}
-                    >
-                        View allowed IPs
-                    </Button>
-                </div>
-            </div>
-        </div>
-
-        {#if !allowedIpsModalOpen && settingsError}
-            <div class="mt-5 rounded-3xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
-                {settingsError}
-            </div>
-        {:else if !allowedIpsModalOpen && settingsSuccess}
-            <div class="mt-5 rounded-3xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200">
-                {settingsSuccess}
             </div>
         {/if}
     </section>
@@ -220,5 +212,20 @@ let {
                 </Button>
             </div>
         </Modal>
+    {/if}
+
+    {#if settingsPanelOpen}
+        <SettingsPanel
+            {allowedIpsModalOpen}
+            {allowedIpsSummary}
+            onClose={closeSettingsPanel}
+            onLogout={logoutFromPanel}
+            onOpenAllowedIps={openAllowedIpsFromPanel}
+            onRegenerateRequestKey={onRegenerateRequestKey}
+            {requestKey}
+            {settingsBusy}
+            {settingsError}
+            {settingsSuccess}
+        />
     {/if}
 </div>

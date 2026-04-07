@@ -2,8 +2,8 @@
 import { formatDistanceToNowStrict } from 'date-fns'
 
 import Button from '$components/Button.svelte'
-
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
+
 import {
     buildTransportAAD,
     deriveOperationKeyBytes,
@@ -182,7 +182,7 @@ function expiresIn(item: V2PendingRequestItem) {
 }
 </script>
 
-<div class="rounded-[1.6rem] border border-white/70 bg-white/68 p-4 shadow-[0_4px_16px_-14px_rgba(15,23,42,0.18)] backdrop-blur dark:border-white/10 dark:bg-slate-950/60">
+<div class="rounded-[1.6rem] border border-white/80 bg-white/86 p-4 shadow-[0_4px_16px_-14px_rgba(15,23,42,0.18)] backdrop-blur-sm dark:border-white/10 dark:bg-slate-950/82">
     <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div class="space-y-1">
             <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{operationTitle(item.operation)} request</div>

@@ -71,7 +71,7 @@ export default defineConfig(({ mode }) => {
                     assetFileNames: '[name].[hash].[ext]',
                     manualChunks: {
                         lib: ['svelte', 'date-fns'],
-                        crypto: ['hash-wasm', 'arraybuffer-encoding']
+                        crypto: ['hash-wasm', 'arraybuffer-encoding'],
                     },
                 },
             },
