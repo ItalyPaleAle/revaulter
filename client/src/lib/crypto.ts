@@ -134,11 +134,11 @@ export async function decryptTransportEnvelope(
 
 /**
  * Derives the logical operation key bytes used for application crypto such as
- * AES-GCM encryption/decryption. The derived key is bound to the target user,
+ * AES-GCM encryption/decryption. The derived key is bound to the user ID,
  * key label, algorithm, and optionally the password.
  */
 export async function deriveOperationKeyBytes(params: {
-    targetUser: string
+    userId: string
     keyLabel: string
     algorithm: string
     prfSecret: Uint8Array
@@ -149,7 +149,7 @@ export async function deriveOperationKeyBytes(params: {
 
     // If a password is present, mix it in as HKDF salt so the derived key depends on both factors
     const salt = params.password ? new TextEncoder().encode(params.password) : new Uint8Array()
-    const infoObj = new InfoObj(params.targetUser, params.keyLabel, params.algorithm)
+    const infoObj = new InfoObj(params.userId, params.keyLabel, params.algorithm)
 
     // Bind the key to the logical key identity so encrypt/decrypt requests derive the same bytes
     const bits = await crypto.subtle.deriveBits(
@@ -186,12 +186,12 @@ class TransportAADInfo {
 
 class InfoObj {
     private v = 1
-    public targetUser: string
+    public userId: string
     public keyLabel: string
     public algorithm: string
 
-    constructor(targetUser: string, keyLabel: string, algorithm: string) {
-        this.targetUser = targetUser
+    constructor(userId: string, keyLabel: string, algorithm: string) {
+        this.userId = userId
         this.keyLabel = keyLabel
         this.algorithm = algorithm
     }
@@ -199,7 +199,7 @@ class InfoObj {
     public serialize(): string {
         // Build a canonical info string that is deterministic across implementations
         // Fields are sorted alphabetically and separated by newlines; no JSON serialization dependency
-        return `algorithm=${this.algorithm}\nkeyLabel=${this.keyLabel}\ntargetUser=${this.targetUser}\nv=${this.v}`
+        return `algorithm=${this.algorithm}\nkeyLabel=${this.keyLabel}\nuserId=${this.userId}\nv=${this.v}`
     }
 }
 
@@ -311,7 +311,7 @@ export async function performAesGcmOperation(params: {
         return new Uint8Array(res)
     } catch {
         throw new Error(
-            'Decryption failed. This normally means that the the ciphertext could not be authenticated. Check that the key label, target user, password, nonce, tag, and additional data match the original encryption request.'
+            'Decryption failed. This normally means that the ciphertext could not be authenticated. Check that the key label, user ID, password, nonce, tag, and additional data match the original encryption request.'
         )
     }
 }

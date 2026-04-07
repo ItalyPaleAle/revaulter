@@ -37,7 +37,7 @@ func (f *testV2Flags) RequestBody(clientTransportKey protocolv2.ECP256PublicJWK)
 	return json.Marshal(req)
 }
 func (f *testV2Flags) GetServer() string                  { return f.server }
-func (f *testV2Flags) GetRequestKey() string              { return "" }
+func (f *testV2Flags) GetRequestKey() string              { return "request-key-123" }
 func (f *testV2Flags) GetAlgorithm() string               { return f.alg }
 func (f *testV2Flags) GetConnectionOptions() (bool, bool) { return false, false }
 
@@ -49,12 +49,11 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/encrypt"):
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/request-key-123/encrypt"):
 			defer r.Body.Close()
 			createSeen.Store(true)
 
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&capturedReq))
-			require.Equal(t, "alice", capturedReq.TargetUser)
 			require.Equal(t, "disk-key", capturedReq.KeyLabel)
 			require.Equal(t, "aes-gcm-256", capturedReq.Algorithm)
 			require.NoError(t, capturedReq.ClientTransportKey.ValidatePublic())
@@ -108,10 +107,9 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 	defer srv.Close()
 
 	flagsBody, err := json.Marshal(v2OperationRequest{
-		TargetUser: "alice",
-		KeyLabel:   "disk-key",
-		Algorithm:  "aes-gcm-256",
-		Value:      base64.RawURLEncoding.EncodeToString([]byte("hello")),
+		KeyLabel:  "disk-key",
+		Algorithm: "aes-gcm-256",
+		Value:     base64.RawURLEncoding.EncodeToString([]byte("hello")),
 	})
 	require.NoError(t, err)
 

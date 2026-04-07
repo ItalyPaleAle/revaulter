@@ -34,8 +34,6 @@ Recommended:
 
 - `baseUrl`
 - `tlsPath` (or `tlsCertPEM` + `tlsKeyPEM`)
-- `requestKey`
-- `allowedIps`
 - `cookieEncryptionKey`
 - `tokenSigningKey`
 
@@ -65,3 +63,4 @@ revaulter
 ```
 
 Then open the web UI, sign in or create an account, and use `revaulter-cli v2 ...` to submit requests.
+Each user receives a per-user request key in the UI and can configure their own allowed IP list there.

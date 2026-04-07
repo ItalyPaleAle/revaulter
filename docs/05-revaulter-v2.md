@@ -5,8 +5,9 @@ Revaulter v2 replaces the Azure AD + Azure Key Vault execution model with a brow
 ## Summary
 
 - Requests are submitted by the CLI to `/v2/request/*`.
+  Each request is routed by a per-user request key.
 - Revaulter stores requests in a database (SQLite or Postgres).
-- Admins authenticate in the browser with WebAuthn.
+- Users authenticate in the browser with WebAuthn.
 - The browser performs crypto operations locally using WebCrypto.
 - Results are encrypted to the CLI using ephemeral ECDH (P-256) + AES-GCM and relayed by Revaulter.
 
@@ -53,7 +54,7 @@ Use the `v2` command group:
 ```bash
 revaulter-cli v2 encrypt \
   --server https://revaulter.example \
-  --target-user alice \
+  --request-key AbCdEf0123456789GhIj \
   --key-label boot-disk \
   --algorithm aes-gcm-256 \
   --value <base64url>
@@ -86,8 +87,8 @@ Users create their own accounts from the main web UI unless `disableSignup` is e
 
 CLI-facing:
 
-- `POST /v2/request/encrypt`
-- `POST /v2/request/decrypt`
+- `POST /v2/request/:requestKey/encrypt`
+- `POST /v2/request/:requestKey/decrypt`
 - `GET /v2/request/result/:state`
 
 User-facing:
@@ -114,5 +115,5 @@ Example:
 ## Security notes
 
 - Sensitive request payloads and response envelopes are encrypted at rest in the DB.
-- Password factor (if enabled) is verified server-side via HMAC proof and used locally in browser key derivation.
+- Password canaries are stored only to support client-side password unlock after passkey authentication.
 - The final operation result returned to the CLI is encrypted in transit with a per-request ECDH-derived AES-GCM key.

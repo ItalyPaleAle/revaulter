@@ -113,7 +113,7 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 		return res, out
 	}
 
-	sessionCookie := seedV2SessionCookie(t, srv, "alice", "Alice")
+	sessionCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
 
 	// Build JWK for client transport key
 	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
@@ -122,11 +122,10 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create request
-	res, createResp := doPostJSON(t, "/v2/request/encrypt", map[string]any{
-		"targetUser": "alice",
-		"keyLabel":   "disk-key",
-		"algorithm":  "aes-gcm-256",
-		"value":      base64.RawURLEncoding.EncodeToString([]byte("hello")),
+	res, createResp := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", map[string]any{
+		"keyLabel":  "disk-key",
+		"algorithm": "aes-gcm-256",
+		"value":     base64.RawURLEncoding.EncodeToString([]byte("hello")),
 		"clientTransportKey": map[string]any{
 			"kty": clientJWK.Kty,
 			"crv": clientJWK.Crv,
@@ -158,7 +157,7 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	// Get request details
 	res, detail := doGetJSON(t, "/v2/api/request/"+state, sessionCookie)
 	require.Equal(t, http.StatusOK, res.StatusCode)
-	require.Equal(t, "alice", detail["targetUser"])
+	require.Equal(t, aliceUser.ID, detail["userId"])
 	reqObj, ok := detail["request"].(map[string]any)
 	require.True(t, ok)
 	require.NotNil(t, reqObj["clientTransportKey"])
@@ -234,10 +233,10 @@ func TestServerV2PublicSignup(t *testing.T) {
 		return res, out
 	}
 
-	seedV2SessionCookie(t, srv, "alice", "Alice")
+	_, _ = seedV2SessionCookie(t, srv, "user-alice", "Alice")
 
 	// Public signup remains available for later users
-	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{"username": "bob", "displayName": "Bob"})
+	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{"displayName": "Bob"})
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.NotEmpty(t, regBegin["challengeId"])
 	require.Equal(t, "webauthn", regBegin["mode"])
@@ -261,7 +260,7 @@ func TestServerV2DisableSignup(t *testing.T) {
 	defer stopServerFn(t)
 	client := clientForListener(srv.appListener)
 
-	body, err := json.Marshal(map[string]any{"username": "alice", "displayName": "Alice"})
+	body, err := json.Marshal(map[string]any{"displayName": "Alice"})
 	require.NoError(t, err)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/register/begin", testServerPort), bytes.NewReader(body))
 	require.NoError(t, err)
@@ -324,7 +323,7 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 		_ = json.NewDecoder(res.Body).Decode(&out)
 		return res, out
 	}
-	aliceCookie := seedV2SessionCookie(t, srv, "alice", "Alice")
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
 
 	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -332,11 +331,10 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.NoError(t, err)
 
 	// Reject malformed client transport JWK (private material present).
-	res, _ := doPostJSON(t, "/v2/request/encrypt", map[string]any{
-		"targetUser": "alice",
-		"keyLabel":   "disk-key",
-		"algorithm":  "aes-gcm-256",
-		"value":      base64.RawURLEncoding.EncodeToString([]byte("hello")),
+	res, _ := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", map[string]any{
+		"keyLabel":  "disk-key",
+		"algorithm": "aes-gcm-256",
+		"value":     base64.RawURLEncoding.EncodeToString([]byte("hello")),
 		"clientTransportKey": map[string]any{
 			"kty": "EC", "crv": "P-256",
 			"x": clientJWK.X, "y": clientJWK.Y,
@@ -346,11 +344,10 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
 	// Create a valid request targeted to alice.
-	res, create := doPostJSON(t, "/v2/request/encrypt", map[string]any{
-		"targetUser": "alice",
-		"keyLabel":   "disk-key",
-		"algorithm":  "aes-gcm-256",
-		"value":      base64.RawURLEncoding.EncodeToString([]byte("hello")),
+	res, create := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", map[string]any{
+		"keyLabel":  "disk-key",
+		"algorithm": "aes-gcm-256",
+		"value":     base64.RawURLEncoding.EncodeToString([]byte("hello")),
 		"clientTransportKey": map[string]any{
 			"kty": clientJWK.Kty, "crv": clientJWK.Crv, "x": clientJWK.X, "y": clientJWK.Y,
 		},
@@ -409,12 +406,11 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
 	// Expiry path: short timeout should transition to failed/expired on result polling.
-	res, create = doPostJSON(t, "/v2/request/encrypt", map[string]any{
-		"targetUser": "alice",
-		"keyLabel":   "expiring-key",
-		"algorithm":  "aes-gcm-256",
-		"value":      base64.RawURLEncoding.EncodeToString([]byte("hello")),
-		"timeout":    "1s",
+	res, create = doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", map[string]any{
+		"keyLabel":  "expiring-key",
+		"algorithm": "aes-gcm-256",
+		"value":     base64.RawURLEncoding.EncodeToString([]byte("hello")),
+		"timeout":   "1s",
 		"clientTransportKey": map[string]any{
 			"kty": clientJWK.Kty, "crv": clientJWK.Crv, "x": clientJWK.X, "y": clientJWK.Y,
 		},
@@ -446,7 +442,7 @@ func TestServerV2RegisterRequiresWebAuthn(t *testing.T) {
 	defer stopServerFn(t)
 	client := clientForListener(srv.appListener)
 
-	body := bytes.NewBufferString(`{"username":"alice","displayName":"Alice"}`)
+	body := bytes.NewBufferString(`{"displayName":"Alice"}`)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/register/begin", testServerPort), body)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -478,18 +474,19 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
 	require.NoError(t, err)
 
+	_, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
 	body, err := json.Marshal(map[string]any{
-		"targetUser": "alice",
-		"keyLabel":   "disk-key",
-		"algorithm":  "aes-gcm-256",
-		"value":      base64.RawURLEncoding.EncodeToString([]byte("hello")),
-		"note":       "boot unlock",
+		"keyLabel":  "disk-key",
+		"algorithm": "aes-gcm-256",
+		"value":     base64.RawURLEncoding.EncodeToString([]byte("hello")),
+		"note":      "boot unlock",
 		"clientTransportKey": map[string]any{
 			"kty": clientJWK.Kty, "crv": clientJWK.Crv, "x": clientJWK.X, "y": clientJWK.Y,
 		},
 	})
 	require.NoError(t, err)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/request/encrypt", testServerPort), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/request/%s/encrypt", testServerPort, aliceUser.RequestKey), bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	res, err := client.Do(req)
@@ -504,7 +501,7 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 		require.NotNil(t, msg)
 		require.Equal(t, "v2", msg.Flow)
 		require.Equal(t, "encrypt", msg.OperationName)
-		require.Equal(t, "alice", msg.TargetUser)
+		require.Equal(t, "Alice", msg.AssignedUser)
 		require.Equal(t, "disk-key", msg.KeyLabel)
 		require.Equal(t, "aes-gcm-256", msg.Algorithm)
 		require.Equal(t, "boot unlock", msg.Note)
@@ -549,20 +546,23 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	return srv, cleanup
 }
 
-func seedV2SessionCookie(t *testing.T, srv *Server, username string, displayName string) *http.Cookie {
+func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName string) (*http.Cookie, *v2db.User) {
 	t.Helper()
 
-	username = normalizeUsername(username)
 	sess, err := srv.authStore.RegisterUser(t.Context(), v2db.RegisterUserInput{
-		Username:       username,
+		UserID:         userID,
 		DisplayName:    displayName,
-		WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("webauthn-" + username)),
-		CredentialID:   "cred-" + username,
+		WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("webauthn-" + userID)),
+		CredentialID:   "cred-" + userID,
 		PublicKey:      `{}`,
 		SignCount:      1,
 		SessionTTL:     config.Get().SessionTimeout,
 	})
 	require.NoError(t, err)
+
+	user, err := srv.authStore.GetUserByID(t.Context(), userID)
+	require.NoError(t, err)
+	require.NotNil(t, user)
 
 	cookieValue, err := serializeSecureCookieEncryptedJWT(sessionCookieNameSecure, sess.ID, time.Until(sess.ExpiresAt))
 	require.NoError(t, err)
@@ -571,7 +571,7 @@ func seedV2SessionCookie(t *testing.T, srv *Server, username string, displayName
 		Name:  sessionCookieNameSecure,
 		Value: cookieValue,
 		Path:  "/",
-	}
+	}, user
 }
 
 func startTestServer(t *testing.T, srv *Server) func(t *testing.T) {

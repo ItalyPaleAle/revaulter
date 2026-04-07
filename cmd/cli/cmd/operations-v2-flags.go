@@ -14,13 +14,12 @@ type v2OperationFlagsBase struct {
 	Insecure bool
 	NoH2C    bool
 
-	TargetUser string
+	RequestKey string
 	KeyLabel   string
 	Algorithm  string
 
-	SecretKey string
-	Timeout   durationValue
-	Note      string
+	Timeout durationValue
+	Note    string
 }
 
 func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
@@ -29,14 +28,13 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
 	cmd.Flags().BoolVar(&f.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 
-	cmd.Flags().StringVar(&f.TargetUser, "target-user", "", "Target user for the request")
-	_ = cmd.MarkFlagRequired("target-user")
+	cmd.Flags().StringVar(&f.RequestKey, "request-key", "", "Per-user request key used to route the request")
+	_ = cmd.MarkFlagRequired("request-key")
 	cmd.Flags().StringVar(&f.KeyLabel, "key-label", "", "Logical key label used for v2 key derivation")
 	_ = cmd.MarkFlagRequired("key-label")
 	cmd.Flags().StringVarP(&f.Algorithm, "algorithm", "a", "", "v2 algorithm identifier")
 	_ = cmd.MarkFlagRequired("algorithm")
 
-	cmd.Flags().StringVarP(&f.SecretKey, "secret-key", "K", "", "Secret key if required by the server to access the /request endpoints")
 	cmd.Flags().VarP(&f.Timeout, "timeout", "t", "Timeout for the operation, as a number of seconds or Go duration")
 	cmd.Flags().StringVarP(&f.Note, "note", "n", "", "Optional message displayed alongside the request (up to 40 characters)")
 }
@@ -47,12 +45,11 @@ func (f *v2OperationFlagsBase) Validate() error {
 }
 
 func (f *v2OperationFlagsBase) GetServer() string                  { return f.Server }
-func (f *v2OperationFlagsBase) GetRequestKey() string              { return f.SecretKey }
+func (f *v2OperationFlagsBase) GetRequestKey() string              { return f.RequestKey }
 func (f *v2OperationFlagsBase) GetAlgorithm() string               { return f.Algorithm }
 func (f *v2OperationFlagsBase) GetConnectionOptions() (bool, bool) { return f.Insecure, f.NoH2C }
 
 func (f *v2OperationFlagsBase) AddBaseRequestFields(data *v2OperationRequest, keyJWK protocolv2.ECP256PublicJWK) {
-	data.TargetUser = f.TargetUser
 	data.KeyLabel = f.KeyLabel
 	data.Algorithm = f.Algorithm
 	data.Timeout = f.Timeout.String()

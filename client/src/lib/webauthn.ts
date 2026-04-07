@@ -69,7 +69,6 @@ function serializePublicKeyCredential(cred: PublicKeyCredential) {
 }
 
 export async function webauthnRegister(args: {
-    username: string
     displayName: string
     challenge: string
     options?: unknown
@@ -93,8 +92,8 @@ export async function webauthnRegister(args: {
             rp: { name: 'Revaulter' },
             user: {
                 id: asBuf(userId),
-                name: args.username,
-                displayName: args.displayName,
+                name: args.displayName || 'user',
+                displayName: args.displayName || 'user',
             },
             pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
             timeout: 60_000,

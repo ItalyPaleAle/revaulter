@@ -41,9 +41,33 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
 			return
 		}
+		if s.authStore == nil {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+			return
+		}
+
+		requestKey := c.Param("requestKey")
+		if requestKey == "" {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing request key"))
+			return
+		}
+
+		user, err := s.authStore.GetUserByRequestKey(c.Request.Context(), requestKey)
+		if err != nil {
+			AbortWithErrorJSON(c, err)
+			return
+		}
+		if user == nil || user.Status != "active" {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request key not found"))
+			return
+		}
+		if !clientIPAllowed(c.ClientIP(), user.AllowedIPs) {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "This client's IP is not allowed to perform this request"))
+			return
+		}
 
 		var body protocolv2.RequestCreateBody
-		err := c.ShouldBindJSON(&body)
+		err = c.ShouldBindJSON(&body)
 		if err != nil {
 			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid request body: %v", err))
 			return
@@ -71,6 +95,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 
 		err = s.requestStore.CreateRequest(c.Request.Context(), v2db.CreateRequestInput{
 			State:       state,
+			UserID:      user.ID,
 			Operation:   operation,
 			RequestorIP: c.ClientIP(),
 			CreatedAt:   now,
@@ -87,26 +112,31 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			"pending": true,
 		})
 		s.publishListItem(&v2db.V2RequestListItem{
-			State:      state,
-			Status:     string(v2db.V2RequestStatusPending),
-			Operation:  operation,
-			TargetUser: body.TargetUser,
-			KeyLabel:   body.KeyLabel,
-			Algorithm:  body.Algorithm,
-			Requestor:  c.ClientIP(),
-			Date:       now.Unix(),
-			Expiry:     now.Add(timeout).Unix(),
-			Note:       body.Note,
+			State:     state,
+			Status:    string(v2db.V2RequestStatusPending),
+			Operation: operation,
+			UserID:    user.ID,
+			KeyLabel:  body.KeyLabel,
+			Algorithm: body.Algorithm,
+			Requestor: c.ClientIP(),
+			Date:      now.Unix(),
+			Expiry:    now.Add(timeout).Unix(),
+			Note:      body.Note,
 		})
 
 		// Notify users via webhook in background
 		go func() {
+			displayName := user.DisplayName
+			if displayName == "" {
+				displayName = user.ID
+			}
+
 			// Use a background context because the request's context is canceled when the handler returns
 			webhookCtx := trace.ContextWithSpan(context.Background(), span)
 			webhookErr := s.webhook.SendWebhook(webhookCtx, &webhook.WebhookRequest{
 				Flow:          "v2",
 				OperationName: operation,
-				TargetUser:    body.TargetUser,
+				AssignedUser:  displayName,
 				KeyLabel:      body.KeyLabel,
 				Algorithm:     body.Algorithm,
 				StateId:       state,
@@ -201,12 +231,11 @@ func (s *Server) RouteV2APIList(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	username, _ := c.Get(contextKeyUsername)
-	userStr, _ := username.(string)
-	if userStr != "" {
+	userID := c.GetString(contextKeyUserID)
+	if userID != "" {
 		filtered := list[:0]
 		for _, item := range list {
-			if item.TargetUser == userStr {
+			if item.UserID == userID {
 				filtered = append(filtered, item)
 			}
 		}
@@ -230,22 +259,22 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 		return
 	}
-	if !s.v2AuthorizeTargetUser(c, rec.TargetUser) {
+	if !s.v2AuthorizeUser(c, rec.UserID) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"state":      rec.State,
-		"status":     rec.Status,
-		"operation":  rec.Operation,
-		"targetUser": rec.TargetUser,
-		"keyLabel":   rec.KeyLabel,
-		"algorithm":  rec.Algorithm,
-		"requestor":  rec.RequestorIP,
-		"date":       rec.CreatedAt.Unix(),
-		"expiry":     rec.ExpiresAt.Unix(),
-		"note":       rec.Note,
-		"request":    rec.RequestBody,
+		"state":     rec.State,
+		"status":    rec.Status,
+		"operation": rec.Operation,
+		"userId":    rec.UserID,
+		"keyLabel":  rec.KeyLabel,
+		"algorithm": rec.Algorithm,
+		"requestor": rec.RequestorIP,
+		"date":      rec.CreatedAt.Unix(),
+		"expiry":    rec.ExpiresAt.Unix(),
+		"note":      rec.Note,
+		"request":   rec.RequestBody,
 	})
 }
 
@@ -278,7 +307,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 			return
 		}
-		if !s.v2AuthorizeTargetUser(c, rec.TargetUser) {
+		if !s.v2AuthorizeUser(c, rec.UserID) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 			return
 		}
@@ -292,10 +321,10 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			return
 		}
 		log := logging.LogFromContext(c.Request.Context())
-		usernameAny, _ := c.Get(contextKeyUsername)
+		userID := c.GetString(contextKeyUserID)
 		log.InfoContext(c.Request.Context(), "Request canceled",
 			slog.String("state", req.State),
-			slog.Any("username", usernameAny),
+			slog.String("user_id", userID),
 			slog.String("client_ip", c.ClientIP()),
 		)
 		s.lock.Lock()
@@ -327,7 +356,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 		return
 	}
-	if !s.v2AuthorizeTargetUser(c, rec.TargetUser) {
+	if !s.v2AuthorizeUser(c, rec.UserID) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 		return
 	}
@@ -342,10 +371,10 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	}
 	{
 		log := logging.LogFromContext(c.Request.Context())
-		usernameAny, _ := c.Get(contextKeyUsername)
+		userID := c.GetString(contextKeyUserID)
 		log.InfoContext(c.Request.Context(), "Request confirmed",
 			slog.String("state", req.State),
-			slog.Any("username", usernameAny),
+			slog.Any("user_id", userID),
 			slog.String("client_ip", c.ClientIP()),
 		)
 	}
@@ -359,16 +388,9 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	})
 }
 
-func (s *Server) v2AuthorizeTargetUser(c *gin.Context, targetUser string) bool {
-	usernameAny, ok := c.Get(contextKeyUsername)
-	if !ok {
-		return false
-	}
-	username, ok := usernameAny.(string)
-	if !ok {
-		return false
-	}
-	return username != "" && username == targetUser
+func (s *Server) v2AuthorizeUser(c *gin.Context, userID string) bool {
+	sessionUserID := c.GetString(contextKeyUserID)
+	return sessionUserID != "" && sessionUserID == userID
 }
 
 func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
@@ -380,12 +402,6 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 	}
 
 	// Check required fields and enforce length limits
-	if body.TargetUser == "" {
-		return NewResponseError(http.StatusBadRequest, "missing parameter 'targetUser'")
-	}
-	if len(body.TargetUser) > 128 {
-		return NewResponseError(http.StatusBadRequest, "parameter 'targetUser' cannot be longer than 128 characters")
-	}
 	if body.KeyLabel == "" {
 		return NewResponseError(http.StatusBadRequest, "missing parameter 'keyLabel'")
 	}
@@ -493,8 +509,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 		return
 	}
 
-	usernameAny, _ := c.Get(contextKeyUsername)
-	username, _ := usernameAny.(string)
+	userID := c.GetString(contextKeyUserID)
 
 	c.Header("Content-Type", ndJSONContentType)
 	c.Status(http.StatusOK)
@@ -505,7 +520,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 	sent := false
 	known := map[string]v2db.V2RequestListItem{}
 	for _, item := range list {
-		if username != "" && item.TargetUser != username {
+		if userID != "" && item.UserID != userID {
 			continue
 		}
 		_ = enc.Encode(item)
@@ -542,7 +557,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 			if msg == nil {
 				continue
 			}
-			if username != "" && msg.TargetUser != "" && msg.TargetUser != username {
+			if userID != "" && msg.UserID != "" && msg.UserID != userID {
 				continue
 			}
 
@@ -570,7 +585,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 
 			current := map[string]v2db.V2RequestListItem{}
 			for _, item := range curList {
-				if username != "" && item.TargetUser != username {
+				if userID != "" && item.UserID != userID {
 					continue
 				}
 				current[item.State] = item

@@ -4,7 +4,7 @@ The Revaulter CLI (`revaulter-cli`) submits v2 crypto requests and waits for app
 
 ## Flow
 
-1. The CLI submits a request to `/v2/request/[operation]`.
+1. The CLI submits a request to `/v2/request/[request-key]/[operation]`.
 2. Revaulter stores the request and notifies users.
 3. A user approves in the browser.
 4. The browser performs the crypto operation locally and encrypts the result to the CLI.
@@ -20,13 +20,12 @@ The Revaulter CLI (`revaulter-cli`) submits v2 crypto requests and waits for app
 Required:
 
 - `--server`
-- `--target-user`
+- `--request-key`
 - `--key-label`
 - `--algorithm` (currently `aes-gcm-256`)
 
 Optional:
 
-- `--secret-key` (for server-side `requestKey` protection)
 - `--timeout`
 - `--note`
 - `--insecure`
@@ -37,7 +36,7 @@ Optional:
 ```bash
 revaulter-cli encrypt \
   --server https://revaulter.example.com \
-  --target-user alice \
+  --request-key AbCdEf0123456789GhIj \
   --key-label boot-disk \
   --algorithm aes-gcm-256 \
   --value SGVsbG8
@@ -48,7 +47,7 @@ revaulter-cli encrypt \
 ```bash
 revaulter-cli decrypt \
   --server https://revaulter.example.com \
-  --target-user alice \
+  --request-key AbCdEf0123456789GhIj \
   --key-label boot-disk \
   --algorithm aes-gcm-256 \
   --value <base64-ciphertext> \

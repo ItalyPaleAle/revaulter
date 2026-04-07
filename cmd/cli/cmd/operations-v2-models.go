@@ -3,9 +3,8 @@ package cmd
 import "github.com/italypaleale/revaulter/pkg/protocolv2"
 
 type v2OperationRequest struct {
-	TargetUser string `json:"targetUser,omitempty"`
-	KeyLabel   string `json:"keyLabel,omitempty"`
-	Algorithm  string `json:"algorithm,omitempty"`
+	KeyLabel  string `json:"keyLabel,omitempty"`
+	Algorithm string `json:"algorithm,omitempty"`
 
 	Value          string `json:"value,omitempty"`
 	Nonce          string `json:"nonce,omitempty"`

@@ -12,20 +12,15 @@ import type {
 } from '$lib/v2-types'
 
 /** Starts the public registration flow and returns the WebAuthn challenge/options payload */
-export async function v2RegisterBegin(username: string, displayName: string) {
+export async function v2RegisterBegin(displayName: string) {
     const res = await Request<V2RegisterBeginResponse>('/v2/auth/register/begin', {
-        postData: { username, displayName },
+        postData: { displayName },
     })
     return res.data
 }
 
 /** Completes registration with the browser's WebAuthn credential response */
-export async function v2RegisterFinish(args: {
-    username: string
-    displayName: string
-    challengeId: string
-    credential: unknown
-}) {
+export async function v2RegisterFinish(args: { challengeId: string; credential: unknown }) {
     const res = await Request<{ registered: boolean; session: V2AuthSessionInfo }>('/v2/auth/register/finish', {
         postData: args,
     })
@@ -52,6 +47,22 @@ export async function v2LoginFinish(args: { challengeId: string; credential: unk
 /** Stores the password canary for the currently authenticated user session */
 export async function v2SetPasswordCanary(canary: string) {
     const res = await Request<{ ok: boolean }>('/v2/auth/password-canary', { postData: { canary } })
+    return res.data
+}
+
+/** Updates the currently signed-in user's allowed IP allowlist */
+export async function v2SetAllowedIPs(allowedIps: string[]) {
+    const res = await Request<{ ok: boolean; allowedIps: string[] }>('/v2/auth/allowed-ips', {
+        postData: { allowedIps },
+    })
+    return res.data
+}
+
+/** Regenerates the currently signed-in user's request key */
+export async function v2RegenerateRequestKey() {
+    const res = await Request<{ ok: boolean; requestKey: string }>('/v2/auth/regenerate-request-key', {
+        method: 'POST',
+    })
     return res.data
 }
 

@@ -1,10 +1,8 @@
 package server
 
 import (
-	"crypto/subtle"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -61,35 +59,6 @@ func (s *Server) getRequestID(c *gin.Context) (string, error) {
 
 	v := reqUuid.String()
 	return v, nil
-}
-
-// MiddlewareRequestKey is a middleware that asserts that the Authorization header contains the shared requestKey
-func (s *Server) MiddlewareRequestKey() gin.HandlerFunc {
-	// Get the requestKey
-	conf := config.Get().RequestKey
-	if conf == "" {
-		// No key, so allow everything
-		return func(c *gin.Context) {}
-	}
-	confB := []byte(conf)
-
-	// Return the middleware
-	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		// The "bearer" or "APIKey" prefixes are optional
-		if len(authHeader) > 7 {
-			prefix := strings.ToLower(authHeader[0:7])
-			if prefix == "bearer " || prefix == "apikey " {
-				authHeader = authHeader[7:]
-			}
-		}
-
-		// Check if the key matches
-		if subtle.ConstantTimeCompare(confB, []byte(authHeader)) == 0 {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Invalid secret key in the Authorization header"))
-			return
-		}
-	}
 }
 
 // MiddlewareNoCache is a middleware that disables caching on clients and CDNs

@@ -81,14 +81,11 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.flags.GetServer()+"/v2/request/"+o.Operation, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.flags.GetServer()+"/v2/request/"+o.flags.GetRequestKey()+"/"+o.Operation, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := o.flags.GetRequestKey(); key != "" {
-		req.Header.Set("Authorization", "APIKey "+key)
-	}
 	var res protocolv2.RequestResultResponse
 	err = doJSONRequest(httpClient, req, &res)
 	if err != nil {
@@ -109,11 +106,9 @@ func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client,
 	if err != nil {
 		return nil, err
 	}
-	if key := o.flags.GetRequestKey(); key != "" {
-		req.Header.Set("Authorization", "APIKey "+key)
-	}
 	var res protocolv2.RequestResultResponse
-	if err := doJSONRequest(httpClient, req, &res); err != nil {
+	err = doJSONRequest(httpClient, req, &res)
+	if err != nil {
 		return nil, err
 	}
 	if res.State != state {

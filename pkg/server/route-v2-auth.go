@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
+	"github.com/google/uuid"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
@@ -23,13 +24,10 @@ import (
 )
 
 type v2AuthRegisterBeginRequest struct {
-	Username    string `json:"username"`
 	DisplayName string `json:"displayName"`
 }
 
 type v2AuthRegisterFinishRequest struct {
-	Username    string          `json:"username"`
-	DisplayName string          `json:"displayName"`
 	ChallengeID string          `json:"challengeId"`
 	Credential  json.RawMessage `json:"credential"`
 }
@@ -40,6 +38,9 @@ type v2AuthLoginFinishRequest struct {
 }
 
 type v2RegisterChallengePayload struct {
+	UserID          string                   `json:"userId"`
+	DisplayName     string                   `json:"displayName"`
+	WebAuthnUserID  string                   `json:"webauthnUserId"`
 	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
 }
 
@@ -51,8 +52,6 @@ type v2LoginChallengePayload struct {
 type v2AuthRegisterBeginResponse struct {
 	ChallengeID string `json:"challengeId"`
 	Challenge   string `json:"challenge"`
-	Username    string `json:"username"`
-	DisplayName string `json:"displayName"`
 	ExpiresAt   int64  `json:"expiresAt"`
 	Mode        string `json:"mode"`
 	Options     any    `json:"options,omitempty"`
@@ -60,13 +59,15 @@ type v2AuthRegisterBeginResponse struct {
 }
 
 type v2AuthSessionInfo struct {
-	Username string `json:"username"`
-	TTL      int    `json:"ttl"`
+	UserID      string   `json:"userId"`
+	DisplayName string   `json:"displayName"`
+	RequestKey  string   `json:"requestKey"`
+	AllowedIPs  []string `json:"allowedIps"`
+	TTL         int      `json:"ttl"`
 }
 
 type v2AuthRegisterFinishResponse struct {
 	Registered bool               `json:"registered"`
-	Username   string             `json:"username,omitempty"`
 	Session    *v2AuthSessionInfo `json:"session,omitempty"`
 }
 
@@ -81,7 +82,6 @@ type v2AuthLoginBeginResponse struct {
 
 type v2AuthLoginFinishResponse struct {
 	Authenticated  bool               `json:"authenticated"`
-	Username       string             `json:"username,omitempty"`
 	Session        *v2AuthSessionInfo `json:"session,omitempty"`
 	PasswordCanary string             `json:"passwordCanary,omitempty"`
 }
@@ -90,10 +90,13 @@ type v2AuthSetPasswordCanaryRequest struct {
 	Canary string `json:"canary"`
 }
 
+type v2AuthAllowedIPsRequest struct {
+	AllowedIPs []string `json:"allowedIps"`
+}
+
 type v2AuthSessionResponse struct {
-	Authenticated bool   `json:"authenticated"`
-	Username      string `json:"username"`
-	TTL           int    `json:"ttl"`
+	Authenticated bool `json:"authenticated"`
+	v2AuthSessionInfo
 }
 
 type v2AuthLogoutResponse struct {
@@ -102,12 +105,10 @@ type v2AuthLogoutResponse struct {
 
 func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	cfg := config.Get()
-
 	if cfg.DisableSignup {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Account creation is disabled"))
 		return
 	}
-
 	if s.authStore == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
 		return
@@ -124,28 +125,9 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		return
 	}
 
-	req.Username = normalizeUsername(req.Username)
-	if req.Username == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "username is required"))
-		return
-	}
-
+	userID := uuid.NewString()
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
-	if req.DisplayName == "" {
-		// Default to username
-		req.DisplayName = req.Username
-	}
-
-	existing, err := s.authStore.GetUserByUsername(c.Request.Context(), req.Username)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	} else if existing != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Username already exists"))
-		return
-	}
-
-	user, err := newV2WebAuthnUserForRegistration(req.Username, req.DisplayName)
+	user, err := newV2WebAuthnUserForRegistration(userID, req.DisplayName)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -162,7 +144,10 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		return
 	}
 
-	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "register", req.Username, session.Challenge, session.Expires, v2RegisterChallengePayload{
+	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "register", userID, session.Challenge, session.Expires, v2RegisterChallengePayload{
+		UserID:          userID,
+		DisplayName:     req.DisplayName,
+		WebAuthnUserID:  base64.RawURLEncoding.EncodeToString(user.id),
 		WebAuthnSession: session,
 	})
 	if err != nil {
@@ -173,8 +158,6 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	c.JSON(http.StatusOK, v2AuthRegisterBeginResponse{
 		ChallengeID: ch.ID,
 		Challenge:   session.Challenge,
-		Username:    req.Username,
-		DisplayName: req.DisplayName,
 		ExpiresAt:   ch.ExpiresAt.Unix(),
 		Mode:        "webauthn",
 		Options:     creation,
@@ -200,11 +183,7 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
-
-	req.Username = normalizeUsername(req.Username)
-	req.DisplayName = strings.TrimSpace(req.DisplayName)
-
-	if req.Username == "" || req.DisplayName == "" || req.ChallengeID == "" || len(req.Credential) == 0 {
+	if req.ChallengeID == "" || len(req.Credential) == 0 {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing required registration fields"))
 		return
 	}
@@ -212,7 +191,6 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 	sess, err := s.v2RegisterFinish(c, req)
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "User registration failed",
-			slog.String("username", req.Username),
 			slog.String("client_ip", c.ClientIP()),
 		)
 		AbortWithErrorJSON(c, err)
@@ -220,11 +198,11 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 	}
 
 	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User registered",
-		slog.String("username", req.Username),
+		slog.String("user_id", sess.UserID),
 		slog.String("client_ip", c.ClientIP()),
 	)
 
-	err = s.setV2SessionCookie(c, sess)
+	err = s.setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -232,10 +210,7 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 
 	c.JSON(http.StatusOK, v2AuthRegisterFinishResponse{
 		Registered: true,
-		Session: &v2AuthSessionInfo{
-			Username: req.Username,
-			TTL:      int(time.Until(sess.ExpiresAt).Seconds()),
-		},
+		Session:    sessionInfoFromSession(sess),
 	})
 }
 
@@ -255,7 +230,6 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 		return
 	}
 
-	// Store the challenge with an empty username — the user will be identified from the credential in finish.
 	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "login", "", session.Challenge, session.Expires, v2LoginChallengePayload{
 		Challenge:       session.Challenge,
 		WebAuthnSession: session,
@@ -292,7 +266,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	sess, username, user, err := s.v2LoginFinish(c, req)
+	sess, user, err := s.v2LoginFinish(c, req)
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Login failed",
 			slog.String("client_ip", c.ClientIP()),
@@ -301,24 +275,20 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	err = s.setV2SessionCookie(c, sess)
+	err = s.setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
 	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged in",
-		slog.String("username", username),
+		slog.String("user_id", sess.UserID),
 		slog.String("client_ip", c.ClientIP()),
 	)
 
 	resp := v2AuthLoginFinishResponse{
 		Authenticated: true,
-		Username:      username,
-		Session: &v2AuthSessionInfo{
-			Username: username,
-			TTL:      int(time.Until(sess.ExpiresAt).Seconds()),
-		},
+		Session:       sessionInfoFromSession(sess),
 	}
 
 	if user != nil && user.PasswordCanary != "" {
@@ -334,9 +304,8 @@ func (s *Server) RouteV2AuthSetPasswordCanary(c *gin.Context) {
 		return
 	}
 
-	username, _ := c.Get(contextKeyUsername)
-	usernameStr, _ := username.(string)
-	if usernameStr == "" {
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
 		return
 	}
@@ -352,8 +321,11 @@ func (s *Server) RouteV2AuthSetPasswordCanary(c *gin.Context) {
 		return
 	}
 
-	err = s.authStore.SetPasswordCanary(c.Request.Context(), usernameStr, req.Canary)
-	if err != nil {
+	err = s.authStore.SetPasswordCanary(c.Request.Context(), userID, req.Canary)
+	if errors.Is(err, v2db.ErrPasswordAlreadySet) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Password is already set for this user"))
+		return
+	} else if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
@@ -363,19 +335,87 @@ func (s *Server) RouteV2AuthSetPasswordCanary(c *gin.Context) {
 	}{OK: true})
 }
 
+func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	var req v2AuthAllowedIPsRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+
+	allowedIPs, err := s.authStore.UpdateAllowedIPs(c.Request.Context(), userID, req.AllowedIPs)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, struct {
+		OK         bool     `json:"ok"`
+		AllowedIPs []string `json:"allowedIps"`
+	}{
+		OK:         true,
+		AllowedIPs: allowedIPs,
+	})
+}
+
+func (s *Server) RouteV2AuthRequestKeyRegenerate(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	requestKey, err := s.authStore.RegenerateRequestKey(c.Request.Context(), userID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, struct {
+		OK         bool   `json:"ok"`
+		RequestKey string `json:"requestKey"`
+	}{
+		OK:         true,
+		RequestKey: requestKey,
+	})
+}
+
 func (s *Server) RouteV2AuthSession(c *gin.Context) {
-	username, _ := c.Get(contextKeyUsername)
-	expiryAny, _ := c.Get(contextKeySessionExpiry)
-	expiry, _ := expiryAny.(time.Time)
-	if username == nil || expiry.IsZero() {
+	sessID := c.GetString(contextKeySessionID)
+	if sessID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	sess, err := s.authStore.GetSession(c.Request.Context(), sessID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if sess == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
 		return
 	}
 
 	c.JSON(http.StatusOK, v2AuthSessionResponse{
-		Authenticated: true,
-		Username:      username.(string),
-		TTL:           int(time.Until(expiry).Seconds()),
+		Authenticated:     true,
+		v2AuthSessionInfo: *sessionInfoFromSession(sess),
 	})
 }
 
@@ -385,11 +425,8 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 		return
 	}
 
-	username, _ := c.Get(contextKeyUsername)
-	usernameStr, _ := username.(string)
-
-	sessID, _ := c.Get(contextKeySessionID)
-	id, _ := sessID.(string)
+	userID := c.GetString(contextKeyUserID)
+	id := c.GetString(contextKeySessionID)
 	if id != "" {
 		err := s.authStore.RevokeSession(c.Request.Context(), id)
 		if err != nil {
@@ -399,7 +436,7 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	}
 
 	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged out",
-		slog.String("username", usernameStr),
+		slog.String("user_id", userID),
 		slog.String("client_ip", c.ClientIP()),
 	)
 
@@ -408,10 +445,12 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(cookieName, "", -1, cookiePath, "", isSecure, true)
 
-	c.JSON(http.StatusOK, v2AuthLogoutResponse{LoggedOut: true})
+	c.JSON(http.StatusOK, v2AuthLogoutResponse{
+		LoggedOut: true,
+	})
 }
 
-func (s *Server) setV2SessionCookie(c *gin.Context, sess *v2db.AuthSession) error {
+func (s *Server) setSessionCookie(c *gin.Context, sess *v2db.AuthSession) error {
 	if sess == nil {
 		return NewResponseError(http.StatusInternalServerError, "session is nil")
 	}
@@ -431,17 +470,13 @@ func secureCookie(c *gin.Context) bool {
 	return url.Scheme == "https" || config.Get().ForceSecureCookies
 }
 
-func normalizeUsername(u string) string {
-	return strings.ToLower(strings.TrimSpace(u))
-}
-
 func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (*v2db.AuthSession, error) {
 	if s.webAuthn == nil {
 		return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 	}
 
 	var payload v2RegisterChallengePayload
-	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "register", req.Username, &payload)
+	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "register", &payload)
 	if err != nil {
 		return nil, err
 	}
@@ -451,118 +486,120 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 	if payload.WebAuthnSession == nil {
 		return nil, NewResponseError(http.StatusConflict, "Registration challenge is missing WebAuthn session data")
 	}
+
+	displayName := payload.DisplayName
+	if displayName == "" {
+		displayName = payload.UserID
+	}
 	user := &v2WebAuthnUser{
 		id:          payload.WebAuthnSession.UserID,
-		name:        req.Username,
-		displayName: req.DisplayName,
-		credentials: nil,
+		userID:      payload.UserID,
+		displayName: displayName,
 	}
 	waReq, err := newJSONHTTPRequest(c, req.Credential)
 	if err != nil {
 		return nil, err
 	}
+
 	cred, err := s.webAuthn.FinishRegistration(user, *payload.WebAuthnSession, waReq)
 	if err != nil {
 		return nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn registration verification failed: %v", err)
 	}
+
 	credJSON, err := json.Marshal(cred)
 	if err != nil {
 		return nil, err
 	}
+
 	sess, err := s.authStore.RegisterUser(c.Request.Context(), v2db.RegisterUserInput{
-		Username:       req.Username,
-		DisplayName:    req.DisplayName,
-		WebAuthnUserID: base64.RawURLEncoding.EncodeToString(payload.WebAuthnSession.UserID),
+		UserID:         payload.UserID,
+		DisplayName:    payload.DisplayName,
+		WebAuthnUserID: payload.WebAuthnUserID,
 		CredentialID:   base64.RawURLEncoding.EncodeToString(cred.ID),
 		PublicKey:      string(credJSON),
 		SignCount:      int64(cred.Authenticator.SignCount),
 		SessionTTL:     config.Get().SessionTimeout,
 	})
-
 	if errors.Is(err, v2db.ErrUserAlreadyExists) {
-		return nil, NewResponseError(http.StatusConflict, "Username already exists")
+		return nil, NewResponseError(http.StatusConflict, "User already exists")
+	} else if err != nil {
+		return nil, err
 	}
 
-	return sess, err
+	return sess, nil
 }
 
-func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v2db.AuthSession, string, *v2db.User, error) {
+func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v2db.AuthSession, *v2db.User, error) {
 	if s.webAuthn == nil {
-		return nil, "", nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
+		return nil, nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 	}
 
 	var payload v2LoginChallengePayload
-	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", "", &payload)
+	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", &payload)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 	if !ok {
-		return nil, "", nil, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
+		return nil, nil, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
 	}
 	if payload.WebAuthnSession == nil {
-		return nil, "", nil, NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
+		return nil, nil, NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
 	}
 
-	// FinishDiscoverableLogin identifies the user from the credential's userHandle
-	var discoveredUser *v2WebAuthnUser
+	var (
+		discoveredUser   *v2WebAuthnUser
+		discoveredDBUser *v2db.User
+	)
 	handler := func(rawID, userHandle []byte) (webauthnlib.User, error) {
 		webAuthnUserID := base64.RawURLEncoding.EncodeToString(userHandle)
-		user, err := s.authStore.GetUserByWebAuthnUserID(c.Request.Context(), webAuthnUserID)
-		if err != nil {
-			return nil, err
+		user, hErr := s.authStore.GetUserByWebAuthnUserID(c.Request.Context(), webAuthnUserID)
+		if hErr != nil {
+			return nil, hErr
 		}
 		if user == nil || user.Status != "active" {
 			return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 		}
 
-		userRecord, err := s.v2LoadWebAuthnUser(c.Request.Context(), user.Username)
-		if err != nil {
-			return nil, err
+		userRecord, hErr := s.v2LoadWebAuthnUser(c.Request.Context(), user.ID)
+		if hErr != nil {
+			return nil, hErr
 		}
 		if userRecord == nil {
 			return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 		}
 
+		discoveredDBUser = user
 		discoveredUser = userRecord
 		return userRecord, nil
 	}
 
 	waReq, err := newJSONHTTPRequest(c, req.Credential)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	cred, err := s.webAuthn.FinishDiscoverableLogin(handler, *payload.WebAuthnSession, waReq)
 	if err != nil {
-		return nil, "", nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
+		return nil, nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
 	}
-
-	if discoveredUser == nil {
-		return nil, "", nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+	if discoveredUser == nil || discoveredDBUser == nil {
+		return nil, nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 	}
 
 	err = s.validateAuthenticatorSignCount(c, discoveredUser, cred)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
-	user, err := s.authStore.GetUserByUsername(c.Request.Context(), discoveredUser.name)
-	if err != nil {
-		return nil, "", nil, err
-	}
-	if user == nil || user.Status != "active" {
-		return nil, "", nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
-	}
-
-	sess, err := s.createLoginSession(c.Request.Context(), discoveredUser.name, cred)
+	sess, err := s.createLoginSession(c.Request.Context(), discoveredUser.userID, cred)
 	if err != nil {
 		if errors.Is(err, v2db.ErrInvalidLogin) {
-			return nil, "", nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+			return nil, nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 		}
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
-	return sess, discoveredUser.name, user, nil
+	return sess, discoveredDBUser, nil
 }
 
 func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2WebAuthnUser, cred *webauthnlib.Credential) error {
@@ -584,7 +621,7 @@ func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2We
 		if storedCount > 0 && newCount <= storedCount {
 			logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
 				"Possible cloned authenticator: sign count did not increase",
-				slog.String("username", userRecord.name),
+				slog.String("user_id", userRecord.userID),
 				slog.String("credential_id", credIDEncoded),
 				slog.Uint64("stored_sign_count", uint64(storedCount)),
 				slog.Uint64("new_sign_count", uint64(newCount)),
@@ -598,9 +635,9 @@ func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2We
 	return nil
 }
 
-func (s *Server) createLoginSession(ctx context.Context, username string, cred *webauthnlib.Credential) (*v2db.AuthSession, error) {
+func (s *Server) createLoginSession(ctx context.Context, userID string, cred *webauthnlib.Credential) (*v2db.AuthSession, error) {
 	return s.authStore.Login(ctx, v2db.LoginInput{
-		Username:     username,
+		UserID:       userID,
 		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
 		SignCount:    int64(cred.Authenticator.SignCount),
 		SessionTTL:   config.Get().SessionTimeout,
@@ -622,69 +659,94 @@ func newJSONHTTPRequest(c *gin.Context, raw json.RawMessage) (*http.Request, err
 
 type v2WebAuthnUser struct {
 	id          []byte
-	name        string
+	userID      string
 	displayName string
 	credentials []webauthnlib.Credential
 }
 
-func newV2WebAuthnUserForRegistration(username, displayName string) (*v2WebAuthnUser, error) {
+func newV2WebAuthnUserForRegistration(userID string, displayName string) (*v2WebAuthnUser, error) {
 	id := make([]byte, 32)
 	if _, err := rand.Read(id); err != nil {
 		return nil, err
 	}
+
+	if displayName == "" {
+		displayName = userID
+	}
 	return &v2WebAuthnUser{
 		id:          id,
-		name:        username,
+		userID:      userID,
 		displayName: displayName,
 	}, nil
 }
 
 func (u *v2WebAuthnUser) WebAuthnID() []byte                            { return u.id }
-func (u *v2WebAuthnUser) WebAuthnName() string                          { return u.name }
+func (u *v2WebAuthnUser) WebAuthnName() string                          { return u.userID }
 func (u *v2WebAuthnUser) WebAuthnDisplayName() string                   { return u.displayName }
 func (u *v2WebAuthnUser) WebAuthnCredentials() []webauthnlib.Credential { return u.credentials }
 
-func (s *Server) v2LoadWebAuthnUser(ctx context.Context, username string) (*v2WebAuthnUser, error) {
-	user, err := s.authStore.GetUserByUsername(ctx, username)
+func (s *Server) v2LoadWebAuthnUser(ctx context.Context, userID string) (*v2WebAuthnUser, error) {
+	user, err := s.authStore.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 	if user == nil || user.Status != "active" {
 		return nil, nil
 	}
-	records, err := s.authStore.ListCredentials(ctx, username)
+
+	records, err := s.authStore.ListCredentials(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
+
 	creds := make([]webauthnlib.Credential, 0, len(records))
 	for _, rec := range records {
-		var c webauthnlib.Credential
-		err = json.Unmarshal([]byte(rec.PublicKey), &c)
+		var cred webauthnlib.Credential
+		err = json.Unmarshal([]byte(rec.PublicKey), &cred)
 		if err != nil {
-			// Skip legacy credential records that do not contain a verified WebAuthn credential
 			continue
 		}
-		c.Authenticator.SignCount = uint32(rec.SignCount)
-		creds = append(creds, c)
+		cred.Authenticator.SignCount = uint32(rec.SignCount)
+		creds = append(creds, cred)
 	}
-
 	if len(creds) == 0 {
 		return nil, nil
 	}
 
-	// Use the stored WebAuthn user ID if available; fall back to the DB row ID for pre-migration users.
-	userID := []byte(user.ID)
+	decodedUserID := []byte(user.ID)
 	if user.WebAuthnUserID != "" {
 		decoded, err := base64.RawURLEncoding.DecodeString(user.WebAuthnUserID)
 		if err == nil {
-			userID = decoded
+			decodedUserID = decoded
 		}
 	}
 
+	displayName := user.DisplayName
+	if displayName == "" {
+		displayName = user.ID
+	}
+
 	return &v2WebAuthnUser{
-		id:          userID,
-		name:        user.Username,
-		displayName: user.DisplayName,
+		id:          decodedUserID,
+		userID:      user.ID,
+		displayName: displayName,
 		credentials: creds,
 	}, nil
+}
+
+func sessionInfoFromSession(sess *v2db.AuthSession) *v2AuthSessionInfo {
+	if sess == nil {
+		return nil
+	}
+	allowedIPs := sess.AllowedIPs
+	if allowedIPs == nil {
+		allowedIPs = []string{}
+	}
+	return &v2AuthSessionInfo{
+		UserID:      sess.UserID,
+		DisplayName: sess.DisplayName,
+		RequestKey:  sess.RequestKey,
+		AllowedIPs:  allowedIPs,
+		TTL:         int(time.Until(sess.ExpiresAt).Seconds()),
+	}
 }

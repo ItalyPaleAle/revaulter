@@ -9,38 +9,42 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/italypaleale/revaulter/pkg/utils"
 )
 
 type AuthStore struct {
-	db  *DB
-	log *slog.Logger
+	db *DB
 }
 
 type User struct {
 	ID             string
-	Username       string
 	DisplayName    string
 	Status         string
 	WebAuthnUserID string
 	PasswordCanary string
+	RequestKey     string
+	AllowedIPs     []string
 }
 
 type AuthSession struct {
-	ID        string
-	UserID    string
-	Username  string
-	ExpiresAt time.Time
-	CreatedAt time.Time
+	ID          string
+	UserID      string
+	DisplayName string
+	RequestKey  string
+	AllowedIPs  []string
+	ExpiresAt   time.Time
+	CreatedAt   time.Time
 }
 
 type AuthChallenge struct {
 	ID        string
 	Kind      string
-	Username  string
+	UserID    string
 	Challenge string
 	ExpiresAt time.Time
 }
@@ -52,7 +56,7 @@ type AuthCredentialRecord struct {
 }
 
 type RegisterUserInput struct {
-	Username       string
+	UserID         string
 	DisplayName    string
 	WebAuthnUserID string
 	CredentialID   string
@@ -62,98 +66,68 @@ type RegisterUserInput struct {
 }
 
 type LoginInput struct {
-	Username     string
+	UserID       string
 	CredentialID string
 	SignCount    int64
 	SessionTTL   time.Duration
 }
 
-func NewAuthStore(db *DB, logger *slog.Logger) (*AuthStore, error) {
-	return NewAuthStoreWithPayloadKey(db, nil, logger)
-}
+var (
+	ErrUserAlreadyExists  = errors.New("user already exists")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrInvalidLogin       = errors.New("invalid login")
+	ErrPasswordAlreadySet = errors.New("password already set")
+)
 
-func NewAuthStoreWithPayloadKey(db *DB, _ []byte, logger *slog.Logger) (*AuthStore, error) {
+func NewAuthStore(db *DB, _ any) (*AuthStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	s := &AuthStore{db: db, log: logger}
-
-	return s, nil
+	return &AuthStore{db: db}, nil
 }
 
 func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
 	var n int
-	err := s.db.db.QueryRow(ctx, `SELECT COUNT(*) FROM v2_admins`).Scan(&n)
+	err := s.db.db.QueryRow(ctx, `SELECT COUNT(*) FROM v2_users`).Scan(&n)
 	return n, err
 }
 
+func (s *AuthStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
+	return s.getUser(ctx, `SELECT id, display_name, status, webauthn_user_id, password_canary, request_key, allowed_ips FROM v2_users WHERE id = $1`, userID)
+}
+
 func (s *AuthStore) GetUserByWebAuthnUserID(ctx context.Context, webAuthnUserID string) (*User, error) {
-	var a User
-	err := s.db.db.
-		QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE webauthn_user_id = $1`, webAuthnUserID).
-		Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID, &a.PasswordCanary)
-	if s.db.db.IsNoRowsError(err) {
-		return nil, nil
-	} else if err != nil {
-		return nil, err
-	}
-
-	return &a, nil
+	return s.getUser(ctx, `SELECT id, display_name, status, webauthn_user_id, password_canary, request_key, allowed_ips FROM v2_users WHERE webauthn_user_id = $1`, webAuthnUserID)
 }
 
-func (s *AuthStore) GetUserByUsername(ctx context.Context, username string) (*User, error) {
-	var a User
-	err := s.db.db.
-		QueryRow(ctx, `SELECT id, username, display_name, status, webauthn_user_id, password_canary FROM v2_admins WHERE username = $1`, username).
-		Scan(&a.ID, &a.Username, &a.DisplayName, &a.Status, &a.WebAuthnUserID, &a.PasswordCanary)
-	if s.db.db.IsNoRowsError(err) {
-		return nil, nil
-	} else if err != nil {
-		return nil, err
-	}
-	return &a, nil
+func (s *AuthStore) GetUserByRequestKey(ctx context.Context, requestKey string) (*User, error) {
+	return s.getUser(ctx, `SELECT id, display_name, status, webauthn_user_id, password_canary, request_key, allowed_ips FROM v2_users WHERE request_key = $1`, requestKey)
 }
 
-func (s *AuthStore) SetPasswordCanary(ctx context.Context, username, canary string) error {
-	_, err := s.db.db.Exec(ctx, `UPDATE v2_admins SET password_canary = $1 WHERE username = $2`, canary, username)
-	return err
-}
-
-func (s *AuthStore) ListCredentialIDs(ctx context.Context, username string) ([]string, error) {
-	rows, err := s.db.db.Query(ctx,
-		`SELECT c.credential_id FROM v2_admin_credentials c INNER JOIN v2_admins a ON a.id = c.admin_id WHERE a.username = $1 ORDER BY c.created_at ASC`,
-		username,
+func (s *AuthStore) getUser(ctx context.Context, query string, arg string) (*User, error) {
+	var (
+		user          User
+		allowedIPsCSV string
 	)
+	err := s.db.db.QueryRow(ctx, query, arg).
+		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.PasswordCanary, &user.RequestKey, &allowedIPsCSV)
+	if s.db.db.IsNoRowsError(err) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []string
-	for rows.Next() {
-		var id string
-		err = rows.Scan(&id)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-
-	return out, rows.Err()
+	user.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
+	return &user, nil
 }
 
-func (s *AuthStore) ListCredentials(ctx context.Context, username string) ([]AuthCredentialRecord, error) {
+func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthCredentialRecord, error) {
 	rows, err := s.db.db.Query(ctx,
-		`SELECT c.credential_id, c.public_key, c.sign_count
-			FROM v2_admin_credentials c
-			INNER JOIN v2_admins a ON a.id = c.admin_id
-			WHERE a.username = $1
-			ORDER BY c.created_at ASC`,
-		username,
+		`SELECT credential_id, public_key, sign_count
+			FROM v2_user_credentials
+			WHERE user_id = $1
+			ORDER BY created_at ASC`,
+		userID,
 	)
 	if err != nil {
 		return nil, err
@@ -162,52 +136,58 @@ func (s *AuthStore) ListCredentials(ctx context.Context, username string) ([]Aut
 
 	var out []AuthCredentialRecord
 	for rows.Next() {
-		var r AuthCredentialRecord
-		err := rows.Scan(&r.CredentialID, &r.PublicKey, &r.SignCount)
+		var rec AuthCredentialRecord
+		err = rows.Scan(&rec.CredentialID, &rec.PublicKey, &rec.SignCount)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		out = append(out, rec)
 	}
 
-	return out, rows.Err()
-}
-
-func (s *AuthStore) BeginChallenge(ctx context.Context, kind, username string, ttl time.Duration) (*AuthChallenge, error) {
-	if ttl <= 0 {
-		ttl = 5 * time.Minute
-	}
-	ch := make([]byte, 32)
-	_, err := io.ReadFull(rand.Reader, ch)
+	err = rows.Err()
 	if err != nil {
 		return nil, err
 	}
-	id := uuid.NewString()
-	now := time.Now().UTC()
+
+	return out, nil
+}
+
+func (s *AuthStore) BeginChallenge(ctx context.Context, kind, userID string, ttl time.Duration) (*AuthChallenge, error) {
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	rawChallenge := make([]byte, 32)
+	_, err := io.ReadFull(rand.Reader, rawChallenge)
+	if err != nil {
+		return nil, err
+	}
+
 	rec := &AuthChallenge{
-		ID:        id,
+		ID:        uuid.NewString(),
 		Kind:      kind,
-		Username:  username,
-		Challenge: base64.RawURLEncoding.EncodeToString(ch),
-		ExpiresAt: now.Add(ttl),
+		UserID:    userID,
+		Challenge: base64.RawURLEncoding.EncodeToString(rawChallenge),
+		ExpiresAt: time.Now().UTC().Add(ttl),
 	}
 	return rec, s.insertChallenge(ctx, rec, nil)
 }
 
-func (s *AuthStore) BeginChallengeWithPayload(ctx context.Context, kind, username string, challenge string, expiresAt time.Time, payload any) (*AuthChallenge, error) {
+func (s *AuthStore) BeginChallengeWithPayload(ctx context.Context, kind, userID string, challenge string, expiresAt time.Time, payload any) (*AuthChallenge, error) {
 	if challenge == "" {
 		return nil, errors.New("challenge is empty")
 	}
 	if expiresAt.IsZero() {
 		expiresAt = time.Now().UTC().Add(5 * time.Minute)
 	}
+
 	rec := &AuthChallenge{
 		ID:        uuid.NewString(),
 		Kind:      kind,
-		Username:  username,
+		UserID:    userID,
 		Challenge: challenge,
 		ExpiresAt: expiresAt,
 	}
+
 	var payloadBytes []byte
 	if payload != nil {
 		var err error
@@ -227,8 +207,8 @@ func (s *AuthStore) insertChallenge(ctx context.Context, rec *AuthChallenge, pay
 	defer tx.Rollback(ctx)
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_auth_challenges (id, kind, username, challenge, expires_at) VALUES ($1, $2, $3, $4, $5)`,
-		rec.ID, rec.Kind, rec.Username, rec.Challenge, rec.ExpiresAt.Unix(),
+		`INSERT INTO v2_auth_challenges (id, kind, user_id, challenge, expires_at) VALUES ($1, $2, $3, $4, $5)`,
+		rec.ID, rec.Kind, rec.UserID, rec.Challenge, rec.ExpiresAt.Unix(),
 	)
 	if err != nil {
 		return err
@@ -252,11 +232,11 @@ func (s *AuthStore) insertChallenge(ctx context.Context, rec *AuthChallenge, pay
 	return nil
 }
 
-func (s *AuthStore) ConsumeChallenge(ctx context.Context, id, kind, username string) (bool, error) {
+func (s *AuthStore) ConsumeChallenge(ctx context.Context, id, kind string) (bool, error) {
 	now := time.Now().Unix()
 	affected, err := s.db.db.Exec(ctx,
-		`UPDATE v2_auth_challenges SET used_at = $1 WHERE id = $2 AND kind = $3 AND username = $4 AND used_at IS NULL AND expires_at >= $5`,
-		now, id, kind, username, now,
+		`UPDATE v2_auth_challenges SET used_at = $1 WHERE id = $2 AND kind = $3 AND used_at IS NULL AND expires_at >= $4`,
+		now, id, kind, now,
 	)
 	if err != nil {
 		return false, err
@@ -264,14 +244,15 @@ func (s *AuthStore) ConsumeChallenge(ctx context.Context, id, kind, username str
 	return affected == 1, nil
 }
 
-func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind, username string, out any) (bool, error) {
-	ok, err := s.ConsumeChallenge(ctx, id, kind, username)
+func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind string, out any) (bool, error) {
+	ok, err := s.ConsumeChallenge(ctx, id, kind)
 	if err != nil || !ok {
 		return ok, err
 	}
 	if out == nil {
 		return true, nil
 	}
+
 	var payload string
 	err = s.db.db.
 		QueryRow(ctx, `SELECT session_data FROM v2_auth_challenge_payloads WHERE challenge_id = $1`, id).
@@ -296,33 +277,31 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 	}
 	defer tx.Rollback(ctx)
 
-	var n int
-	err = tx.QueryRow(ctx, `SELECT COUNT(*) FROM v2_admins WHERE username = $1`, in.Username).Scan(&n)
+	requestKey, err := utils.RandomString(20)
 	if err != nil {
 		return nil, err
 	}
 
-	if n > 0 {
-		return nil, ErrUserAlreadyExists
-	}
-
-	now := time.Now().UTC()
-	userID := uuid.NewString()
+	now := time.Now().UTC().Unix()
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_admins (id, username, display_name, status, webauthn_user_id, created_at, updated_at) VALUES ($1, $2, $3, 'active', $4, $5, $6)`,
-		userID, in.Username, in.DisplayName, in.WebAuthnUserID, now.Unix(), now.Unix())
+		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, password_canary, request_key, allowed_ips, created_at, updated_at)
+		VALUES ($1, $2, 'active', $3, '', $4, '', $5, $6)`,
+		in.UserID, in.DisplayName, in.WebAuthnUserID, requestKey, now, now,
+	)
 	if err != nil {
 		return nil, err
 	}
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_admin_credentials (id, admin_id, credential_id, public_key, sign_count, created_at, last_used_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		uuid.NewString(), userID, in.CredentialID, in.PublicKey, in.SignCount, now.Unix(), now.Unix())
+		`INSERT INTO v2_user_credentials (id, user_id, credential_id, public_key, sign_count, created_at, last_used_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		uuid.NewString(), in.UserID, in.CredentialID, in.PublicKey, in.SignCount, now, now,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	sess, err := insertSession(ctx, tx, userID, in.Username, in.SessionTTL)
+	sess, err := insertSession(ctx, tx, in.UserID, in.SessionTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -331,8 +310,7 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 	if err != nil {
 		return nil, err
 	}
-
-	return sess, nil
+	return s.GetSession(ctx, sess.ID)
 }
 
 func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, error) {
@@ -340,33 +318,29 @@ func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, err
 	if err != nil {
 		return nil, err
 	}
-
 	defer tx.Rollback(ctx)
 
-	// Retrieve the admin ID and atomically update the sign in count
-	var adminID string
 	now := time.Now().Unix()
 	err = tx.
 		QueryRow(ctx,
-			`UPDATE v2_admin_credentials
+			`UPDATE v2_user_credentials
 			SET sign_count = $1, last_used_at = $2
 			WHERE credential_id = $3
-			AND admin_id = (
-				SELECT a.id
-				FROM v2_admins a
-				WHERE a.username = $4 AND a.status = 'active'
+			AND user_id = (
+				SELECT id FROM v2_users WHERE id = $4 AND status = 'active'
 			)
-			RETURNING admin_id`,
-			in.SignCount, now, in.CredentialID, in.Username,
+			RETURNING user_id`,
+			in.SignCount, now, in.CredentialID, in.UserID,
 		).
-		Scan(&adminID)
+		Scan(&in.UserID)
 	if s.db.db.IsNoRowsError(err) {
 		return nil, ErrInvalidLogin
-	} else if err != nil {
+	}
+	if err != nil {
 		return nil, err
 	}
 
-	sess, err := insertSession(ctx, tx, adminID, in.Username, in.SessionTTL)
+	sess, err := insertSession(ctx, tx, in.UserID, in.SessionTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -376,17 +350,26 @@ func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, err
 		return nil, err
 	}
 
-	return sess, nil
+	return s.GetSession(ctx, sess.ID)
 }
 
 func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, error) {
 	var (
-		sess                            AuthSession
-		expiresAt, createdAt, revokedAt sql.NullInt64
+		sess          AuthSession
+		expiresAt     int64
+		createdAt     int64
+		revokedAt     sql.NullInt64
+		allowedIPsCSV string
 	)
 	err := s.db.db.
-		QueryRow(ctx, `SELECT id, admin_id, username, expires_at, created_at, revoked_at FROM v2_admin_sessions WHERE id = $1`, id).
-		Scan(&sess.ID, &sess.UserID, &sess.Username, &expiresAt, &createdAt, &revokedAt)
+		QueryRow(ctx,
+			`SELECT s.id, s.user_id, u.display_name, u.request_key, u.allowed_ips, s.expires_at, s.created_at, s.revoked_at
+			FROM v2_user_sessions s
+			INNER JOIN v2_users u ON u.id = s.user_id
+			WHERE s.id = $1 AND u.status = 'active'`,
+			id,
+		).
+		Scan(&sess.ID, &sess.UserID, &sess.DisplayName, &sess.RequestKey, &allowedIPsCSV, &expiresAt, &createdAt, &revokedAt)
 	if s.db.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
@@ -396,8 +379,9 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 		return nil, nil
 	}
 
-	sess.ExpiresAt = time.Unix(expiresAt.Int64, 0)
-	sess.CreatedAt = time.Unix(createdAt.Int64, 0)
+	sess.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
+	sess.ExpiresAt = time.Unix(expiresAt, 0)
+	sess.CreatedAt = time.Unix(createdAt, 0)
 	if sess.ExpiresAt.Before(time.Now()) {
 		return nil, nil
 	}
@@ -406,28 +390,87 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 	return &sess, nil
 }
 
+func (s *AuthStore) SetPasswordCanary(ctx context.Context, userID, canary string) error {
+	affected, err := s.db.db.Exec(ctx,
+		`UPDATE v2_users SET password_canary = $1, updated_at = $2 WHERE id = $3 AND password_canary = ''`,
+		canary, time.Now().UTC().Unix(), userID,
+	)
+	if err != nil {
+		return err
+	}
+	if affected == 1 {
+		return nil
+	}
+
+	user, err := s.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	if user == nil {
+		return ErrUserNotFound
+	}
+
+	return ErrPasswordAlreadySet
+}
+
+func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowedIPs []string) ([]string, error) {
+	normalized, err := NormalizeAllowedIPs(allowedIPs)
+	if err != nil {
+		return nil, err
+	}
+
+	affected, err := s.db.db.Exec(ctx,
+		`UPDATE v2_users SET allowed_ips = $1, updated_at = $2 WHERE id = $3`,
+		strings.Join(normalized, ","), time.Now().UTC().Unix(), userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if affected == 0 {
+		return nil, ErrUserNotFound
+	}
+
+	return normalized, nil
+}
+
+func (s *AuthStore) RegenerateRequestKey(ctx context.Context, userID string) (string, error) {
+	requestKey, err := utils.RandomString(20)
+	if err != nil {
+		return "", err
+	}
+
+	affected, err := s.db.db.Exec(ctx,
+		`UPDATE v2_users SET request_key = $1, updated_at = $2 WHERE id = $3`,
+		requestKey, time.Now().UTC().Unix(), userID,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	if affected == 0 {
+		return "", ErrUserNotFound
+	}
+
+	return requestKey, nil
+}
+
 func (s *AuthStore) RevokeSession(ctx context.Context, id string) error {
-	now := time.Now().Unix()
-	_, err := s.db.db.Exec(ctx, `UPDATE v2_admin_sessions SET revoked_at = $1 WHERE id = $2`, now, id)
+	_, err := s.db.db.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $1 WHERE id = $2`, time.Now().UTC().Unix(), id)
 	return err
 }
 
 func (s *AuthStore) touchSession(ctx context.Context, id string) error {
-	now := time.Now().Unix()
-	_, err := s.db.db.Exec(ctx, `UPDATE v2_admin_sessions SET last_seen_at = $1 WHERE id = $2`, now, id)
+	_, err := s.db.db.Exec(ctx, `UPDATE v2_user_sessions SET last_seen_at = $1 WHERE id = $2`, time.Now().UTC().Unix(), id)
 	return err
 }
-
-var (
-	ErrUserAlreadyExists = errors.New("user already exists")
-	ErrInvalidLogin      = errors.New("invalid login")
-)
 
 type txExec interface {
 	Exec(ctx context.Context, query string, args ...any) (int64, error)
 }
 
-func insertSession(ctx context.Context, tx txExec, userID string, username string, ttl time.Duration) (*AuthSession, error) {
+func insertSession(ctx context.Context, tx txExec, userID string, ttl time.Duration) (*AuthSession, error) {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
@@ -435,23 +478,19 @@ func insertSession(ctx context.Context, tx txExec, userID string, username strin
 	sess := &AuthSession{
 		ID:        uuid.NewString(),
 		UserID:    userID,
-		Username:  username,
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),
 	}
 	_, err := tx.Exec(ctx,
-		`INSERT INTO v2_admin_sessions (id, admin_id, username, expires_at, created_at, last_seen_at) VALUES ($1,$2,$3,$4,$5,$6)`,
-		sess.ID, sess.UserID, sess.Username, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix(),
+		`INSERT INTO v2_user_sessions (id, user_id, expires_at, created_at, last_seen_at) VALUES ($1, $2, $3, $4, $5)`,
+		sess.ID, sess.UserID, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix(),
 	)
 	return sess, err
 }
 
-// CleanupExpired deletes expired/used challenges and revoked sessions that are older than 10 minutes past their expiry or revocation
 func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 	cutoff := now.Add(-10 * time.Minute).Unix()
 
-	// Delete expired/used challenges
-	// This also causes the deletion of payload challenges because of the foreign key reference
 	_, err := s.db.db.Exec(ctx,
 		`DELETE FROM v2_auth_challenges WHERE expires_at < $1 OR used_at IS NOT NULL`,
 		cutoff,
@@ -460,14 +499,66 @@ func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("error deleting expired auth challenges: %w", err)
 	}
 
-	// Delete expired or revoked sessions
 	_, err = s.db.db.Exec(ctx,
-		`DELETE FROM v2_admin_sessions WHERE expires_at < $1 OR (revoked_at IS NOT NULL AND revoked_at < $2)`,
+		`DELETE FROM v2_user_sessions WHERE expires_at < $1 OR (revoked_at IS NOT NULL AND revoked_at < $2)`,
 		cutoff, cutoff,
 	)
 	if err != nil {
-		return fmt.Errorf("error deleting expired admin sessions: %w", err)
+		return fmt.Errorf("error deleting expired user sessions: %w", err)
+	}
+	return nil
+}
+
+func NormalizeAllowedIPs(allowedIPs []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(allowedIPs))
+	normalized := make([]string, 0, len(allowedIPs))
+
+	for _, entry := range allowedIPs {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		var canonical string
+		if strings.ContainsRune(entry, '/') {
+			_, network, err := net.ParseCIDR(entry)
+			if err != nil {
+				return nil, fmt.Errorf("invalid CIDR: %s", entry)
+			}
+			canonical = network.String()
+		} else {
+			ip := net.ParseIP(entry)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid IP: %s", entry)
+			}
+			canonical = ip.String()
+		}
+
+		_, ok := seen[canonical]
+		if ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		normalized = append(normalized, canonical)
 	}
 
-	return nil
+	return normalized, nil
+}
+
+func parseAllowedIPsCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	var j int
+	for i := range parts {
+		parts[j] = strings.TrimSpace(parts[i])
+		if parts[j] != "" {
+			j++
+		}
+	}
+	parts = parts[:j]
+
+	return parts
 }

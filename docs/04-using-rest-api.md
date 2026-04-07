@@ -4,7 +4,7 @@ Revaulter v2 exposes REST APIs for request submission, user approval, and result
 
 ## Request flow
 
-1. Client submits `POST /v2/request/[operation]`.
+1. Client submits `POST /v2/request/[request-key]/[operation]`.
 2. Client long-polls `GET /v2/request/result/[state]`.
 3. A user authenticates in the web UI (`/v2/auth/*`) and approves the request.
 4. Browser performs the crypto operation locally and sends an encrypted response envelope via `POST /v2/api/confirm`.
@@ -13,15 +13,14 @@ Revaulter v2 exposes REST APIs for request submission, user approval, and result
 
 ## Supported CLI-facing endpoints
 
-- `POST /v2/request/encrypt`
-- `POST /v2/request/decrypt`
+- `POST /v2/request/:requestKey/encrypt`
+- `POST /v2/request/:requestKey/decrypt`
 - `GET /v2/request/result/:state`
 
 ## Create request body (example)
 
 ```json
 {
-  "targetUser": "alice",
   "keyLabel": "boot-disk",
   "algorithm": "aes-gcm-256",
   "value": "SGVsbG8",
@@ -40,7 +39,7 @@ Notes:
 
 - `clientTransportKey` must be a public EC JWK (`P-256`), with no private fields (`d` is rejected).
 - `value`, `nonce`, `tag`, and `additionalData` are base64/base64url-encoded strings.
-- `targetUser` identifies the user who is allowed to approve the request.
+- The request key in the URL identifies the user who is allowed to approve the request.
 
 ## Create request response
 
@@ -95,6 +94,9 @@ Authenticated user flows use:
 - `POST /v2/auth/login/begin`
 - `POST /v2/auth/login/finish`
 - `GET /v2/auth/session`
+- `POST /v2/auth/password-canary`
+- `POST /v2/auth/regenerate-request-key`
+- `POST /v2/auth/allowed-ips`
 - `POST /v2/auth/logout`
 - `GET /v2/api/list`
 - `GET /v2/api/request/:state`

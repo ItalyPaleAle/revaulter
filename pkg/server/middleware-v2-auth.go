@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	headerSessionTTL = "x-session-ttl"
+	headerSessionTTL          = "x-session-ttl"
 	sessionCookieNameSecure   = "__Host-_s"
 	sessionCookieNameInsecure = "_s"
 	contextKeySessionID       = "SessionID"
 	contextKeyUserID          = "UserID"
-	contextKeyUsername        = "Username"
+	contextKeyUserDisplayName = "UserDisplayName"
 	contextKeySessionExpiry   = "SessionExpiry"
 )
 
@@ -72,7 +72,7 @@ func (s *Server) V2SessionMiddleware(required bool) gin.HandlerFunc {
 		c.Header(headerSessionTTL, strconv.Itoa(int(ttl.Seconds())))
 		c.Set(contextKeySessionID, sess.ID)
 		c.Set(contextKeyUserID, sess.UserID)
-		c.Set(contextKeyUsername, sess.Username)
+		c.Set(contextKeyUserDisplayName, sess.DisplayName)
 		c.Set(contextKeySessionExpiry, sess.ExpiresAt)
 	}
 }

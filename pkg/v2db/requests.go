@@ -30,7 +30,7 @@ type V2RequestRecord struct {
 	State       string
 	Status      V2RequestStatus
 	Operation   string
-	TargetUser  string
+	UserID      string
 	KeyLabel    string
 	Algorithm   string
 	RequestorIP string
@@ -44,20 +44,21 @@ type V2RequestRecord struct {
 }
 
 type V2RequestListItem struct {
-	State      string `json:"state"`
-	Status     string `json:"status"`
-	Operation  string `json:"operation"`
-	TargetUser string `json:"targetUser"`
-	KeyLabel   string `json:"keyLabel"`
-	Algorithm  string `json:"algorithm"`
-	Requestor  string `json:"requestor,omitempty"`
-	Date       int64  `json:"date"`
-	Expiry     int64  `json:"expiry"`
-	Note       string `json:"note,omitempty"`
+	State     string `json:"state"`
+	Status    string `json:"status"`
+	Operation string `json:"operation"`
+	UserID    string `json:"userId"`
+	KeyLabel  string `json:"keyLabel"`
+	Algorithm string `json:"algorithm"`
+	Requestor string `json:"requestor,omitempty"`
+	Date      int64  `json:"date"`
+	Expiry    int64  `json:"expiry"`
+	Note      string `json:"note,omitempty"`
 }
 
 type CreateRequestInput struct {
 	State       string
+	UserID      string
 	Operation   string
 	RequestorIP string
 	CreatedAt   time.Time
@@ -102,9 +103,9 @@ func (s *RequestStore) CreateRequest(ctx context.Context, in CreateRequestInput)
 	expires := in.ExpiresAt.Unix()
 	_, err = s.db.db.Exec(ctx,
 		`INSERT INTO v2_requests
-			(state, status, operation, target_user, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, payload_ciphertext, payload_nonce)
+			(state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, payload_ciphertext, payload_nonce)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-		in.State, string(V2RequestStatusPending), in.Operation, in.Body.TargetUser, in.Body.KeyLabel, in.Body.Algorithm, in.RequestorIP, note, now, expires, now, payloadCiphertext, payloadNonce,
+		in.State, string(V2RequestStatusPending), in.Operation, in.UserID, in.Body.KeyLabel, in.Body.Algorithm, in.RequestorIP, note, now, expires, now, payloadCiphertext, payloadNonce,
 	)
 	return err
 }
@@ -123,20 +124,20 @@ func (s *RequestStore) GetRequest(ctx context.Context, state string) (*V2Request
 
 func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2RequestRecord, error) {
 	type rowT struct {
-		State, Status, Operation, TargetUser, KeyLabel, Algorithm, RequestorIP, Note string
-		CreatedAt, ExpiresAt, UpdatedAt                                              int64
-		PayloadCiphertext, PayloadNonce                                              []byte
-		ResultCiphertext, ResultNonce                                                []byte
+		State, Status, Operation, UserID, KeyLabel, Algorithm, RequestorIP, Note string
+		CreatedAt, ExpiresAt, UpdatedAt                                          int64
+		PayloadCiphertext, PayloadNonce                                          []byte
+		ResultCiphertext, ResultNonce                                            []byte
 	}
 	var row rowT
 
 	err := s.db.db.
 		QueryRow(ctx,
-			`SELECT state ,status ,operation ,target_user ,key_label ,algorithm ,requestor_ip ,note ,created_at ,expires_at ,updated_at ,payload_ciphertext ,payload_nonce ,result_ciphertext ,result_nonce FROM v2_requests WHERE state = $1`,
+			`SELECT state ,status ,operation ,user_id ,key_label ,algorithm ,requestor_ip ,note ,created_at ,expires_at ,updated_at ,payload_ciphertext ,payload_nonce ,result_ciphertext ,result_nonce FROM v2_requests WHERE state = $1`,
 			state,
 		).
 		Scan(
-			&row.State, &row.Status, &row.Operation, &row.TargetUser, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.PayloadCiphertext, &row.PayloadNonce, &row.ResultCiphertext, &row.ResultNonce,
+			&row.State, &row.Status, &row.Operation, &row.UserID, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.PayloadCiphertext, &row.PayloadNonce, &row.ResultCiphertext, &row.ResultNonce,
 		)
 	if s.db.db.IsNoRowsError(err) {
 		return nil, nil
@@ -154,7 +155,7 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 		State:       row.State,
 		Status:      V2RequestStatus(row.Status),
 		Operation:   row.Operation,
-		TargetUser:  row.TargetUser,
+		UserID:      row.UserID,
 		KeyLabel:    row.KeyLabel,
 		Algorithm:   row.Algorithm,
 		RequestorIP: row.RequestorIP,
@@ -180,7 +181,7 @@ func (s *RequestStore) ListPending(ctx context.Context) ([]V2RequestListItem, er
 	_ = s.ExpirePending(ctx, time.Now())
 	var out []V2RequestListItem
 	rows, err := s.db.db.Query(ctx,
-		`SELECT state,status,operation,target_user,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = $1 ORDER BY created_at ASC`,
+		`SELECT state,status,operation,user_id,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = $1 ORDER BY created_at ASC`,
 		string(V2RequestStatusPending),
 	)
 	if err != nil {
@@ -190,7 +191,7 @@ func (s *RequestStore) ListPending(ctx context.Context) ([]V2RequestListItem, er
 
 	for rows.Next() {
 		var item V2RequestListItem
-		err = rows.Scan(&item.State, &item.Status, &item.Operation, &item.TargetUser, &item.KeyLabel, &item.Algorithm, &item.Requestor, &item.Note, &item.Date, &item.Expiry)
+		err = rows.Scan(&item.State, &item.Status, &item.Operation, &item.UserID, &item.KeyLabel, &item.Algorithm, &item.Requestor, &item.Note, &item.Date, &item.Expiry)
 		if err != nil {
 			return nil, err
 		}

@@ -92,7 +92,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
     }
 
     const operationKey = await deriveOperationKeyBytes({
-        targetUser: req.targetUser,
+        userId: req.userId,
         keyLabel: req.keyLabel,
         algorithm: req.algorithm,
         prfSecret,
@@ -185,9 +185,6 @@ function expiresIn(item: V2PendingRequestItem) {
             <div class="text-base font-semibold text-slate-900 dark:text-white">
                 {item.keyLabel}
                 <span class="font-normal text-slate-500 dark:text-slate-400"> · {item.algorithm}</span>
-            </div>
-            <div class="text-sm text-slate-700 dark:text-slate-300">
-                Target user: <span class="font-mono">{item.targetUser}</span>
             </div>
             {#if item.requestor}
                 <div class="text-sm text-slate-700 dark:text-slate-300">

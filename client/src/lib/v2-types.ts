@@ -14,7 +14,6 @@ export type V2ResponseEnvelope = {
 }
 
 export type V2RequestCreateBody = {
-    targetUser: string
     keyLabel: string
     algorithm: string
     value: string
@@ -30,7 +29,7 @@ export type V2PendingRequestItem = {
     state: string
     status: 'pending' | 'completed' | 'canceled' | 'expired' | 'removed'
     operation: 'encrypt' | 'decrypt'
-    targetUser: string
+    userId: string
     keyLabel: string
     algorithm: string
     requestor?: string
@@ -43,7 +42,7 @@ export type V2RequestDetail = {
     state: string
     status: string
     operation: 'encrypt' | 'decrypt'
-    targetUser: string
+    userId: string
     keyLabel: string
     algorithm: string
     requestor?: string
@@ -56,8 +55,6 @@ export type V2RequestDetail = {
 export type V2RegisterBeginResponse = {
     challengeId: string
     challenge: string
-    username: string
-    displayName: string
     expiresAt: number
     mode: string
     options?: unknown
@@ -65,7 +62,10 @@ export type V2RegisterBeginResponse = {
 }
 
 export type V2AuthSessionInfo = {
-    username: string
+    userId: string
+    displayName: string
+    requestKey: string
+    allowedIps: string[]
     ttl: number
 }
 
@@ -80,13 +80,15 @@ export type V2LoginBeginResponse = {
 
 export type V2LoginFinishResponse = {
     authenticated: boolean
-    username?: string
     session?: V2AuthSessionInfo
     passwordCanary?: string
 }
 
 export type V2SessionResponse = {
     authenticated: boolean
-    username: string
+    userId: string
+    displayName: string
+    requestKey: string
+    allowedIps: string[]
     ttl: number
 }

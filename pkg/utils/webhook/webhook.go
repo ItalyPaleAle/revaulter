@@ -309,9 +309,9 @@ type WebhookRequest struct {
 	KeyId         string
 	Vault         string
 
-	TargetUser string
-	KeyLabel   string
-	Algorithm  string
+	AssignedUser string
+	KeyLabel     string
+	Algorithm    string
 
 	StateId   string
 	Requestor string
@@ -331,7 +331,7 @@ Open Revaulter: %s
 (Request ID: %s - Client IP: %s)%s`,
 		data.OperationName,
 		data.KeyLabel,
-		data.TargetUser,
+		data.AssignedUser,
 		data.Algorithm,
 		w.getLink(),
 		data.StateId,
@@ -349,7 +349,7 @@ func (w *webhookClient) formatSlackMessage(data *WebhookRequest) string {
 		"Received a request to %s using key label **%s** for user **%s** (algorithm **%s**).\n%s[Open Revaulter](%s)\n`(Request ID: %s - Client IP: %s)`",
 		data.OperationName,
 		data.KeyLabel,
-		data.TargetUser,
+		data.AssignedUser,
 		data.Algorithm,
 		note,
 		w.getLink(),

@@ -222,12 +222,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	}
 	healthzGroup.GET("/healthz", gin.WrapF(s.RouteHealthzHandler))
 
-	// Middleware to allow certain IPs
-	allowIpMw, err := s.AllowIpMiddleware()
-	if err != nil {
-		return err
-	}
-
 	// CSRF protection for browser-facing endpoints.
 	// This rejects cross-origin requests on state-changing methods (POST, PUT, DELETE, etc) by checking the Sec-Fetch-Site and Origin headers
 	cop := http.NewCrossOriginProtection()
@@ -254,9 +248,9 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 
 	// Request group is API-to-server (not browser-originated), so no CSRF middleware
 	v2RequestGroup := v2RouteGroup.Group("/request")
-	v2RequestGroup.Use(allowIpMw, s.MiddlewareRequestKey(), requestRateLimiter)
-	v2RequestGroup.POST("/encrypt", s.RouteV2RequestCreate("encrypt"))
-	v2RequestGroup.POST("/decrypt", s.RouteV2RequestCreate("decrypt"))
+	v2RequestGroup.Use(requestRateLimiter)
+	v2RequestGroup.POST("/:requestKey/encrypt", s.RouteV2RequestCreate("encrypt"))
+	v2RequestGroup.POST("/:requestKey/decrypt", s.RouteV2RequestCreate("decrypt"))
 	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
 
 	// API and auth groups are browser-facing, apply CSRF protection
@@ -274,6 +268,8 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/login/finish", s.RouteV2AuthLoginFinish)
 	v2AuthGroup.GET("/session", s.V2SessionMiddleware(true), s.RouteV2AuthSession)
 	v2AuthGroup.POST("/password-canary", s.V2SessionMiddleware(true), s.RouteV2AuthSetPasswordCanary)
+	v2AuthGroup.POST("/allowed-ips", s.V2SessionMiddleware(true), s.RouteV2AuthAllowedIPs)
+	v2AuthGroup.POST("/regenerate-request-key", s.V2SessionMiddleware(true), s.RouteV2AuthRequestKeyRegenerate)
 	v2AuthGroup.POST("/logout", s.V2SessionMiddleware(true), s.RouteV2AuthLogout)
 
 	// Static files as fallback

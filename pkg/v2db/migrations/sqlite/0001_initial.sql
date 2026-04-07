@@ -1,17 +1,22 @@
-CREATE TABLE IF NOT EXISTS v2_admins (
+CREATE TABLE IF NOT EXISTS v2_users (
 	id TEXT PRIMARY KEY,
-	username TEXT NOT NULL UNIQUE,
-	display_name TEXT NOT NULL,
+	display_name TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
-	webauthn_user_id TEXT NOT NULL DEFAULT '',
+	webauthn_user_id TEXT NOT NULL,
 	password_canary TEXT NOT NULL DEFAULT '',
+	request_key TEXT NOT NULL,
+	allowed_ips TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS v2_admin_credentials (
+CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_users_webauthn_user_id ON v2_users(webauthn_user_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_users_request_key ON v2_users(request_key);
+
+CREATE TABLE IF NOT EXISTS v2_user_credentials (
 	id TEXT PRIMARY KEY,
-	admin_id TEXT NOT NULL REFERENCES v2_admins(id) ON DELETE CASCADE,
+	user_id TEXT NOT NULL REFERENCES v2_users(id) ON DELETE CASCADE,
 	credential_id TEXT NOT NULL UNIQUE,
 	public_key TEXT NOT NULL,
 	sign_count INTEGER NOT NULL,
@@ -22,7 +27,7 @@ CREATE TABLE IF NOT EXISTS v2_admin_credentials (
 CREATE TABLE IF NOT EXISTS v2_auth_challenges (
 	id TEXT PRIMARY KEY,
 	kind TEXT NOT NULL,
-	username TEXT NOT NULL,
+	user_id TEXT NOT NULL,
 	challenge TEXT NOT NULL,
 	expires_at INTEGER NOT NULL,
 	used_at INTEGER
@@ -33,25 +38,24 @@ CREATE TABLE IF NOT EXISTS v2_auth_challenge_payloads (
 	session_data TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS v2_admin_sessions (
+CREATE TABLE IF NOT EXISTS v2_user_sessions (
 	id TEXT PRIMARY KEY,
-	admin_id TEXT NOT NULL REFERENCES v2_admins(id) ON DELETE CASCADE,
-	username TEXT NOT NULL,
+	user_id TEXT NOT NULL REFERENCES v2_users(id) ON DELETE CASCADE,
 	expires_at INTEGER NOT NULL,
 	created_at INTEGER NOT NULL,
 	last_seen_at INTEGER NOT NULL,
 	revoked_at INTEGER
 );
 
-CREATE INDEX IF NOT EXISTS idx_v2_auth_challenges_lookup ON v2_auth_challenges(kind, username, expires_at);
+CREATE INDEX IF NOT EXISTS idx_v2_auth_challenges_lookup ON v2_auth_challenges(kind, user_id, expires_at);
 
-CREATE INDEX IF NOT EXISTS idx_v2_admin_sessions_lookup ON v2_admin_sessions(username, expires_at);
+CREATE INDEX IF NOT EXISTS idx_v2_user_sessions_lookup ON v2_user_sessions(user_id, expires_at);
 
 CREATE TABLE IF NOT EXISTS v2_requests (
 	state TEXT PRIMARY KEY,
 	status TEXT NOT NULL,
 	operation TEXT NOT NULL,
-	target_user TEXT NOT NULL,
+	user_id TEXT NOT NULL REFERENCES v2_users(id) ON DELETE CASCADE,
 	key_label TEXT NOT NULL,
 	algorithm TEXT NOT NULL,
 	requestor_ip TEXT NOT NULL,
@@ -66,3 +70,5 @@ CREATE TABLE IF NOT EXISTS v2_requests (
 );
 
 CREATE INDEX IF NOT EXISTS idx_v2_requests_status_expires ON v2_requests(status, expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_v2_requests_user_status_created ON v2_requests(user_id, status, created_at);

@@ -11,8 +11,10 @@ import {
     v2LoginBegin,
     v2LoginFinish,
     v2Logout,
+    v2RegenerateRequestKey,
     v2RegisterBegin,
     v2RegisterFinish,
+    v2SetAllowedIPs,
     v2Session,
     v2SetPasswordCanary,
 } from '$lib/v2-api'
@@ -27,11 +29,14 @@ let authError = $state<string | null>(null)
 let pageError = $state<string | null>(null)
 let signupDisabled = $state(false)
 
-let username = $state('')
 let displayName = $state('')
 let passwordInput = $state('')
 let activePassword = $state('')
 let loginPasswordCanary = $state<string | null>(null)
+let allowedIpsText = $state('')
+let settingsBusy = $state(false)
+let settingsError = $state<string | null>(null)
+let settingsSuccess = $state<string | null>(null)
 
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
@@ -79,7 +84,10 @@ async function initialize() {
 function toSessionResponse(authSession: V2AuthSessionInfo): V2SessionResponse {
     return {
         authenticated: true,
-        username: authSession.username,
+        userId: authSession.userId,
+        displayName: authSession.displayName,
+        requestKey: authSession.requestKey,
+        allowedIps: authSession.allowedIps,
         ttl: authSession.ttl,
     }
 }
@@ -100,12 +108,18 @@ function clearLocalAuthState() {
     prfSecret = null
     activePassword = ''
     loginPasswordCanary = null
+    allowedIpsText = ''
+    settingsError = null
+    settingsSuccess = null
 }
 
 function enterReadyView() {
     uiState = 'ready'
     passwordInput = ''
     authError = null
+    settingsError = null
+    settingsSuccess = null
+    allowedIpsText = session?.allowedIps.join('\n') ?? ''
     startListStream()
 }
 
@@ -129,6 +143,13 @@ async function returnToSignIn() {
         return
     }
     openSignIn()
+}
+
+function sessionLabel() {
+    if (!session) {
+        return ''
+    }
+    return session.displayName.trim() || session.userId
 }
 
 async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-required'> {
@@ -211,16 +232,13 @@ async function doRegister() {
     pageError = null
 
     try {
-        const begin = await v2RegisterBegin(username, displayName)
+        const begin = await v2RegisterBegin(displayName)
         const cred = await webauthnRegister({
-            username: begin.username,
-            displayName: begin.displayName,
+            displayName,
             challenge: begin.challenge,
             options: begin.options,
         })
         await v2RegisterFinish({
-            username: begin.username,
-            displayName: begin.displayName,
             challengeId: begin.challengeId,
             credential: (cred.raw as { credential?: unknown })?.credential ?? cred,
         })
@@ -240,8 +258,6 @@ async function doRegister() {
             signupDisabled = true
             authError = err.message || 'Account creation is disabled on this server.'
             uiState = 'signin'
-        } else if (err instanceof ResponseNotOkError && err.statusCode === 409) {
-            authError = err.message || 'Username already exists'
         } else {
             authError = err instanceof Error ? err.message : String(err)
         }
@@ -309,6 +325,47 @@ async function doLogout() {
     passwordInput = ''
     authError = null
     uiState = 'signin'
+}
+
+const parseAllowedIpsInput = (raw: string) =>
+    raw
+        .split(/[\n,]/)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== '')
+
+async function doUpdateAllowedIps() {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        const res = await v2SetAllowedIPs(parseAllowedIpsInput(allowedIpsText))
+        if (session) {
+            session = { ...session, allowedIps: res.allowedIps }
+        }
+        allowedIpsText = res.allowedIps.join('\n')
+        settingsSuccess = res.allowedIps.length === 0 ? 'Allowed IP restrictions removed' : 'Allowed IPs updated'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doRegenerateRequestKey() {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        const res = await v2RegenerateRequestKey()
+        if (session) {
+            session = { ...session, requestKey: res.requestKey }
+        }
+        settingsSuccess = 'Request key regenerated.'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
 }
 
 function startListStream() {
@@ -419,14 +476,14 @@ function authBodyCopy() {
                         <div class="space-y-2">
                             <h1 class="font-serif text-3xl text-slate-950 dark:text-white md:text-4xl">Pending approvals</h1>
                             <p class="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-                                Review inbound encrypt and decrypt operations for <span class="font-mono text-slate-900 dark:text-slate-100">{session?.username}</span>.
+                                Review inbound encrypt and decrypt operations for <span class="font-mono text-slate-900 dark:text-slate-100">{sessionLabel()}</span>.
                             </p>
                         </div>
                     </div>
 
                     <div class="flex flex-col items-start gap-3 rounded-3xl border border-slate-200/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-200">
                         <div>
-                            Signed in as <span class="font-mono text-slate-950 dark:text-white">{session?.username}</span>
+                            Signed in as <span class="font-mono text-slate-950 dark:text-white">{sessionLabel()}</span>
                         </div>
                         <button
                             class="inline-flex items-center justify-center rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
@@ -449,13 +506,58 @@ function authBodyCopy() {
                     <div>
                         <div class="text-sm font-medium text-slate-900 dark:text-white">Assigned requests</div>
                         <div class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                            Requests stream to this page in real time. Confirm only if the input and target user look correct.
+                            Requests stream to this page in real time. Confirm only if the input, key label, and requester look correct.
                         </div>
                     </div>
                     <div class="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
                         {#if listConnected}Live stream connected{:else}Connecting…{/if}
                     </div>
                 </div>
+
+                <div class="mb-5 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+                    <div class="rounded-3xl border border-slate-200/80 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                        <div class="text-sm font-medium text-slate-900 dark:text-white">Request key</div>
+                        <div class="mt-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100">
+                            {session?.requestKey}
+                        </div>
+                        <button
+                            class="mt-3 inline-flex items-center justify-center rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+                            onclick={doRegenerateRequestKey}
+                            disabled={settingsBusy}
+                        >
+                            Regenerate request key
+                        </button>
+                    </div>
+
+                    <div class="rounded-3xl border border-slate-200/80 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                        <div class="text-sm font-medium text-slate-900 dark:text-white">Allowed IPs</div>
+                        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                            One IP or CIDR per line. Leave empty to allow requests from any IP.
+                        </p>
+                        <textarea
+                            class="mt-3 min-h-32 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 font-mono text-sm text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
+                            bind:value={allowedIpsText}
+                            disabled={settingsBusy}
+                        ></textarea>
+                        <button
+                            class="mt-3 inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
+                            onclick={doUpdateAllowedIps}
+                            disabled={settingsBusy}
+                        >
+                            Save allowed IPs
+                        </button>
+                    </div>
+                </div>
+
+                {#if settingsError}
+                    <div class="mb-5 rounded-3xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+                        {settingsError}
+                    </div>
+                {:else if settingsSuccess}
+                    <div class="mb-5 rounded-3xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200">
+                        {settingsSuccess}
+                    </div>
+                {/if}
 
                 {#if sortedItems().length === 0}
                     <div class="rounded-3xl border border-dashed border-slate-300/90 bg-white/70 px-6 py-12 text-center dark:border-slate-700 dark:bg-slate-950/40">
@@ -527,21 +629,11 @@ function authBodyCopy() {
                             }}
                         >
                             <div class="space-y-2">
-                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-username">Username</label>
-                                <input
-                                    id="v2-username"
-                                    class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
-                                    bind:value={username}
-                                    required
-                                />
-                            </div>
-
-                            <div class="space-y-2">
                                 <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-displayname">Display name (optional)</label>
                                 <input
                                     id="v2-displayname"
                                     class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
-                                    bind:value={displayName} placeholder={username}
+                                    bind:value={displayName}
                                 />
                             </div>
 
@@ -563,7 +655,7 @@ function authBodyCopy() {
                             }}
                         >
                             <div class="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-300">
-                                Unlocking local keys for <span class="font-mono text-slate-950 dark:text-white">{session?.username}</span>
+                                Unlocking local keys for <span class="font-mono text-slate-950 dark:text-white">{sessionLabel()}</span>
                             </div>
 
                             <div class="space-y-2">
