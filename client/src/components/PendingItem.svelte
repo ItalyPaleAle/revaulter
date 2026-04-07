@@ -43,7 +43,9 @@ $effect(() => {
 })
 
 async function ensureDetail() {
-    if (detail) return detail
+    if (detail) {
+        return detail
+    }
     detail = await v2GetRequest(item.state)
     return detail
 }
@@ -180,10 +182,10 @@ function expiresIn(item: V2PendingRequestItem) {
 }
 </script>
 
-<div class="rounded-lg border border-slate-200/80 dark:border-slate-700 p-4 bg-white/90 dark:bg-slate-900/70">
+<div class="rounded-[1.6rem] border border-white/70 bg-white/68 p-4 shadow-[0_4px_16px_-14px_rgba(15,23,42,0.18)] backdrop-blur dark:border-white/10 dark:bg-slate-950/60">
     <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div class="space-y-1">
-            <div class="text-sm text-slate-500 dark:text-slate-400">{operationTitle(item.operation)} request</div>
+            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{operationTitle(item.operation)} request</div>
             <div class="text-base font-semibold text-slate-900 dark:text-white">
                 {item.keyLabel}
                 <span class="font-normal text-slate-500 dark:text-slate-400"> · {item.algorithm}</span>
@@ -200,11 +202,11 @@ function expiresIn(item: V2PendingRequestItem) {
                 Expires {expiresIn(item)} · <span class="font-mono">{item.state}</span>
             </div>
             {#if detailOpen && detail}
-                <pre class="mt-2 max-h-64 overflow-auto rounded bg-slate-100 dark:bg-slate-800 p-2 text-xs">{JSON.stringify(detail.request, null, 2)}</pre>
+                <pre class="mt-3 max-h-64 overflow-auto rounded-[1rem] bg-slate-950 px-3 py-3 text-xs text-slate-100 dark:bg-black/60">{JSON.stringify(detail.request, null, 2)}</pre>
             {/if}
         </div>
 
-        <div class="flex flex-col gap-2 min-w-52">
+        <div class="min-w-52 border-t border-slate-200/80 pt-3 dark:border-white/10 md:border-l md:border-t-0 md:pl-4 md:pt-0">
             {#if error}
                 <div class="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
                     {error}
@@ -232,6 +234,7 @@ function expiresIn(item: V2PendingRequestItem) {
                 </Button>
             </div>
             <Button
+                class="mt-2 w-full"
                 size="sm"
                 variant="outline"
                 type="button"
@@ -249,11 +252,11 @@ function expiresIn(item: V2PendingRequestItem) {
                 {detailOpen ? 'Hide request body' : 'Show request body'}
             </Button>
             {#if localStatus === 'confirmed'}
-                <div class="text-sm text-emerald-700 dark:text-emerald-300">Confirmed</div>
+                <div class="mt-2 text-sm text-emerald-700 dark:text-emerald-300">Confirmed</div>
             {:else if localStatus === 'canceled'}
-                <div class="text-sm text-rose-700 dark:text-rose-300">Canceled</div>
+                <div class="mt-2 text-sm text-rose-700 dark:text-rose-300">Canceled</div>
             {:else if localStatus === '_failed'}
-                <div class="text-sm text-rose-700 dark:text-rose-300">Failed</div>
+                <div class="mt-2 text-sm text-rose-700 dark:text-rose-300">Failed</div>
             {/if}
         </div>
     </div>

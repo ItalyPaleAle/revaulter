@@ -1,1 +1,79 @@
 @import "tailwindcss";
+
+:root {
+    color-scheme: light dark;
+    font-family:
+        "Avenir Next",
+        "Segoe UI",
+        "Helvetica Neue",
+        sans-serif;
+    --app-bg:
+        radial-gradient(circle at top left, rgba(250, 204, 21, 0.2), transparent 28%),
+        radial-gradient(circle at 88% 14%, rgba(14, 165, 233, 0.2), transparent 22%),
+        radial-gradient(circle at 75% 78%, rgba(244, 114, 182, 0.12), transparent 24%),
+        linear-gradient(180deg, #fff7ed 0%, #f8fafc 32%, #ecfeff 100%);
+    --app-text: #0f172a;
+    --app-line: rgba(15, 23, 42, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --app-bg:
+            radial-gradient(circle at top left, rgba(250, 204, 21, 0.08), transparent 24%),
+            radial-gradient(circle at 88% 14%, rgba(14, 165, 233, 0.16), transparent 20%),
+            radial-gradient(circle at 80% 82%, rgba(244, 114, 182, 0.1), transparent 24%),
+            linear-gradient(180deg, #020617 0%, #0f172a 35%, #111827 100%);
+        --app-text: #e5eefb;
+        --app-line: rgba(226, 232, 240, 0.12);
+    }
+}
+
+html {
+    background: #020617;
+}
+
+body {
+    min-height: 100vh;
+    background: var(--app-bg);
+    color: var(--app-text);
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+        linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+    background-size: 120px 120px;
+    mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.35), transparent 80%);
+    opacity: 0.16;
+}
+
+@media (prefers-color-scheme: dark) {
+    body::before {
+        background-image:
+            linear-gradient(rgba(148, 163, 184, 0.1) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(148, 163, 184, 0.1) 1px, transparent 1px);
+        opacity: 0.2;
+    }
+}
+
+h1,
+h2,
+h3,
+h4,
+[data-display='serif'] {
+    font-family:
+        "Iowan Old Style",
+        "Palatino Linotype",
+        "Book Antiqua",
+        "URW Palladio L",
+        serif;
+    letter-spacing: -0.03em;
+}
+
+::selection {
+    background: rgba(14, 165, 233, 0.2);
+}

@@ -53,19 +53,20 @@ let {
 }: Props = $props()
 </script>
 
-<div class="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
-    <header class="rounded-4xl border border-white/70 bg-white/75 p-5 shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/70">
+<div class="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-4 py-6 md:px-6 md:py-8">
+    <header class="relative overflow-hidden rounded-[2rem] border border-white/65 bg-white/48 p-5 shadow-[0_8px_26px_-20px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/42">
+        <div class="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(90deg,rgba(251,191,36,0.18),rgba(14,165,233,0.16),rgba(244,114,182,0.16))] opacity-90 blur-2xl dark:opacity-60"></div>
         <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div class="space-y-3">
                 <div class="space-y-2">
-                    <h1 class="font-serif text-3xl text-slate-950 dark:text-white md:text-4xl">Pending approvals</h1>
+                    <h1 class="text-3xl text-slate-950 dark:text-white md:text-4xl" data-display="serif">Pending approvals</h1>
                     <p class="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
                         Review inbound encrypt and decrypt operations for <span class="font-mono text-slate-900 dark:text-slate-100">{sessionLabel}</span>.
                     </p>
                 </div>
             </div>
 
-            <div class="flex flex-col items-start gap-3 rounded-3xl border border-slate-200/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-200">
+            <div class="flex flex-col items-start gap-3 border-l border-slate-200/80 pl-0 text-sm text-slate-700 dark:border-white/10 dark:text-slate-200 lg:pl-6">
                 <div>
                     Signed in as <span class="font-mono text-slate-950 dark:text-white">{sessionLabel}</span>
                 </div>
@@ -82,21 +83,21 @@ let {
         </div>
     {/if}
 
-    <section class="rounded-4xl border border-white/70 bg-white/80 p-5 shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/70">
-        <div class="mb-5 flex flex-col gap-3 rounded-3xl border border-slate-200/80 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-900/70 md:flex-row md:items-center md:justify-between">
+    <section class="relative overflow-hidden rounded-[2rem] border border-white/65 bg-white/46 p-5 shadow-[0_8px_26px_-20px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/42">
+        <div class="mb-5 flex flex-col gap-3 border-b border-slate-200/80 pb-4 dark:border-white/10 md:flex-row md:items-center md:justify-between">
             <div>
-                <div class="text-sm font-medium text-slate-900 dark:text-white">Assigned requests</div>
+                <div class="text-sm font-medium uppercase tracking-[0.18em] text-slate-700 dark:text-slate-200">Assigned requests</div>
                 <div class="mt-1 text-sm text-slate-600 dark:text-slate-300">
                     Requests stream to this page in real time. Confirm only if the input, key label, and requester look correct.
                 </div>
             </div>
-            <div class="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+            <div class="rounded-full bg-white/68 px-3 py-1 text-xs font-medium text-slate-500 ring-1 ring-slate-200/80 dark:bg-white/6 dark:text-slate-300 dark:ring-white/10">
                 {#if listConnected}Live stream connected{:else}Connecting…{/if}
             </div>
         </div>
 
         {#if pendingItems.length === 0}
-            <div class="rounded-3xl border border-dashed border-slate-300/90 bg-white/70 px-6 py-12 text-center dark:border-slate-700 dark:bg-slate-950/40">
+            <div class="border border-dashed border-slate-300/90 bg-white/25 px-6 py-12 text-center dark:border-white/12 dark:bg-white/4">
                 {#if listConnected}
                     <div class="text-base font-medium text-slate-900 dark:text-white">No pending requests</div>
                     <div class="mt-2 text-sm text-slate-500 dark:text-slate-400">New approvals will appear here as soon as they are assigned to you.</div>
@@ -123,12 +124,15 @@ let {
         {/if}
     </section>
 
-    <section class="rounded-4xl border border-white/70 bg-white/80 p-5 shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/70">
-        <div class="mt-5 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-            <div class="rounded-3xl border border-slate-200/80 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+    <section class="relative overflow-hidden rounded-[2rem] border border-white/65 bg-white/46 p-5 shadow-[0_8px_26px_-20px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/42">
+        <div class="mb-4 border-b border-slate-200/80 pb-4 dark:border-white/10">
+            <div class="text-sm font-medium uppercase tracking-[0.18em] text-slate-700 dark:text-slate-200">Security settings</div>
+        </div>
+        <div class="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+            <div class="space-y-3">
                 <div class="text-sm font-medium text-slate-900 dark:text-white">Request key</div>
                 <div class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center">
-                    <div class="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100">
+                    <div class="min-w-0 flex-1 rounded-[1.35rem] bg-white/60 px-4 py-3 font-mono text-sm text-slate-900 ring-1 ring-slate-200/80 dark:bg-white/6 dark:text-slate-100 dark:ring-white/10">
                         <div class="overflow-x-auto whitespace-nowrap">{requestKey}</div>
                     </div>
                     <Button
@@ -141,7 +145,7 @@ let {
                 </div>
             </div>
 
-            <div class="rounded-3xl border border-slate-200/80 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+            <div class="space-y-3 border-t border-slate-200/80 pt-6 dark:border-white/10 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
                 <div class="text-sm font-medium text-slate-900 dark:text-white">Allowed IPs</div>
                 <div class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center">
                     <p class="min-w-0 flex-1 text-sm text-slate-600 dark:text-slate-300">
@@ -180,7 +184,7 @@ let {
             </p>
 
             <textarea
-                class="mt-4 min-h-40 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 font-mono text-sm text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
+                class="mt-4 min-h-40 w-full rounded-[1.35rem] border border-white/70 bg-white/80 px-4 py-3 font-mono text-sm text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-white/10 dark:bg-slate-950/70 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
                 value={allowedIpsText}
                 oninput={(event) => {
                     onAllowedIpsTextInput((event.currentTarget as HTMLTextAreaElement).value)

@@ -462,7 +462,7 @@ function allowedIpsSummary() {
 }
 </script>
 
-<div class="min-h-screen bg-[radial-gradient(circle_at_top,rgba(14,165,233,0.12),transparent_28%),linear-gradient(180deg,#f8fafc_0%,#eef2ff_44%,#ffffff_100%)] dark:bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.15),transparent_24%),linear-gradient(180deg,#020617_0%,#0f172a_48%,#020617_100%)]">
+<div class="min-h-screen">
     {#if uiState === 'ready'}
         <ReadyView
             activePassword={activePassword}

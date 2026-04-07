@@ -28,21 +28,21 @@ let {
 function variantClass(value: typeof variant) {
     switch (value) {
         case 'primary':
-            return 'bg-sky-600 text-white hover:bg-sky-500'
+            return 'bg-slate-950 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-100'
         case 'neutral':
-            return 'bg-slate-950 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white'
+            return 'bg-[rgba(255,255,255,0.22)] text-slate-900 ring-1 ring-white/70 hover:bg-[rgba(255,255,255,0.32)] dark:bg-white/10 dark:text-white dark:ring-white/12 dark:hover:bg-white/16'
         case 'surface':
-            return 'border border-slate-300 bg-white/70 text-slate-700 shadow-sm hover:border-slate-400 hover:bg-white dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-950'
+            return 'bg-transparent text-slate-700 hover:bg-white/45 dark:text-slate-100 dark:hover:bg-white/6'
         case 'danger':
             return 'bg-rose-600 text-white hover:bg-rose-500'
         case 'success':
             return 'bg-emerald-600 text-white hover:bg-emerald-500'
         case 'icon':
-            return 'border border-slate-300 text-slate-600 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:bg-slate-900'
+            return 'bg-white/60 text-slate-600 ring-1 ring-slate-200/80 hover:bg-white dark:bg-white/8 dark:text-slate-200 dark:ring-white/10 dark:hover:bg-white/14'
         case 'unstyled':
             return ''
         case 'outline':
-            return 'border border-slate-300 text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800'
+            return 'text-slate-700 ring-1 ring-slate-300/80 hover:bg-white/45 dark:text-slate-100 dark:ring-white/12 dark:hover:bg-white/6'
     }
 }
 
@@ -73,7 +73,7 @@ function widthClass(value: typeof width) {
     {type}
     {disabled}
     aria-label={ariaLabel}
-    class={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-full font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 dark:focus-visible:ring-sky-950 disabled:cursor-not-allowed disabled:opacity-60 ${variantClass(variant)} ${sizeClass(size)} ${widthClass(width)} ${className}`}
+    class={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-full font-medium transition duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 dark:focus-visible:ring-sky-950 disabled:cursor-not-allowed disabled:opacity-60 ${variantClass(variant)} ${sizeClass(size)} ${widthClass(width)} ${className}`}
     onclick={onclick}
 >
     {@render children?.()}

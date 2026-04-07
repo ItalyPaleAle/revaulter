@@ -1,6 +1,7 @@
 <script lang="ts">
 import Button from '$components/Button.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
+import TextField from '$components/TextField.svelte'
 
 interface Props {
     authBusy: boolean
@@ -49,13 +50,14 @@ function authBodyCopy() {
 
 <div class="mx-auto flex min-h-screen w-full max-w-5xl items-center justify-center px-4 py-10 md:px-6">
     <section class="mx-auto flex w-full max-w-md flex-col items-stretch justify-center">
-        <div class="rounded-4xl border border-white/80 bg-white/85 p-6 shadow-[0_35px_90px_-45px_rgba(15,23,42,0.55)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/80 md:p-8">
-            <div class="mb-6 space-y-3">
-                <div class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 lg:hidden">
+        <div class="relative overflow-hidden rounded-[2rem] border border-white/65 bg-white/50 p-6 shadow-[0_8px_24px_-20px_rgba(15,23,42,0.22)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/48 md:p-8">
+            <div class="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(90deg,rgba(251,191,36,0.2),rgba(14,165,233,0.16),rgba(244,114,182,0.16))] opacity-80 blur-2xl dark:opacity-60"></div>
+            <div class="relative mb-6 space-y-3">
+                <div class="inline-flex items-center rounded-full bg-white/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 ring-1 ring-slate-200/70 dark:bg-white/6 dark:text-slate-300 dark:ring-white/10 lg:hidden">
                     Revaulter v2
                 </div>
                 <div class="space-y-2">
-                    <h2 class="font-serif text-3xl text-slate-950 dark:text-white">{authHeadline()}</h2>
+                    <h2 class="text-3xl text-slate-950 dark:text-white" data-display="serif">{authHeadline()}</h2>
                     <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">{authBodyCopy()}</p>
                 </div>
             </div>
@@ -84,9 +86,8 @@ function authBodyCopy() {
                 >
                     <div class="space-y-2">
                         <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-displayname">Display name (optional)</label>
-                        <input
+                        <TextField
                             id="v2-displayname"
-                            class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
                             value={displayName}
                             oninput={(event) => {
                                 onDisplayNameInput((event.currentTarget as HTMLInputElement).value)
@@ -117,10 +118,9 @@ function authBodyCopy() {
                 >
                     <div class="space-y-2">
                         <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-password-setup">Password</label>
-                        <input
+                        <TextField
                             id="v2-password-setup"
                             type="password"
-                            class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
                             value={passwordInput}
                             oninput={(event) => {
                                 onPasswordInput((event.currentTarget as HTMLInputElement).value)
