@@ -1,5 +1,8 @@
 <script lang="ts">
 import { formatDistanceToNowStrict } from 'date-fns'
+
+import Button from '$components/Button.svelte'
+
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
 import {
     buildTransportAAD,
@@ -208,24 +211,29 @@ function expiresIn(item: V2PendingRequestItem) {
                 </div>
             {/if}
             <div class="flex gap-2">
-                <button
-                    class="flex-1 rounded bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
+                <Button
+                    class="flex-1"
+                    size="sm"
+                    variant="success"
                     disabled={working || localStatus !== 'pending'}
                     onclick={doConfirm}
                 >
                     {#if working && localStatus === '_processing'}<LoadingSpinner size="1rem" />{/if}
                     Confirm
-                </button>
-                <button
-                    class="flex-1 rounded bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-500 disabled:opacity-50"
+                </Button>
+                <Button
+                    class="flex-1"
+                    size="sm"
+                    variant="danger"
                     disabled={working || localStatus !== 'pending'}
                     onclick={doCancel}
                 >
                     Cancel
-                </button>
+                </Button>
             </div>
-            <button
-                class="rounded border border-slate-300 dark:border-slate-600 px-3 py-2 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
+            <Button
+                size="sm"
+                variant="outline"
                 type="button"
                 onclick={async () => {
                     detailOpen = !detailOpen
@@ -239,7 +247,7 @@ function expiresIn(item: V2PendingRequestItem) {
                 }}
             >
                 {detailOpen ? 'Hide request body' : 'Show request body'}
-            </button>
+            </Button>
             {#if localStatus === 'confirmed'}
                 <div class="text-sm text-emerald-700 dark:text-emerald-300">Confirmed</div>
             {:else if localStatus === 'canceled'}

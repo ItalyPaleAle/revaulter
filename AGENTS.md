@@ -54,3 +54,9 @@ for (let i = 0; i < 10; i++) {
     process(i)
 }
 ```
+
+## Svelte and UI
+
+All clickable `<button>` elements must expose `cursor: pointer` when enabled.
+
+Prefer the shared button component at `client/src/components/Button.svelte` instead of ad hoc button markup so button behavior and styling stay standardized.

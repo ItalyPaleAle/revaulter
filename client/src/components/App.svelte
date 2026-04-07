@@ -1,7 +1,9 @@
 <script lang="ts">
 import { onMount } from 'svelte'
 
+import Button from '$components/Button.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
+import Modal from '$components/Modal.svelte'
 import PendingItem from '$components/PendingItem.svelte'
 import { encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
 import { ResponseNotOkError } from '$lib/request'
@@ -37,6 +39,7 @@ let allowedIpsText = $state('')
 let settingsBusy = $state(false)
 let settingsError = $state<string | null>(null)
 let settingsSuccess = $state<string | null>(null)
+let allowedIpsModalOpen = $state(false)
 
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
@@ -66,11 +69,6 @@ async function initialize() {
     } catch (err) {
         if (err instanceof ResponseNotOkError) {
             if (err.statusCode === 401) {
-                uiState = 'signin'
-                return
-            }
-            if (err.statusCode === 503) {
-                pageError = 'v2 is not configured on this server.'
                 uiState = 'signin'
                 return
             }
@@ -135,6 +133,18 @@ function openSignup() {
     passwordInput = ''
     loginPasswordCanary = null
     uiState = 'signup'
+}
+
+function openAllowedIpsModal() {
+    settingsError = null
+    settingsSuccess = null
+    allowedIpsModalOpen = true
+}
+
+function closeAllowedIpsModal() {
+    settingsError = null
+    settingsSuccess = null
+    allowedIpsModalOpen = false
 }
 
 async function returnToSignIn() {
@@ -465,6 +475,17 @@ function authBodyCopy() {
             return ''
     }
 }
+
+function allowedIpsSummary() {
+    const count = session?.allowedIps.length ?? 0
+    if (count === 0) {
+        return 'No IP restrictions configured'
+    }
+    if (count === 1) {
+        return '1 allowed IP configured'
+    }
+    return `${count} allowed IPs configured`
+}
 </script>
 
 <div class="min-h-screen bg-[radial-gradient(circle_at_top,rgba(14,165,233,0.12),transparent_28%),linear-gradient(180deg,#f8fafc_0%,#eef2ff_44%,#ffffff_100%)] dark:bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.15),transparent_24%),linear-gradient(180deg,#020617_0%,#0f172a_48%,#020617_100%)]">
@@ -485,12 +506,9 @@ function authBodyCopy() {
                         <div>
                             Signed in as <span class="font-mono text-slate-950 dark:text-white">{sessionLabel()}</span>
                         </div>
-                        <button
-                            class="inline-flex items-center justify-center rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
-                            onclick={doLogout}
-                        >
+                        <Button variant="outline" onclick={doLogout}>
                             Sign out
-                        </button>
+                        </Button>
                     </div>
                 </div>
             </header>
@@ -513,51 +531,6 @@ function authBodyCopy() {
                         {#if listConnected}Live stream connected{:else}Connecting…{/if}
                     </div>
                 </div>
-
-                <div class="mb-5 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-                    <div class="rounded-3xl border border-slate-200/80 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
-                        <div class="text-sm font-medium text-slate-900 dark:text-white">Request key</div>
-                        <div class="mt-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100">
-                            {session?.requestKey}
-                        </div>
-                        <button
-                            class="mt-3 inline-flex items-center justify-center rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
-                            onclick={doRegenerateRequestKey}
-                            disabled={settingsBusy}
-                        >
-                            Regenerate request key
-                        </button>
-                    </div>
-
-                    <div class="rounded-3xl border border-slate-200/80 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
-                        <div class="text-sm font-medium text-slate-900 dark:text-white">Allowed IPs</div>
-                        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                            One IP or CIDR per line. Leave empty to allow requests from any IP.
-                        </p>
-                        <textarea
-                            class="mt-3 min-h-32 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 font-mono text-sm text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
-                            bind:value={allowedIpsText}
-                            disabled={settingsBusy}
-                        ></textarea>
-                        <button
-                            class="mt-3 inline-flex items-center justify-center rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
-                            onclick={doUpdateAllowedIps}
-                            disabled={settingsBusy}
-                        >
-                            Save allowed IPs
-                        </button>
-                    </div>
-                </div>
-
-                {#if settingsError}
-                    <div class="mb-5 rounded-3xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
-                        {settingsError}
-                    </div>
-                {:else if settingsSuccess}
-                    <div class="mb-5 rounded-3xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200">
-                        {settingsSuccess}
-                    </div>
-                {/if}
 
                 {#if sortedItems().length === 0}
                     <div class="rounded-3xl border border-dashed border-slate-300/90 bg-white/70 px-6 py-12 text-center dark:border-slate-700 dark:bg-slate-950/40">
@@ -585,7 +558,97 @@ function authBodyCopy() {
                         {/each}
                     </div>
                 {/if}
+
+                <div class="mt-5 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+                    <div class="rounded-3xl border border-slate-200/80 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                        <div class="text-sm font-medium text-slate-900 dark:text-white">Request key</div>
+                        <div class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center">
+                            <div class="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100">
+                                <div class="overflow-x-auto whitespace-nowrap">{session?.requestKey}</div>
+                            </div>
+                            <Button
+                                variant="outline"
+                                onclick={doRegenerateRequestKey}
+                                disabled={settingsBusy}
+                            >
+                                Regenerate request key
+                            </Button>
+                        </div>
+                    </div>
+
+                    <div class="rounded-3xl border border-slate-200/80 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+                        <div class="text-sm font-medium text-slate-900 dark:text-white">Allowed IPs</div>
+                        <div class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center">
+                            <p class="min-w-0 flex-1 text-sm text-slate-600 dark:text-slate-300">
+                                {allowedIpsSummary()}
+                            </p>
+                            <Button
+                                variant="neutral"
+                                onclick={openAllowedIpsModal}
+                                disabled={settingsBusy}
+                            >
+                                View allowed IPs
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+
+                {#if !allowedIpsModalOpen && settingsError}
+                    <div class="mt-5 rounded-3xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+                        {settingsError}
+                    </div>
+                {:else if !allowedIpsModalOpen && settingsSuccess}
+                    <div class="mt-5 rounded-3xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200">
+                        {settingsSuccess}
+                    </div>
+                {/if}
             </section>
+
+            {#if allowedIpsModalOpen}
+                <Modal
+                    title="Allowed IPs"
+                    ariaLabel="Close allowed IPs modal"
+                    onClose={closeAllowedIpsModal}
+                >
+                    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                        One IP or CIDR per line. Leave empty to allow requests from any IP.
+                    </p>
+
+                    <textarea
+                        class="mt-4 min-h-40 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 font-mono text-sm text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
+                        bind:value={allowedIpsText}
+                        disabled={settingsBusy}
+                    ></textarea>
+
+                    {#if settingsError}
+                        <div class="mt-4 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+                            {settingsError}
+                        </div>
+                    {:else if settingsSuccess}
+                        <div class="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200">
+                            {settingsSuccess}
+                        </div>
+                    {/if}
+
+                    <div class="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                        <Button
+                            variant="outline"
+                            type="button"
+                            onclick={closeAllowedIpsModal}
+                        >
+                            Close
+                        </Button>
+                        <Button
+                            variant="neutral"
+                            type="button"
+                            onclick={doUpdateAllowedIps}
+                            disabled={settingsBusy}
+                        >
+                            Save allowed IPs
+                        </Button>
+                    </div>
+                </Modal>
+            {/if}
         </div>
     {:else}
         <div class="mx-auto flex min-h-screen w-full max-w-5xl items-center justify-center px-4 py-10 md:px-6">
@@ -637,14 +700,16 @@ function authBodyCopy() {
                                 />
                             </div>
 
-                            <button
+                            <Button
                                 type="submit"
-                                class="inline-flex w-full items-center justify-center gap-2 rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-100 dark:text-slate-950 dark:hover:bg-white"
+                                variant="neutral"
+                                size="lg"
+                                width="full"
                                 disabled={authBusy || signupDisabled}
                             >
                                 {#if authBusy}<LoadingSpinner size="1rem" />{/if}
                                 Create account with passkey
-                            </button>
+                            </Button>
                         </form>
                     {:else if uiState === 'password-login' && loginPasswordCanary}
                         <form
@@ -669,14 +734,16 @@ function authBodyCopy() {
                                 />
                             </div>
 
-                            <button
+                            <Button
                                 type="submit"
-                                class="inline-flex w-full items-center justify-center gap-2 rounded-full bg-sky-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                variant="primary"
+                                size="lg"
+                                width="full"
                                 disabled={authBusy}
                             >
                                 {#if authBusy}<LoadingSpinner size="1rem" />{/if}
                                 Unlock local keys
-                            </button>
+                            </Button>
                         </form>
                     {:else if uiState === 'password-setup'}
                         <form
@@ -697,31 +764,37 @@ function authBodyCopy() {
                             </div>
 
                             <div class="flex flex-col gap-3 sm:flex-row">
-                                <button
+                                <Button
                                     type="submit"
-                                    class="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-sky-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                    class="flex-1"
+                                    variant="primary"
+                                    size="lg"
                                     disabled={authBusy}
                                 >
                                     {#if authBusy}<LoadingSpinner size="1rem" />{/if}
                                     Save password
-                                </button>
-                                <button
+                                </Button>
+                                <Button
                                     type="button"
-                                    class="inline-flex flex-1 items-center justify-center rounded-full border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+                                    class="flex-1"
+                                    variant="outline"
+                                    size="lg"
                                     onclick={() => {
                                         activePassword = ''
                                         enterReadyView()
                                     }}
                                 >
                                     Skip password
-                                </button>
+                                </Button>
                             </div>
                         </form>
                     {:else}
                         <div class="space-y-4">
-                            <button
+                            <Button
                                 type="button"
-                                class="inline-flex w-full items-center justify-center gap-2 rounded-full bg-sky-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                variant="primary"
+                                size="lg"
+                                width="full"
                                 disabled={authBusy}
                                 onclick={() => {
                                     if (!authBusy) void doLogin()
@@ -729,7 +802,7 @@ function authBodyCopy() {
                             >
                                 {#if authBusy}<LoadingSpinner size="1rem" />{/if}
                                 Continue with passkey
-                            </button>
+                            </Button>
 
                             {#if signupDisabled}
                                 <div class="rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-200">
@@ -741,23 +814,27 @@ function authBodyCopy() {
                 </div>
 
                 {#if uiState === 'signin' && !signupDisabled}
-                    <button
+                    <Button
                         type="button"
-                        class="mt-4 inline-flex items-center justify-center rounded-full border border-slate-300 bg-white/70 px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-white dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-950"
+                        class="mt-4"
+                        variant="surface"
+                        size="lg"
                         onclick={openSignup}
                     >
                         Create a new account
-                    </button>
+                    </Button>
                 {:else if uiState !== 'signin'}
-                    <button
+                    <Button
                         type="button"
-                        class="mt-4 inline-flex items-center justify-center rounded-full border border-slate-300 bg-white/70 px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-white dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-950"
+                        class="mt-4"
+                        variant="surface"
+                        size="lg"
                         onclick={() => {
                             void returnToSignIn()
                         }}
                     >
                         Back to sign in
-                    </button>
+                    </Button>
                 {/if}
             </section>
         </div>
