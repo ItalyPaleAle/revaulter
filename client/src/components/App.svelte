@@ -1,10 +1,10 @@
 <script lang="ts">
 import { onMount } from 'svelte'
 
-import Button from '$components/Button.svelte'
-import LoadingSpinner from '$components/LoadingSpinner.svelte'
-import Modal from '$components/Modal.svelte'
-import PendingItem from '$components/PendingItem.svelte'
+import AuthAccessView from '$components/AuthAccessView.svelte'
+import AuthSetupView from '$components/AuthSetupView.svelte'
+import ReadyView from '$components/ReadyView.svelte'
+
 import { encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
 import { ResponseNotOkError } from '$lib/request'
 import { base64UrlToBytes } from '$lib/utils'
@@ -450,32 +450,6 @@ function sortedItems() {
     return Object.values(items).sort((a, b) => a.date - b.date)
 }
 
-function authHeadline() {
-    switch (uiState) {
-        case 'signup':
-            return 'Create a new account'
-        case 'password-login':
-            return 'Unlock with your password'
-        case 'password-setup':
-            return 'Add a password'
-        default:
-            return 'Sign in with your passkey'
-    }
-}
-
-function authBodyCopy() {
-    switch (uiState) {
-        case 'signup':
-            return 'Register a new Revaulter user with a resident passkey. You can add an optional password after registration.'
-        case 'password-login':
-            return 'Your session is active. Enter the password to unlock local cryptographic operations in this browser.'
-        case 'password-setup':
-            return 'Passwords are optional. If you set one now, Revaulter will ask for it after future passkey sign-ins before unlocking local keys.'
-        default:
-            return ''
-    }
-}
-
 function allowedIpsSummary() {
     const count = session?.allowedIps.length ?? 0
     if (count === 0) {
@@ -490,353 +464,69 @@ function allowedIpsSummary() {
 
 <div class="min-h-screen bg-[radial-gradient(circle_at_top,rgba(14,165,233,0.12),transparent_28%),linear-gradient(180deg,#f8fafc_0%,#eef2ff_44%,#ffffff_100%)] dark:bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.15),transparent_24%),linear-gradient(180deg,#020617_0%,#0f172a_48%,#020617_100%)]">
     {#if uiState === 'ready'}
-        <div class="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-6 md:px-6 md:py-8">
-            <header class="rounded-4xl border border-white/70 bg-white/75 p-5 shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/70">
-                <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                    <div class="space-y-3">
-                        <div class="space-y-2">
-                            <h1 class="font-serif text-3xl text-slate-950 dark:text-white md:text-4xl">Pending approvals</h1>
-                            <p class="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-                                Review inbound encrypt and decrypt operations for <span class="font-mono text-slate-900 dark:text-slate-100">{sessionLabel()}</span>.
-                            </p>
-                        </div>
-                    </div>
-
-                    <div class="flex flex-col items-start gap-3 rounded-3xl border border-slate-200/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-200">
-                        <div>
-                            Signed in as <span class="font-mono text-slate-950 dark:text-white">{sessionLabel()}</span>
-                        </div>
-                        <Button variant="outline" onclick={doLogout}>
-                            Sign out
-                        </Button>
-                    </div>
-                </div>
-            </header>
-
-            {#if pageError}
-                <div class="rounded-3xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
-                    {pageError}
-                </div>
-            {/if}
-
-            <section class="rounded-4xl border border-white/70 bg-white/80 p-5 shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/70">
-                <div class="mb-5 flex flex-col gap-3 rounded-3xl border border-slate-200/80 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-900/70 md:flex-row md:items-center md:justify-between">
-                    <div>
-                        <div class="text-sm font-medium text-slate-900 dark:text-white">Assigned requests</div>
-                        <div class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                            Requests stream to this page in real time. Confirm only if the input, key label, and requester look correct.
-                        </div>
-                    </div>
-                    <div class="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
-                        {#if listConnected}Live stream connected{:else}Connecting…{/if}
-                    </div>
-                </div>
-
-                {#if sortedItems().length === 0}
-                    <div class="rounded-3xl border border-dashed border-slate-300/90 bg-white/70 px-6 py-12 text-center dark:border-slate-700 dark:bg-slate-950/40">
-                        {#if listConnected}
-                            <div class="text-base font-medium text-slate-900 dark:text-white">No pending requests</div>
-                            <div class="mt-2 text-sm text-slate-500 dark:text-slate-400">New approvals will appear here as soon as they are assigned to you.</div>
-                        {:else}
-                            <div class="flex items-center justify-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                                <LoadingSpinner size="1rem" />
-                                Waiting for updates…
-                            </div>
-                        {/if}
-                    </div>
-                {:else}
-                    <div class="space-y-3">
-                        {#each sortedItems() as item (item.state)}
-                            {#if prfSecret}
-                                <PendingItem
-                                    {item}
-                                    {prfSecret}
-                                    password={activePassword}
-                                    onRemoved={removeItem}
-                                />
-                            {/if}
-                        {/each}
-                    </div>
-                {/if}
-
-                <div class="mt-5 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-                    <div class="rounded-3xl border border-slate-200/80 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
-                        <div class="text-sm font-medium text-slate-900 dark:text-white">Request key</div>
-                        <div class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center">
-                            <div class="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100">
-                                <div class="overflow-x-auto whitespace-nowrap">{session?.requestKey}</div>
-                            </div>
-                            <Button
-                                variant="outline"
-                                onclick={doRegenerateRequestKey}
-                                disabled={settingsBusy}
-                            >
-                                Regenerate request key
-                            </Button>
-                        </div>
-                    </div>
-
-                    <div class="rounded-3xl border border-slate-200/80 bg-white/70 p-4 dark:border-slate-800 dark:bg-slate-950/40">
-                        <div class="text-sm font-medium text-slate-900 dark:text-white">Allowed IPs</div>
-                        <div class="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center">
-                            <p class="min-w-0 flex-1 text-sm text-slate-600 dark:text-slate-300">
-                                {allowedIpsSummary()}
-                            </p>
-                            <Button
-                                variant="neutral"
-                                onclick={openAllowedIpsModal}
-                                disabled={settingsBusy}
-                            >
-                                View allowed IPs
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-
-                {#if !allowedIpsModalOpen && settingsError}
-                    <div class="mt-5 rounded-3xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
-                        {settingsError}
-                    </div>
-                {:else if !allowedIpsModalOpen && settingsSuccess}
-                    <div class="mt-5 rounded-3xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200">
-                        {settingsSuccess}
-                    </div>
-                {/if}
-            </section>
-
-            {#if allowedIpsModalOpen}
-                <Modal
-                    title="Allowed IPs"
-                    ariaLabel="Close allowed IPs modal"
-                    onClose={closeAllowedIpsModal}
-                >
-                    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                        One IP or CIDR per line. Leave empty to allow requests from any IP.
-                    </p>
-
-                    <textarea
-                        class="mt-4 min-h-40 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 font-mono text-sm text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
-                        bind:value={allowedIpsText}
-                        disabled={settingsBusy}
-                    ></textarea>
-
-                    {#if settingsError}
-                        <div class="mt-4 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
-                            {settingsError}
-                        </div>
-                    {:else if settingsSuccess}
-                        <div class="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200">
-                            {settingsSuccess}
-                        </div>
-                    {/if}
-
-                    <div class="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                        <Button
-                            variant="outline"
-                            type="button"
-                            onclick={closeAllowedIpsModal}
-                        >
-                            Close
-                        </Button>
-                        <Button
-                            variant="neutral"
-                            type="button"
-                            onclick={doUpdateAllowedIps}
-                            disabled={settingsBusy}
-                        >
-                            Save allowed IPs
-                        </Button>
-                    </div>
-                </Modal>
-            {/if}
-        </div>
+        <ReadyView
+            activePassword={activePassword}
+            allowedIpsModalOpen={allowedIpsModalOpen}
+            allowedIpsSummary={allowedIpsSummary()}
+            allowedIpsText={allowedIpsText}
+            listConnected={listConnected}
+            onAllowedIpsTextInput={(value) => {
+                allowedIpsText = value
+            }}
+            onCloseAllowedIpsModal={closeAllowedIpsModal}
+            onLogout={doLogout}
+            onOpenAllowedIpsModal={openAllowedIpsModal}
+            onRegenerateRequestKey={doRegenerateRequestKey}
+            onRemoveItem={removeItem}
+            onUpdateAllowedIps={doUpdateAllowedIps}
+            pageError={pageError}
+            pendingItems={sortedItems()}
+            {prfSecret}
+            requestKey={session?.requestKey ?? ''}
+            sessionLabel={sessionLabel()}
+            settingsBusy={settingsBusy}
+            settingsError={settingsError}
+            settingsSuccess={settingsSuccess}
+        />
+    {:else if uiState === 'signup' || uiState === 'password-setup'}
+        <AuthSetupView
+            authBusy={authBusy}
+            authError={authError}
+            displayName={displayName}
+            onDisplayNameInput={(value) => {
+                displayName = value
+            }}
+            onPasswordInput={(value) => {
+                passwordInput = value
+            }}
+            onRegister={doRegister}
+            onReturnToSignIn={returnToSignIn}
+            onSetPassword={doSetPassword}
+            onSkipPassword={() => {
+                activePassword = ''
+                enterReadyView()
+            }}
+            pageError={pageError}
+            passwordInput={passwordInput}
+            uiState={uiState}
+        />
     {:else}
-        <div class="mx-auto flex min-h-screen w-full max-w-5xl items-center justify-center px-4 py-10 md:px-6">
-            <section class="mx-auto flex w-full max-w-md flex-col items-stretch justify-center">
-                <div class="rounded-4xl border border-white/80 bg-white/85 p-6 shadow-[0_35px_90px_-45px_rgba(15,23,42,0.55)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/80 md:p-8">
-                    <div class="mb-6 space-y-3">
-                        <div class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 lg:hidden">
-                            Revaulter v2
-                        </div>
-                        <div class="space-y-2">
-                            <h2 class="font-serif text-3xl text-slate-950 dark:text-white">{authHeadline()}</h2>
-                            {#if authBodyCopy()}
-                                <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">{authBodyCopy()}</p>
-                            {/if}
-                        </div>
-                    </div>
-
-                    {#if pageError}
-                        <div class="mb-4 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
-                            {pageError}
-                        </div>
-                    {/if}
-
-                    {#if authError}
-                        <div class="mb-4 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
-                            {authError}
-                        </div>
-                    {/if}
-
-                    {#if uiState === 'boot'}
-                        <div class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
-                            <LoadingSpinner size="1rem" />
-                            Initializing…
-                        </div>
-                    {:else if uiState === 'signup'}
-                        <form
-                            class="space-y-4"
-                            onsubmit={(e) => {
-                                e.preventDefault()
-                                if (!authBusy && !signupDisabled) void doRegister()
-                            }}
-                        >
-                            <div class="space-y-2">
-                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-displayname">Display name (optional)</label>
-                                <input
-                                    id="v2-displayname"
-                                    class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
-                                    bind:value={displayName}
-                                />
-                            </div>
-
-                            <Button
-                                type="submit"
-                                variant="neutral"
-                                size="lg"
-                                width="full"
-                                disabled={authBusy || signupDisabled}
-                            >
-                                {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                                Create account with passkey
-                            </Button>
-                        </form>
-                    {:else if uiState === 'password-login' && loginPasswordCanary}
-                        <form
-                            class="space-y-4"
-                            onsubmit={(e) => {
-                                e.preventDefault()
-                                if (!authBusy) void doFinishPasswordLogin()
-                            }}
-                        >
-                            <div class="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900/80 dark:text-slate-300">
-                                Unlocking local keys for <span class="font-mono text-slate-950 dark:text-white">{sessionLabel()}</span>
-                            </div>
-
-                            <div class="space-y-2">
-                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-password-login">Password</label>
-                                <input
-                                    id="v2-password-login"
-                                    type="password"
-                                    class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
-                                    bind:value={passwordInput}
-                                    required
-                                />
-                            </div>
-
-                            <Button
-                                type="submit"
-                                variant="primary"
-                                size="lg"
-                                width="full"
-                                disabled={authBusy}
-                            >
-                                {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                                Unlock local keys
-                            </Button>
-                        </form>
-                    {:else if uiState === 'password-setup'}
-                        <form
-                            class="space-y-4"
-                            onsubmit={(e) => {
-                                e.preventDefault()
-                                if (!authBusy) void doSetPassword()
-                            }}
-                        >
-                            <div class="space-y-2">
-                                <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-password-setup">Password</label>
-                                <input
-                                    id="v2-password-setup"
-                                    type="password"
-                                    class="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
-                                    bind:value={passwordInput}
-                                />
-                            </div>
-
-                            <div class="flex flex-col gap-3 sm:flex-row">
-                                <Button
-                                    type="submit"
-                                    class="flex-1"
-                                    variant="primary"
-                                    size="lg"
-                                    disabled={authBusy}
-                                >
-                                    {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                                    Save password
-                                </Button>
-                                <Button
-                                    type="button"
-                                    class="flex-1"
-                                    variant="outline"
-                                    size="lg"
-                                    onclick={() => {
-                                        activePassword = ''
-                                        enterReadyView()
-                                    }}
-                                >
-                                    Skip password
-                                </Button>
-                            </div>
-                        </form>
-                    {:else}
-                        <div class="space-y-4">
-                            <Button
-                                type="button"
-                                variant="primary"
-                                size="lg"
-                                width="full"
-                                disabled={authBusy}
-                                onclick={() => {
-                                    if (!authBusy) void doLogin()
-                                }}
-                            >
-                                {#if authBusy}<LoadingSpinner size="1rem" />{/if}
-                                Continue with passkey
-                            </Button>
-
-                            {#if signupDisabled}
-                                <div class="rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-200">
-                                    Account creation is disabled on this server.
-                                </div>
-                            {/if}
-                        </div>
-                    {/if}
-                </div>
-
-                {#if uiState === 'signin' && !signupDisabled}
-                    <Button
-                        type="button"
-                        class="mt-4"
-                        variant="surface"
-                        size="lg"
-                        onclick={openSignup}
-                    >
-                        Create a new account
-                    </Button>
-                {:else if uiState !== 'signin'}
-                    <Button
-                        type="button"
-                        class="mt-4"
-                        variant="surface"
-                        size="lg"
-                        onclick={() => {
-                            void returnToSignIn()
-                        }}
-                    >
-                        Back to sign in
-                    </Button>
-                {/if}
-            </section>
-        </div>
+        <AuthAccessView
+            authBusy={authBusy}
+            authError={authError}
+            loginPasswordCanary={loginPasswordCanary}
+            onFinishPasswordLogin={doFinishPasswordLogin}
+            onLogin={doLogin}
+            onOpenSignup={openSignup}
+            onPasswordInput={(value) => {
+                passwordInput = value
+            }}
+            onReturnToSignIn={returnToSignIn}
+            pageError={pageError}
+            passwordInput={passwordInput}
+            sessionLabel={sessionLabel()}
+            signupDisabled={signupDisabled}
+            uiState={uiState}
+        />
     {/if}
 </div>
