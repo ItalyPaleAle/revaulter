@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: "go.mod"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: "client/package.json"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: "client/.nvmrc"
+          cache: "pnpm"
+          cache-dependency-path: "client/pnpm-lock.yaml"
+
+      - name: Install client dependencies
+        working-directory: client
+        run: |
+          pnpm install --frozen-lockfile
+
+      - name: Build client
+        working-directory: client
+        run: |
+          pnpm run build
+
+      - name: Run tests
+        run: |
+          make test
+
+      - name: Install Playwright browsers
+        working-directory: client
+        run: |
+          pnpm run e2e:install
+
+      - name: Run E2E tests
+        working-directory: client
+        run: |
+          pnpm run e2e
