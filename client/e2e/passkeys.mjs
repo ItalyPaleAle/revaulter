@@ -9,9 +9,9 @@ export async function createVirtualPasskey(page) {
             transport: 'internal',
             hasResidentKey: true,
             hasUserVerification: true,
+            hasPrf: true,
             isUserVerified: true,
             automaticPresenceSimulation: true,
-            extensions: ['prf'],
         },
     })
     const authenticatorId = result.authenticatorId

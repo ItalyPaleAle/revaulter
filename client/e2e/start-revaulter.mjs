@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -23,6 +23,10 @@ const clientDir = resolve(currentDir, '..')
 const repoRoot = resolve(clientDir, '..')
 const binaryPath = join(repoRoot, '.bin', 'revaulter-e2e')
 
+if (!existsSync(binaryPath)) {
+    throw new Error(`Missing e2e binary at ${binaryPath}. Run "corepack pnpm run e2e:build-server" first.`)
+}
+
 const tempDir = mkdtempSync(join(tmpdir(), 'revaulter-playwright-'))
 const configPath = join(tempDir, 'config.yaml')
 const databasePath = join(tempDir, 'revaulter-e2e.db')
@@ -35,7 +39,7 @@ writeFileSync(
         `baseUrl: "http://localhost:${port}"`,
         'bind: "127.0.0.1"',
         `port: ${port}`,
-        `databaseDSN: "sqlite://${databasePath}"`,
+        `databaseDSN: "${databasePath}"`,
         `secretKey: "${secretKey}"`,
         'webauthnRpId: "localhost"',
         'webauthnOrigins:',
