@@ -37,7 +37,7 @@ Supported operations:
 
 ## End-to-end tests
 
-From `/home/runner/work/revaulter/revaulter/client`:
+From `client/`:
 
 1. `corepack pnpm install`
 2. `corepack pnpm run e2e:install`
