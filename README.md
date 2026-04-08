@@ -39,8 +39,8 @@ Supported operations:
 
 From `client/`:
 
-1. `corepack pnpm install`
-2. `corepack pnpm run e2e:install`
-3. `corepack pnpm run e2e`
+1. `pnpm install`
+2. `pnpm run e2e:install`
+3. `pnpm run e2e`
 
 The e2e command builds the client, builds a self-contained `revaulter` Go binary into `.bin/revaulter-e2e`, starts it with a temporary SQLite config, and runs a Playwright smoke test using a virtual passkey authenticator with PRF support.

@@ -24,7 +24,7 @@ const repoRoot = resolve(clientDir, '..')
 const binaryPath = join(repoRoot, '.bin', 'revaulter-e2e')
 
 if (!existsSync(binaryPath)) {
-    throw new Error(`Missing e2e binary at ${binaryPath}. Run "corepack pnpm run e2e:build-server" first.`)
+    throw new Error(`Missing e2e binary at ${binaryPath}. Run "pnpm run e2e:build-server" first.`)
 }
 
 const tempDir = mkdtempSync(join(tmpdir(), 'revaulter-playwright-'))
