@@ -109,5 +109,8 @@ dist/
 # Temporary folders
 tmp/
 temp/
+playwright-report/
+test-results/
+blob-report/
 
 # End of https://www.gitignore.io/api/node
