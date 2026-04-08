@@ -34,3 +34,13 @@ Supported operations:
 3. [Using the Revaulter CLI (v2)](./docs/03-interacting-with-revaulter-cli.md)
 4. [Using the REST APIs (v2)](./docs/04-using-rest-api.md)
 5. [Architecture and protocol overview (v2)](./docs/05-revaulter-v2.md)
+
+## End-to-end tests
+
+From `/home/runner/work/revaulter/revaulter/client`:
+
+1. `corepack pnpm install`
+2. `corepack pnpm run e2e:install`
+3. `corepack pnpm run e2e`
+
+The e2e command builds the client, builds a self-contained `revaulter` Go binary into `.bin/revaulter-e2e`, starts it with a temporary SQLite config, and runs a Playwright smoke test using a virtual passkey authenticator with PRF support.
