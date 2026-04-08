@@ -22,15 +22,16 @@ type AuthStore struct {
 }
 
 type User struct {
-	ID               string
-	DisplayName      string
-	Status           string
-	WebAuthnUserID   string
-	PasswordCanary   string
-	RequestKey       string
-	RequestEncPubkey string
-	AllowedIPs       []string
-	Ready            bool
+	ID                    string
+	DisplayName           string
+	Status                string
+	WebAuthnUserID        string
+	PasswordCanary        string
+	RequestKey            string
+	RequestEncEcdhPubkey  string
+	RequestEncMlkemPubkey string
+	AllowedIPs            []string
+	Ready                 bool
 }
 
 type AuthSession struct {
@@ -94,7 +95,7 @@ func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
-const userSelectCols = `id, display_name, status, webauthn_user_id, password_canary, request_key, request_enc_pubkey, allowed_ips, ready`
+const userSelectCols = `id, display_name, status, webauthn_user_id, password_canary, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, allowed_ips, ready`
 
 func (s *AuthStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
 	return s.getUser(ctx, `SELECT `+userSelectCols+` FROM v2_users WHERE id = $1`, userID)
@@ -114,11 +115,10 @@ func (s *AuthStore) getUser(ctx context.Context, query string, arg string) (*Use
 		allowedIPsCSV string
 	)
 	err := s.db.db.QueryRow(ctx, query, arg).
-		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.PasswordCanary, &user.RequestKey, &user.RequestEncPubkey, &allowedIPsCSV, &user.Ready)
+		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.PasswordCanary, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &allowedIPsCSV, &user.Ready)
 	if s.db.db.IsNoRowsError(err) {
 		return nil, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return nil, err
 	}
 	user.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
@@ -396,14 +396,13 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 
 var ErrAlreadyFinalized = errors.New("account already finalized")
 
-// FinalizeSignup marks the account as ready, stores the request encryption
-// public key, and optionally sets the password canary. It can only be called
-// once (when ready = false).
-func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, canary, requestEncPubkey string) error {
+// FinalizeSignup marks the account as ready, stores the request encryption public keys (ECDH and ML-KEM), and optionally sets the password canary
+// It can only update records with ready = false
+func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, canary, requestEncEcdhPubkey, requestEncMlkemPubkey string) error {
 	now := time.Now().UTC().Unix()
 	affected, err := s.db.db.Exec(ctx,
-		`UPDATE v2_users SET password_canary = $1, request_enc_pubkey = $2, ready = true, updated_at = $3 WHERE id = $4 AND ready = false`,
-		canary, requestEncPubkey, now, userID,
+		`UPDATE v2_users SET password_canary = $1, request_enc_ecdh_pubkey = $2, request_enc_mlkem_pubkey = $3, ready = true, updated_at = $4 WHERE id = $5 AND ready = false`,
+		canary, requestEncEcdhPubkey, requestEncMlkemPubkey, now, userID,
 	)
 	if err != nil {
 		return err
@@ -412,6 +411,7 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, canary, requestE
 		return nil
 	}
 
+	// If no rows affected, check if it's because the user was already finalized or just not found
 	user, err := s.GetUserByID(ctx, userID)
 	if err != nil {
 		return err

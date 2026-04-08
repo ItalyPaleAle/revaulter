@@ -5,7 +5,7 @@ import AuthAccessView from '$components/AuthAccessView.svelte'
 import AuthSetupView from '$components/AuthSetupView.svelte'
 import ReadyView from '$components/ReadyView.svelte'
 
-import { deriveRequestEncKeyPair, encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
+import { deriveRequestEncKeyPair, deriveRequestEncMlkemKeyPair, encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
 import { ResponseNotOkError } from '$lib/request'
 import { base64UrlToBytes } from '$lib/utils'
 import {
@@ -310,13 +310,18 @@ async function doSetPassword() {
             prfSecret,
             password,
         })
+        const { encapsulationKeyB64 } = await deriveRequestEncMlkemKeyPair({
+            userId: session.userId,
+            prfSecret,
+            password,
+        })
 
         let canary: string | undefined
         if (trimmedPassword) {
             canary = await encryptPasswordCanary(trimmedPassword)
         }
 
-        await v2FinalizeSignup(publicKeyJwk, canary)
+        await v2FinalizeSignup(publicKeyJwk, encapsulationKeyB64, canary)
         activePassword = trimmedPassword
         loginPasswordCanary = null
         enterReadyView()
@@ -521,7 +526,11 @@ function allowedIpsSummary() {
                         userId: session.userId,
                         prfSecret,
                     })
-                    await v2FinalizeSignup(publicKeyJwk)
+                    const { encapsulationKeyB64 } = await deriveRequestEncMlkemKeyPair({
+                        userId: session.userId,
+                        prfSecret,
+                    })
+                    await v2FinalizeSignup(publicKeyJwk, encapsulationKeyB64)
                     activePassword = ''
                     enterReadyView()
                 } catch (err) {

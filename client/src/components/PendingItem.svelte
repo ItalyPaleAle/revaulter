@@ -13,6 +13,7 @@ import {
     performAesGcmOperation,
     splitAesGcmCiphertextAndTag,
 } from '$lib/crypto'
+
 import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import { v2Cancel, v2Confirm, v2GetRequest } from '$lib/v2-api'
 import type { V2PendingRequestItem, V2RequestDetail } from '$lib/v2-types'
@@ -97,13 +98,14 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
         throw new Error(`Unsupported algorithm: ${req.algorithm}`)
     }
 
-    // Decrypt the E2EE request payload
+    // Decrypt the E2EE request payload using hybrid ECDH + ML-KEM
     const requestEncAAD = buildRequestEncAAD(req.algorithm, req.keyLabel, req.operation)
     const input = await decryptRequestPayload({
         userId: req.userId,
         prfSecret,
         password: password.trim() || undefined,
         cliEphemeralPublicKey: req.encryptedRequest.cliEphemeralPublicKey,
+        mlkemCiphertext: req.encryptedRequest.mlkemCiphertext,
         nonce: req.encryptedRequest.nonce,
         ciphertext: req.encryptedRequest.ciphertext,
         aad: requestEncAAD,
@@ -178,7 +180,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
     }
 
     const transportAAD = buildTransportAAD(req.state, req.operation, req.algorithm)
-    return encryptTransportEnvelope(req.state, input.clientTransportKey, resultPlain, transportAAD)
+    return encryptTransportEnvelope(req.state, input.clientTransportEcdhKey, input.clientTransportMlkemKey, resultPlain, transportAAD)
 }
 
 function operationTitle(op: V2PendingRequestItem['operation']) {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
+	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/v2db"
 )
@@ -88,8 +89,9 @@ type v2AuthLoginFinishResponse struct {
 }
 
 type v2AuthFinalizeSignupRequest struct {
-	RequestEncPubkey json.RawMessage `json:"requestEncPubkey"`
-	Canary           string          `json:"canary,omitempty"`
+	RequestEncEcdhPubkey  json.RawMessage `json:"requestEncEcdhPubkey"`
+	RequestEncMlkemPubkey string          `json:"requestEncMlkemPubkey"`
+	Canary                string          `json:"canary,omitempty"`
 }
 
 type v2AuthAllowedIPsRequest struct {
@@ -318,21 +320,32 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
-	if len(req.RequestEncPubkey) == 0 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "requestEncPubkey is required"))
+	if len(req.RequestEncEcdhPubkey) == 0 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "requestEncEcdhPubkey is required"))
+		return
+	}
+	if req.RequestEncMlkemPubkey == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "requestEncMlkemPubkey is required"))
 		return
 	}
 
-	// Validate the public key is a valid P-256 JWK
-	var pubkey protocolv2.ECP256PublicJWK
-	err = json.Unmarshal(req.RequestEncPubkey, &pubkey)
+	// Validate the ECDH public key is a valid P-256 JWK
+	var ecdhPubkey protocolv2.ECP256PublicJWK
+	err = json.Unmarshal(req.RequestEncEcdhPubkey, &ecdhPubkey)
 	if err != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid requestEncPubkey"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid requestEncEcdhPubkey"))
 		return
 	}
-	err = pubkey.ValidatePublic()
+	err = ecdhPubkey.ValidatePublic()
 	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid requestEncPubkey: %v", err))
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid requestEncEcdhPubkey: %v", err))
+		return
+	}
+
+	// Validate the ML-KEM public key is valid base64
+	_, err = utils.DecodeBase64String(req.RequestEncMlkemPubkey)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid requestEncMlkemPubkey format"))
 		return
 	}
 
@@ -341,7 +354,7 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
-	err = s.authStore.FinalizeSignup(c.Request.Context(), userID, req.Canary, string(req.RequestEncPubkey))
+	err = s.authStore.FinalizeSignup(c.Request.Context(), userID, req.Canary, string(req.RequestEncEcdhPubkey), req.RequestEncMlkemPubkey)
 	if errors.Is(err, v2db.ErrAlreadyFinalized) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Account is already finalized"))
 		return
@@ -579,7 +592,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 		if hErr != nil {
 			return nil, hErr
 		}
-		if user == nil || user.Status != "active" || !user.Ready {
+		if user == nil || user.Status != "active" {
 			return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 		}
 

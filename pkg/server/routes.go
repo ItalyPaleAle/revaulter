@@ -99,6 +99,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 
 		encEnvelope := protocolv2.RequestEncEnvelope{
 			CliEphemeralPublicKey: body.CliEphemeralPublicKey,
+			MlkemCiphertext:       body.MlkemCiphertext,
 			Nonce:                 body.EncryptedPayloadNonce,
 			Ciphertext:            body.EncryptedPayload,
 		}
@@ -191,12 +192,15 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request key not found or user setup is not complete"))
 		return
 	}
-	if user.RequestEncPubkey == "" {
+	if user.RequestEncEcdhPubkey == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusPreconditionFailed, "User has not configured request encryption key"))
 		return
 	}
 
-	c.Data(http.StatusOK, "application/json", []byte(user.RequestEncPubkey))
+	c.JSON(http.StatusOK, gin.H{
+		"ecdhP256": json.RawMessage(user.RequestEncEcdhPubkey),
+		"mlkem768": user.RequestEncMlkemPubkey,
+	})
 }
 
 func (s *Server) RouteV2RequestResult(c *gin.Context) {
@@ -475,12 +479,19 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 	}
 
 	// Validate E2EE envelope fields
-	if body.RequestEncAlg != "ecdh-p256+a256gcm" {
+	if body.RequestEncAlg != "ecdh-p256+mlkem768+a256gcm" {
 		return NewResponseError(http.StatusBadRequest, "unsupported requestEncAlg")
 	}
 	err := body.CliEphemeralPublicKey.ValidatePublic()
 	if err != nil {
 		return NewResponseErrorf(http.StatusBadRequest, "invalid cliEphemeralPublicKey: %v", err)
+	}
+	if body.MlkemCiphertext == "" {
+		return NewResponseError(http.StatusBadRequest, "missing mlkemCiphertext")
+	}
+	_, err = utils.DecodeBase64String(body.MlkemCiphertext)
+	if err != nil {
+		return NewResponseError(http.StatusBadRequest, "invalid mlkemCiphertext format")
 	}
 	if body.EncryptedPayloadNonce == "" {
 		return NewResponseError(http.StatusBadRequest, "missing encryptedPayloadNonce")
@@ -501,15 +512,23 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 }
 
 func validateV2ResponseEnvelope(env protocolv2.ResponseEnvelope) error {
-	// Currently only supported transport algorithm is ECDH+P-256 with AES-256-GCM
-	if env.TransportAlg != "ecdh-p256+a256gcm" {
+	if env.TransportAlg != "ecdh-p256+mlkem768+a256gcm" {
 		return NewResponseError(http.StatusBadRequest, "unsupported transportAlg")
 	}
 
-	// Validate the browser's ephemeral public key
+	// Validate the browser's ephemeral ECDH public key
 	err := env.BrowserEphemeralPublicKey.ValidatePublic()
 	if err != nil {
 		return err
+	}
+
+	// Validate ML-KEM ciphertext
+	if env.MlkemCiphertext == "" {
+		return NewResponseError(http.StatusBadRequest, "missing mlkemCiphertext")
+	}
+	_, err = utils.DecodeBase64String(env.MlkemCiphertext)
+	if err != nil {
+		return NewResponseError(http.StatusBadRequest, "invalid mlkemCiphertext format")
 	}
 
 	// Validate required fields

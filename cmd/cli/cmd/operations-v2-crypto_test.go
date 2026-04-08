@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
+	"crypto/mlkem"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -15,14 +16,26 @@ import (
 )
 
 func TestDecryptV2ResponseEnvelope(t *testing.T) {
-	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	browserPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	// Generate CLI transport key pair (ECDH + ML-KEM)
+	kp, err := newV2TransportKeyPair()
 	require.NoError(t, err)
 
-	shared, err := browserPriv.ECDH(clientPriv.PublicKey())
+	// Simulate browser: ECDH key agreement
+	browserEcdhPriv, err := ecdh.P256().GenerateKey(rand.Reader)
 	require.NoError(t, err)
-	key, err := deriveV2TransportKey(shared, "state-1")
+	ecdhShared, err := browserEcdhPriv.ECDH(kp.EcdhPrivate.PublicKey())
+	require.NoError(t, err)
+
+	// Simulate browser: ML-KEM encapsulation
+	mlkemPubBytes, err := base64.RawURLEncoding.DecodeString(kp.MlkemPublic)
+	require.NoError(t, err)
+	mlkemPub, err := mlkem.NewEncapsulationKey768(mlkemPubBytes)
+	require.NoError(t, err)
+	mlkemShared, mlkemCT := mlkemPub.Encapsulate()
+
+	// Combine shared secrets
+	combined := append(ecdhShared, mlkemShared...)
+	key, err := deriveV2TransportKey(combined, "state-1")
 	require.NoError(t, err)
 
 	block, err := aes.NewCipher(key)
@@ -37,12 +50,13 @@ func TestDecryptV2ResponseEnvelope(t *testing.T) {
 	plain := []byte(`{"ok":true}`)
 	ct := aead.Seal(nil, nonce, plain, aad)
 
-	pubJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
+	browserEcdhPubJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserEcdhPriv.PublicKey())
 	require.NoError(t, err)
 
-	out, err := decryptV2ResponseEnvelope("state-1", clientPriv, &protocolv2.ResponseEnvelope{
-		TransportAlg:              "ecdh-p256+a256gcm",
-		BrowserEphemeralPublicKey: pubJWK,
+	out, err := decryptV2ResponseEnvelope("state-1", kp, &protocolv2.ResponseEnvelope{
+		TransportAlg:              "ecdh-p256+mlkem768+a256gcm",
+		BrowserEphemeralPublicKey: browserEcdhPubJWK,
+		MlkemCiphertext:           base64.RawURLEncoding.EncodeToString(mlkemCT),
 		Nonce:                     base64.RawURLEncoding.EncodeToString(nonce),
 		Ciphertext:                base64.RawURLEncoding.EncodeToString(ct),
 	}, aad)

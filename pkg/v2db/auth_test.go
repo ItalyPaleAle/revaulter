@@ -103,8 +103,8 @@ func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "canary-1", `{"kty":"EC","crv":"P-256","x":"test","y":"test"}`))
-	require.ErrorIs(t, store.FinalizeSignup(ctx, "user-1", "canary-2", `{"kty":"EC"}`), ErrAlreadyFinalized)
+	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "canary-1", `{"kty":"EC","crv":"P-256","x":"test","y":"test"}`, "dGVzdC1tbGtlbS1wdWJrZXk"))
+	require.ErrorIs(t, store.FinalizeSignup(ctx, "user-1", "canary-2", `{"kty":"EC"}`, "dGVzdA"), ErrAlreadyFinalized)
 
 	allowed, err := store.UpdateAllowedIPs(ctx, "user-1", []string{"127.0.0.1", " 10.0.0.0/8 ", "::1", "127.0.0.1"})
 	require.NoError(t, err)

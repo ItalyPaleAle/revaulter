@@ -54,7 +54,7 @@ func (f *v2OperationFlagsBase) GetConnectionOptions() (bool, bool) { return f.In
 type v2OperationFlags interface {
 	BindToCommand(cmd *cobra.Command)
 	Validate() error
-	InnerPayload(clientTransportKey protocolv2.ECP256PublicJWK) protocolv2.RequestPayloadInner
+	InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner
 	GetServer() string
 	GetRequestKey() string
 	GetKeyLabel() string
@@ -79,12 +79,13 @@ func (f *v2OperationFlagsEncrypt) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data (base64-encoded)")
 }
 
-func (f *v2OperationFlagsEncrypt) InnerPayload(clientTransportKey protocolv2.ECP256PublicJWK) protocolv2.RequestPayloadInner {
+func (f *v2OperationFlagsEncrypt) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
-		Value:              f.Value.String(),
-		Nonce:              f.Nonce.String(),
-		AdditionalData:     f.AdditionalData.String(),
-		ClientTransportKey: clientTransportKey,
+		Value:                   f.Value.String(),
+		Nonce:                   f.Nonce.String(),
+		AdditionalData:          f.AdditionalData.String(),
+		ClientTransportEcdhKey:  clientTransportEcdhKey,
+		ClientTransportMlkemKey: clientTransportMlkemKey,
 	}
 }
 
@@ -105,12 +106,13 @@ func (f *v2OperationFlagsDecrypt) BindToCommand(cmd *cobra.Command) {
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data (base64-encoded)")
 }
 
-func (f *v2OperationFlagsDecrypt) InnerPayload(clientTransportKey protocolv2.ECP256PublicJWK) protocolv2.RequestPayloadInner {
+func (f *v2OperationFlagsDecrypt) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
-		Value:              f.Value.String(),
-		Tag:                f.Tag.String(),
-		Nonce:              f.Nonce.String(),
-		AdditionalData:     f.AdditionalData.String(),
-		ClientTransportKey: clientTransportKey,
+		Value:                   f.Value.String(),
+		Tag:                     f.Tag.String(),
+		Nonce:                   f.Nonce.String(),
+		AdditionalData:          f.AdditionalData.String(),
+		ClientTransportEcdhKey:  clientTransportEcdhKey,
+		ClientTransportMlkemKey: clientTransportMlkemKey,
 	}
 }

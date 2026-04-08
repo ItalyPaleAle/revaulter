@@ -6,8 +6,9 @@ export type EcP256PublicJwk = {
 }
 
 export type V2ResponseEnvelope = {
-    transportAlg: 'ecdh-p256+a256gcm'
+    transportAlg: 'ecdh-p256+mlkem768+a256gcm'
     browserEphemeralPublicKey: EcP256PublicJwk
+    mlkemCiphertext: string
     nonce: string
     ciphertext: string
     resultType?: string
@@ -20,6 +21,7 @@ export type V2RequestCreateBody = {
     note?: string
     requestEncAlg: string
     cliEphemeralPublicKey: EcP256PublicJwk
+    mlkemCiphertext: string
     encryptedPayloadNonce: string
     encryptedPayload: string
 }
@@ -29,11 +31,13 @@ export type V2RequestPayloadInner = {
     nonce?: string
     tag?: string
     additionalData?: string
-    clientTransportKey: EcP256PublicJwk
+    clientTransportEcdhKey: EcP256PublicJwk
+    clientTransportMlkemKey: string
 }
 
 export type V2RequestEncEnvelope = {
     cliEphemeralPublicKey: EcP256PublicJwk
+    mlkemCiphertext: string
     nonce: string
     ciphertext: string
 }

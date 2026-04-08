@@ -12,6 +12,7 @@ type v2OperationRequest struct {
 	// E2EE envelope
 	RequestEncAlg         string                    `json:"requestEncAlg"`
 	CliEphemeralPublicKey protocolv2.ECP256PublicJWK `json:"cliEphemeralPublicKey"`
+	MlkemCiphertext       string                    `json:"mlkemCiphertext"`
 	EncryptedPayloadNonce string                    `json:"encryptedPayloadNonce"`
 	EncryptedPayload      string                    `json:"encryptedPayload"`
 }

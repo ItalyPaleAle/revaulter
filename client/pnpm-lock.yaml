@@ -20,6 +20,9 @@ importers:
       js-cookie:
         specifier: 3.0.5
         version: 3.0.5
+      mlkem-wasm:
+        specifier: 0.0.7
+        version: 0.0.7
       tailwindcss:
         specifier: 4.2.2
         version: 4.2.2
@@ -1867,6 +1870,9 @@ packages:
   minipass@7.1.2:
     resolution: {integrity: sha512-qOOzS1cBTWYF4BH8fVePDBOO9iptMnGUEZwNc/cMWnTV2nVLZ7VoNWEPHkYczZA0pdoA7dl6e7FL659nX9S2aw==}
     engines: {node: '>=16 || 14 >=14.17'}
+
+  mlkem-wasm@0.0.7:
+    resolution: {integrity: sha512-q0kxtIlfUUrYGZpW8ebtLmEvZMenqMvHwsPfJGFSHDmprbiF6zI9VyAQc/MecHQXAqsMRYOdrzGVS0YQe4LW1w==}
 
   mri@1.2.0:
     resolution: {integrity: sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==}
@@ -4441,6 +4447,8 @@ snapshots:
       brace-expansion: 2.0.2
 
   minipass@7.1.2: {}
+
+  mlkem-wasm@0.0.7: {}
 
   mri@1.2.0: {}
 

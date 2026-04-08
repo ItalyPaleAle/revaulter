@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdh"
+	"crypto/mlkem"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,13 +62,13 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	state, err := o.createRequest(cmd.Context(), httpClient, kp.Public)
+	state, err := o.createRequest(cmd.Context(), httpClient, kp)
 	if err != nil {
 		return fmt.Errorf("failed to start operation: %w", err)
 	}
 
 	aad := buildTransportAAD(state, o.Operation, o.flags.GetAlgorithm())
-	res, err := o.getResult(cmd.Context(), httpClient, state, kp.Private, aad)
+	res, err := o.getResult(cmd.Context(), httpClient, state, kp, aad)
 	if err != nil {
 		return fmt.Errorf("failed to get response: %w", err)
 	}
@@ -76,21 +78,21 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 	return enc.Encode(res)
 }
 
-func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Client, transportPub protocolv2.ECP256PublicJWK) (string, error) {
-	// Fetch the user's static ECDH public key
-	pubkey, err := o.fetchUserPubkey(ctx, httpClient)
+func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Client, kp *v2TransportKeyPair) (string, error) {
+	// Fetch the user's static public keys (ECDH + ML-KEM)
+	ecdhPub, mlkemPub, err := o.fetchUserPubkeys(ctx, httpClient)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch user public key: %w", err)
+		return "", fmt.Errorf("failed to fetch user public keys: %w", err)
 	}
 
 	// Build the inner payload (sensitive fields)
-	innerPayload := o.flags.InnerPayload(transportPub)
+	innerPayload := o.flags.InnerPayload(kp.EcdhPublic, kp.MlkemPublic)
 
 	// Build AAD from plaintext metadata
 	aad := buildRequestEncAAD(o.flags.GetAlgorithm(), o.flags.GetKeyLabel(), o.Operation)
 
-	// Encrypt the inner payload
-	cliEphPub, nonce, ciphertext, err := encryptV2RequestPayload(pubkey, innerPayload, aad)
+	// Encrypt the inner payload with hybrid ECDH + ML-KEM
+	cliEphPub, mlkemCiphertext, nonce, ciphertext, err := encryptV2RequestPayload(ecdhPub, mlkemPub, innerPayload, aad)
 	if err != nil {
 		return "", fmt.Errorf("failed to encrypt request payload: %w", err)
 	}
@@ -101,8 +103,9 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 		Algorithm:             o.flags.GetAlgorithm(),
 		Timeout:               o.flags.GetTimeout(),
 		Note:                  o.flags.GetNote(),
-		RequestEncAlg:         "ecdh-p256+a256gcm",
+		RequestEncAlg:         "ecdh-p256+mlkem768+a256gcm",
 		CliEphemeralPublicKey: cliEphPub,
+		MlkemCiphertext:       mlkemCiphertext,
 		EncryptedPayloadNonce: nonce,
 		EncryptedPayload:      ciphertext,
 	}
@@ -128,25 +131,41 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 	return res.State, nil
 }
 
-func (o *v2OperationCmd) fetchUserPubkey(ctx context.Context, httpClient *http.Client) (*ecdh.PublicKey, error) {
+func (o *v2OperationCmd) fetchUserPubkeys(ctx context.Context, httpClient *http.Client) (*ecdh.PublicKey, *mlkem.EncapsulationKey768, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.flags.GetServer()+"/v2/request/"+o.flags.GetRequestKey()+"/pubkey", nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var pubkeyJWK protocolv2.ECP256PublicJWK
-	err = doJSONRequest(httpClient, req, &pubkeyJWK)
+	var resp struct {
+		EcdhP256 protocolv2.ECP256PublicJWK `json:"ecdhP256"`
+		Mlkem768 string                     `json:"mlkem768"`
+	}
+	err = doJSONRequest(httpClient, req, &resp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return pubkeyJWK.ToECDHPublicKey()
+	ecdhPub, err := resp.EcdhP256.ToECDHPublicKey()
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid ECDH public key: %w", err)
+	}
+
+	mlkemBytes, err := base64.RawURLEncoding.DecodeString(resp.Mlkem768)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid ML-KEM public key encoding: %w", err)
+	}
+	mlkemPub, err := mlkem.NewEncapsulationKey768(mlkemBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid ML-KEM public key: %w", err)
+	}
+
+	return ecdhPub, mlkemPub, nil
 }
 
-func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client, state string, priv any, aad []byte) (json.RawMessage, error) {
-	clientPriv, ok := priv.(*ecdh.PrivateKey)
-	if !ok || clientPriv == nil {
-		return nil, errors.New("invalid client private key")
+func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client, state string, kp *v2TransportKeyPair, aad []byte) (json.RawMessage, error) {
+	if kp == nil {
+		return nil, errors.New("missing transport key pair")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.flags.GetServer()+"/v2/request/result/"+state, nil)
 	if err != nil {
@@ -169,7 +188,7 @@ func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client,
 	if !res.Done || res.ResponseEnvelope == nil {
 		return nil, errors.New("missing encrypted response envelope")
 	}
-	plain, err := decryptV2ResponseEnvelope(state, clientPriv, res.ResponseEnvelope, aad)
+	plain, err := decryptV2ResponseEnvelope(state, kp, res.ResponseEnvelope, aad)
 	if err != nil {
 		return nil, err
 	}

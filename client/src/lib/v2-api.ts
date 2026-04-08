@@ -45,9 +45,9 @@ export async function v2LoginFinish(args: { challengeId: string; credential: unk
     return res.data
 }
 
-/** Finalizes the signup by storing the request encryption public key and optional password canary */
-export async function v2FinalizeSignup(requestEncPubkey: EcP256PublicJwk, canary?: string) {
-    const body: Record<string, unknown> = { requestEncPubkey }
+/** Finalizes the signup by storing the request encryption public keys (ECDH + ML-KEM) and optional password canary */
+export async function v2FinalizeSignup(requestEncEcdhPubkey: EcP256PublicJwk, requestEncMlkemPubkey: string, canary?: string) {
+    const body: Record<string, unknown> = { requestEncEcdhPubkey, requestEncMlkemPubkey }
     if (canary) {
         body.canary = canary
     }

@@ -25,6 +25,10 @@ if err != nil {
 }
 ```
 
+## Package Management
+
+The client project uses **pnpm** as the package manager. Always use `pnpm` (not `npm`) to install, add, or remove packages in the `client/` directory.
+
 ## JavaScript, TypeScript, JSX, and TSX
 
 Always use braces `{}` around statements in control flow blocks (`if`, `else`, `while`, `for`, etc.). Single-line statements without braces are not allowed.

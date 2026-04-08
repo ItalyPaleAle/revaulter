@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/hkdf"
+	"crypto/mlkem"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -37,30 +38,42 @@ func (f *testV2Flags) GetAlgorithm() string                 { return f.alg }
 func (f *testV2Flags) GetTimeout() string                   { return "" }
 func (f *testV2Flags) GetNote() string                      { return "" }
 func (f *testV2Flags) GetConnectionOptions() (bool, bool)   { return false, false }
-func (f *testV2Flags) InnerPayload(clientTransportKey protocolv2.ECP256PublicJWK) protocolv2.RequestPayloadInner {
+func (f *testV2Flags) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
-		Value:              base64.RawURLEncoding.EncodeToString([]byte("hello")),
-		ClientTransportKey: clientTransportKey,
+		Value:                   base64.RawURLEncoding.EncodeToString([]byte("hello")),
+		ClientTransportEcdhKey:  clientTransportEcdhKey,
+		ClientTransportMlkemKey: clientTransportMlkemKey,
 	}
 }
 
 func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 	var createSeen atomic.Bool
-	var capturedClientTransportKey protocolv2.ECP256PublicJWK
+	var capturedClientTransportEcdhKey protocolv2.ECP256PublicJWK
+	var capturedClientTransportMlkemKey string
 	state := "state-test-1"
 	plainResp := []byte(`{"ok":true,"value":"hello"}`)
 
 	// Generate a static ECDH key pair to simulate the browser user's key
-	userStaticPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	userStaticEcdhPriv, err := ecdh.P256().GenerateKey(rand.Reader)
 	require.NoError(t, err)
-	userStaticPubJWK, err := protocolv2.ECP256PublicJWKFromECDH(userStaticPriv.PublicKey())
+	userStaticEcdhPubJWK, err := protocolv2.ECP256PublicJWKFromECDH(userStaticEcdhPriv.PublicKey())
 	require.NoError(t, err)
+
+	// Generate a static ML-KEM key pair to simulate the browser user's key
+	userStaticMlkemDK, err := mlkem.GenerateKey768()
+	require.NoError(t, err)
+	userStaticMlkemPubB64 := base64.RawURLEncoding.EncodeToString(userStaticMlkemDK.EncapsulationKey().Bytes())
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/request-key-123/pubkey"):
 			w.Header().Set("Content-Type", "application/json")
-			require.NoError(t, json.NewEncoder(w).Encode(userStaticPubJWK))
+			ecdhJSON, _ := json.Marshal(userStaticEcdhPubJWK)
+			resp := map[string]any{
+				"ecdhP256": json.RawMessage(ecdhJSON),
+				"mlkem768": userStaticMlkemPubB64,
+			}
+			require.NoError(t, json.NewEncoder(w).Encode(resp))
 
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/request-key-123/encrypt"):
 			defer r.Body.Close()
@@ -70,15 +83,23 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 			require.Equal(t, "disk-key", req.KeyLabel)
 			require.Equal(t, "aes-gcm-256", req.Algorithm)
-			require.Equal(t, "ecdh-p256+a256gcm", req.RequestEncAlg)
+			require.Equal(t, "ecdh-p256+mlkem768+a256gcm", req.RequestEncAlg)
 			require.NoError(t, req.CliEphemeralPublicKey.ValidatePublic())
+			require.NotEmpty(t, req.MlkemCiphertext)
 
-			// Decrypt the E2EE payload to extract the clientTransportKey
+			// Decrypt the E2EE payload using hybrid ECDH + ML-KEM
 			cliEphPub, err := req.CliEphemeralPublicKey.ToECDHPublicKey()
 			require.NoError(t, err)
-			shared, err := userStaticPriv.ECDH(cliEphPub)
+			ecdhShared, err := userStaticEcdhPriv.ECDH(cliEphPub)
 			require.NoError(t, err)
-			aesKey, err := hkdf.Key(sha256.New, shared, nil, "revaulter/v2/request-enc", 32)
+
+			mlkemCT, err := base64.RawURLEncoding.DecodeString(req.MlkemCiphertext)
+			require.NoError(t, err)
+			mlkemShared, err := userStaticMlkemDK.Decapsulate(mlkemCT)
+			require.NoError(t, err)
+
+			combined := append(ecdhShared, mlkemShared...)
+			aesKey, err := hkdf.Key(sha256.New, combined, nil, "revaulter/v2/request-enc", 32)
 			require.NoError(t, err)
 			block, err := aes.NewCipher(aesKey)
 			require.NoError(t, err)
@@ -94,8 +115,10 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 
 			var inner protocolv2.RequestPayloadInner
 			require.NoError(t, json.Unmarshal(plaintext, &inner))
-			require.NoError(t, inner.ClientTransportKey.ValidatePublic())
-			capturedClientTransportKey = inner.ClientTransportKey
+			require.NoError(t, inner.ClientTransportEcdhKey.ValidatePublic())
+			require.NotEmpty(t, inner.ClientTransportMlkemKey)
+			capturedClientTransportEcdhKey = inner.ClientTransportEcdhKey
+			capturedClientTransportMlkemKey = inner.ClientTransportMlkemKey
 
 			w.Header().Set("Content-Type", "application/json")
 			require.NoError(t, json.NewEncoder(w).Encode(protocolv2.RequestResultResponse{
@@ -105,13 +128,25 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/result/"+state):
 			require.True(t, createSeen.Load())
-			clientPub, err := capturedClientTransportKey.ToECDHPublicKey()
+
+			// ECDH key agreement for transport
+			clientEcdhPub, err := capturedClientTransportEcdhKey.ToECDHPublicKey()
 			require.NoError(t, err)
-			browserPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+			browserEcdhPriv, err := ecdh.P256().GenerateKey(rand.Reader)
 			require.NoError(t, err)
-			shared, err := browserPriv.ECDH(clientPub)
+			ecdhShared, err := browserEcdhPriv.ECDH(clientEcdhPub)
 			require.NoError(t, err)
-			key, err := deriveV2TransportKey(shared, state)
+
+			// ML-KEM encapsulation for transport
+			clientMlkemPubBytes, err := base64.RawURLEncoding.DecodeString(capturedClientTransportMlkemKey)
+			require.NoError(t, err)
+			clientMlkemPub, err := mlkem.NewEncapsulationKey768(clientMlkemPubBytes)
+			require.NoError(t, err)
+			mlkemShared, mlkemCT := clientMlkemPub.Encapsulate()
+
+			// Combine secrets
+			combined := append(ecdhShared, mlkemShared...)
+			key, err := deriveV2TransportKey(combined, state)
 			require.NoError(t, err)
 
 			block, err := aes.NewCipher(key)
@@ -123,7 +158,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 			require.NoError(t, err)
 			aadBytes := buildTransportAAD(state, "encrypt", "aes-gcm-256")
 			ct := aead.Seal(nil, nonce, plainResp, aadBytes)
-			browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
+			browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserEcdhPriv.PublicKey())
 			require.NoError(t, err)
 
 			w.Header().Set("Content-Type", "application/json")
@@ -131,8 +166,9 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 				State: state,
 				Done:  true,
 				ResponseEnvelope: &protocolv2.ResponseEnvelope{
-					TransportAlg:              "ecdh-p256+a256gcm",
+					TransportAlg:              "ecdh-p256+mlkem768+a256gcm",
 					BrowserEphemeralPublicKey: browserJWK,
+					MlkemCiphertext:           base64.RawURLEncoding.EncodeToString(mlkemCT),
 					Nonce:                     base64.RawURLEncoding.EncodeToString(nonce),
 					Ciphertext:                base64.RawURLEncoding.EncodeToString(ct),
 					ResultType:                "bytes",
@@ -154,10 +190,10 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 	}
 	kp, err := newV2TransportKeyPair()
 	require.NoError(t, err)
-	gotState, err := impl.createRequest(context.Background(), srv.Client(), kp.Public)
+	gotState, err := impl.createRequest(context.Background(), srv.Client(), kp)
 	require.NoError(t, err)
 	require.Equal(t, state, gotState)
-	got, err := impl.getResult(context.Background(), srv.Client(), gotState, kp.Private, buildTransportAAD(gotState, "encrypt", "aes-gcm-256"))
+	got, err := impl.getResult(context.Background(), srv.Client(), gotState, kp, buildTransportAAD(gotState, "encrypt", "aes-gcm-256"))
 	require.NoError(t, err)
 	require.JSONEq(t, string(plainResp), string(got))
 	require.True(t, createSeen.Load())
@@ -173,9 +209,9 @@ func TestV2OperationCmdGetResultFailed(t *testing.T) {
 	defer srv.Close()
 	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, alg: "aes-gcm-256", keyLabel: "k"}}
 
-	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	kp, err := newV2TransportKeyPair()
 	require.NoError(t, err)
-	_, err = impl.getResult(context.Background(), srv.Client(), "s1", clientPriv, buildTransportAAD("s1", "", "aes-gcm-256"))
+	_, err = impl.getResult(context.Background(), srv.Client(), "s1", kp, buildTransportAAD("s1", "", "aes-gcm-256"))
 	require.ErrorContains(t, err, "canceled, denied, or failed")
 }
 
@@ -185,23 +221,24 @@ func TestV2OperationCmdGetResultStateMismatch(t *testing.T) {
 			State: "other",
 			Done:  true,
 			ResponseEnvelope: &protocolv2.ResponseEnvelope{
-				TransportAlg: "ecdh-p256+a256gcm",
+				TransportAlg: "ecdh-p256+mlkem768+a256gcm",
 				BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 					Kty: "EC", Crv: "P-256",
 					X: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 					Y: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 				},
-				Nonce:      base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
-				Ciphertext: base64.RawURLEncoding.EncodeToString([]byte("x")),
+				MlkemCiphertext: base64.RawURLEncoding.EncodeToString(make([]byte, 1088)),
+				Nonce:           base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
+				Ciphertext:      base64.RawURLEncoding.EncodeToString([]byte("x")),
 			},
 		}))
 	}))
 	defer srv.Close()
 	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, alg: "aes-gcm-256", keyLabel: "k"}}
 
-	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	kp, err := newV2TransportKeyPair()
 	require.NoError(t, err)
-	_, err = impl.getResult(context.Background(), srv.Client(), "expected", clientPriv, buildTransportAAD("expected", "", "aes-gcm-256"))
+	_, err = impl.getResult(context.Background(), srv.Client(), "expected", kp, buildTransportAAD("expected", "", "aes-gcm-256"))
 	require.ErrorContains(t, err, "response state mismatch")
 }
 
@@ -211,23 +248,24 @@ func TestV2OperationCmdGetResultRejectsMalformedEnvelope(t *testing.T) {
 			State: "s1",
 			Done:  true,
 			ResponseEnvelope: &protocolv2.ResponseEnvelope{
-				TransportAlg: "ecdh-p256+a256gcm",
+				TransportAlg: "ecdh-p256+mlkem768+a256gcm",
 				BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 					Kty: "EC", Crv: "P-256",
 					X: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 					Y: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 					D: "forbidden",
 				},
-				Nonce:      base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
-				Ciphertext: base64.RawURLEncoding.EncodeToString([]byte("x")),
+				MlkemCiphertext: base64.RawURLEncoding.EncodeToString(make([]byte, 1088)),
+				Nonce:           base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
+				Ciphertext:      base64.RawURLEncoding.EncodeToString([]byte("x")),
 			},
 		}))
 	}))
 	defer srv.Close()
 	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, alg: "aes-gcm-256", keyLabel: "k"}}
 
-	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	kp, err := newV2TransportKeyPair()
 	require.NoError(t, err)
-	_, err = impl.getResult(context.Background(), srv.Client(), "s1", clientPriv, buildTransportAAD("s1", "", "aes-gcm-256"))
+	_, err = impl.getResult(context.Background(), srv.Client(), "s1", kp, buildTransportAAD("s1", "", "aes-gcm-256"))
 	require.Error(t, err)
 }

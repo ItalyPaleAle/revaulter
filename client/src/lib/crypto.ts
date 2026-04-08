@@ -1,4 +1,5 @@
 import { argon2id } from 'hash-wasm'
+import mlkem from 'mlkem-wasm'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import type { EcP256PublicJwk, V2RequestPayloadInner, V2ResponseEnvelope } from '$lib/v2-types'
 
@@ -30,16 +31,47 @@ export async function generateTransportKeyPairJwk(): Promise<{
 }
 
 /**
- * Derives the symmetric AES transport key shared between the requester and the
- * browser approver. The request `state` is mixed into HKDF so the transport key
- * is scoped to a single pending request.
+ * Derives the hybrid ECDH + ML-KEM shared secret, then expands it via HKDF into an AES-256-GCM key.
+ * Handles both the encapsulate (encrypt) and decapsulate (decrypt) sides of ML-KEM so callers don't touch ML-KEM directly.
+ *
+ * The request `state` is mixed into HKDF so the key is scoped to a single pending request.
  */
-async function deriveTransportAesKey(
+async function deriveTransportAesKeyForEncrypt(
     state: string,
-    privateKey: CryptoKey,
-    peerPublicJwk: EcP256PublicJwk
+    ecdhPrivateKey: CryptoKey,
+    peerEcdhPublicJwk: EcP256PublicJwk,
+    peerMlkemKeyB64: string
+): Promise<{ aesKey: CryptoKey; mlkemCiphertext: Uint8Array }> {
+    // ECDH shared secret
+    const ecdhShared = await deriveEcdhSharedSecret(ecdhPrivateKey, peerEcdhPublicJwk)
+
+    // ML-KEM encapsulation
+    const mlkemPubBytes = base64UrlToBytes(peerMlkemKeyB64)
+    const mlkemPubKey = await mlkem.importKey('raw-public', asBuf(mlkemPubBytes) as BufferSource, 'ML-KEM-768', false, ['encapsulateBits'])
+    const { sharedKey: mlkemSharedBuf, ciphertext: mlkemCTBuf } = await mlkem.encapsulateBits('ML-KEM-768', mlkemPubKey)
+
+    const aesKey = await deriveHybridAesKey(ecdhShared, new Uint8Array(mlkemSharedBuf), `revaulter/v2/transport/${state}`)
+    return { aesKey, mlkemCiphertext: new Uint8Array(mlkemCTBuf) }
+}
+
+async function deriveTransportAesKeyForDecrypt(
+    state: string,
+    ecdhPrivateKey: CryptoKey,
+    peerEcdhPublicJwk: EcP256PublicJwk,
+    mlkemDecapsulationKey: CryptoKey,
+    mlkemCiphertext: Uint8Array
 ): Promise<CryptoKey> {
-    // Import the peer ECDH key
+    // ECDH shared secret
+    const ecdhShared = await deriveEcdhSharedSecret(ecdhPrivateKey, peerEcdhPublicJwk)
+
+    // ML-KEM decapsulation
+    const mlkemSharedBuf = await mlkem.decapsulateBits('ML-KEM-768', mlkemDecapsulationKey, asBuf(mlkemCiphertext) as BufferSource)
+
+    return deriveHybridAesKey(ecdhShared, new Uint8Array(mlkemSharedBuf), `revaulter/v2/transport/${state}`)
+}
+
+/** Performs ECDH key agreement and returns the raw 32-byte shared secret */
+async function deriveEcdhSharedSecret(privateKey: CryptoKey, peerPublicJwk: EcP256PublicJwk): Promise<Uint8Array> {
     const peerKey = await crypto.subtle.importKey(
         'jwk',
         peerPublicJwk as JsonWebKey,
@@ -47,20 +79,26 @@ async function deriveTransportAesKey(
         false,
         []
     )
+    return new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: peerKey }, privateKey, 256))
+}
 
-    // Derive the raw ECDH shared secret from the local private key and peer public key
-    const sharedBits = await crypto.subtle.deriveBits({ name: 'ECDH', public: peerKey }, privateKey, 256)
+/** Combines ECDH + ML-KEM shared secrets and derives an AES-256-GCM key via HKDF-SHA256 */
+async function deriveHybridAesKey(
+    ecdhShared: Uint8Array,
+    mlkemShared: Uint8Array,
+    hkdfInfo: string
+): Promise<CryptoKey> {
+    const combined = new Uint8Array(ecdhShared.length + mlkemShared.length)
+    combined.set(ecdhShared, 0)
+    combined.set(mlkemShared, ecdhShared.length)
 
-    // Re-import the shared secret so HKDF can expand it into a symmetric AES key
-    const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey'])
-
-    // Bind the transport key to the request state
+    const hkdfKey = await crypto.subtle.importKey('raw', combined, 'HKDF', false, ['deriveKey'])
     return crypto.subtle.deriveKey(
         {
             name: 'HKDF',
             hash: 'SHA-256',
             salt: new Uint8Array(),
-            info: new TextEncoder().encode(`revaulter/v2/transport/${state}`),
+            info: new TextEncoder().encode(hkdfInfo),
         },
         hkdfKey,
         { name: 'AES-GCM', length: 256 },
@@ -71,20 +109,19 @@ async function deriveTransportAesKey(
 
 /**
  * Encrypts the browser response envelope that is sent back to the original CLI/client.
- * A fresh ephemeral ECDH key is generated for each response and included in the envelope.
+ * Uses hybrid ECDH + ML-KEM key exchange: a fresh ephemeral ECDH key is generated, and ML-KEM encapsulation is performed against the CLI's transport ML-KEM public key.
  */
 export async function encryptTransportEnvelope(
     state: string,
-    clientTransportKey: EcP256PublicJwk,
+    clientTransportEcdhKey: EcP256PublicJwk,
+    clientTransportMlkemKey: string,
     plaintext: Uint8Array,
     aad?: Uint8Array
 ): Promise<V2ResponseEnvelope> {
-    // Generate a one-off browser transport key pair for this response
     const eph = await generateTransportKeyPairJwk()
-    const aesKey = await deriveTransportAesKey(state, eph.privateKey, clientTransportKey)
+    const { aesKey, mlkemCiphertext } = await deriveTransportAesKeyForEncrypt(state, eph.privateKey, clientTransportEcdhKey, clientTransportMlkemKey)
     const nonce = crypto.getRandomValues(new Uint8Array(12))
 
-    // Encrypt the payload and optionally bind caller-provided AAD into the AES-GCM tag
     const ciphertext = await crypto.subtle.encrypt(
         {
             name: 'AES-GCM',
@@ -95,10 +132,10 @@ export async function encryptTransportEnvelope(
         asBuf(plaintext) as BufferSource
     )
 
-    // Return the encrypted response in the API envelope format expected by clients
     return {
-        transportAlg: 'ecdh-p256+a256gcm',
+        transportAlg: 'ecdh-p256+mlkem768+a256gcm',
         browserEphemeralPublicKey: eph.publicKeyJwk,
+        mlkemCiphertext: bytesToBase64Url(mlkemCiphertext),
         nonce: bytesToBase64Url(nonce),
         ciphertext: bytesToBase64Url(ciphertext),
         resultType: 'bytes',
@@ -106,19 +143,19 @@ export async function encryptTransportEnvelope(
 }
 
 /**
- * Decrypts a transport envelope using the requester's private transport key.
+ * Decrypts a transport envelope using hybrid ECDH + ML-KEM.
  * The same request `state` must be supplied so HKDF derives the matching AES key.
  */
 export async function decryptTransportEnvelope(
     state: string,
-    privateKey: CryptoKey,
+    ecdhPrivateKey: CryptoKey,
+    mlkemDecapsulationKey: CryptoKey,
     env: V2ResponseEnvelope,
     aad?: Uint8Array
 ): Promise<Uint8Array> {
-    // Re-derive the symmetric key from the local private key and browser ephemeral public key
-    const aesKey = await deriveTransportAesKey(state, privateKey, env.browserEphemeralPublicKey)
+    const mlkemCT = base64UrlToBytes(env.mlkemCiphertext)
+    const aesKey = await deriveTransportAesKeyForDecrypt(state, ecdhPrivateKey, env.browserEphemeralPublicKey, mlkemDecapsulationKey, mlkemCT)
 
-    // Decode the envelope fields and verify the AES-GCM tag during decryption
     const plain = await crypto.subtle.decrypt(
         {
             name: 'AES-GCM',
@@ -356,6 +393,27 @@ function hashToP256Scalar(hash: Uint8Array): Uint8Array {
 }
 
 /**
+ * Imports a raw 32-byte P-256 private scalar as an extractable ECDH CryptoKey
+ * via PKCS8 DER encoding. PKCS8 import only needs the scalar — the browser
+ * derives the public point automatically (unlike JWK which requires x/y).
+ */
+async function importP256ScalarAsEcdhKey(scalar: Uint8Array): Promise<CryptoKey> {
+    // Minimal PKCS8 DER envelope: AlgorithmIdentifier(EC, P-256) + ECPrivateKey(version=1, scalar)
+    // prettier-ignore
+    const PREFIX = new Uint8Array([
+        0x30, 0x3e, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86,
+        0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
+        0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x04,
+        0x27, 0x30, 0x25, 0x02, 0x01, 0x01, 0x04, 0x20,
+    ])
+    const pkcs8 = new Uint8Array(PREFIX.length + scalar.length)
+    pkcs8.set(PREFIX)
+    pkcs8.set(scalar, PREFIX.length)
+
+    return crypto.subtle.importKey('pkcs8', pkcs8, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
+}
+
+/**
  * Derives a deterministic ECDH P-256 key pair from the user's PRF secret
  * (and optional password) for request payload encryption. The browser stores
  * this key's public half on the server so the CLI can encrypt request payloads.
@@ -378,15 +436,7 @@ export async function deriveRequestEncKeyPair(params: {
     )
 
     const scalarBytes = hashToP256Scalar(new Uint8Array(rawBits))
-
-    // Import as ECDH private key via JWK — the browser computes the public point from the scalar
-    const privateKey = await crypto.subtle.importKey(
-        'jwk',
-        { kty: 'EC', crv: 'P-256', d: bytesToBase64Url(scalarBytes) },
-        { name: 'ECDH', namedCurve: 'P-256' },
-        true,
-        ['deriveBits']
-    )
+    const privateKey = await importP256ScalarAsEcdhKey(scalarBytes)
 
     // Export the public key as JWK
     const jwk = (await crypto.subtle.exportKey('jwk', privateKey)) as JsonWebKey
@@ -401,6 +451,42 @@ export async function deriveRequestEncKeyPair(params: {
 }
 
 /**
+ * Derives a deterministic ML-KEM-768 key pair from the user's PRF secret (and optional password) for hybrid request payload encryption.
+ * The browser stores this key's public half on the server alongside the ECDH public key.
+ *
+ * Returns the CryptoKey decapsulation key and the base64url-encoded raw public encapsulation key (for sending to the server).
+ */
+export async function deriveRequestEncMlkemKeyPair(params: {
+    userId: string
+    prfSecret: Uint8Array
+    password?: string
+}): Promise<{ decapsulationKey: CryptoKey; encapsulationKeyB64: string }> {
+    const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret), 'HKDF', false, ['deriveBits'])
+
+    const salt = params.password ? new TextEncoder().encode(params.password) : new Uint8Array()
+    const info = new TextEncoder().encode(`revaulter/v2/requestEncMlkemSeed\nuserId=${params.userId}\nv=1`)
+
+    // Derive 64 bytes (512 bits) as the ML-KEM seed (d || z)
+    const seedBits = await crypto.subtle.deriveBits(
+        { name: 'HKDF', hash: 'SHA-256', salt: asBuf(salt), info: asBuf(info) },
+        ikm,
+        512
+    )
+
+    // Import as ML-KEM-768 decapsulation key from seed
+    const dk = await mlkem.importKey('raw-seed', seedBits, 'ML-KEM-768', true, ['decapsulateBits'])
+
+    // Extract the encapsulation (public) key
+    const pk = await mlkem.getPublicKey(dk, ['encapsulateBits'])
+    const pkRaw = await mlkem.exportKey('raw-public', pk)
+
+    return {
+        decapsulationKey: dk,
+        encapsulationKeyB64: bytesToBase64Url(pkRaw),
+    }
+}
+
+/**
  * Builds the canonical AAD used when encrypting/decrypting request payloads.
  * This binds the plaintext metadata to the E2EE ciphertext so tampering with
  * keyLabel, algorithm, or operation causes decryption to fail.
@@ -410,50 +496,41 @@ export function buildRequestEncAAD(algorithm: string, keyLabel: string, operatio
 }
 
 /**
- * Decrypts an E2EE request payload envelope using the browser's static ECDH key.
+ * Decrypts an E2EE request payload envelope using hybrid ECDH + ML-KEM
  */
 export async function decryptRequestPayload(params: {
     userId: string
     prfSecret: Uint8Array
     password?: string
     cliEphemeralPublicKey: EcP256PublicJwk
+    mlkemCiphertext: string
     nonce: string
     ciphertext: string
     aad: Uint8Array
 }): Promise<V2RequestPayloadInner> {
     // Derive the static ECDH private key
-    const { privateKey } = await deriveRequestEncKeyPair({
+    const { privateKey: ecdhPrivKey } = await deriveRequestEncKeyPair({
         userId: params.userId,
         prfSecret: params.prfSecret,
         password: params.password,
     })
 
-    // Import the CLI's ephemeral public key
-    const peerKey = await crypto.subtle.importKey(
-        'jwk',
-        params.cliEphemeralPublicKey as JsonWebKey,
-        { name: 'ECDH', namedCurve: 'P-256' },
-        false,
-        []
-    )
+    // Derive the static ML-KEM decapsulation key
+    const { decapsulationKey: mlkemDK } = await deriveRequestEncMlkemKeyPair({
+        userId: params.userId,
+        prfSecret: params.prfSecret,
+        password: params.password,
+    })
 
     // ECDH shared secret
-    const sharedBits = await crypto.subtle.deriveBits({ name: 'ECDH', public: peerKey }, privateKey, 256)
+    const ecdhShared = await deriveEcdhSharedSecret(ecdhPrivKey, params.cliEphemeralPublicKey)
 
-    // HKDF to derive AES-256-GCM key
-    const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey'])
-    const aesKey = await crypto.subtle.deriveKey(
-        {
-            name: 'HKDF',
-            hash: 'SHA-256',
-            salt: new Uint8Array(),
-            info: new TextEncoder().encode('revaulter/v2/request-enc'),
-        },
-        hkdfKey,
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['decrypt']
-    )
+    // ML-KEM decapsulation
+    const mlkemCT = base64UrlToBytes(params.mlkemCiphertext)
+    const mlkemSharedBuf = await mlkem.decapsulateBits('ML-KEM-768', mlkemDK, asBuf(mlkemCT) as BufferSource)
+
+    // Derive AES key from combined ECDH + ML-KEM shared secrets
+    const aesKey = await deriveHybridAesKey(ecdhShared, new Uint8Array(mlkemSharedBuf), 'revaulter/v2/request-enc')
 
     // Decrypt
     const nonce = base64UrlToBytes(params.nonce)
