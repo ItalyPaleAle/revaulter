@@ -144,6 +144,7 @@ function authBodyCopy() {
                             variant="outline"
                             size="lg"
                             onclick={onSkipPassword}
+                            disabled={authBusy}
                         >
                             Skip password
                         </Button>

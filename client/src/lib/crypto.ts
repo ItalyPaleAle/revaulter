@@ -373,7 +373,7 @@ export function splitAesGcmCiphertextAndTag(ciphertextWithTag: Uint8Array, tagLe
  *
  * The caller should supply at least 48 bytes (384 bits) of input so the modular bias is bounded by ~2^-128, which is cryptographically negligible.
  */
-function hashToP256Scalar(hash: Uint8Array): Uint8Array {
+export function hashToP256Scalar(hash: Uint8Array): Uint8Array {
     // P-256 curve order
     const P256_ORDER = BigInt('0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551')
 
@@ -397,20 +397,35 @@ function hashToP256Scalar(hash: Uint8Array): Uint8Array {
  * via PKCS8 DER encoding. PKCS8 import only needs the scalar — the browser
  * derives the public point automatically (unlike JWK which requires x/y).
  */
-async function importP256ScalarAsEcdhKey(scalar: Uint8Array): Promise<CryptoKey> {
-    // Minimal PKCS8 DER envelope: AlgorithmIdentifier(EC, P-256) + ECPrivateKey(version=1, scalar)
+export async function importP256ScalarAsEcdhKey(scalar: Uint8Array): Promise<CryptoKey> {
+    if (scalar.length !== 32) {
+        throw new Error(`P-256 scalar must be exactly 32 bytes, got ${scalar.length}`)
+    }
+
+    // PKCS8 DER envelope: version(0) + AlgorithmIdentifier(EC, P-256) + ECPrivateKey(version=1, scalar)
     // prettier-ignore
     const PREFIX = new Uint8Array([
-        0x30, 0x3e, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86,
-        0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
-        0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x04,
-        0x27, 0x30, 0x25, 0x02, 0x01, 0x01, 0x04, 0x20,
+        0x30, 0x41,                                     // SEQUENCE (65 bytes)
+        0x02, 0x01, 0x00,                               //   INTEGER 0 (PKCS8 version)
+        0x30, 0x13,                                     //   SEQUENCE (AlgorithmIdentifier)
+        0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, //     OID 1.2.840.10045.2.1 (ecPublicKey)
+        0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, // OID 1.2.840.10045.3.1.7 (P-256)
+        0x04, 0x27,                                     //   OCTET STRING (39 bytes)
+        0x30, 0x25,                                     //     SEQUENCE (ECPrivateKey)
+        0x02, 0x01, 0x01,                               //       INTEGER 1 (version)
+        0x04, 0x20,                                     //       OCTET STRING (32 bytes) — scalar follows
     ])
     const pkcs8 = new Uint8Array(PREFIX.length + scalar.length)
     pkcs8.set(PREFIX)
     pkcs8.set(scalar, PREFIX.length)
 
-    return crypto.subtle.importKey('pkcs8', pkcs8, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
+    const result = await Promise.race([
+        crypto.subtle.importKey('pkcs8', pkcs8, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']),
+        new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('PKCS8 P-256 key import timed out')), 30_000)
+        ),
+    ])
+    return result
 }
 
 /**

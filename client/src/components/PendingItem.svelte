@@ -13,7 +13,6 @@ import {
     performAesGcmOperation,
     splitAesGcmCiphertextAndTag,
 } from '$lib/crypto'
-
 import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import { v2Cancel, v2Confirm, v2GetRequest } from '$lib/v2-api'
 import type { V2PendingRequestItem, V2RequestDetail } from '$lib/v2-types'

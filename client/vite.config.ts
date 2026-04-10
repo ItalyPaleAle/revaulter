@@ -60,6 +60,9 @@ export default defineConfig(({ mode }) => {
             },
         },
         define: {},
+        test: {
+            exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
+        },
         build: {
             outDir: 'dist',
             emptyOutDir: true,
