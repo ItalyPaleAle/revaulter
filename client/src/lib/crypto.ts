@@ -48,10 +48,16 @@ async function deriveTransportAesKeyForEncrypt(
 
     // ML-KEM encapsulation
     const mlkemPubBytes = base64UrlToBytes(peerMlkemKeyB64)
-    const mlkemPubKey = await mlkem.importKey('raw-public', asBuf(mlkemPubBytes) as BufferSource, 'ML-KEM-768', false, ['encapsulateBits'])
+    const mlkemPubKey = await mlkem.importKey('raw-public', asBuf(mlkemPubBytes) as BufferSource, 'ML-KEM-768', false, [
+        'encapsulateBits',
+    ])
     const { sharedKey: mlkemSharedBuf, ciphertext: mlkemCTBuf } = await mlkem.encapsulateBits('ML-KEM-768', mlkemPubKey)
 
-    const aesKey = await deriveHybridAesKey(ecdhShared, new Uint8Array(mlkemSharedBuf), `revaulter/v2/transport/${state}`)
+    const aesKey = await deriveHybridAesKey(
+        ecdhShared,
+        new Uint8Array(mlkemSharedBuf),
+        `revaulter/v2/transport/${state}`
+    )
     return { aesKey, mlkemCiphertext: new Uint8Array(mlkemCTBuf) }
 }
 
@@ -66,7 +72,11 @@ async function deriveTransportAesKeyForDecrypt(
     const ecdhShared = await deriveEcdhSharedSecret(ecdhPrivateKey, peerEcdhPublicJwk)
 
     // ML-KEM decapsulation
-    const mlkemSharedBuf = await mlkem.decapsulateBits('ML-KEM-768', mlkemDecapsulationKey, asBuf(mlkemCiphertext) as BufferSource)
+    const mlkemSharedBuf = await mlkem.decapsulateBits(
+        'ML-KEM-768',
+        mlkemDecapsulationKey,
+        asBuf(mlkemCiphertext) as BufferSource
+    )
 
     return deriveHybridAesKey(ecdhShared, new Uint8Array(mlkemSharedBuf), `revaulter/v2/transport/${state}`)
 }
@@ -120,7 +130,12 @@ export async function encryptTransportEnvelope(
     aad?: Uint8Array
 ): Promise<V2ResponseEnvelope> {
     const eph = await generateTransportKeyPairJwk()
-    const { aesKey, mlkemCiphertext } = await deriveTransportAesKeyForEncrypt(state, eph.privateKey, clientTransportEcdhKey, clientTransportMlkemKey)
+    const { aesKey, mlkemCiphertext } = await deriveTransportAesKeyForEncrypt(
+        state,
+        eph.privateKey,
+        clientTransportEcdhKey,
+        clientTransportMlkemKey
+    )
     const nonce = crypto.getRandomValues(new Uint8Array(12))
 
     const ciphertext = await crypto.subtle.encrypt(
@@ -155,7 +170,13 @@ export async function decryptTransportEnvelope(
     aad?: Uint8Array
 ): Promise<Uint8Array> {
     const mlkemCT = base64UrlToBytes(env.mlkemCiphertext)
-    const aesKey = await deriveTransportAesKeyForDecrypt(state, ecdhPrivateKey, env.browserEphemeralPublicKey, mlkemDecapsulationKey, mlkemCT)
+    const aesKey = await deriveTransportAesKeyForDecrypt(
+        state,
+        ecdhPrivateKey,
+        env.browserEphemeralPublicKey,
+        mlkemDecapsulationKey,
+        mlkemCT
+    )
 
     const plain = await crypto.subtle.decrypt(
         {

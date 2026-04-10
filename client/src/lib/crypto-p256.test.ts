@@ -80,11 +80,7 @@ describe('importP256ScalarAsEcdhKey', () => {
 
         // Generate an ephemeral peer key and perform ECDH
         const peer = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits'])
-        const shared = await crypto.subtle.deriveBits(
-            { name: 'ECDH', public: peer.publicKey },
-            privateKey,
-            256
-        )
+        const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: peer.publicKey }, privateKey, 256)
         expect(shared.byteLength).toBe(32)
     })
 

@@ -179,7 +179,13 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
     }
 
     const transportAAD = buildTransportAAD(req.state, req.operation, req.algorithm)
-    return encryptTransportEnvelope(req.state, input.clientTransportEcdhKey, input.clientTransportMlkemKey, resultPlain, transportAAD)
+    return encryptTransportEnvelope(
+        req.state,
+        input.clientTransportEcdhKey,
+        input.clientTransportMlkemKey,
+        resultPlain,
+        transportAAD
+    )
 }
 
 function operationTitle(op: V2PendingRequestItem['operation']) {

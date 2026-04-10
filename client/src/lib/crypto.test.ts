@@ -392,6 +392,9 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
         // Simulate CLI: generate transport key pairs
         const ecdhKP = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
         const ecdhPubJwk = (await crypto.subtle.exportKey('jwk', ecdhKP.publicKey)) as JsonWebKey
+        if (!ecdhPubJwk.x || !ecdhPubJwk.y) {
+            throw new Error('Invalid ECDH key imported: missing x or y parameters')
+        }
 
         // ML-KEM key pair for transport
         const mlkem = await import('mlkem-wasm')
@@ -406,7 +409,7 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
         // Browser encrypts the response envelope
         const envelope = await encryptTransportEnvelope(
             'test-state',
-            { kty: 'EC', crv: 'P-256', x: ecdhPubJwk.x!, y: ecdhPubJwk.y! },
+            { kty: 'EC', crv: 'P-256', x: ecdhPubJwk.x, y: ecdhPubJwk.y },
             mlkemPubB64,
             plaintext,
             aad
@@ -432,6 +435,9 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
     it('rejects envelope with wrong state', async () => {
         const ecdhKP = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
         const ecdhPubJwk = (await crypto.subtle.exportKey('jwk', ecdhKP.publicKey)) as JsonWebKey
+        if (!ecdhPubJwk.x || !ecdhPubJwk.y) {
+            throw new Error('Invalid ECDH key imported: missing x or y parameters')
+        }
 
         const mlkem = await import('mlkem-wasm')
         const mlkemKP = await mlkem.default.generateKey('ML-KEM-768', true, ['decapsulateBits', 'encapsulateBits'])
@@ -443,7 +449,7 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
 
         const envelope = await encryptTransportEnvelope(
             'state-A',
-            { kty: 'EC', crv: 'P-256', x: ecdhPubJwk.x!, y: ecdhPubJwk.y! },
+            { kty: 'EC', crv: 'P-256', x: ecdhPubJwk.x, y: ecdhPubJwk.y },
             mlkemPubB64,
             plaintext
         )

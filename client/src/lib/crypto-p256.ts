@@ -36,16 +36,17 @@ export async function importP256ScalarAsEcdhKey(scalar: Uint8Array): Promise<Cry
 
     // PKCS8 DER envelope: version(0) + AlgorithmIdentifier(EC, P-256) + ECPrivateKey(version=1, scalar)
     // prettier-ignore
+    // biome-ignore format: the array should not be formatted
     const PREFIX = new Uint8Array([
-        0x30, 0x41,                                     // SEQUENCE (65 bytes)
-        0x02, 0x01, 0x00,                               //   INTEGER 0 (PKCS8 version)
-        0x30, 0x13,                                     //   SEQUENCE (AlgorithmIdentifier)
-        0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, //     OID 1.2.840.10045.2.1 (ecPublicKey)
+        0x30, 0x41,                                                 // SEQUENCE (65 bytes)
+        0x02, 0x01, 0x00,                                           //   INTEGER 0 (PKCS8 version)
+        0x30, 0x13,                                                 //   SEQUENCE (AlgorithmIdentifier)
+        0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,       //     OID 1.2.840.10045.2.1 (ecPublicKey)
         0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, // OID 1.2.840.10045.3.1.7 (P-256)
-        0x04, 0x27,                                     //   OCTET STRING (39 bytes)
-        0x30, 0x25,                                     //     SEQUENCE (ECPrivateKey)
-        0x02, 0x01, 0x01,                               //       INTEGER 1 (version)
-        0x04, 0x20,                                     //       OCTET STRING (32 bytes) — scalar follows
+        0x04, 0x27,                                                 //   OCTET STRING (39 bytes)
+        0x30, 0x25,                                                 //     SEQUENCE (ECPrivateKey)
+        0x02, 0x01, 0x01,                                           //       INTEGER 1 (version)
+        0x04, 0x20,                                                 //       OCTET STRING (32 bytes) — scalar follows
     ])
     const pkcs8 = new Uint8Array(PREFIX.length + scalar.length)
     pkcs8.set(PREFIX)

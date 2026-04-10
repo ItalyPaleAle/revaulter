@@ -9,7 +9,7 @@ const args = new Map(
     process.argv.slice(2).map((entry) => {
         const [key, value] = entry.split('=', 2)
         return [key, value]
-    }),
+    })
 )
 const portArg = args.get('--port')
 const port = Number.parseInt(portArg ?? '41741', 10)
@@ -47,7 +47,7 @@ writeFileSync(
         'logLevel: "error"',
         'omitHealthCheckLogs: true',
         '',
-    ].join('\n'),
+    ].join('\n')
 )
 
 const serverProcess = spawn(binaryPath, {

@@ -5,7 +5,12 @@ import AuthAccessView from '$components/AuthAccessView.svelte'
 import AuthSetupView from '$components/AuthSetupView.svelte'
 import ReadyView from '$components/ReadyView.svelte'
 
-import { deriveRequestEncKeyPair, deriveRequestEncMlkemKeyPair, encryptPasswordCanary, verifyPasswordCanary } from '$lib/crypto'
+import {
+    deriveRequestEncKeyPair,
+    deriveRequestEncMlkemKeyPair,
+    encryptPasswordCanary,
+    verifyPasswordCanary,
+} from '$lib/crypto'
 import { ResponseNotOkError } from '$lib/request'
 import { base64UrlToBytes } from '$lib/utils'
 import {
