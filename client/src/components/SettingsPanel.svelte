@@ -27,6 +27,17 @@ let {
     settingsError,
     settingsSuccess,
 }: Props = $props()
+
+let copied = $state(false)
+
+function copyRequestKey() {
+    navigator.clipboard.writeText(requestKey).then(() => {
+        copied = true
+        setTimeout(() => {
+            copied = false
+        }, 2000)
+    })
+}
 </script>
 
 <div class="fixed inset-0 z-40 bg-slate-950/32 backdrop-blur-sm dark:bg-slate-950/58"></div>
@@ -59,17 +70,31 @@ let {
                         <Icon icon="key-round" title="Request key" size="4" />
                         Request key
                     </div>
-                    <div class="rounded-[1.2rem] bg-slate-50/90 px-4 py-3 font-mono text-sm text-slate-900 ring-1 ring-slate-200/80 dark:bg-white/6 dark:text-slate-100 dark:ring-white/10">
-                        <div class="overflow-x-auto whitespace-nowrap">{requestKey}</div>
+                    <div class="flex items-center gap-2">
+                        <div class="flex min-w-0 flex-1 items-center rounded-[1.2rem] bg-slate-50/90 ring-1 ring-slate-200/80 dark:bg-white/6 dark:ring-white/10">
+                            <div class="min-w-0 flex-1 overflow-x-auto whitespace-nowrap px-4 py-3 font-mono text-sm text-slate-900 dark:text-slate-100">{requestKey}</div>
+                            <button
+                                type="button"
+                                class="flex shrink-0 cursor-pointer items-center justify-center rounded-r-[1.2rem] border-l border-slate-200/80 px-2 py-2 text-slate-500 transition hover:bg-slate-100/80 hover:text-slate-700 dark:border-white/10 dark:text-slate-400 dark:hover:bg-white/8 dark:hover:text-slate-200"
+                                aria-label="Copy to clipboard"
+                                onclick={copyRequestKey}
+                            >
+                                {#if copied}
+                                    <Icon icon="check" title="Copied" size="4" />
+                                {:else}
+                                    <Icon icon="clipboard-copy" title="Copy to clipboard" size="4" />
+                                {/if}
+                            </button>
+                        </div>
+                        <Button
+                            variant="outline"
+                            onclick={onRegenerateRequestKey}
+                            disabled={settingsBusy}
+                        >
+                            <Icon icon="refresh-cw" title="Regenerate" size="4" />
+                            Regenerate
+                        </Button>
                     </div>
-                    <Button
-                        variant="outline"
-                        onclick={onRegenerateRequestKey}
-                        disabled={settingsBusy}
-                    >
-                        <Icon icon="refresh-cw" title="Regenerate request key" size="4" />
-                        Regenerate request key
-                    </Button>
                 </div>
 
                 <div class="space-y-3 border-t border-slate-200/80 pt-6 dark:border-white/10 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">

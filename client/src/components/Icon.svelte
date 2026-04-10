@@ -155,6 +155,25 @@ const { icon, title, size = '12' }: Props = $props()
             <path d="M16 17l5-5-5-5" />
             <path d="M21 12H9" />
         </IconContainer>
+    {:else if icon == 'clipboard-copy'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+        </IconContainer>
+    {:else if icon == 'check'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M20 6 9 17l-5-5" />
+        </IconContainer>
     {:else if icon == 'x'}
         <!--
             lucide.dev
