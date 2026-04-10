@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hashToP256Scalar, importP256ScalarAsEcdhKey } from './crypto'
+import { hashToP256Scalar, importP256ScalarAsEcdhKey } from './crypto-p256'
 
 /** Converts a hex string to Uint8Array. */
 function hexToBytes(hex: string): Uint8Array {
