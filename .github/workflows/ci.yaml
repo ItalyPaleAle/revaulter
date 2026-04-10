@@ -41,7 +41,7 @@ jobs:
         run: |
           pnpm run build
 
-      - name: Run tests
+      - name: Run backend tests
         run: |
           make test
 
@@ -49,6 +49,11 @@ jobs:
         working-directory: client
         run: |
           pnpm run e2e:install
+
+      - name: Run frontend tests
+        working-directory: client
+        run: |
+          pnpm run test
 
       - name: Run E2E tests
         working-directory: client
