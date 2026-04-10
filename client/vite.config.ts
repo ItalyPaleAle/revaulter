@@ -44,7 +44,13 @@ export default defineConfig(({ mode }) => {
                     theme_color: '#1e293b',
                     background_color: '#f8fafc',
                     display: 'standalone',
-                    icons: [],
+                    icons: [
+                        {
+                            src: 'favicon.svg',
+                            sizes: 'any',
+                            type: 'image/svg+xml',
+                        },
+                    ],
                 },
                 devOptions: {
                     enabled: false,
