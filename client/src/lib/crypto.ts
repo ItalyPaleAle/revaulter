@@ -269,14 +269,19 @@ export function buildTransportAAD(state: string, operation: 'encrypt' | 'decrypt
     return new TextEncoder().encode(new TransportAADInfo(state, operation, algorithm).serialize())
 }
 
-/** Derives the AES key used to encrypt and verify the password canary value. */
+/**
+ * Derives the AES key used to encrypt and verify the password canary value.
+ *
+ * Parameters are intentionally aggressive because the canary is a verifier for the password on the client side, and an attacker who has obtained the canary ciphertext (for example by stealing a passkey) would mount an offline Argon2id search against it.
+ * These settings roughly exceed the current OWASP Argon2id guidance as of April 2026 (m=128 MiB, t=4, p=1) and aim for well over 500 ms of work on modern laptops while still being tolerable in-browser.
+ */
 async function deriveCanaryKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
     const keyBytes = await argon2id({
         password,
         salt,
         parallelism: 1,
-        iterations: 3,
-        memorySize: 65536, // 64 MiB
+        iterations: 4,
+        memorySize: 128<<10, // 128 MiB
         hashLength: 32,
         outputType: 'binary',
     })
