@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -594,13 +593,11 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 	enc.SetEscapeHTML(false)
 
 	sent := false
-	known := map[string]v2db.V2RequestListItem{}
 	for _, item := range list {
 		if item.UserID != userID {
 			continue
 		}
 		_ = enc.Encode(item)
-		known[item.State] = item
 		sent = true
 	}
 
@@ -620,9 +617,6 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 	flushTicker := time.NewTicker(100 * time.Millisecond)
 	defer flushTicker.Stop()
 
-	reconcileTicker := time.NewTicker(2 * time.Second)
-	defer reconcileTicker.Stop()
-
 	hasData := false
 	for {
 		select {
@@ -639,13 +633,6 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 			}
 
 			_ = enc.Encode(msg)
-
-			if msg.Status == "removed" {
-				delete(known, msg.State)
-			} else if msg.State != "" {
-				known[msg.State] = *msg
-			}
-
 			hasData = true
 
 		case <-flushTicker.C:
@@ -653,34 +640,6 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 				c.Writer.Flush()
 				hasData = false
 			}
-
-		case <-reconcileTicker.C:
-			curList, err := s.requestStore.ListPending(c.Request.Context())
-			if err != nil {
-				continue
-			}
-
-			current := map[string]v2db.V2RequestListItem{}
-			for _, item := range curList {
-				if item.UserID != userID {
-					continue
-				}
-				current[item.State] = item
-				prev, ok := known[item.State]
-				if !ok || !reflect.DeepEqual(prev, item) {
-					_ = enc.Encode(item)
-					hasData = true
-				}
-			}
-
-			for state := range known {
-				_, ok := current[state]
-				if !ok {
-					_ = enc.Encode(&v2db.V2RequestListItem{State: state, Status: "removed", UserID: userID})
-					hasData = true
-				}
-			}
-			known = current
 
 		case <-c.Request.Context().Done():
 			return
