@@ -442,8 +442,9 @@ func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowed
 		return nil, err
 	}
 
+	// Only allow mutations for users that are active and have completed setup
 	affected, err := s.db.db.Exec(ctx,
-		`UPDATE v2_users SET allowed_ips = $1, updated_at = $2 WHERE id = $3`,
+		`UPDATE v2_users SET allowed_ips = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
 		strings.Join(normalized, ","), time.Now().UTC().Unix(), userID,
 	)
 	if err != nil {
@@ -463,8 +464,9 @@ func (s *AuthStore) RegenerateRequestKey(ctx context.Context, userID string) (st
 		return "", err
 	}
 
+	// Only allow mutations for users that are active and have completed setup
 	affected, err := s.db.db.Exec(ctx,
-		`UPDATE v2_users SET request_key = $1, updated_at = $2 WHERE id = $3`,
+		`UPDATE v2_users SET request_key = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
 		requestKey, time.Now().UTC().Unix(), userID,
 	)
 	if err != nil {

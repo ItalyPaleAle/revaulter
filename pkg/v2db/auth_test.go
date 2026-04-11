@@ -139,6 +139,10 @@ func TestAuthStoreRegenerateRequestKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// RegenerateRequestKey requires the account to be active and ready;
+	// finalize the signup first.
+	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "", `{"kty":"EC"}`, "mlkem-pub"))
+
 	newKey, err := store.RegenerateRequestKey(ctx, "user-1")
 	require.NoError(t, err)
 	require.Len(t, newKey, 20)
