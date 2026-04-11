@@ -136,6 +136,8 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 		return err
 	}
 
+	s.v2Pubsub.SetLogger(log.With(slog.String("component", "v2pubsub")))
+
 	// Init the app server
 	err = s.initAppServer(log)
 	if err != nil {
