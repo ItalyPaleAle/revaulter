@@ -76,6 +76,7 @@ type v2OperationFlags interface {
 
 type v2OperationFlagsEncrypt struct {
 	v2OperationFlagsBase
+
 	Value          stringValue
 	Nonce          stringValue
 	AdditionalData stringValue
@@ -101,6 +102,7 @@ func (f *v2OperationFlagsEncrypt) InnerPayload(clientTransportEcdhKey protocolv2
 
 type v2OperationFlagsDecrypt struct {
 	v2OperationFlagsBase
+
 	Value          stringValue
 	Tag            stringValue
 	Nonce          stringValue

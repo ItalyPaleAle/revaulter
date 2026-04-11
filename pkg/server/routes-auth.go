@@ -100,8 +100,9 @@ type v2AuthAllowedIPsRequest struct {
 }
 
 type v2AuthSessionResponse struct {
-	Authenticated bool `json:"authenticated"`
 	v2AuthSessionInfo
+
+	Authenticated bool `json:"authenticated"`
 }
 
 type v2AuthLogoutResponse struct {
@@ -386,20 +387,24 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 	}
 
 	err = s.authStore.FinalizeSignup(c.Request.Context(), userID, req.Canary, string(req.RequestEncEcdhPubkey), req.RequestEncMlkemPubkey)
-	if errors.Is(err, v2db.ErrAlreadyFinalized) {
+	switch {
+	case errors.Is(err, v2db.ErrAlreadyFinalized):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Account is already finalized"))
 		return
-	} else if errors.Is(err, v2db.ErrUserNotFound) {
+	case errors.Is(err, v2db.ErrUserNotFound):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
 		return
-	} else if err != nil {
+	case err != nil:
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, struct {
-		OK bool `json:"ok"`
-	}{OK: true})
+	c.JSON(http.StatusOK,
+		struct {
+			OK bool `json:"ok"`
+		}{
+			OK: true,
+		})
 }
 
 func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
@@ -522,10 +527,7 @@ func (s *Server) setSessionCookie(c *gin.Context, sess *v2db.AuthSession) error 
 		return NewResponseError(http.StatusInternalServerError, "session is nil")
 	}
 
-	ttl := time.Until(sess.ExpiresAt)
-	if ttl < time.Second {
-		ttl = time.Second
-	}
+	ttl := max(time.Until(sess.ExpiresAt), time.Second)
 
 	cookieName, cookiePath := sessionCookieFor(c)
 	c.SetSameSite(http.SameSiteLaxMode)

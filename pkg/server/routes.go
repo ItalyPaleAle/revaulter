@@ -312,7 +312,7 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 		return
 	}
-	if !s.v2AuthorizeUser(c, rec.UserID) {
+	if !s.authorizeUser(c, rec.UserID) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 		return
 	}
@@ -340,11 +340,14 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
 		return
 	}
+
 	var req confirmRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
+
 	if req.State == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing state in request body"))
 		return
@@ -364,10 +367,12 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 			return
 		}
-		if !s.v2AuthorizeUser(c, rec.UserID) {
+
+		if !s.authorizeUser(c, rec.UserID) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 			return
 		}
+
 		ok, err := s.requestStore.CancelRequest(c.Request.Context(), req.State)
 		if err != nil {
 			AbortWithErrorJSON(c, err)
@@ -377,6 +382,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be canceled"))
 			return
 		}
+
 		log := logging.LogFromContext(c.Request.Context())
 		userID := c.GetString(contextKeyUserID)
 		log.InfoContext(c.Request.Context(), "Request canceled",
@@ -384,9 +390,11 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			slog.String("user_id", userID),
 			slog.String("client_ip", c.ClientIP()),
 		)
+
 		s.lock.Lock()
 		s.notifySubscriber(req.State)
 		s.lock.Unlock()
+
 		c.JSON(http.StatusOK, gin.H{"canceled": true})
 		s.publishListItem(&v2db.V2RequestListItem{
 			State:  req.State,
@@ -400,11 +408,13 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing responseEnvelope"))
 		return
 	}
-	err := validateV2ResponseEnvelope(*req.ResponseEnvelope)
+
+	err = validateV2ResponseEnvelope(*req.ResponseEnvelope)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid responseEnvelope: %v", err))
 		return
 	}
+
 	rec, err := s.requestStore.GetRequest(c.Request.Context(), req.State)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -414,10 +424,12 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 		return
 	}
-	if !s.v2AuthorizeUser(c, rec.UserID) {
+
+	if !s.authorizeUser(c, rec.UserID) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 		return
 	}
+
 	ok, err := s.requestStore.CompleteRequest(c.Request.Context(), req.State, *req.ResponseEnvelope)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -427,15 +439,15 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be confirmed"))
 		return
 	}
-	{
-		log := logging.LogFromContext(c.Request.Context())
-		userID := c.GetString(contextKeyUserID)
-		log.InfoContext(c.Request.Context(), "Request confirmed",
-			slog.String("state", req.State),
-			slog.Any("user_id", userID),
-			slog.String("client_ip", c.ClientIP()),
-		)
-	}
+
+	log := logging.LogFromContext(c.Request.Context())
+	userID := c.GetString(contextKeyUserID)
+	log.InfoContext(c.Request.Context(), "Request confirmed",
+		slog.String("state", req.State),
+		slog.Any("user_id", userID),
+		slog.String("client_ip", c.ClientIP()),
+	)
+
 	s.lock.Lock()
 	s.notifySubscriber(req.State)
 	s.lock.Unlock()
@@ -447,7 +459,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	})
 }
 
-func (s *Server) v2AuthorizeUser(c *gin.Context, userID string) bool {
+func (s *Server) authorizeUser(c *gin.Context, userID string) bool {
 	sessionUserID := c.GetString(contextKeyUserID)
 	return sessionUserID != "" && sessionUserID == userID
 }

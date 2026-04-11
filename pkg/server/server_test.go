@@ -90,7 +90,10 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 		}
 		res, err := client.Do(req)
 		require.NoError(t, err)
-		defer closeBody(res)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
 		var out map[string]any
 		_ = json.NewDecoder(res.Body).Decode(&out)
 		return res, out
@@ -107,7 +110,10 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 		}
 		res, err := client.Do(req)
 		require.NoError(t, err)
-		defer closeBody(res)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
 		var out map[string]any
 		_ = json.NewDecoder(res.Body).Decode(&out)
 		return res, out
@@ -137,7 +143,10 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 		return client.Do(req)
 	}()
 	require.NoError(t, err)
-	defer closeBody(resList)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		resList.Body.Close()
+	}()
 	require.Equal(t, http.StatusOK, resList.StatusCode)
 	var list []map[string]any
 	require.NoError(t, json.NewDecoder(resList.Body).Decode(&list))
@@ -205,7 +214,10 @@ func TestServerV2PublicSignup(t *testing.T) {
 		}
 		res, err := client.Do(req)
 		require.NoError(t, err)
-		defer closeBody(res)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
 		var out map[string]any
 		_ = json.NewDecoder(res.Body).Decode(&out)
 		return res, out
@@ -245,7 +257,10 @@ func TestServerV2DisableSignup(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	res, err := client.Do(req)
 	require.NoError(t, err)
-	defer closeBody(res)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
 	require.Equal(t, http.StatusForbidden, res.StatusCode)
 }
 
@@ -280,7 +295,10 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 		}
 		res, err := client.Do(req)
 		require.NoError(t, err)
-		defer closeBody(res)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
 		var out map[string]any
 		_ = json.NewDecoder(res.Body).Decode(&out)
 		return res, out
@@ -296,7 +314,10 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 		}
 		res, err := client.Do(req)
 		require.NoError(t, err)
-		defer closeBody(res)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
 		var out map[string]any
 		_ = json.NewDecoder(res.Body).Decode(&out)
 		return res, out
@@ -330,7 +351,10 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	req.AddCookie(aliceCookie)
 	resList, err := client.Do(req)
 	require.NoError(t, err)
-	defer closeBody(resList)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		resList.Body.Close()
+	}()
 	require.Equal(t, http.StatusOK, resList.StatusCode)
 	var list []map[string]any
 	require.NoError(t, json.NewDecoder(resList.Body).Decode(&list))
@@ -402,7 +426,10 @@ func TestServerV2RegisterRequiresWebAuthn(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	res, err := client.Do(req)
 	require.NoError(t, err)
-	defer closeBody(res)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
 	require.Equal(t, http.StatusServiceUnavailable, res.StatusCode)
 }
 
@@ -439,7 +466,10 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	res, err := client.Do(req)
 	require.NoError(t, err)
-	defer closeBody(res)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 
 	select {
@@ -656,21 +686,6 @@ func getSelfSignedTLSCredentials() (certPem []byte, keyPem []byte, err error) {
 	return certPem, keyPem, nil
 }
 
-func assertResponseError(t *testing.T, res *http.Response, expectStatusCode int, expectErr string) {
-	t.Helper()
-
-	require.Equal(t, expectStatusCode, res.StatusCode, "Response has an unexpected status code")
-	require.Equal(t, jsonContentType, res.Header.Get("Content-Type"), "Content-Type header is invalid") //nolint:testifylint
-
-	data := struct {
-		Error string `json:"error"`
-	}{}
-	err := json.NewDecoder(res.Body).Decode(&data)
-	require.NoError(t, err, "Error parsing response body as JSON")
-
-	require.Equal(t, expectErr, data.Error, "Error message does not match")
-}
-
 // mockWebhook implements the Webhook interface
 type mockWebhook struct {
 	requests chan *webhook.WebhookRequest
@@ -685,11 +700,4 @@ func (w mockWebhook) SendWebhook(_ context.Context, data *webhook.WebhookRequest
 
 func (w mockWebhook) SetBaseURL(val string) {
 	// Nop
-}
-
-// Closes a HTTP response body making sure to drain it first
-// Normally invoked as a defer'd function
-func closeBody(res *http.Response) {
-	_, _ = io.Copy(io.Discard, res.Body)
-	res.Body.Close()
 }

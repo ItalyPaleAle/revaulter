@@ -429,9 +429,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 
 	// Background v2 request expiry sweeper to notify long-poll/list subscribers when requests time out.
 	if s.requestStore != nil {
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			ticker := time.NewTicker(500 * time.Millisecond)
 			defer ticker.Stop()
 			for {
@@ -459,14 +457,12 @@ func (s *Server) startAppServer(ctx context.Context) error {
 					s.lock.Unlock()
 				}
 			}
-		}()
+		})
 	}
 
 	// Background cleanup of expired records every 60 seconds.
 	if s.requestStore != nil || s.authStore != nil {
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			cleanupTicker := time.NewTicker(60 * time.Second)
 			defer cleanupTicker.Stop()
 			for {
@@ -494,7 +490,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 					}
 				}
 			}
-		}()
+		})
 	}
 
 	return nil

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -98,9 +97,6 @@ func newWebhookWithClock(clock kclock.Clock) Webhook {
 		httpClient: httpClient,
 	}
 }
-
-// errWebhookDisallowedScheme is returned when the configured webhook URL uses anything other than http or https
-var errWebhookDisallowedScheme = errors.New("webhook URL must use http or https")
 
 // validateWebhookScheme checks that the webhook URL uses an allowed scheme (http/https)
 func validateWebhookScheme(webhookUrl string) error {

@@ -9,12 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/jackc/pgx/v5"
 )
 
 type AuthStore struct {
@@ -208,7 +210,12 @@ func (s *AuthStore) insertChallenge(ctx context.Context, rec *AuthChallenge, pay
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		rollbackErr := tx.Rollback(ctx)
+		if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
+		}
+	}()
 
 	_, err = tx.Exec(ctx,
 		`INSERT INTO v2_auth_challenges (id, kind, user_id, challenge, expires_at) VALUES ($1, $2, $3, $4, $5)`,
@@ -279,7 +286,12 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		rollbackErr := tx.Rollback(ctx)
+		if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
+		}
+	}()
 
 	requestKey, err := utils.RandomString(20)
 	if err != nil {
@@ -322,7 +334,12 @@ func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, err
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		rollbackErr := tx.Rollback(ctx)
+		if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
+		}
+	}()
 
 	now := time.Now().Unix()
 	err = tx.
