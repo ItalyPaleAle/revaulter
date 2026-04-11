@@ -230,10 +230,16 @@ func (s *RequestStore) ExpirePending(ctx context.Context, now time.Time) error {
 	return err
 }
 
-func (s *RequestStore) ExpirePendingAndReturnStates(ctx context.Context, now time.Time) ([]string, error) {
+// ExpiredRequestRef identifies a request row that was just transitioned from pending to expired
+type ExpiredRequestRef struct {
+	State  string
+	UserID string
+}
+
+func (s *RequestStore) ExpirePendingAndReturnStates(ctx context.Context, now time.Time) ([]ExpiredRequestRef, error) {
 	n := now.Unix()
 	rows, err := s.db.db.Query(ctx,
-		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4 RETURNING state`,
+		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4 RETURNING state, user_id`,
 		string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
 	)
 	if err != nil {
@@ -241,17 +247,17 @@ func (s *RequestStore) ExpirePendingAndReturnStates(ctx context.Context, now tim
 	}
 	defer rows.Close()
 
-	var states []string
+	var refs []ExpiredRequestRef
 	for rows.Next() {
-		var st string
-		err = rows.Scan(&st)
+		var ref ExpiredRequestRef
+		err = rows.Scan(&ref.State, &ref.UserID)
 		if err != nil {
 			return nil, err
 		}
-		states = append(states, st)
+		refs = append(refs, ref)
 	}
 
-	return states, rows.Err()
+	return refs, rows.Err()
 }
 
 // CleanupOldRecords deletes non-pending requests that expired more than 10 minutes ago.

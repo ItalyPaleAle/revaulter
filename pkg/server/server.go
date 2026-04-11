@@ -431,18 +431,22 @@ func (s *Server) startAppServer(ctx context.Context) error {
 				case <-ctx.Done():
 					return
 				case now := <-ticker.C:
-					states, err := s.requestStore.ExpirePendingAndReturnStates(ctx, now)
+					refs, err := s.requestStore.ExpirePendingAndReturnStates(ctx, now)
 					if err != nil {
 						log.WarnContext(ctx, "v2 expiry sweeper failed", slog.Any("error", err))
 						continue
 					}
-					if len(states) == 0 {
+					if len(refs) == 0 {
 						continue
 					}
 					s.lock.Lock()
-					for _, st := range states {
-						s.notifySubscriber(st)
-						s.publishListItem(&v2db.V2RequestListItem{State: st, Status: "removed"})
+					for _, ref := range refs {
+						s.notifySubscriber(ref.State)
+						s.publishListItem(&v2db.V2RequestListItem{
+							State:  ref.State,
+							Status: "removed",
+							UserID: ref.UserID,
+						})
 					}
 					s.lock.Unlock()
 				}

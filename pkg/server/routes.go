@@ -389,6 +389,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		s.publishListItem(&v2db.V2RequestListItem{
 			State:  req.State,
 			Status: "removed",
+			UserID: rec.UserID,
 		})
 		return
 	}
@@ -440,6 +441,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	s.publishListItem(&v2db.V2RequestListItem{
 		State:  req.State,
 		Status: "removed",
+		UserID: rec.UserID,
 	})
 }
 
@@ -623,7 +625,8 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 			if msg == nil {
 				continue
 			}
-			if userID != "" && msg.UserID != "" && msg.UserID != userID {
+			// Every broker message must carry a UserID, and it must match the session user
+			if msg.UserID == "" || msg.UserID != userID {
 				continue
 			}
 
@@ -665,7 +668,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 			for state := range known {
 				_, ok := current[state]
 				if !ok {
-					_ = enc.Encode(&v2db.V2RequestListItem{State: state, Status: "removed"})
+					_ = enc.Encode(&v2db.V2RequestListItem{State: state, Status: "removed", UserID: userID})
 					hasData = true
 				}
 			}
