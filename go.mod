@@ -6,6 +6,7 @@ require (
 	github.com/caarlos0/env/v11 v11.4.0
 	github.com/gin-contrib/location/v2 v2.0.1
 	github.com/gin-gonic/gin v1.12.0
+	github.com/go-chi/httprate v0.15.0
 	github.com/go-webauthn/webauthn v0.16.3
 	github.com/google/uuid v1.6.0
 	github.com/italypaleale/go-kit v0.0.0-20260326154118-cba072650bb2
@@ -97,6 +98,7 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	github.com/zeebo/xxh3 v1.0.2 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/bridges/prometheus v0.68.0 // indirect

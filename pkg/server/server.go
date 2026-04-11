@@ -241,8 +241,8 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	}
 
 	// Rate limiters for request creation and authentication endpoints
-	requestRateLimiter := MiddlewareRateLimit(20) // 20 req/s for CLI request creation
-	authRateLimiter := MiddlewareRateLimit(5)     // 5 req/s for auth endpoints
+	requestRateLimiter := MiddlewareRateLimit(200) // 200 req/m for CLI request creation
+	authRateLimiter := MiddlewareRateLimit(30)     // 30 req/m for auth endpoints
 
 	// v2 routes (WebAuthn + browser crypto flow)
 	v2RouteGroup := s.appRouter.Group("/v2")

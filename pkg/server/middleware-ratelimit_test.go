@@ -1,60 +1,93 @@
 package server
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
-	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
-func TestIPRateLimiterPerKey(t *testing.T) {
-	l := newIPRateLimiter(5, 5)
-	now := time.Unix(1_700_000_000, 0)
+func TestMiddlewareRateLimit_AllowsRequestsUpToConfiguredLimit(t *testing.T) {
+	router, handlerCalls := newRateLimitTestRouter(t, 2, nil)
 
-	// First 5 requests from ip1 succeed, then it is blocked
-	for range 5 {
-		require.True(t, l.allow("ip1", now), "ip1 should have tokens remaining")
-	}
-	require.False(t, l.allow("ip1", now), "ip1 should be throttled")
+	first := performRateLimitRequest(t, router, "198.51.100.10:1001", "")
+	second := performRateLimitRequest(t, router, "198.51.100.10:1001", "")
 
-	// ip2 is independent and still has its full burst
-	for range 5 {
-		require.True(t, l.allow("ip2", now), "ip2 should have its own bucket")
-	}
-	require.False(t, l.allow("ip2", now), "ip2 should be throttled")
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, http.StatusOK, second.Code)
+	require.Equal(t, int32(2), handlerCalls.Load())
 }
 
-func TestIPRateLimiterRefill(t *testing.T) {
-	l := newIPRateLimiter(10, 10)
-	now := time.Unix(1_700_000_000, 0)
+func TestMiddlewareRateLimit_BlocksRequestsAboveConfiguredLimitForSameIP(t *testing.T) {
+	router, handlerCalls := newRateLimitTestRouter(t, 1, nil)
 
-	// Drain the bucket
-	for range 10 {
-		require.True(t, l.allow("ip", now))
-	}
-	require.False(t, l.allow("ip", now))
+	first := performRateLimitRequest(t, router, "198.51.100.20:1001", "")
+	second := performRateLimitRequest(t, router, "198.51.100.20:2002", "")
 
-	// Half a second at 10 rps => 5 tokens regenerated
-	now = now.Add(500 * time.Millisecond)
-	for range 5 {
-		require.True(t, l.allow("ip", now))
-	}
-	require.False(t, l.allow("ip", now))
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, http.StatusTooManyRequests, second.Code)
+	require.Equal(t, int32(1), handlerCalls.Load())
 }
 
-func TestIPRateLimiterEvictionCap(t *testing.T) {
-	l := newIPRateLimiter(1, 1)
-	l.maxSize = 3
-	now := time.Unix(1_700_000_000, 0)
+func TestMiddlewareRateLimit_TracksLimitsPerClientIP(t *testing.T) {
+	router, handlerCalls := newRateLimitTestRouter(t, 1, nil)
 
-	require.True(t, l.allow("a", now))
-	require.True(t, l.allow("b", now.Add(time.Second)))
-	require.True(t, l.allow("c", now.Add(2*time.Second)))
-	require.Len(t, l.buckets, 3)
+	clientAFirst := performRateLimitRequest(t, router, "198.51.100.30:1001", "")
+	clientBFirst := performRateLimitRequest(t, router, "198.51.100.31:1001", "")
+	clientASecond := performRateLimitRequest(t, router, "198.51.100.30:2002", "")
 
-	// Adding a 4th key should evict the oldest ("a")
-	require.True(t, l.allow("d", now.Add(3*time.Second)))
-	require.Len(t, l.buckets, 3)
-	_, aStillThere := l.buckets["a"]
-	require.False(t, aStillThere, "oldest key should have been evicted")
+	require.Equal(t, http.StatusOK, clientAFirst.Code)
+	require.Equal(t, http.StatusOK, clientBFirst.Code)
+	require.Equal(t, http.StatusTooManyRequests, clientASecond.Code)
+	require.Equal(t, int32(2), handlerCalls.Load())
+}
+
+func TestMiddlewareRateLimit_UsesForwardedClientIPFromTrustedProxy(t *testing.T) {
+	router, handlerCalls := newRateLimitTestRouter(t, 1, []string{"10.0.0.0/8"})
+
+	first := performRateLimitRequest(t, router, "10.1.2.3:1001", "203.0.113.9")
+	second := performRateLimitRequest(t, router, "10.1.2.3:2002", "203.0.113.9")
+	third := performRateLimitRequest(t, router, "10.1.2.3:3003", "203.0.113.10")
+
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, http.StatusTooManyRequests, second.Code)
+	require.Equal(t, http.StatusOK, third.Code)
+	require.Equal(t, int32(2), handlerCalls.Load())
+}
+
+func newRateLimitTestRouter(t *testing.T, rpm int, trustedProxies []string) (*gin.Engine, *atomic.Int32) {
+	t.Helper()
+
+	handlerCalls := &atomic.Int32{}
+	router := gin.New()
+
+	err := router.SetTrustedProxies(trustedProxies)
+	require.NoError(t, err)
+
+	router.Use(MiddlewareRateLimit(rpm))
+	router.GET("/limited", func(c *gin.Context) {
+		handlerCalls.Add(1)
+		c.String(http.StatusOK, "ok")
+	})
+
+	return router, handlerCalls
+}
+
+func performRateLimitRequest(t *testing.T, router http.Handler, remoteAddr string, forwardedFor string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/limited", nil)
+	req.RemoteAddr = remoteAddr
+
+	if forwardedFor != "" {
+		req.Header.Set("X-Forwarded-For", forwardedFor)
+	}
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	return recorder
 }
