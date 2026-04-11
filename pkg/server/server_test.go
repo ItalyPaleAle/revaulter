@@ -122,17 +122,7 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create request
-	res, createResp := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", map[string]any{
-		"keyLabel":  "disk-key",
-		"algorithm": "aes-gcm-256",
-		"value":     base64.RawURLEncoding.EncodeToString([]byte("hello")),
-		"clientTransportKey": map[string]any{
-			"kty": clientJWK.Kty,
-			"crv": clientJWK.Crv,
-			"x":   clientJWK.X,
-			"y":   clientJWK.Y,
-		},
-	})
+	res, createResp := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK))
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 	state, _ := createResp["state"].(string)
 	require.NotEmpty(t, state)
@@ -158,9 +148,9 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	res, detail := doGetJSON(t, "/v2/api/request/"+state, sessionCookie)
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, aliceUser.ID, detail["userId"])
-	reqObj, ok := detail["request"].(map[string]any)
+	reqObj, ok := detail["encryptedRequest"].(map[string]any)
 	require.True(t, ok)
-	require.NotNil(t, reqObj["clientTransportKey"])
+	require.NotNil(t, reqObj["cliEphemeralPublicKey"])
 
 	// Confirm with a valid-looking encrypted response envelope
 	browserPriv, err := ecdh.P256().GenerateKey(rand.Reader)
@@ -168,21 +158,9 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
 	require.NoError(t, err)
 	res, confirmResp := doPostJSON(t, "/v2/api/confirm", map[string]any{
-		"state":   state,
-		"confirm": true,
-		"responseEnvelope": map[string]any{
-			"transportAlg": "ecdh-p256+a256gcm",
-			"browserEphemeralPublicKey": map[string]any{
-				"kty": browserJWK.Kty,
-				"crv": browserJWK.Crv,
-				"x":   browserJWK.X,
-				"y":   browserJWK.Y,
-			},
-			"nonce":      base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
-			"ciphertext": base64.RawURLEncoding.EncodeToString([]byte("ciphertext+tag")),
-			"aad":        base64.RawURLEncoding.EncodeToString([]byte(`{"v":1}`)),
-			"resultType": "bytes",
-		},
+		"state":            state,
+		"confirm":          true,
+		"responseEnvelope": newV2ResponseEnvelope(browserJWK),
 	}, sessionCookie)
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, true, confirmResp["confirmed"])
@@ -331,27 +309,17 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.NoError(t, err)
 
 	// Reject malformed client transport JWK (private material present).
-	res, _ := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", map[string]any{
-		"keyLabel":  "disk-key",
-		"algorithm": "aes-gcm-256",
-		"value":     base64.RawURLEncoding.EncodeToString([]byte("hello")),
-		"clientTransportKey": map[string]any{
-			"kty": "EC", "crv": "P-256",
-			"x": clientJWK.X, "y": clientJWK.Y,
-			"d": "forbidden",
-		},
-	})
+	invalidCreateBody := newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK)
+	invalidCreateBody["cliEphemeralPublicKey"] = map[string]any{
+		"kty": "EC", "crv": "P-256",
+		"x": clientJWK.X, "y": clientJWK.Y,
+		"d": "forbidden",
+	}
+	res, _ := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", invalidCreateBody)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
 	// Create a valid request targeted to alice.
-	res, create := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", map[string]any{
-		"keyLabel":  "disk-key",
-		"algorithm": "aes-gcm-256",
-		"value":     base64.RawURLEncoding.EncodeToString([]byte("hello")),
-		"clientTransportKey": map[string]any{
-			"kty": clientJWK.Kty, "crv": clientJWK.Crv, "x": clientJWK.X, "y": clientJWK.Y,
-		},
-	})
+	res, create := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK))
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 	state, _ := create["state"].(string)
 	require.NotEmpty(t, state)
@@ -370,19 +338,16 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.Equal(t, state, list[0]["state"])
 
 	// Reject malformed response envelope from Alice.
+	invalidEnvelope := newV2ResponseEnvelope(clientJWK)
+	invalidEnvelope["browserEphemeralPublicKey"] = map[string]any{
+		"kty": "EC", "crv": "P-256",
+		"x": clientJWK.X, "y": clientJWK.Y,
+		"d": "forbidden",
+	}
 	res, _ = doPostJSON(t, "/v2/api/confirm", map[string]any{
-		"state":   state,
-		"confirm": true,
-		"responseEnvelope": map[string]any{
-			"transportAlg": "ecdh-p256+a256gcm",
-			"browserEphemeralPublicKey": map[string]any{
-				"kty": "EC", "crv": "P-256",
-				"x": clientJWK.X, "y": clientJWK.Y,
-				"d": "forbidden",
-			},
-			"nonce":      base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
-			"ciphertext": base64.RawURLEncoding.EncodeToString([]byte("ciphertext+tag")),
-		},
+		"state":            state,
+		"confirm":          true,
+		"responseEnvelope": invalidEnvelope,
 	}, aliceCookie)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
@@ -391,30 +356,19 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.NoError(t, err)
 	browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
 	require.NoError(t, err)
+	invalidNonceEnvelope := newV2ResponseEnvelope(browserJWK)
+	invalidNonceEnvelope["nonce"] = "!!!!"
 	res, _ = doPostJSON(t, "/v2/api/confirm", map[string]any{
-		"state":   state,
-		"confirm": true,
-		"responseEnvelope": map[string]any{
-			"transportAlg": "ecdh-p256+a256gcm",
-			"browserEphemeralPublicKey": map[string]any{
-				"kty": browserJWK.Kty, "crv": browserJWK.Crv, "x": browserJWK.X, "y": browserJWK.Y,
-			},
-			"nonce":      "!!!!",
-			"ciphertext": base64.RawURLEncoding.EncodeToString([]byte("ciphertext+tag")),
-		},
+		"state":            state,
+		"confirm":          true,
+		"responseEnvelope": invalidNonceEnvelope,
 	}, aliceCookie)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
 	// Expiry path: short timeout should transition to failed/expired on result polling.
-	res, create = doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", map[string]any{
-		"keyLabel":  "expiring-key",
-		"algorithm": "aes-gcm-256",
-		"value":     base64.RawURLEncoding.EncodeToString([]byte("hello")),
-		"timeout":   "1s",
-		"clientTransportKey": map[string]any{
-			"kty": clientJWK.Kty, "crv": clientJWK.Crv, "x": clientJWK.X, "y": clientJWK.Y,
-		},
-	})
+	expiringCreateBody := newV2CreateRequestBody("expiring-key", "aes-gcm-256", clientJWK)
+	expiringCreateBody["timeout"] = "1s"
+	res, create = doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", expiringCreateBody)
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 	expState, _ := create["state"].(string)
 	require.NotEmpty(t, expState)
@@ -476,15 +430,9 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 
 	_, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
 
-	body, err := json.Marshal(map[string]any{
-		"keyLabel":  "disk-key",
-		"algorithm": "aes-gcm-256",
-		"value":     base64.RawURLEncoding.EncodeToString([]byte("hello")),
-		"note":      "boot unlock",
-		"clientTransportKey": map[string]any{
-			"kty": clientJWK.Kty, "crv": clientJWK.Crv, "x": clientJWK.X, "y": clientJWK.Y,
-		},
-	})
+	createBody := newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK)
+	createBody["note"] = "boot unlock"
+	body, err := json.Marshal(createBody)
 	require.NoError(t, err)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/request/%s/encrypt", testServerPort, aliceUser.RequestKey), bytes.NewReader(body))
 	require.NoError(t, err)
@@ -560,6 +508,21 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 	})
 	require.NoError(t, err)
 
+	requestEncPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	requestEncJWK, err := protocolv2.ECP256PublicJWKFromECDH(requestEncPriv.PublicKey())
+	require.NoError(t, err)
+	requestEncJWKJSON, err := json.Marshal(requestEncJWK)
+	require.NoError(t, err)
+	err = srv.authStore.FinalizeSignup(
+		t.Context(),
+		userID,
+		"test-canary",
+		string(requestEncJWKJSON),
+		base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey")),
+	)
+	require.NoError(t, err)
+
 	user, err := srv.authStore.GetUserByID(t.Context(), userID)
 	require.NoError(t, err)
 	require.NotNil(t, user)
@@ -621,6 +584,39 @@ func clientForListener(ln net.Listener) *http.Client {
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+}
+
+func newV2CreateRequestBody(keyLabel string, algorithm string, cliJWK protocolv2.ECP256PublicJWK) map[string]any {
+	return map[string]any{
+		"keyLabel":      keyLabel,
+		"algorithm":     algorithm,
+		"requestEncAlg": "ecdh-p256+mlkem768+a256gcm",
+		"cliEphemeralPublicKey": map[string]any{
+			"kty": cliJWK.Kty,
+			"crv": cliJWK.Crv,
+			"x":   cliJWK.X,
+			"y":   cliJWK.Y,
+		},
+		"mlkemCiphertext":       base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-ciphertext")),
+		"encryptedPayloadNonce": base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
+		"encryptedPayload":      base64.RawURLEncoding.EncodeToString([]byte("test-request-ciphertext")),
+	}
+}
+
+func newV2ResponseEnvelope(browserJWK protocolv2.ECP256PublicJWK) map[string]any {
+	return map[string]any{
+		"transportAlg": "ecdh-p256+mlkem768+a256gcm",
+		"browserEphemeralPublicKey": map[string]any{
+			"kty": browserJWK.Kty,
+			"crv": browserJWK.Crv,
+			"x":   browserJWK.X,
+			"y":   browserJWK.Y,
+		},
+		"mlkemCiphertext": base64.RawURLEncoding.EncodeToString([]byte("test-response-mlkem-ciphertext")),
+		"nonce":           base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
+		"ciphertext":      base64.RawURLEncoding.EncodeToString([]byte("test-response-ciphertext")),
+		"resultType":      "bytes",
 	}
 }
 

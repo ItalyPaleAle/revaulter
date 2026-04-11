@@ -7,8 +7,6 @@ import (
 	"github.com/go-chi/httprate"
 )
 
-type clientIPCtxKey struct{}
-
 // MiddlewareRateLimit returns a Gin middleware that enforces a per-client-IP request-per-second limit
 // Requests that exceed the limit receive HTTP 429 Too Many Requests
 func MiddlewareRateLimit(rpm int) gin.HandlerFunc {

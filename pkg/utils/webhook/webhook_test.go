@@ -21,8 +21,8 @@ import (
 func TestWebhook(t *testing.T) {
 	// Set configurations
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"webhookUrl":    "http://test.local/endpoint",
-		"baseUrl":       "http://test.local/app",
+		"webhookUrl":    "http://198.51.100.10/endpoint",
+		"baseUrl":       "http://198.51.100.10/app",
 		"webhookKey":    "",
 		"webhookFormat": "",
 	}))
@@ -39,8 +39,9 @@ func TestWebhook(t *testing.T) {
 	getWebhookRequest := func() *WebhookRequest {
 		return &WebhookRequest{
 			OperationName: "encrypt",
-			KeyId:         "mykey",
-			Vault:         "myvault",
+			AssignedUser:  "Alice",
+			KeyLabel:      "mykey",
+			Algorithm:     "aes-gcm-256",
 			StateId:       "mystate",
 			Requestor:     "127.0.0.1",
 		}
@@ -69,43 +70,43 @@ func TestWebhook(t *testing.T) {
 	t.Run("format plain", basicTestFn(map[string]any{
 		"webhookFormat": "plain",
 	}, func(t *testing.T, r *http.Request) {
-		require.Equal(t, "http://test.local/endpoint", r.URL.String())
-		requireBodyEqual(t, r.Body, "Received a request to encrypt a message using key **mykey** in vault **myvault**.\n\nConfirm request: http://test.local/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
+		require.Equal(t, "http://198.51.100.10/endpoint", r.URL.String())
+		requireBodyEqual(t, r.Body, "Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n\nOpen Revaulter: http://198.51.100.10/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
 	}))
 
 	t.Run("empty format, fallback to plain", basicTestFn(map[string]any{
 		"webhookFormat": "",
 	}, func(t *testing.T, r *http.Request) {
-		require.Equal(t, "http://test.local/endpoint", r.URL.String())
-		requireBodyEqual(t, r.Body, "Received a request to encrypt a message using key **mykey** in vault **myvault**.\n\nConfirm request: http://test.local/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
+		require.Equal(t, "http://198.51.100.10/endpoint", r.URL.String())
+		requireBodyEqual(t, r.Body, "Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n\nOpen Revaulter: http://198.51.100.10/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
 	}))
 
 	t.Run("format slack", basicTestFn(map[string]any{
 		"webhookFormat": "slack",
 	}, func(t *testing.T, r *http.Request) {
-		require.Equal(t, "http://test.local/endpoint", r.URL.String())
-		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt a message using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
+		require.Equal(t, "http://198.51.100.10/endpoint", r.URL.String())
+		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("format discord appends /slack", basicTestFn(map[string]any{
 		"webhookFormat": "discord",
 	}, func(t *testing.T, r *http.Request) {
-		require.Equal(t, "http://test.local/endpoint/slack", r.URL.String())
-		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt a message using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
+		require.Equal(t, "http://198.51.100.10/endpoint/slack", r.URL.String())
+		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("format discord with /slack already appended", basicTestFn(map[string]any{
-		"webhookUrl":    "http://my.local/endpoint/slack",
+		"webhookUrl":    "http://203.0.113.10/endpoint/slack",
 		"webhookFormat": "discord",
 	}, func(t *testing.T, r *http.Request) {
-		require.Equal(t, "http://my.local/endpoint/slack", r.URL.String())
-		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt a message using key **mykey** in vault **myvault**.\n[Confirm request](http://test.local/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
+		require.Equal(t, "http://203.0.113.10/endpoint/slack", r.URL.String())
+		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("plain request with authorization", basicTestFn(map[string]any{
 		"webhookKey": "mykey",
 	}, func(t *testing.T, r *http.Request) {
-		require.Equal(t, "http://test.local/endpoint", r.URL.String())
+		require.Equal(t, "http://198.51.100.10/endpoint", r.URL.String())
 		require.Equal(t, "mykey", r.Header.Get("Authorization"))
 	}))
 
@@ -113,7 +114,7 @@ func TestWebhook(t *testing.T) {
 		"webhookKey":    "mykey",
 		"webhookFormat": "slack",
 	}, func(t *testing.T, r *http.Request) {
-		require.Equal(t, "http://test.local/endpoint", r.URL.String())
+		require.Equal(t, "http://198.51.100.10/endpoint", r.URL.String())
 		require.Equal(t, "mykey", r.Header.Get("Authorization"))
 	}))
 
@@ -270,7 +271,7 @@ func TestWebhook(t *testing.T) {
 
 		err := wh.SendWebhook(t.Context(), getWebhookRequest())
 		require.Error(t, err)
-		require.ErrorContains(t, err, "failed to create request")
+		require.ErrorContains(t, err, "webhook URL validation failed")
 	})
 }
 
