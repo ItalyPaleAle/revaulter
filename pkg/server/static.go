@@ -175,7 +175,8 @@ func isNotModified(c *gin.Context) bool {
 func setPageSecurityHeaders(w http.ResponseWriter) {
 	// Content-Security-Policy:
 	//   default-src 'none'  — deny everything not explicitly allowed
-	//   script-src 'self'   — JS only from same origin (Vite/SRI bundles)
+	//   script-src 'self' 'wasm-unsafe-eval'
+	//                       — JS only from same origin (Vite/SRI bundles); 'wasm-unsafe-eval' is required for mlkem-wasm
 	//   style-src 'self'    — CSS only from same origin (Tailwind bundle)
 	//   img-src 'self'      — images from same origin
 	//   font-src 'self'     — fonts from same origin
@@ -187,7 +188,7 @@ func setPageSecurityHeaders(w http.ResponseWriter) {
 	//   form-action 'none'  — no HTML form submissions (SPA, all interaction is via fetch)
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'none'; "+
-			"script-src 'self'; "+
+			"script-src 'self' 'wasm-unsafe-eval'; "+
 			"style-src 'self'; "+
 			"img-src 'self'; "+
 			"font-src 'self'; "+
