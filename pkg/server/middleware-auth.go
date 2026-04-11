@@ -60,6 +60,12 @@ func (s *Server) MiddlewareSession(required bool) gin.HandlerFunc {
 			}
 			return
 		}
+		if !sess.Ready {
+			if required {
+				AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account setup is not complete"))
+			}
+			return
+		}
 
 		// Use the minimum of cookie TTL and DB TTL.
 		dbTTL := time.Until(sess.ExpiresAt)

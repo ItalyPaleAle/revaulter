@@ -42,6 +42,7 @@ type AuthSession struct {
 	DisplayName string
 	RequestKey  string
 	AllowedIPs  []string
+	Ready       bool
 	ExpiresAt   time.Time
 	CreatedAt   time.Time
 }
@@ -384,13 +385,13 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 	)
 	err := s.db.db.
 		QueryRow(ctx,
-			`SELECT s.id, s.user_id, u.display_name, u.request_key, u.allowed_ips, s.expires_at, s.created_at, s.revoked_at
+			`SELECT s.id, s.user_id, u.display_name, u.request_key, u.allowed_ips, u.ready, s.expires_at, s.created_at, s.revoked_at
 			FROM v2_user_sessions s
 			INNER JOIN v2_users u ON u.id = s.user_id
 			WHERE s.id = $1 AND u.status = 'active'`,
 			id,
 		).
-		Scan(&sess.ID, &sess.UserID, &sess.DisplayName, &sess.RequestKey, &allowedIPsCSV, &expiresAt, &createdAt, &revokedAt)
+		Scan(&sess.ID, &sess.UserID, &sess.DisplayName, &sess.RequestKey, &allowedIPsCSV, &sess.Ready, &expiresAt, &createdAt, &revokedAt)
 	if s.db.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
@@ -406,8 +407,6 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 	if sess.ExpiresAt.Before(time.Now()) {
 		return nil, nil
 	}
-
-	_ = s.touchSession(ctx, id)
 	return &sess, nil
 }
 
@@ -499,11 +498,6 @@ func (s *AuthStore) RegenerateRequestKey(ctx context.Context, userID string) (st
 
 func (s *AuthStore) RevokeSession(ctx context.Context, id string) error {
 	_, err := s.db.db.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $1 WHERE id = $2`, time.Now().UTC().Unix(), id)
-	return err
-}
-
-func (s *AuthStore) touchSession(ctx context.Context, id string) error {
-	_, err := s.db.db.Exec(ctx, `UPDATE v2_user_sessions SET last_seen_at = $1 WHERE id = $2`, time.Now().UTC().Unix(), id)
 	return err
 }
 

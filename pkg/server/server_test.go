@@ -236,6 +236,41 @@ func TestServerV2PublicSignup(t *testing.T) {
 	require.Equal(t, "webauthn", regBegin["mode"])
 }
 
+func TestServerV2SessionMiddlewareBlocksUnreadyUsersFromAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Cleanup(config.SetTestConfig(map[string]any{
+		"databaseDSN":     tmpDir + "/v2-unready.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+	}))
+
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	defer cleanup()
+
+	stopServerFn := startTestServer(t, srv)
+	defer stopServerFn(t)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-unready", "Unready")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort), nil)
+	require.NoError(t, err)
+	req.AddCookie(sessionCookie)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+
+	var body map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&body)
+	require.Equal(t, http.StatusForbidden, res.StatusCode)
+	require.Equal(t, "User account setup is not complete", body["error"])
+}
+
 func TestServerV2DisableSignup(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{

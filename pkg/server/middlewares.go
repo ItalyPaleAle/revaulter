@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -44,8 +45,8 @@ func (s *Server) getRequestID(c *gin.Context) (string, error) {
 	// Check if we have a trusted request ID header and it has a value
 	headerName := config.Get().TrustedRequestIdHeader
 	if headerName != "" {
-		v := c.GetHeader(headerName)
-		if v != "" {
+		v := strings.TrimSpace(c.GetHeader(headerName))
+		if validTrustedRequestID(v) {
 			return v, nil
 		}
 	}
@@ -58,6 +59,28 @@ func (s *Server) getRequestID(c *gin.Context) (string, error) {
 
 	v := reqUuid.String()
 	return v, nil
+}
+
+// validTrustedRequestID validates that the request ID header matches `[A-Za-z0-9._:-]{1,128}`
+func validTrustedRequestID(v string) bool {
+	if v == "" || len(v) > 128 {
+		return false
+	}
+
+	for _, ch := range v {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
+			continue
+		}
+
+		switch ch {
+		case '.', '_', ':', '-':
+			continue
+		default:
+			return false
+		}
+	}
+
+	return true
 }
 
 // MiddlewareNoCache is a middleware that disables caching on clients and CDNs

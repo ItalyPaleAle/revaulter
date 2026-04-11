@@ -51,12 +51,6 @@ func prepareStaticResponse(c *gin.Context) (ok bool) {
 func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 	reqPath = strings.TrimLeft(reqPath, "/")
 
-	// If the request is for a HTML file, set the security headers
-	ext := strings.ToLower(path.Ext(reqPath))
-	if ext == ".html" || ext == ".htm" {
-		setPageSecurityHeaders(c.Writer)
-	}
-
 	// Check if the static file exists
 	f, err := filesystem.Open(staticBaseDir + "/" + reqPath)
 	if err != nil {
@@ -111,6 +105,12 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 		// Load the index.html file in the directory instead
 		serveStaticFiles(c, path.Join(reqPath, "index.html"), filesystem)
 		return
+	}
+
+	// Apply page security headers to the actual file being served, including SPA index fallbacks
+	ext := strings.ToLower(path.Ext(reqPath))
+	if ext == ".html" || ext == ".htm" {
+		setPageSecurityHeaders(c.Writer)
 	}
 
 	// File should implement io.Seeker when it's not a directory
