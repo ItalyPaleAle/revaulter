@@ -39,6 +39,12 @@ Set `secretKey` to a strong secret. For example:
 openssl rand -base64 32
 ```
 
+> **⚠️ WARNING: Rotating `secretKey` will brick every existing account** on this instance, essentially making them unable to sign in.
+> Treat this value as immutable for the lifetime of the instance.
+
+> **Note:** `secretKey` is **not** used to encrypt anything stored in the database.
+> All request payloads are end-to-end encrypted in the browser; the server only relays opaque ciphertext. `secretKey` is the input used to derive the instance-wide WebAuthn PRF salt that every user's in-browser key derivation is bound to.
+
 ## Account Registration
 
 Users can create their own accounts from the main web UI using WebAuthn, unless `disableSignup` is set to `true` in the server configuration.

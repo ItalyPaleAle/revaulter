@@ -62,8 +62,12 @@ type Config struct {
 	// +required
 	DatabaseDSN string `env:"DATABASEDSN" yaml:"databaseDSN"`
 
-	// Shared key used to encrypt sensitive payloads stored in the database.
-	// It's recommended to generate with `openssl rand -base64 32`
+	// Instance-wide secret to derive encryption keys.
+	// It's recommended to generate with `openssl rand -base64 32`.
+	//
+	// IMPORTANT: rotating `secretKey` changes the PRF salt for every user effectively bricks every existing account. Treat this value as immutable for the lifetime of the instance; if you must rotate it, plan on every user re-registering from scratch.
+	//
+	// Note: this value is NOT used to encrypt anything server-side: all request payloads and responses are end-to-end encrypted in the browser, and the server only stores opaque envelopes.
 	// +required
 	SecretKey string `env:"SECRETKEY" yaml:"secretKey"`
 
@@ -214,7 +218,14 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	return nil
 }
 
-// SetSecretKey parses and normalizes the secret key.
+// SetSecretKey derives the instance-wide deterministic WebAuthn PRF salt
+// from `secretKey`. The resulting salt is NOT used to encrypt any
+// server-side data; it is purely the input-material anchor that every
+// user's in-browser key derivation (static ECDH/ML-KEM decryption keys
+// and per-operation AES-GCM keys) is bound to. Rotating `secretKey`
+// therefore invalidates every existing user's derived keys and bricks
+// every existing account on the instance - see the doc comment on
+// Config.SecretKey for details.
 func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
 	if c.SecretKey == "" {
 		return errors.New("secret key value is empty")
