@@ -281,7 +281,7 @@ async function deriveCanaryKey(password: string, salt: Uint8Array): Promise<Cryp
         salt,
         parallelism: 1,
         iterations: 4,
-        memorySize: 128<<10, // 128 MiB
+        memorySize: 128 << 10, // 128 MiB
         hashLength: 32,
         outputType: 'binary',
     })
