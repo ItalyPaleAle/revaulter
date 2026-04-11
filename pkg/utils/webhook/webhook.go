@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -48,15 +50,48 @@ func NewWebhook() Webhook {
 
 // newWebhookWithClock creates a new Webhook with the given clock
 func newWebhookWithClock(clock kclock.Clock) Webhook {
+	// Build an HTTP transport whose dialer refuses to connect to private or otherwise non-routable IP addresses.
+	// net.Dialer.Control is invoked AFTER the OS has resolved the hostname to an IP but BEFORE the connect syscall, which means:
+	//   1. it sees the actual IP that would be connected to (no TOCTOU)
+	//   2. it runs for every A/AAAA candidate in a multi-address result, so a mixed-public/private DNS response cannot slip through
+	//   3. it also catches redirects (we disable auto-following below for good measure, but a custom resolver round would still be blocked)
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control: func(network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("invalid dial address %q: %w", address, err)
+			}
+			ip := net.ParseIP(host)
+			if ip == nil {
+				return fmt.Errorf("dial target %q is not an IP literal", host)
+			}
+			if isPrivateIP(ip) {
+				return fmt.Errorf("refusing to dial private/internal IP %s: SSRF protection", ip)
+			}
+			return nil
+		},
+	}
+
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
 	httpClient := &http.Client{
 		Timeout: webhookTimeout,
 		// Disable automatic redirect following to prevent SSRF via redirects to internal IPs
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+		Transport: otelhttp.NewTransport(transport),
 	}
-	// Update the transport for the HTTP client to include tracing information
-	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	return &webhookClient{
 		clock:      clock,
@@ -64,8 +99,11 @@ func newWebhookWithClock(clock kclock.Clock) Webhook {
 	}
 }
 
-// validateWebhookURL checks that the webhook URL uses an allowed scheme (http/https) and does not resolve to a private/internal IP address to prevent SSRF attacks
-func validateWebhookURL(webhookUrl string) error {
+// errWebhookDisallowedScheme is returned when the configured webhook URL uses anything other than http or https
+var errWebhookDisallowedScheme = errors.New("webhook URL must use http or https")
+
+// validateWebhookScheme checks that the webhook URL uses an allowed scheme (http/https)
+func validateWebhookScheme(webhookUrl string) error {
 	parsed, err := url.Parse(webhookUrl)
 	if err != nil {
 		return fmt.Errorf("invalid webhook URL: %w", err)
@@ -75,28 +113,10 @@ func validateWebhookURL(webhookUrl string) error {
 	switch parsed.Scheme {
 	case "http", "https":
 		// OK
+		return nil
 	default:
 		return fmt.Errorf("webhook URL has disallowed scheme %q: only http and https are permitted", parsed.Scheme)
 	}
-
-	// Resolve the hostname and check all returned IPs
-	host := parsed.Hostname()
-	ips, err := net.LookupHost(host)
-	if err != nil {
-		return fmt.Errorf("failed to resolve webhook host %q: %w", host, err)
-	}
-
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			continue
-		}
-		if isPrivateIP(ip) {
-			return fmt.Errorf("webhook URL resolves to private/internal IP %s: blocked for SSRF prevention", ipStr)
-		}
-	}
-
-	return nil
 }
 
 // isPrivateIP returns true if the IP is in a private, loopback, link-local, or
@@ -131,8 +151,9 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) e
 	cfg := config.Get()
 	webhookUrl := cfg.WebhookUrl
 
-	// Validate the webhook URL to prevent SSRF attacks
-	err := validateWebhookURL(webhookUrl)
+	// Validate the webhook URL scheme
+	// The custom net.Dialer.Control on the HTTP transport enforces the private-IP block at connect time
+	err := validateWebhookScheme(webhookUrl)
 	if err != nil {
 		return fmt.Errorf("webhook URL validation failed: %w", err)
 	}
