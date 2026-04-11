@@ -643,14 +643,17 @@ func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2We
 	// If the stored count was non-zero but the new count is not strictly greater, the credential may have been cloned.
 	// Note: Some authenticators do not report a counter, which is always 0.
 	newCount := cred.Authenticator.SignCount
-	if newCount == 0 {
-		return nil
-	}
 
 	credIDEncoded := base64.RawURLEncoding.EncodeToString(cred.ID)
 	for _, stored := range userRecord.credentials {
 		if base64.RawURLEncoding.EncodeToString(stored.ID) != credIDEncoded {
 			continue
+		}
+
+		// Authenticators that don't implement a sign counter always report 0
+		// In that case we cannot detect cloning, but we still need to match the credential in the user's stored list.
+		if newCount == 0 {
+			return nil
 		}
 
 		storedCount := stored.Authenticator.SignCount
@@ -665,10 +668,21 @@ func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2We
 			)
 			return NewResponseError(http.StatusForbidden, "Authenticator sign count anomaly detected — possible credential cloning")
 		}
-		break
+		return nil
 	}
 
-	return nil
+	// Fail-closed: if the credential that signed the assertion isn't in the
+	// user's stored credential list, refuse the login. This should be
+	// unreachable because FinishDiscoverableLogin already matched a stored
+	// credential, but we want a defense-in-depth guarantee against a future
+	// refactor that reorders the lookups.
+	logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
+		"Authenticator credential not found in user's stored credentials",
+		slog.String("user_id", userRecord.userID),
+		slog.String("credential_id", credIDEncoded),
+		slog.String("client_ip", c.ClientIP()),
+	)
+	return NewResponseError(http.StatusForbidden, "Authenticator credential not recognized")
 }
 
 func (s *Server) createLoginSession(ctx context.Context, userID string, cred *webauthnlib.Credential) (*v2db.AuthSession, error) {
