@@ -167,32 +167,58 @@ func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client,
 	if kp == nil {
 		return nil, errors.New("missing transport key pair")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.flags.GetServer()+"/v2/request/result/"+state, nil)
-	if err != nil {
-		return nil, err
+
+	// The server long-polls and may return {pending:true} when its own subscription window elapses, when the broker is saturated, or when the subscriber slot is temporarily unavailable
+	// Treat those as "keep waiting" and re-issue the request until the context is canceled (or its deadline is reached)
+	// A short backoff avoids tight-spinning if the server ever returns pending immediately
+	const minBackoff = 250 * time.Millisecond
+	const maxBackoff = 2 * time.Second
+	backoff := minBackoff
+
+	for {
+		err := ctx.Err()
+		if err != nil {
+			return nil, err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.flags.GetServer()+"/v2/request/result/"+state, nil)
+		if err != nil {
+			return nil, err
+		}
+		var res protocolv2.RequestResultResponse
+		err = doJSONRequest(httpClient, req, &res)
+		if err != nil {
+			return nil, err
+		}
+		if res.State != state {
+			return nil, errors.New("response state mismatch")
+		}
+		if res.Pending {
+			// Wait briefly before reconnecting
+			// The typical server long-poll already covered the bulk of the wait time; this backoff only kicks in if the server is returning pending quickly
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+		if res.Failed {
+			return nil, errors.New("operation is canceled, denied, or failed")
+		}
+		if !res.Done || res.ResponseEnvelope == nil {
+			return nil, errors.New("missing encrypted response envelope")
+		}
+		plain, err := decryptV2ResponseEnvelope(state, kp, res.ResponseEnvelope, aad)
+		if err != nil {
+			return nil, err
+		}
+		return formatV2DecryptedPayload(state, plain)
 	}
-	var res protocolv2.RequestResultResponse
-	err = doJSONRequest(httpClient, req, &res)
-	if err != nil {
-		return nil, err
-	}
-	if res.State != state {
-		return nil, errors.New("response state mismatch")
-	}
-	if res.Pending {
-		return nil, errors.New("waiting for the result got interrupted")
-	}
-	if res.Failed {
-		return nil, errors.New("operation is canceled, denied, or failed")
-	}
-	if !res.Done || res.ResponseEnvelope == nil {
-		return nil, errors.New("missing encrypted response envelope")
-	}
-	plain, err := decryptV2ResponseEnvelope(state, kp, res.ResponseEnvelope, aad)
-	if err != nil {
-		return nil, err
-	}
-	return formatV2DecryptedPayload(state, plain)
 }
 
 func doJSONRequest(client *http.Client, req *http.Request, out any) error {
