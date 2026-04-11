@@ -29,7 +29,7 @@ func sessionCookieFor(c *gin.Context) (name, path string) {
 	return sessionCookieNameInsecure, "/v2"
 }
 
-func (s *Server) MiddlewareSession(required bool) gin.HandlerFunc {
+func (s *Server) MiddlewareSession(required bool, requireReady bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if s.authStore == nil {
 			if required {
@@ -60,7 +60,7 @@ func (s *Server) MiddlewareSession(required bool) gin.HandlerFunc {
 			}
 			return
 		}
-		if !sess.Ready {
+		if requireReady && !sess.Ready {
 			if required {
 				AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account setup is not complete"))
 			}

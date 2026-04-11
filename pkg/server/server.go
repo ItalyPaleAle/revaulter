@@ -266,7 +266,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 
 	// API and auth groups are browser-facing, apply CSRF protection
 	v2APIGroup := v2RouteGroup.Group("/api")
-	v2APIGroup.Use(csrfMw, s.MiddlewareSession(true))
+	v2APIGroup.Use(csrfMw, s.MiddlewareSession(true, true))
 	v2APIGroup.GET("/list", s.RouteV2APIList)
 	v2APIGroup.GET("/request/:state", s.RouteV2APIRequestGet)
 	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
@@ -277,11 +277,11 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
 	v2AuthGroup.POST("/login/finish", s.RouteV2AuthLoginFinish)
-	v2AuthGroup.GET("/session", s.MiddlewareSession(true), s.RouteV2AuthSession)
-	v2AuthGroup.POST("/finalize-signup", s.MiddlewareSession(true), s.RouteV2AuthFinalizeSignup)
-	v2AuthGroup.POST("/allowed-ips", s.MiddlewareSession(true), s.RouteV2AuthAllowedIPs)
-	v2AuthGroup.POST("/regenerate-request-key", s.MiddlewareSession(true), s.RouteV2AuthRequestKeyRegenerate)
-	v2AuthGroup.POST("/logout", s.MiddlewareSession(true), s.RouteV2AuthLogout)
+	v2AuthGroup.GET("/session", s.MiddlewareSession(true, false), s.RouteV2AuthSession)
+	v2AuthGroup.POST("/finalize-signup", s.MiddlewareSession(true, false), s.RouteV2AuthFinalizeSignup)
+	v2AuthGroup.POST("/allowed-ips", s.MiddlewareSession(true, true), s.RouteV2AuthAllowedIPs)
+	v2AuthGroup.POST("/regenerate-request-key", s.MiddlewareSession(true, true), s.RouteV2AuthRequestKeyRegenerate)
+	v2AuthGroup.POST("/logout", s.MiddlewareSession(true, false), s.RouteV2AuthLogout)
 
 	// Static files as fallback
 	// This doesn't include most middlewares
