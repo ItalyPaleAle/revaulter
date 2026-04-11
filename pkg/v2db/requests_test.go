@@ -173,7 +173,7 @@ func TestRequestStoreExpirePendingAndReturnStates(t *testing.T) {
 
 	expired, err := store.ExpirePendingAndReturnStates(ctx, now)
 	require.NoError(t, err)
-	require.Equal(t, []string{"expired-1"}, expired)
+	require.Equal(t, []ExpiredRequestRef{{State: "expired-1", UserID: "user-1"}}, expired)
 
 	rec, err := store.GetRequest(ctx, "expired-1")
 	require.NoError(t, err)
