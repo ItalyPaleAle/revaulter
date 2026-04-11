@@ -29,7 +29,6 @@ let { item, prfSecret, password = '', onRemoved }: Props = $props()
 let working = $state(false)
 let localStatus = $state<string>('pending')
 let error = $state<string | null>(null)
-let detailOpen = $state(false)
 let detail = $state<V2RequestDetail | null>(null)
 
 $effect(() => {
@@ -221,9 +220,6 @@ function expiresIn(item: V2PendingRequestItem) {
             <div class="text-xs text-slate-500 dark:text-slate-400">
                 Expires {expiresIn(item)} · <span class="font-mono">{item.state}</span>
             </div>
-            {#if detailOpen && detail}
-                <pre class="mt-3 max-h-64 overflow-auto rounded-2xl bg-slate-950 px-3 py-3 text-xs text-slate-100 dark:bg-black/60">{JSON.stringify(detail.encryptedRequest, null, 2)}</pre>
-            {/if}
         </div>
 
         <div class="min-w-52 border-t border-slate-200/80 pt-3 dark:border-white/10 md:border-l md:border-t-0 md:pl-4 md:pt-0">
@@ -253,24 +249,6 @@ function expiresIn(item: V2PendingRequestItem) {
                     Cancel
                 </Button>
             </div>
-            <Button
-                class="mt-2 w-full"
-                size="sm"
-                variant="outline"
-                type="button"
-                onclick={async () => {
-                    detailOpen = !detailOpen
-                    if (detailOpen) {
-                        try {
-                            await ensureDetail()
-                        } catch (err) {
-                            error = err instanceof Error ? err.message : String(err)
-                        }
-                    }
-                }}
-            >
-                {detailOpen ? 'Hide request body' : 'Show request body'}
-            </Button>
             {#if localStatus === 'confirmed'}
                 <div class="mt-2 text-sm text-emerald-700 dark:text-emerald-300">Confirmed</div>
             {:else if localStatus === 'canceled'}
