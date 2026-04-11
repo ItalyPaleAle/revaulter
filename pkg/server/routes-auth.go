@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -759,6 +760,20 @@ func (s *Server) v2LoadWebAuthnUser(ctx context.Context, userID string) (*v2WebA
 		if err != nil {
 			continue
 		}
+
+		// The DB stores sign_count as int64 to accommodate any authenticator, but the webauthn library exposes it as uint32
+		// Guard against silent wrap-around: a wrap to 0 (or any smaller value) would look like a replay and either lock out the user or conceal a real clone
+		// Reject the credential and log it instead of narrowing
+		if rec.SignCount < 0 || rec.SignCount > math.MaxUint32 {
+			logging.LogFromContext(ctx).WarnContext(ctx,
+				"Credential sign count out of uint32 range; skipping credential",
+				slog.String("user_id", userID),
+				slog.String("credential_id", rec.CredentialID),
+				slog.Int64("sign_count", rec.SignCount),
+			)
+			continue
+		}
+
 		cred.Authenticator.SignCount = uint32(rec.SignCount)
 		creds = append(creds, cred)
 	}
