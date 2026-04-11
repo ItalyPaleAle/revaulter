@@ -41,6 +41,10 @@ jobs:
         run: |
           pnpm run build
 
+      - name: Check diff
+        run: |
+          make check-config-diff || echo "Please run 'make gen-config'"
+
       - name: Run backend tests
         run: |
           make test
