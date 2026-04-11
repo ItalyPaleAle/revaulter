@@ -296,8 +296,38 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		Session:       sessionInfoFromSession(sess),
 	}
 
+	// Throttle password canary delivery
+	// The canary is the user's locally-derived password verifier; an attacker that controls a passkey can otherwise call /v2/auth/login/finish in a tight loop and harvest unlimited verifier samples for offline cracking
+	// We refuse the login so the client cannot bypass the password check by spamming this endpoint
 	if user != nil && user.PasswordCanary != "" {
+		overLimit := s.canaryLimiter.OnLimit(c.Writer, c.Request, "v2-canary:"+sess.UserID)
+		if overLimit {
+			// A WebAuthn-authenticated client that exceeds the budget has the new session revoked and a 429 returned by RouteV2AuthLoginFinish
+			revokeErr := s.authStore.RevokeSession(c.Request.Context(), sess.ID)
+			if revokeErr != nil {
+				logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
+					"Failed to revoke session after canary rate-limit refusal",
+					slog.String("user_id", sess.UserID),
+					slog.Any("error", revokeErr),
+				)
+			}
+
+			logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
+				"Refused canary delivery: per-user rate limit exceeded",
+				slog.String("user_id", sess.UserID),
+				slog.String("client_ip", c.ClientIP()),
+			)
+
+			AbortWithErrorJSON(c, NewResponseError(http.StatusTooManyRequests, "Too many login attempts; please retry later"))
+			return
+		}
+
 		resp.PasswordCanary = user.PasswordCanary
+		logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(),
+			"Delivered password canary to authenticated client",
+			slog.String("user_id", sess.UserID),
+			slog.String("client_ip", c.ClientIP()),
+		)
 	}
 
 	c.JSON(http.StatusOK, resp)

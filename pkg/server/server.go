@@ -16,6 +16,7 @@ import (
 
 	location "github.com/gin-contrib/location/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/go-chi/httprate"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	slogkit "github.com/italypaleale/go-kit/slog"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
@@ -58,6 +59,10 @@ type Server struct {
 	requestStore *v2db.RequestStore
 	authStore    *v2db.AuthStore
 	webAuthn     *webauthnlib.WebAuthn
+
+	// Per-user rate limiter for password canary delivery
+	// Refuses logins that try to harvest the canary too quickly
+	canaryLimiter *httprate.RateLimiter
 
 	// Servers
 	appSrv *http.Server
@@ -109,6 +114,9 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 		metrics:  opts.Metrics,
 
 		httpClient: httpClient,
+
+		// Throttle password canary delivery to 5 successful logins per hour per user
+		canaryLimiter: httprate.NewRateLimiter(5, time.Hour),
 
 		addTestRoutes: opts.addTestRoutes,
 	}
