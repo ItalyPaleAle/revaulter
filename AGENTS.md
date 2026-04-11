@@ -4,59 +4,55 @@
 
 Never define variables inside `if` conditions. Always declare variables on a separate line before the conditional check.
 
-**Incorrect:**
-
 ```go
-if err := something(); err != nil {
-    // ...
-}
+// Wrong
+if err := something(); err != nil { ... }
 
-if err = something(); err != nil {
-    // ...
-}
-```
-
-**Correct:**
-
-```go
+// Right
 err := something()
-if err != nil {
-    // ...
-}
+if err != nil { ... }
 ```
-
-## Package Management
-
-The client project uses **pnpm** as the package manager. Always use `pnpm` (not `npm`) to install, add, or remove packages in the `client/` directory.
 
 ## JavaScript, TypeScript, JSX, and TSX
 
-Always use braces `{}` around statements in control flow blocks (`if`, `else`, `while`, `for`, etc.). Single-line statements without braces are not allowed.
+### Package management
 
-**Incorrect:**
+The client project uses **pnpm** (NOT `npm`) for all package operations in the `client/` directory.
+
+### Braces
+
+Always use braces `{}` around control flow bodies — no single-line statements.
 
 ```js
+// Wrong
 if (foo) return false
 
-while (true) sleep()
-
-for (let i = 0; i < 10; i++) process(i)
-```
-
-**Correct:**
-
-```js
+// Right
 if (foo) {
     return false
 }
+```
 
-while (true) {
-    sleep()
-}
+## Comments (all languages)
 
-for (let i = 0; i < 10; i++) {
-    process(i)
-}
+- One sentence per line; do not wrap to a max line length
+- No trailing period on single-line comments
+
+```go
+// Wrong — wrapped mid-sentence
+// This function performs the main validation logic. It checks
+// the input against the schema and returns an error if the
+// input is invalid.
+
+// Wrong — trailing period on single-line comment
+// Validate the input.
+
+// Right
+// This function performs the main validation logic
+// It checks the input against the schema and returns an error if the input is invalid
+
+// Right
+// Validate the input
 ```
 
 ## Svelte and UI
