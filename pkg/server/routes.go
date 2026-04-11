@@ -277,22 +277,25 @@ func (s *Server) RouteV2APIList(c *gin.Context) {
 		return
 	}
 
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		// The session middleware must have authenticated a user before this handler runs
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Unauthenticated"))
+		return
+	}
+
 	list, err := s.requestStore.ListPending(c.Request.Context())
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	userID := c.GetString(contextKeyUserID)
-	if userID != "" {
-		filtered := list[:0]
-		for _, item := range list {
-			if item.UserID == userID {
-				filtered = append(filtered, item)
-			}
+	filtered := list[:0]
+	for _, item := range list {
+		if item.UserID == userID {
+			filtered = append(filtered, item)
 		}
-		list = filtered
 	}
-	c.JSON(http.StatusOK, list)
+	c.JSON(http.StatusOK, filtered)
 }
 
 func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
@@ -571,13 +574,18 @@ func parseRequestTimeout(raw string) time.Duration {
 }
 
 func (s *Server) routeV2APIListStream(c *gin.Context) {
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		// Fail closed: require an authenticated session before streaming.
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Unauthenticated"))
+		return
+	}
+
 	list, err := s.requestStore.ListPending(c.Request.Context())
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-
-	userID := c.GetString(contextKeyUserID)
 
 	c.Header("Content-Type", ndJSONContentType)
 	c.Status(http.StatusOK)
@@ -588,7 +596,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 	sent := false
 	known := map[string]v2db.V2RequestListItem{}
 	for _, item := range list {
-		if userID != "" && item.UserID != userID {
+		if item.UserID != userID {
 			continue
 		}
 		_ = enc.Encode(item)
@@ -654,7 +662,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 
 			current := map[string]v2db.V2RequestListItem{}
 			for _, item := range curList {
-				if userID != "" && item.UserID != userID {
+				if item.UserID != userID {
 					continue
 				}
 				current[item.State] = item
