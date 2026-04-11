@@ -18,12 +18,12 @@ type RequestCreateBody struct {
 // RequestPayloadInner is the plaintext payload encrypted inside the E2EE envelope
 // It is serialized to JSON by the CLI before encryption and deserialized by the browser after decryption
 type RequestPayloadInner struct {
-	Value                    string          `json:"value,omitempty"`
-	Nonce                    string          `json:"nonce,omitempty"`
-	Tag                      string          `json:"tag,omitempty"`
-	AdditionalData           string          `json:"additionalData,omitempty"`
-	ClientTransportEcdhKey   ECP256PublicJWK `json:"clientTransportEcdhKey"`
-	ClientTransportMlkemKey  string          `json:"clientTransportMlkemKey"`
+	Value                   string          `json:"value,omitempty"`
+	Nonce                   string          `json:"nonce,omitempty"`
+	Tag                     string          `json:"tag,omitempty"`
+	AdditionalData          string          `json:"additionalData,omitempty"`
+	ClientTransportEcdhKey  ECP256PublicJWK `json:"clientTransportEcdhKey"`
+	ClientTransportMlkemKey string          `json:"clientTransportMlkemKey"`
 }
 
 // RequestEncEnvelope is the E2EE envelope stored by the server and forwarded to the browser
