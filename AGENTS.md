@@ -4,6 +4,8 @@
 
 Never define variables inside `if` conditions. Always declare variables on a separate line before the conditional check.
 
+If you modify `pkg/config.Config` or any struct referenced from it, always run `make gen-config` before finishing the task.
+
 ```go
 // Wrong
 if err := something(); err != nil { ... }
