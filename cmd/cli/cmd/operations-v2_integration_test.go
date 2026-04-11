@@ -130,7 +130,9 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 				return
 			}
 
-			combined := append(ecdhShared, mlkemShared...)
+			combined := make([]byte, 0, len(ecdhShared)+len(mlkemShared))
+			combined = append(combined, ecdhShared...)
+			combined = append(combined, mlkemShared...)
 			aesKey, err := hkdf.Key(sha256.New, combined, nil, "revaulter/v2/request-enc", 32)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -228,7 +230,9 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 			mlkemShared, mlkemCT := clientMlkemPub.Encapsulate()
 
 			// Combine secrets
-			combined := append(ecdhShared, mlkemShared...)
+			combined := make([]byte, 0, len(ecdhShared)+len(mlkemShared))
+			combined = append(combined, ecdhShared...)
+			combined = append(combined, mlkemShared...)
 			key, err := deriveV2TransportKey(combined, state)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)

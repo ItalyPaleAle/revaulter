@@ -227,6 +227,10 @@ func TestServerV2PublicSignup(t *testing.T) {
 
 	// Public signup remains available for later users
 	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{"displayName": "Bob"})
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.NotEmpty(t, regBegin["challengeId"])
 	require.Equal(t, "webauthn", regBegin["mode"])

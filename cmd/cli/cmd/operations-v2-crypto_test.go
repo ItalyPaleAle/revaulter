@@ -34,7 +34,9 @@ func TestDecryptV2ResponseEnvelope(t *testing.T) {
 	mlkemShared, mlkemCT := mlkemPub.Encapsulate()
 
 	// Combine shared secrets
-	combined := append(ecdhShared, mlkemShared...)
+	combined := make([]byte, 0, len(ecdhShared)+len(mlkemShared))
+	combined = append(combined, ecdhShared...)
+	combined = append(combined, mlkemShared...)
 	key, err := deriveV2TransportKey(combined, "state-1")
 	require.NoError(t, err)
 
