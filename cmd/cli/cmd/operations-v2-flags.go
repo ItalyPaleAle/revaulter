@@ -19,6 +19,9 @@ type v2OperationFlagsBase struct {
 
 	Timeout durationValue
 	Note    string
+
+	Output string
+	Raw    bool
 }
 
 func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
@@ -36,6 +39,9 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 
 	cmd.Flags().VarP(&f.Timeout, "timeout", "t", "Timeout for the operation, as a number of seconds or Go duration")
 	cmd.Flags().StringVarP(&f.Note, "note", "n", "", "Optional message displayed alongside the request (up to 40 characters)")
+
+	cmd.Flags().StringVarP(&f.Output, "output", "o", "", "Write the result to this file path instead of stdout (mode 0600, refuses symlinks)")
+	cmd.Flags().BoolVar(&f.Raw, "raw", false, "Write the decrypted plaintext as raw bytes instead of the default JSON envelope")
 }
 
 func (f *v2OperationFlagsBase) Validate() error {
@@ -50,6 +56,8 @@ func (f *v2OperationFlagsBase) GetAlgorithm() string               { return f.Al
 func (f *v2OperationFlagsBase) GetTimeout() string                 { return f.Timeout.String() }
 func (f *v2OperationFlagsBase) GetNote() string                    { return f.Note }
 func (f *v2OperationFlagsBase) GetConnectionOptions() (bool, bool) { return f.Insecure, f.NoH2C }
+func (f *v2OperationFlagsBase) GetOutput() string                  { return f.Output }
+func (f *v2OperationFlagsBase) GetRaw() bool                       { return f.Raw }
 
 type v2OperationFlags interface {
 	BindToCommand(cmd *cobra.Command)
@@ -62,6 +70,8 @@ type v2OperationFlags interface {
 	GetTimeout() string
 	GetNote() string
 	GetConnectionOptions() (insecure bool, noh2c bool)
+	GetOutput() string
+	GetRaw() bool
 }
 
 type v2OperationFlagsEncrypt struct {

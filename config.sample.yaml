@@ -17,7 +17,10 @@ webhookUrl:
 
 ## webhookKey (string)
 ## Description:
-##   Value for the Authorization header send with the webhook request. Set this if your webhook requires it.
+##   Value sent verbatim as the `Authorization` header on webhook requests
+##   Revaulter does NOT add an authentication scheme prefix, so include one yourself if your downstream expects it
+##   For example, set this to `Bearer abc123` for bearer-token auth, or `Basic dXNlcjpwYXNz` for HTTP Basic
+##   Leave unset to omit the header entirely
 #webhookKey: 
 
 ## baseUrl (string)
@@ -65,8 +68,12 @@ databaseDSN:
 
 ## secretKey (string)
 ## Description:
-##   Shared key used to encrypt sensitive payloads stored in the database.
-##   It's recommended to generate with `openssl rand -base64 32`
+##   Instance-wide secret to derive encryption keys.
+##   It's recommended to generate with `openssl rand -base64 32`.
+##
+##   IMPORTANT: rotating `secretKey` changes the PRF salt for every user effectively bricks every existing account. Treat this value as immutable for the lifetime of the instance; if you must rotate it, plan on every user re-registering from scratch.
+##
+##   Note: this value is NOT used to encrypt anything server-side: all request payloads and responses are end-to-end encrypted in the browser, and the server only stores opaque envelopes.
 ## Required
 secretKey:
 

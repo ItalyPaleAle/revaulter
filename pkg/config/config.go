@@ -30,7 +30,10 @@ type Config struct {
 	// +default "plain"
 	WebhookFormat string `env:"WEBHOOKFORMAT" yaml:"webhookFormat"`
 
-	// Value for the Authorization header send with the webhook request. Set this if your webhook requires it.
+	// Value sent verbatim as the `Authorization` header on webhook requests
+	// Revaulter does NOT add an authentication scheme prefix, so include one yourself if your downstream expects it
+	// For example, set this to `Bearer abc123` for bearer-token auth, or `Basic dXNlcjpwYXNz` for HTTP Basic
+	// Leave unset to omit the header entirely
 	WebhookKey string `env:"WEBHOOKKEY" yaml:"webhookKey"`
 
 	// The URL your application can be reached at. This is used in the links that are sent in webhook notifications.
