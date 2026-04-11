@@ -357,20 +357,41 @@ Open Revaulter: %s
 	)
 }
 
+// escapeSlackText escapes the small set of mrkdwn/meta characters we interpolate
+// This prevents user-controlled fields such as key labels and notes from changing how the webhook message renders
+func escapeSlackText(v string) string {
+	if v == "" {
+		return ""
+	}
+
+	// Slack and Discord Slack-compatible webhooks treat &, <, and > as HTML entities
+	// The remaining characters are escaped so user-controlled text cannot inject emphasis, strike-through, or code spans
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"*", "\\*",
+		"_", "\\_",
+		"~", "\\~",
+		"`", "\\`",
+	)
+	return replacer.Replace(v)
+}
+
 func (w *webhookClient) formatSlackMessage(data *WebhookRequest) string {
 	var note string
 	if data.Note != "" {
-		note = "Note: *" + data.Note + "*\n"
+		note = "Note: *" + escapeSlackText(data.Note) + "*\n"
 	}
 	return fmt.Sprintf(
 		"Received a request to %s using key label **%s** for user **%s** (algorithm **%s**).\n%s[Open Revaulter](%s)\n`(Request ID: %s - Client IP: %s)`",
-		data.OperationName,
-		data.KeyLabel,
-		data.AssignedUser,
-		data.Algorithm,
+		escapeSlackText(data.OperationName),
+		escapeSlackText(data.KeyLabel),
+		escapeSlackText(data.AssignedUser),
+		escapeSlackText(data.Algorithm),
 		note,
 		w.getLink(),
-		data.StateId,
-		data.Requestor,
+		escapeSlackText(data.StateId),
+		escapeSlackText(data.Requestor),
 	)
 }

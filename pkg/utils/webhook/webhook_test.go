@@ -103,6 +103,13 @@ func TestWebhook(t *testing.T) {
 		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
+	t.Run("format slack escapes user-controlled markdown", basicTestFn(map[string]any{
+		"webhookFormat": "slack",
+	}, func(t *testing.T, r *http.Request) {
+		require.Equal(t, "http://198.51.100.10/endpoint", r.URL.String())
+		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **my\\*key\\_\\`+"`"+`demo\\~\\u0026lt;tag\\u0026gt;** for user **Alice \\u0026 Bob** (algorithm **aes\\-gcm\\-256**).\nNote: *pay\\_load \\*bold\\* \\`+"`"+`code\\`+"`"+`*\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: state\\:1 - Client IP: 127.0.0.1)`"+`"}`+"\n")
+	}))
+
 	t.Run("plain request with authorization", basicTestFn(map[string]any{
 		"webhookKey": "mykey",
 	}, func(t *testing.T, r *http.Request) {
