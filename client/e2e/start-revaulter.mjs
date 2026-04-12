@@ -31,6 +31,7 @@ const tempDir = mkdtempSync(join(tmpdir(), 'revaulter-playwright-'))
 const configPath = join(tempDir, 'config.yaml')
 const databasePath = join(tempDir, 'revaulter-e2e.db')
 const secretKey = Buffer.alloc(32, 7).toString('base64')
+const e2eToken = process.env.REVAULTER_E2E_TOKEN || 'playwright-e2e-token-fixed'
 
 writeFileSync(
     configPath,
@@ -42,8 +43,7 @@ writeFileSync(
         `databaseDSN: "${databasePath}"`,
         `secretKey: "${secretKey}"`,
         'webauthnRpId: "localhost"',
-        'webauthnOrigins:',
-        `  - "http://localhost:${port}"`,
+        `webauthnOrigins: ["http://localhost:${port}"]`,
         'logLevel: "error"',
         'omitHealthCheckLogs: true',
         '',
@@ -56,6 +56,7 @@ const serverProcess = spawn(binaryPath, {
     env: {
         ...process.env,
         REVAULTER_CONFIG: configPath,
+        REVAULTER_E2E_TOKEN: e2eToken,
         OTEL_LOGS_EXPORTER: 'none',
         OTEL_METRICS_EXPORTER: 'none',
         OTEL_TRACES_EXPORTER: 'none',

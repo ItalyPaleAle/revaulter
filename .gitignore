@@ -5,6 +5,7 @@ scratchpad
 # Compiled
 .out
 .bin
+.cache
 server/static
 .pnpm-store
 

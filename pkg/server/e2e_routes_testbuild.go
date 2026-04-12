@@ -1,0 +1,389 @@
+//go:build e2e
+
+// This file includes routes for the e2e tests, and it's only built with the "e2e" tag
+
+package server
+
+import (
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/protocolv2"
+	"github.com/italypaleale/revaulter/pkg/v2db"
+)
+
+const e2eHeaderToken = "x-revaulter-e2e-token"
+
+type e2eSeedUserRequest struct {
+	UserID      string `json:"userId"`
+	DisplayName string `json:"displayName"`
+	State       string `json:"state"`
+	Password    string `json:"password,omitempty"`
+}
+
+type e2eSeedSessionRequest struct {
+	UserID string `json:"userId"`
+}
+
+type e2eSeedRequestRequest struct {
+	UserID     string `json:"userId"`
+	Operation  string `json:"operation"`
+	KeyLabel   string `json:"keyLabel"`
+	Algorithm  string `json:"algorithm"`
+	Requestor  string `json:"requestor"`
+	Note       string `json:"note,omitempty"`
+	TimeoutSec int    `json:"timeoutSec,omitempty"`
+	State      string `json:"state,omitempty"`
+	Status     string `json:"status,omitempty"`
+}
+
+func AddE2ETestRoutes(token string) func(s *Server, r gin.IRouter) {
+	return func(s *Server, r gin.IRouter) {
+		group := r.Group("/__e2e__")
+
+		group.Use(func(c *gin.Context) {
+			if token == "" || c.GetHeader(e2eHeaderToken) != token {
+				AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "invalid e2e token"))
+				return
+			}
+			c.Next()
+		})
+
+		group.POST("/reset", s.RouteE2EReset)
+		group.POST("/seed-user", s.RouteE2ESeedUser)
+		group.POST("/seed-session", s.RouteE2ESeedSession)
+		group.POST("/seed-request", s.RouteE2ESeedRequest)
+		group.GET("/request/:state", s.RouteE2EGetRequest)
+	}
+}
+
+func init() {
+	token := strings.TrimSpace(os.Getenv("REVAULTER_E2E_TOKEN"))
+	if token == "" {
+		return
+	}
+
+	testRoutes = append(testRoutes, AddE2ETestRoutes(token))
+}
+
+func (s *Server) RouteE2EReset(c *gin.Context) {
+	if s.db == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
+		return
+	}
+
+	err := s.db.ResetAllForTests(c.Request.Context())
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	s.lock.Lock()
+	s.subs = map[string]chan struct{}{}
+	s.lock.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Server) RouteE2ESeedUser(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	var req e2eSeedUserRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+	if req.UserID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "userId is required"))
+		return
+	}
+	if req.State == "" {
+		req.State = "ready-no-password"
+	}
+
+	_, err = s.authStore.RegisterUser(c.Request.Context(), v2db.RegisterUserInput{
+		UserID:         req.UserID,
+		DisplayName:    req.DisplayName,
+		WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("e2e-webauthn-" + req.UserID)),
+		CredentialID:   "e2e-cred-" + req.UserID,
+		PublicKey:      `{}`,
+		SignCount:      1,
+		SessionTTL:     config.Get().SessionTimeout,
+	})
+	if err != nil && !errors.Is(err, v2db.ErrUserAlreadyExists) {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	switch req.State {
+	case "registered-unready":
+		// Keep the user unfinalized
+	case "ready-no-password", "ready-with-password":
+		user, getUserErr := s.authStore.GetUserByID(c.Request.Context(), req.UserID)
+		if getUserErr != nil {
+			AbortWithErrorJSON(c, getUserErr)
+			return
+		}
+		if user == nil {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+			return
+		}
+
+		if !user.Ready {
+			requestEncPriv, keyErr := ecdh.P256().GenerateKey(rand.Reader)
+			if keyErr != nil {
+				AbortWithErrorJSON(c, keyErr)
+				return
+			}
+			requestEncJWK, keyErr := protocolv2.ECP256PublicJWKFromECDH(requestEncPriv.PublicKey())
+			if keyErr != nil {
+				AbortWithErrorJSON(c, keyErr)
+				return
+			}
+			requestEncJWKJSON, keyErr := json.Marshal(requestEncJWK)
+			if keyErr != nil {
+				AbortWithErrorJSON(c, keyErr)
+				return
+			}
+
+			canary := ""
+			if req.State == "ready-with-password" {
+				if req.Password == "" {
+					AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "password is required for ready-with-password state"))
+					return
+				}
+				canary = req.Password
+			}
+
+			keyErr = s.authStore.FinalizeSignup(
+				c.Request.Context(),
+				req.UserID,
+				canary,
+				string(requestEncJWKJSON),
+				base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey-"+req.UserID)),
+			)
+			if keyErr != nil && !errors.Is(keyErr, v2db.ErrAlreadyFinalized) {
+				AbortWithErrorJSON(c, keyErr)
+				return
+			}
+		}
+	default:
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "unsupported seed user state"))
+		return
+	}
+
+	user, err := s.authStore.GetUserByID(c.Request.Context(), req.UserID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if user == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":          true,
+		"userId":      user.ID,
+		"displayName": user.DisplayName,
+		"requestKey":  user.RequestKey,
+		"ready":       user.Ready,
+	})
+}
+
+func (s *Server) RouteE2ESeedSession(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	var req e2eSeedSessionRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+	if req.UserID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "userId is required"))
+		return
+	}
+
+	sess, err := s.authStore.Login(c.Request.Context(), v2db.LoginInput{
+		UserID:       req.UserID,
+		CredentialID: "e2e-cred-" + req.UserID,
+		SignCount:    2,
+		SessionTTL:   config.Get().SessionTimeout,
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	cookieName := sessionCookieNameInsecure
+	cookiePath := "/v2"
+	if config.Get().ForceSecureCookies {
+		cookieName = sessionCookieNameSecure
+		cookiePath = "/"
+	}
+
+	cookieValue, err := serializeSecureCookieEncryptedJWT(cookieName, sess.ID, time.Until(sess.ExpiresAt))
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":          true,
+		"sessionId":   sess.ID,
+		"cookieName":  cookieName,
+		"cookiePath":  cookiePath,
+		"cookieValue": cookieValue,
+	})
+}
+
+func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
+	if s.requestStore == nil || s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
+		return
+	}
+
+	var req e2eSeedRequestRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+	if req.UserID == "" || req.Operation == "" || req.KeyLabel == "" || req.Algorithm == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "userId, operation, keyLabel, and algorithm are required"))
+		return
+	}
+	if req.Requestor == "" {
+		req.Requestor = "198.51.100.20"
+	}
+	if req.TimeoutSec <= 0 {
+		req.TimeoutSec = 300
+	}
+	if req.State == "" {
+		req.State = uuid.NewString()
+	}
+
+	status := strings.TrimSpace(req.Status)
+	if status == "" {
+		status = string(v2db.V2RequestStatusPending)
+	}
+
+	now := time.Now().UTC()
+	encryptedRequest := `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","y":"AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"mlkemCiphertext":"dGVzdC1tbGtlbS1jaXBoZXJ0ZXh0","nonce":"MTIzNDU2Nzg5MDEy","ciphertext":"dGVzdC1yZXF1ZXN0LWNpcGhlcnRleHQifQ}`
+	err = s.requestStore.CreateRequest(c.Request.Context(), v2db.CreateRequestInput{
+		State:            req.State,
+		UserID:           req.UserID,
+		Operation:        req.Operation,
+		RequestorIP:      req.Requestor,
+		KeyLabel:         req.KeyLabel,
+		Algorithm:        req.Algorithm,
+		Note:             req.Note,
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(time.Duration(req.TimeoutSec) * time.Second),
+		EncryptedRequest: encryptedRequest,
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	switch status {
+	case string(v2db.V2RequestStatusPending):
+		// nothing else to do
+	case string(v2db.V2RequestStatusCanceled):
+		_, err = s.requestStore.CancelRequest(c.Request.Context(), req.State)
+	case string(v2db.V2RequestStatusCompleted):
+		_, err = s.requestStore.CompleteRequest(c.Request.Context(), req.State, protocolv2.ResponseEnvelope{
+			TransportAlg: "ecdh-p256+mlkem768+a256gcm",
+			BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
+				Kty: "EC",
+				Crv: "P-256",
+				X:   "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+				Y:   "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			},
+			MlkemCiphertext: "dGVzdC1yZXNwb25zZS1tbGtlbS1jaXBoZXJ0ZXh0",
+			Nonce:           "MTIzNDU2Nzg5MDEy",
+			Ciphertext:      "dGVzdC1yZXNwb25zZS1jaXBoZXJ0ZXh0",
+			ResultType:      "bytes",
+		})
+	case string(v2db.V2RequestStatusExpired):
+		execErr := s.requestStore.ForceExpireRequestForTests(c.Request.Context(), req.State, now.Add(-time.Second))
+		if execErr == nil {
+			err = s.requestStore.MarkExpired(c.Request.Context(), req.State)
+		} else {
+			err = execErr
+		}
+	default:
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "unsupported request status"))
+		return
+	}
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	if status == string(v2db.V2RequestStatusPending) {
+		s.publishListItem(&v2db.V2RequestListItem{
+			State:     req.State,
+			Status:    status,
+			Operation: req.Operation,
+			UserID:    req.UserID,
+			KeyLabel:  req.KeyLabel,
+			Algorithm: req.Algorithm,
+			Requestor: req.Requestor,
+			Date:      now.Unix(),
+			Expiry:    now.Add(time.Duration(req.TimeoutSec) * time.Second).Unix(),
+			Note:      req.Note,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "state": req.State, "status": status})
+}
+
+func (s *Server) RouteE2EGetRequest(c *gin.Context) {
+	if s.requestStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
+		return
+	}
+
+	state := c.Param("state")
+	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if rec == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request not found"))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"state":     rec.State,
+		"status":    rec.Status,
+		"operation": rec.Operation,
+		"userId":    rec.UserID,
+		"keyLabel":  rec.KeyLabel,
+		"algorithm": rec.Algorithm,
+		"requestor": rec.RequestorIP,
+		"note":      rec.Note,
+	})
+}

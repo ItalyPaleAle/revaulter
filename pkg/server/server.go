@@ -41,6 +41,8 @@ const (
 	jsonContentType   = "application/json; charset=utf-8"
 )
 
+var testRoutes []func(s *Server, r gin.IRouter)
+
 // Server is the server based on Gin
 type Server struct {
 	appRouter  *gin.Engine
@@ -80,10 +82,6 @@ type Server struct {
 	// Listeners for the app and metrics servers
 	// These can be used for testing without having to start an actual TCP listener
 	appListener net.Listener
-
-	// Optional function to add test routes
-	// This is used in testing
-	addTestRoutes func(s *Server, r gin.IRouter)
 }
 
 // NewServerOpts contains options for the NewServer method
@@ -92,10 +90,6 @@ type NewServerOpts struct {
 	Webhook       webhook.Webhook
 	Metrics       *metrics.RevaulterMetrics
 	TraceExporter sdkTrace.SpanExporter
-
-	// Optional function to add test routes
-	// This is used in testing
-	addTestRoutes func(s *Server, r gin.IRouter)
 }
 
 // NewServer creates a new Server object and initializes it
@@ -117,8 +111,6 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 
 		// Throttle password canary delivery to 5 successful logins per hour per user
 		canaryLimiter: httprate.NewRateLimiter(5, time.Hour),
-
-		addTestRoutes: opts.addTestRoutes,
 	}
 
 	// Init the object
@@ -282,6 +274,10 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/allowed-ips", s.MiddlewareSession(true, true), s.RouteV2AuthAllowedIPs)
 	v2AuthGroup.POST("/regenerate-request-key", s.MiddlewareSession(true, true), s.RouteV2AuthRequestKeyRegenerate)
 	v2AuthGroup.POST("/logout", s.MiddlewareSession(true, false), s.RouteV2AuthLogout)
+
+	for _, addRoutes := range testRoutes {
+		addRoutes(s, s.appRouter)
+	}
 
 	// Static files as fallback
 	// This doesn't include most middlewares
