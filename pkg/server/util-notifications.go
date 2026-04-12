@@ -5,11 +5,11 @@ import (
 )
 
 func (s *Server) publishListItem(item *v2db.V2RequestListItem) {
-	if s.v2Pubsub == nil || item == nil {
+	if s.pubsub == nil || item == nil {
 		return
 	}
 
-	go s.v2Pubsub.Publish(item)
+	go s.pubsub.Publish(item)
 }
 
 // Callers must hold lock with s.lock

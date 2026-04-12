@@ -583,10 +583,20 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 		"tLSCertPEM": cert,
 		"tLSKeyPEM":  key,
 	})
+	db := v2db.NewTestDatabaseForServerTests(t)
+	err = v2db.RunMigrations(t.Context(), db, log)
+	require.NoError(t, err)
+	authStore, err := v2db.NewAuthStore(db, log)
+	require.NoError(t, err)
+	requestStore, err := v2db.NewRequestStore(db, log)
+	require.NoError(t, err)
 
 	srv, err := NewServer(NewServerOpts{
-		Log:     log,
-		Webhook: wh,
+		Log:          log,
+		Webhook:      wh,
+		DB:           db,
+		AuthStore:    authStore,
+		RequestStore: requestStore,
 	})
 	require.NoError(t, err)
 

@@ -1,67 +1,18 @@
 package server
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/go-webauthn/webauthn/protocol"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
-func (s *Server) initStore(log *slog.Logger) error {
-	cfg := config.Get()
-	if cfg.DatabaseDSN == "" {
-		return nil
-	}
-
-	connCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	db, err := v2db.Open(connCtx, cfg.DatabaseDSN)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-
-	err = v2db.RunMigrations(context.Background(), db, log)
-	if err != nil {
-		_ = db.Close()
-		return fmt.Errorf("failed to run database migrations: %w", err)
-	}
-
-	authStore, err := v2db.NewAuthStore(db, log)
-	if err != nil {
-		_ = db.Close()
-		return fmt.Errorf("failed to initialize auth store: %w", err)
-	}
-
-	store, err := v2db.NewRequestStore(db, log)
-	if err != nil {
-		_ = db.Close()
-		return fmt.Errorf("failed to initialize request store: %w", err)
-	}
-
-	s.db = db
-	s.authStore = authStore
-	s.requestStore = store
-
-	s.webAuthn, err = s.initWebAuthn()
-	if err != nil {
-		_ = db.Close()
-		return fmt.Errorf("failed to initialize WebAuthn config: %w", err)
-	}
-
-	return nil
-}
-
-// initWebAuthn builds the relying-party configuration used for all v2 WebAuthn registration and login ceremonies
+// initWebAuthn builds the relying-party configuration used for all WebAuthn registration and login ceremonies
 // It derives the RP ID from config when needed, normalizes the allowed origins, and enables related-origin requests when extra WebAuthn origins are explicitly configured
 func (s *Server) initWebAuthn() (*webauthnlib.WebAuthn, error) {
 	cfg := config.Get()

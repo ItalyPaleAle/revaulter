@@ -110,7 +110,7 @@ secretKey:
 
 ## requestTimeout (duration)
 ## Description:
-##   Default timeout for v2 request operations, as a Go duration.
+##   Default timeout for request operations, as a Go duration.
 ##   This is the default value, and can be overridden in each request.
 ## Default: 5m
 #requestTimeout: 

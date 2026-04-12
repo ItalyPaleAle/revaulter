@@ -30,7 +30,7 @@ type DB struct {
 	pgx  *pgxpool.Pool
 }
 
-func (db *DB) Close() error {
+func (db *DB) Close(_ context.Context) error {
 	// Close the connection
 	if db.sql != nil {
 		err := db.sql.Close()

@@ -95,7 +95,7 @@ type Config struct {
 	// +default 5m
 	SessionTimeout time.Duration `env:"SESSIONTIMEOUT" yaml:"sessionTimeout"`
 
-	// Default timeout for v2 request operations, as a Go duration.
+	// Default timeout for request operations, as a Go duration.
 	// This is the default value, and can be overridden in each request.
 	// +default 5m
 	RequestTimeout time.Duration `env:"REQUESTTIMEOUT" yaml:"requestTimeout"`

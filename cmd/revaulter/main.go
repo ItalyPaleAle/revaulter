@@ -19,6 +19,7 @@ import (
 	"github.com/italypaleale/revaulter/pkg/server"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
+	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
 func main() {
@@ -74,6 +75,43 @@ func main() {
 	// Init the webhook object
 	webhook := webhook.NewWebhook()
 
+	// Initialize the database and stores in main so their lifecycle is explicit
+	var db *v2db.DB
+	var authStore *v2db.AuthStore
+	var requestStore *v2db.RequestStore
+	if conf.DatabaseDSN != "" {
+		connCtx, connCancel := context.WithTimeout(ctx, 20*time.Second)
+		db, err = v2db.Open(connCtx, conf.DatabaseDSN)
+		connCancel()
+		if err != nil {
+			slogkit.FatalError(log, "Failed to open database", err)
+			return
+		}
+
+		err = v2db.RunMigrations(ctx, db, log)
+		if err != nil {
+			_ = db.Close(ctx)
+			slogkit.FatalError(log, "Failed to run database migrations", err)
+			return
+		}
+
+		authStore, err = v2db.NewAuthStore(db, log)
+		if err != nil {
+			_ = db.Close(ctx)
+			slogkit.FatalError(log, "Failed to initialize auth store", err)
+			return
+		}
+
+		requestStore, err = v2db.NewRequestStore(db, log)
+		if err != nil {
+			_ = db.Close(ctx)
+			slogkit.FatalError(log, "Failed to initialize request store", err)
+			return
+		}
+
+		shutdownFns = append(shutdownFns, db.Close)
+	}
+
 	// Init metrics
 	metrics, metricsShutdownFn, err := revaultermetrics.NewRevaulterMetrics(ctx, log)
 	if err != nil {
@@ -102,6 +140,9 @@ func main() {
 		Webhook:       webhook,
 		Metrics:       metrics,
 		TraceExporter: traceExporter,
+		DB:            db,
+		AuthStore:     authStore,
+		RequestStore:  requestStore,
 	})
 	if err != nil {
 		slogkit.FatalError(log, "Cannot initialize the server", err)

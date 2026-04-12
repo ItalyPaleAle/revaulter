@@ -62,11 +62,11 @@ type Server struct {
 	metrics    *metrics.RevaulterMetrics
 
 	// Subscribers for v2 pending request list updates
-	v2Pubsub *broker.Broker[*v2db.V2RequestListItem]
-	// v2 subscriptions to watch request status changes
+	pubsub *broker.Broker[*v2db.V2RequestListItem]
+	// Subscriptions to watch request status changes
 	subs map[string]chan struct{}
 
-	// v2 database and request store
+	// Database and request store
 	db           *v2db.DB
 	requestStore *v2db.RequestStore
 	authStore    *v2db.AuthStore
@@ -100,6 +100,9 @@ type NewServerOpts struct {
 	Webhook       webhook.Webhook
 	Metrics       *metrics.RevaulterMetrics
 	TraceExporter sdkTrace.SpanExporter
+	DB            *v2db.DB
+	RequestStore  *v2db.RequestStore
+	AuthStore     *v2db.AuthStore
 }
 
 // NewServer creates a new Server object and initializes it
@@ -112,10 +115,13 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		subs:     map[string]chan struct{}{},
-		v2Pubsub: broker.NewBroker[*v2db.V2RequestListItem](),
-		webhook:  opts.Webhook,
-		metrics:  opts.Metrics,
+		subs:         map[string]chan struct{}{},
+		pubsub:       broker.NewBroker[*v2db.V2RequestListItem](),
+		webhook:      opts.Webhook,
+		metrics:      opts.Metrics,
+		db:           opts.DB,
+		authStore:    opts.AuthStore,
+		requestStore: opts.RequestStore,
 
 		httpClient: httpClient,
 
@@ -140,13 +146,12 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 		return err
 	}
 
-	// Initialize optional v2 DB-backed request store
-	err = s.initStore(log)
-	if err != nil {
-		return err
-	}
+	s.pubsub.SetLogger(log.With(slog.String("component", "pubsub")))
 
-	s.v2Pubsub.SetLogger(log.With(slog.String("component", "v2pubsub")))
+	s.webAuthn, err = s.initWebAuthn()
+	if err != nil {
+		return fmt.Errorf("failed to initialize WebAuthn config: %w", err)
+	}
 
 	// Init the app server
 	err = s.initAppServer(log)
@@ -335,12 +340,6 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	defer s.running.Store(false)
 	defer s.wg.Wait()
-	defer func() {
-		if s.db != nil {
-			_ = s.db.Close()
-		}
-	}()
-
 	// App server
 	s.wg.Add(1)
 	err := s.startAppServer(ctx)
@@ -361,7 +360,7 @@ func (s *Server) Run(ctx context.Context) error {
 			)
 		}
 	}()
-	defer s.v2Pubsub.Shutdown()
+	defer s.pubsub.Shutdown()
 
 	// If we have a tlsCertWatchFn, invoke that
 	if s.tlsCertWatchFn != nil {

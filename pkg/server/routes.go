@@ -613,12 +613,12 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 		sent = true
 	}
 
-	events, err := s.v2Pubsub.Subscribe()
+	events, err := s.pubsub.Subscribe()
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	defer s.v2Pubsub.Unsubscribe(events)
+	defer s.pubsub.Unsubscribe(events)
 
 	if !sent {
 		// Send an empty message
