@@ -17,6 +17,33 @@ export class ResponseNotOkError extends Error {
     statusCode?: number
 }
 
+async function parseErrorMessage(response: globalThis.Response): Promise<string> {
+    const contentType = response.headers.get('content-type') || ''
+
+    if (contentType.match(/application\/json/i)) {
+        try {
+            const body = (await response.json()) as { error?: string }
+            if (body?.error) {
+                return body.error
+            }
+        } catch {
+            // Fall back to text handling below
+        }
+    }
+
+    const text = (await response.text()).trim()
+    if (text !== '') {
+        return text
+    }
+
+    switch (response.status) {
+        case 429:
+            return 'Too many requests; please retry shortly'
+        default:
+            return 'Invalid response status code'
+    }
+}
+
 /**
  * Response object
  */
@@ -83,15 +110,15 @@ export async function Request<T>(url: string, options: RequestOptions = {}): Pro
         }
         const response = await p
 
-        // We're expecting a JSON document
+        // Check if we have a response with status code 200-299
+        // Otherwise, this method throws
+        await ThrowResponseNotOk(response)
+
+        // We're expecting a JSON document on success
         const ct = response.headers.get('content-type')
         if (!ct?.match(/application\/json/i)) {
             throw Error('Response was not JSON')
         }
-
-        // Check if we have a response with status code 200-299
-        // Otherwise, this method throws
-        await ThrowResponseNotOk(response)
 
         // Get the TTL
         let ttl: number | undefined
@@ -128,12 +155,7 @@ export async function ThrowResponseNotOk(response: globalThis.Response) {
     if (!response.ok) {
         const e = new ResponseNotOkError('Invalid response status code')
         e.statusCode = response.status
-        const body = (await response.json()) as { error: string }
-        if (body?.error) {
-            // eslint-disable-next-line no-console
-            console.error('Invalid response status code')
-            e.message = body.error
-        }
+        e.message = await parseErrorMessage(response)
         throw e
     }
 }

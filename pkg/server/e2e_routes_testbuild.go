@@ -69,6 +69,8 @@ func AddE2ETestRoutes(token string) func(s *Server, r gin.IRouter) {
 }
 
 func init() {
+	authRateLimitRPM = 10_000
+
 	token := strings.TrimSpace(os.Getenv("REVAULTER_E2E_TOKEN"))
 	if token == "" {
 		return

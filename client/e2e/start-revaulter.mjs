@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -30,6 +30,7 @@ if (!existsSync(binaryPath)) {
 const tempDir = mkdtempSync(join(tmpdir(), 'revaulter-playwright-'))
 const configPath = join(tempDir, 'config.yaml')
 const databasePath = join(tempDir, 'revaulter-e2e.db')
+const logPath = join(tempDir, 'server.log')
 const secretKey = Buffer.alloc(32, 7).toString('base64')
 const e2eToken = process.env.REVAULTER_E2E_TOKEN || 'playwright-e2e-token-fixed'
 
@@ -52,7 +53,7 @@ writeFileSync(
 
 const serverProcess = spawn(binaryPath, {
     cwd: repoRoot,
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
     env: {
         ...process.env,
         REVAULTER_CONFIG: configPath,
@@ -62,6 +63,14 @@ const serverProcess = spawn(binaryPath, {
         OTEL_TRACES_EXPORTER: 'none',
     },
 })
+
+for (const stream of [serverProcess.stdout, serverProcess.stderr]) {
+    stream?.on('data', (chunk) => {
+        const text = chunk.toString()
+        appendFileSync(logPath, text)
+        process.stderr.write(text)
+    })
+}
 
 let cleanedUp = false
 
@@ -74,6 +83,10 @@ function cleanup() {
 }
 
 serverProcess.on('exit', (code, signal) => {
+    if ((code ?? 0) !== 0 || signal) {
+        process.stderr.write(`\nserver exited unexpectedly. Log: ${logPath}\n`)
+    }
+
     cleanup()
     if (signal) {
         process.kill(process.pid, signal)

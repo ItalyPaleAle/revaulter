@@ -3,7 +3,6 @@ import { expect, test } from '@playwright/test'
 import {
     completePasswordSetup,
     installSessionCookie,
-    loginThroughUI,
     registerThroughUI,
     resetBrowserState,
     resetState,
@@ -44,7 +43,7 @@ test('user can register and save a password', async ({ page }) => {
     }
 })
 
-test('passwordless ready user logs in directly to ready view', async ({ page, request, context }) => {
+test('passwordless ready user logs in directly to ready view', async ({ page }) => {
     const passkey = await registerThroughUI(page, 'Passwordless User')
 
     try {

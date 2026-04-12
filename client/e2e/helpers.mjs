@@ -2,6 +2,55 @@ import { expect } from '@playwright/test'
 
 import { createVirtualPasskey } from './passkeys.mjs'
 
+function attachAuthDebugLogging(page) {
+    const failures = []
+    const trackedPaths = new Set(['/v2/auth/register/finish', '/v2/auth/login/finish', '/v2/auth/finalize-signup'])
+
+    const responseHandler = async (response) => {
+        const url = new URL(response.url())
+        if (!trackedPaths.has(url.pathname)) {
+            return
+        }
+
+        const contentType = response.headers()['content-type'] || ''
+        if (response.ok() && contentType.includes('application/json')) {
+            return
+        }
+
+        let body = ''
+        try {
+            body = await response.text()
+        } catch (err) {
+            body = err instanceof Error ? err.message : String(err)
+        }
+
+        failures.push({
+            path: url.pathname,
+            status: response.status(),
+            contentType,
+            body,
+        })
+    }
+
+    page.on('response', responseHandler)
+
+    return {
+        detach() {
+            page.off('response', responseHandler)
+        },
+        assertNoFailures() {
+            if (failures.length === 0) {
+                return
+            }
+
+            const details = failures
+                .map((failure) => `${failure.path} -> ${failure.status} ${failure.contentType}\n${failure.body}`)
+                .join('\n\n')
+            throw new Error(`Auth flow returned unexpected response\n\n${details}`)
+        },
+    }
+}
+
 async function fetchSessionState(page) {
     const sessionResponse = await page.request.get('/v2/auth/session')
     if (!sessionResponse.ok()) {
@@ -97,13 +146,23 @@ export async function registerAndReachReady(page, displayName = 'Playwright Read
 }
 
 export async function registerThroughUI(page, displayName = 'Playwright User') {
+    const authDebug = attachAuthDebugLogging(page)
     const passkey = await createVirtualPasskey(page)
-    await page.goto('/')
-    await page.getByRole('button', { name: 'Create a new account' }).click()
-    await page.getByLabel('Display name (optional)').fill(displayName)
-    await page.getByRole('button', { name: 'Create account with passkey' }).click()
-    await expect(page.getByRole('heading', { name: 'Add a password' })).toBeVisible()
-    return passkey
+
+    try {
+        await page.goto('/')
+        await page.getByRole('button', { name: 'Create a new account' }).click()
+        await page.getByLabel('Display name (optional)').fill(displayName)
+        await page.getByRole('button', { name: 'Create account with passkey' }).click()
+        await expect(page.getByRole('heading', { name: 'Add a password' })).toBeVisible()
+        authDebug.assertNoFailures()
+        return passkey
+    } catch (err) {
+        authDebug.assertNoFailures()
+        throw err
+    } finally {
+        authDebug.detach()
+    }
 }
 
 export async function loginThroughUI(page) {
@@ -120,8 +179,19 @@ export async function completePasswordSetup(page, password) {
 }
 
 export async function skipPasswordSetup(page) {
+    const authDebug = attachAuthDebugLogging(page)
+
     await page.getByRole('button', { name: 'Skip password' }).click()
-    await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
+
+    try {
+        await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
+        authDebug.assertNoFailures()
+    } catch (err) {
+        authDebug.assertNoFailures()
+        throw err
+    } finally {
+        authDebug.detach()
+    }
 }
 
 export async function waitForListStream(page) {
@@ -130,11 +200,11 @@ export async function waitForListStream(page) {
 
 export async function openSettings(page) {
     await page.getByRole('button', { name: 'Open security settings' }).click()
-    await expect(page.getByText('Security settings')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Close security settings' })).toBeVisible()
 }
 
 export async function openAllowedIPs(page) {
     await openSettings(page)
     await page.getByRole('button', { name: 'Configure allowed IPs' }).click()
-    await expect(page.getByText('Allowed IPs')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Allowed IPs' })).toBeVisible()
 }

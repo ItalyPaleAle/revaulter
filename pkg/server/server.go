@@ -41,7 +41,17 @@ const (
 	jsonContentType   = "application/json; charset=utf-8"
 )
 
-var testRoutes []func(s *Server, r gin.IRouter)
+// These variables are overwritten in e2e_routes_testbuild when building for e2e tests
+var (
+	// List of test routes
+	testRoutes []func(s *Server, r gin.IRouter)
+	// Rate limit for CLI request creation
+	// 200 req/m
+	requestRateLimit = 200
+	// Rate limit for auth endpoints
+	// 30 req/m
+	authRateLimitRPM = 30
+)
 
 // Server is the server based on Gin
 type Server struct {
@@ -241,8 +251,8 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	}
 
 	// Rate limiters for request creation and authentication endpoints
-	requestRateLimiter := MiddlewareRateLimit(200) // 200 req/m for CLI request creation
-	authRateLimiter := MiddlewareRateLimit(30)     // 30 req/m for auth endpoints
+	requestRateLimiter := MiddlewareRateLimit(requestRateLimit)
+	authRateLimiter := MiddlewareRateLimit(authRateLimitRPM)
 
 	// v2 routes (WebAuthn + browser crypto flow)
 	v2RouteGroup := s.appRouter.Group("/v2")
