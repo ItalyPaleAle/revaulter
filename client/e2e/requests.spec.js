@@ -1,12 +1,14 @@
 import { expect, test } from '@playwright/test'
 
 import {
+    fetchRequestPubkey,
     getSeededRequest,
     registerAndReachReady,
     resetBrowserState,
     resetState,
     seedPendingRequest,
     seedUser,
+    startCLIRequest,
     waitForListStream,
 } from './helpers.mjs'
 
@@ -126,6 +128,81 @@ test('new seeded request appears without reload after stream is connected', asyn
         })
 
         await expect(page.getByText('stream-key')).toBeVisible()
+    } finally {
+        await auth.passkey.dispose()
+    }
+})
+
+test('regenerating the request key invalidates the old public key endpoint', async ({ page, request }) => {
+    const auth = await registerAndReachReady(page, 'Request User')
+    const oldKey = auth.session.requestKey
+
+    try {
+        const before = await fetchRequestPubkey(request, oldKey)
+        expect(before.status).toBe(200)
+
+        await page.getByRole('button', { name: 'Open security settings' }).click()
+        await page.getByRole('button', { name: 'Regenerate' }).click()
+        await expect(page.getByText('Request key regenerated.')).toBeVisible()
+
+        const current = await page.request.get('/v2/auth/session')
+        const session = await current.json()
+        const newKey = session.requestKey
+
+        expect(newKey).not.toBe(oldKey)
+
+        const oldKeyResponse = await fetchRequestPubkey(request, oldKey)
+        expect(oldKeyResponse.status).toBe(404)
+
+        const newKeyResponse = await fetchRequestPubkey(request, newKey)
+        expect(newKeyResponse.status).toBe(200)
+    } finally {
+        await auth.passkey.dispose()
+    }
+})
+
+test('cli encrypt then decrypt round-trips hello world', async ({ page }) => {
+    const auth = await registerAndReachReady(page, 'CLI Crypto User')
+
+    try {
+        await waitForListStream(page)
+
+        const encryptRun = startCLIRequest({
+            operation: 'encrypt',
+            requestKey: auth.session.requestKey,
+            keyLabel: 'disk-key',
+            algorithm: 'aes-gcm-256',
+            note: 'cli round trip encrypt',
+            value: 'hello world',
+        })
+
+        await expect(page.getByText('cli round trip encrypt')).toBeVisible()
+        await page.getByRole('button', { name: 'Confirm' }).click()
+
+        const encryptResult = await encryptRun.done
+        expect(encryptResult.json.operation).toBe('encrypt')
+        expect(typeof encryptResult.json.value).toBe('string')
+        expect(typeof encryptResult.json.nonce).toBe('string')
+        expect(typeof encryptResult.json.tag).toBe('string')
+
+        const decryptRun = startCLIRequest({
+            operation: 'decrypt',
+            requestKey: auth.session.requestKey,
+            keyLabel: 'disk-key',
+            algorithm: 'aes-gcm-256',
+            note: 'cli round trip decrypt',
+            value: encryptResult.json.value,
+            nonce: encryptResult.json.nonce,
+            tag: encryptResult.json.tag,
+            aad: encryptResult.json.additionalData,
+        })
+
+        await expect(page.getByText('cli round trip decrypt')).toBeVisible()
+        await page.getByRole('button', { name: 'Confirm' }).click()
+
+        const decryptResult = await decryptRun.done
+        expect(decryptResult.json.operation).toBe('decrypt')
+        expect(decryptResult.json.decodedValue).toBe('hello world')
     } finally {
         await auth.passkey.dispose()
     }

@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test'
+import { spawn } from 'node:child_process'
 
 import { createVirtualPasskey } from './passkeys.mjs'
 
@@ -61,6 +62,7 @@ async function fetchSessionState(page) {
 }
 
 const e2eToken = process.env.REVAULTER_E2E_TOKEN || 'playwright-e2e-token-fixed'
+const defaultServerURL = process.env.PLAYWRIGHT_TEST_BASE_URL || 'http://localhost:41741'
 
 async function e2eFetch(request, path, options = {}) {
     const headers = {
@@ -173,9 +175,20 @@ export async function loginThroughUI(page) {
 }
 
 export async function completePasswordSetup(page, password) {
+    const authDebug = attachAuthDebugLogging(page)
+
     await page.getByLabel('Password').fill(password)
     await page.getByRole('button', { name: 'Save password' }).click()
-    await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
+
+    try {
+        await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
+        authDebug.assertNoFailures()
+    } catch (err) {
+        authDebug.assertNoFailures()
+        throw err
+    } finally {
+        authDebug.detach()
+    }
 }
 
 export async function skipPasswordSetup(page) {
@@ -207,4 +220,112 @@ export async function openAllowedIPs(page) {
     await openSettings(page)
     await page.getByRole('button', { name: 'Configure allowed IPs' }).click()
     await expect(page.getByRole('heading', { name: 'Allowed IPs' })).toBeVisible()
+}
+
+export async function readSession(page) {
+    return fetchSessionState(page)
+}
+
+export async function loginToPasswordPrompt(page) {
+    await page.goto('/')
+    await page.getByRole('button', { name: 'Continue with passkey' }).click()
+    await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
+}
+
+export async function unlockWithPassword(page, password) {
+    await page.getByLabel('Password').fill(password)
+    await page.getByRole('button', { name: 'Unlock local keys' }).click()
+}
+
+export async function fetchRequestPubkey(request, requestKey) {
+    const res = await request.get(`/v2/request/${requestKey}/pubkey`)
+    const text = await res.text()
+    return {
+        ok: res.ok(),
+        status: res.status(),
+        text,
+    }
+}
+
+function encodeBase64UrlUtf8(value) {
+    return Buffer.from(value, 'utf8').toString('base64url')
+}
+
+function decodeBase64UrlUtf8(value) {
+    return Buffer.from(value, 'base64url').toString('utf8')
+}
+
+function decodeCliJSON(stdout) {
+    const parsed = JSON.parse(stdout)
+    if (typeof parsed.value === 'string') {
+        parsed.decodedValue = decodeBase64UrlUtf8(parsed.value)
+    }
+    if (typeof parsed.data === 'string') {
+        parsed.decodedData = Buffer.from(parsed.data, 'base64').toString('utf8')
+    }
+    return parsed
+}
+
+export function startCLIRequest(args) {
+    const cliArgs = [
+        'run',
+        './cmd/cli',
+        args.operation,
+        '--server',
+        args.server || defaultServerURL,
+        '--request-key',
+        args.requestKey,
+        '--key-label',
+        args.keyLabel,
+        '--algorithm',
+        args.algorithm,
+        '--note',
+        args.note,
+    ]
+
+    if (args.operation === 'encrypt') {
+        cliArgs.push('--value', encodeBase64UrlUtf8(args.value))
+        if (args.aad) {
+            cliArgs.push('--aad', Buffer.from(args.aad, 'utf8').toString('base64url'))
+        }
+    } else {
+        cliArgs.push('--value', args.value)
+        cliArgs.push('--nonce', args.nonce)
+        cliArgs.push('--tag', args.tag)
+        if (args.aad) {
+            cliArgs.push('--aad', args.aad)
+        }
+    }
+
+    const child = spawn('go', cliArgs, {
+        cwd: process.cwd().replace(/\/client$/, ''),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: process.env,
+    })
+
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString()
+    })
+    child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString()
+    })
+
+    const done = new Promise((resolve, reject) => {
+        child.on('error', reject)
+        child.on('close', (code) => {
+            if (code !== 0) {
+                reject(new Error(`CLI exited with ${code}\n${stderr || stdout}`))
+                return
+            }
+            try {
+                resolve({ stdout, stderr, json: decodeCliJSON(stdout) })
+            } catch (err) {
+                reject(err)
+            }
+        })
+    })
+
+    return { child, done }
 }

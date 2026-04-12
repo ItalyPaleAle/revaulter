@@ -1,12 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-import {
-    openAllowedIPs,
-    openSettings,
-    registerAndReachReady,
-    resetBrowserState,
-    resetState,
-} from './helpers.mjs'
+import { openAllowedIPs, openSettings, registerAndReachReady, resetBrowserState, resetState } from './helpers.mjs'
 
 test.beforeEach(async ({ page, request }) => {
     await resetState(request)

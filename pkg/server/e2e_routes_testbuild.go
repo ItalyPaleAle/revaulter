@@ -65,6 +65,7 @@ func AddE2ETestRoutes(token string) func(s *Server, r gin.IRouter) {
 		group.POST("/seed-session", s.RouteE2ESeedSession)
 		group.POST("/seed-request", s.RouteE2ESeedRequest)
 		group.GET("/request/:state", s.RouteE2EGetRequest)
+		group.GET("/request/:state/result", s.RouteE2EGetRequestResult)
 	}
 }
 
@@ -387,5 +388,41 @@ func (s *Server) RouteE2EGetRequest(c *gin.Context) {
 		"algorithm": rec.Algorithm,
 		"requestor": rec.RequestorIP,
 		"note":      rec.Note,
+	})
+}
+
+func (s *Server) RouteE2EGetRequestResult(c *gin.Context) {
+	if s.requestStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
+		return
+	}
+
+	state := c.Param("state")
+	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if rec == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request not found"))
+		return
+	}
+
+	var responseEnvelope any
+	if rec.ResponseEnvelope != nil {
+		responseEnvelope = rec.ResponseEnvelope
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"state":            rec.State,
+		"status":           rec.Status,
+		"operation":        rec.Operation,
+		"userId":           rec.UserID,
+		"keyLabel":         rec.KeyLabel,
+		"algorithm":        rec.Algorithm,
+		"requestor":        rec.RequestorIP,
+		"note":             rec.Note,
+		"encryptedRequest": json.RawMessage(rec.EncryptedRequest),
+		"responseEnvelope": responseEnvelope,
 	})
 }

@@ -3,11 +3,13 @@ import { expect, test } from '@playwright/test'
 import {
     completePasswordSetup,
     installSessionCookie,
+    loginToPasswordPrompt,
     registerThroughUI,
     resetBrowserState,
     resetState,
     seedUser,
     skipPasswordSetup,
+    unlockWithPassword,
 } from './helpers.mjs'
 
 test.beforeEach(async ({ page, request }) => {
@@ -49,7 +51,9 @@ test('passwordless ready user logs in directly to ready view', async ({ page }) 
     try {
         await skipPasswordSetup(page)
         await openSignInState(page)
-        await expect(page.getByText('Session exists but local key material is missing. Sign in again to continue.')).toBeVisible()
+        await expect(
+            page.getByText('Session exists but local key material is missing. Sign in again to continue.')
+        ).toBeVisible()
 
         await page.getByRole('button', { name: 'Continue with passkey' }).click()
         await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
@@ -65,6 +69,54 @@ test('user can register and later return to sign-in after password setup', async
         await completePasswordSetup(page, 'hunter2')
         await openSignInState(page)
         await expect(page.getByRole('button', { name: 'Continue with passkey' })).toBeVisible()
+    } finally {
+        await passkey.dispose()
+    }
+})
+
+test('password-protected user can unlock with the correct password', async ({ page }) => {
+    const passkey = await registerThroughUI(page, 'Protected User')
+
+    try {
+        await completePasswordSetup(page, 'hunter2')
+        await openSignInState(page)
+
+        await loginToPasswordPrompt(page)
+        await unlockWithPassword(page, 'hunter2')
+        await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
+    } finally {
+        await passkey.dispose()
+    }
+})
+
+test('password-protected user sees an error for a wrong password and can recover', async ({ page }) => {
+    const passkey = await registerThroughUI(page, 'Protected User')
+
+    try {
+        await completePasswordSetup(page, 'hunter2')
+        await openSignInState(page)
+
+        await loginToPasswordPrompt(page)
+        await unlockWithPassword(page, 'wrong-password')
+        await expect(page.getByText('Incorrect password')).toBeVisible()
+        await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
+
+        await unlockWithPassword(page, 'hunter2')
+        await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
+    } finally {
+        await passkey.dispose()
+    }
+})
+
+test('expired ready session forces the UI back to sign-in', async ({ page, request }) => {
+    const passkey = await registerThroughUI(page, 'Session User')
+
+    try {
+        await skipPasswordSetup(page)
+        await resetState(request)
+
+        await page.goto('/')
+        await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
     } finally {
         await passkey.dispose()
     }
