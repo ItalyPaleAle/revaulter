@@ -29,11 +29,11 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/utils/broker"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
-	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
 const (
@@ -61,15 +61,15 @@ type Server struct {
 	webhook    webhook.Webhook
 	metrics    *metrics.RevaulterMetrics
 
-	// Subscribers for v2 pending request list updates
-	pubsub *broker.Broker[*v2db.V2RequestListItem]
+	// Subscribers for pending request list updates
+	pubsub *broker.Broker[*db.V2RequestListItem]
 	// Subscriptions to watch request status changes
 	subs map[string]chan struct{}
 
 	// Database and request store
-	db           *v2db.DB
-	requestStore *v2db.RequestStore
-	authStore    *v2db.AuthStore
+	db           *db.DB
+	requestStore *db.RequestStore
+	authStore    *db.AuthStore
 	webAuthn     *webauthnlib.WebAuthn
 
 	// Per-user rate limiter for password canary delivery
@@ -100,9 +100,9 @@ type NewServerOpts struct {
 	Webhook       webhook.Webhook
 	Metrics       *metrics.RevaulterMetrics
 	TraceExporter sdkTrace.SpanExporter
-	DB            *v2db.DB
-	RequestStore  *v2db.RequestStore
-	AuthStore     *v2db.AuthStore
+	DB            *db.DB
+	RequestStore  *db.RequestStore
+	AuthStore     *db.AuthStore
 }
 
 // NewServer creates a new Server object and initializes it
@@ -116,7 +116,7 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 
 	s := &Server{
 		subs:         map[string]chan struct{}{},
-		pubsub:       broker.NewBroker[*v2db.V2RequestListItem](),
+		pubsub:       broker.NewBroker[*db.V2RequestListItem](),
 		webhook:      opts.Webhook,
 		metrics:      opts.Metrics,
 		db:           opts.DB,
@@ -432,7 +432,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		}
 	}()
 
-	// Background v2 request expiry sweeper to notify long-poll/list subscribers when requests time out.
+	// Background request expiry sweeper to notify long-poll/list subscribers when requests time out.
 	if s.requestStore != nil {
 		s.wg.Go(func() {
 			ticker := time.NewTicker(500 * time.Millisecond)
@@ -444,7 +444,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 				case now := <-ticker.C:
 					refs, err := s.requestStore.ExpirePendingAndReturnStates(ctx, now)
 					if err != nil {
-						log.WarnContext(ctx, "v2 expiry sweeper failed", slog.Any("error", err))
+						log.WarnContext(ctx, "error cleaning expired requests", slog.Any("error", err))
 						continue
 					}
 					if len(refs) == 0 {
@@ -453,7 +453,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 					s.lock.Lock()
 					for _, ref := range refs {
 						s.notifySubscriber(ref.State)
-						s.publishListItem(&v2db.V2RequestListItem{
+						s.publishListItem(&db.V2RequestListItem{
 							State:  ref.State,
 							Status: "removed",
 							UserID: ref.UserID,

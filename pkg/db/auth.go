@@ -1,4 +1,4 @@
-package v2db
+package db
 
 import (
 	"context"

@@ -15,11 +15,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
-	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
 var noteValidate = regexp.MustCompile(`[^A-Za-z0-9 .\/_-]`)
@@ -108,7 +108,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
-		err = s.requestStore.CreateRequest(c.Request.Context(), v2db.CreateRequestInput{
+		err = s.requestStore.CreateRequest(c.Request.Context(), db.CreateRequestInput{
 			State:            state,
 			UserID:           user.ID,
 			Operation:        operation,
@@ -129,9 +129,9 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			"state":   state,
 			"pending": true,
 		})
-		s.publishListItem(&v2db.V2RequestListItem{
+		s.publishListItem(&db.V2RequestListItem{
 			State:     state,
-			Status:    string(v2db.V2RequestStatusPending),
+			Status:    string(db.V2RequestStatusPending),
 			Operation: operation,
 			UserID:    user.ID,
 			KeyLabel:  body.KeyLabel,
@@ -224,14 +224,14 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 			return
 		}
 		switch rec.Status {
-		case v2db.V2RequestStatusCompleted:
+		case db.V2RequestStatusCompleted:
 			c.JSON(http.StatusOK, protocolv2.RequestResultResponse{
 				State:            rec.State,
 				Done:             true,
 				ResponseEnvelope: rec.ResponseEnvelope,
 			})
 			return
-		case v2db.V2RequestStatusCanceled, v2db.V2RequestStatusExpired:
+		case db.V2RequestStatusCanceled, db.V2RequestStatusExpired:
 			c.JSON(http.StatusConflict, protocolv2.RequestResultResponse{
 				State:  rec.State,
 				Failed: true,
@@ -396,7 +396,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		s.lock.Unlock()
 
 		c.JSON(http.StatusOK, gin.H{"canceled": true})
-		s.publishListItem(&v2db.V2RequestListItem{
+		s.publishListItem(&db.V2RequestListItem{
 			State:  req.State,
 			Status: "removed",
 			UserID: rec.UserID,
@@ -452,7 +452,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	s.notifySubscriber(req.State)
 	s.lock.Unlock()
 	c.JSON(http.StatusOK, gin.H{"confirmed": true})
-	s.publishListItem(&v2db.V2RequestListItem{
+	s.publishListItem(&db.V2RequestListItem{
 		State:  req.State,
 		Status: "removed",
 		UserID: rec.UserID,

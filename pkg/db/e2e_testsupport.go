@@ -2,7 +2,7 @@
 
 // This file includes helpers for the e2e tests, and it's only built with the "e2e" tag
 
-package v2db
+package db
 
 import (
 	"context"

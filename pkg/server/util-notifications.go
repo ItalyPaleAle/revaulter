@@ -1,10 +1,10 @@
 package server
 
 import (
-	"github.com/italypaleale/revaulter/pkg/v2db"
+	"github.com/italypaleale/revaulter/pkg/db"
 )
 
-func (s *Server) publishListItem(item *v2db.V2RequestListItem) {
+func (s *Server) publishListItem(item *db.V2RequestListItem) {
 	if s.pubsub == nil || item == nil {
 		return
 	}

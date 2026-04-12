@@ -19,8 +19,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
-	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
 const e2eHeaderToken = "x-revaulter-e2e-token"
@@ -119,7 +119,7 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 		req.State = "ready-no-password"
 	}
 
-	_, err = s.authStore.RegisterUser(c.Request.Context(), v2db.RegisterUserInput{
+	_, err = s.authStore.RegisterUser(c.Request.Context(), db.RegisterUserInput{
 		UserID:         req.UserID,
 		DisplayName:    req.DisplayName,
 		WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("e2e-webauthn-" + req.UserID)),
@@ -128,7 +128,7 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 		SignCount:      1,
 		SessionTTL:     config.Get().SessionTimeout,
 	})
-	if err != nil && !errors.Is(err, v2db.ErrUserAlreadyExists) {
+	if err != nil && !errors.Is(err, db.ErrUserAlreadyExists) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
@@ -180,7 +180,7 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 				string(requestEncJWKJSON),
 				base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey-"+req.UserID)),
 			)
-			if keyErr != nil && !errors.Is(keyErr, v2db.ErrAlreadyFinalized) {
+			if keyErr != nil && !errors.Is(keyErr, db.ErrAlreadyFinalized) {
 				AbortWithErrorJSON(c, keyErr)
 				return
 			}
@@ -226,7 +226,7 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 		return
 	}
 
-	sess, err := s.authStore.Login(c.Request.Context(), v2db.LoginInput{
+	sess, err := s.authStore.Login(c.Request.Context(), db.LoginInput{
 		UserID:       req.UserID,
 		CredentialID: "e2e-cred-" + req.UserID,
 		SignCount:    2,
@@ -287,12 +287,12 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 
 	status := strings.TrimSpace(req.Status)
 	if status == "" {
-		status = string(v2db.V2RequestStatusPending)
+		status = string(db.V2RequestStatusPending)
 	}
 
 	now := time.Now().UTC()
 	encryptedRequest := `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","y":"AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"mlkemCiphertext":"dGVzdC1tbGtlbS1jaXBoZXJ0ZXh0","nonce":"MTIzNDU2Nzg5MDEy","ciphertext":"dGVzdC1yZXF1ZXN0LWNpcGhlcnRleHQifQ}`
-	err = s.requestStore.CreateRequest(c.Request.Context(), v2db.CreateRequestInput{
+	err = s.requestStore.CreateRequest(c.Request.Context(), db.CreateRequestInput{
 		State:            req.State,
 		UserID:           req.UserID,
 		Operation:        req.Operation,
@@ -310,11 +310,11 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 	}
 
 	switch status {
-	case string(v2db.V2RequestStatusPending):
+	case string(db.V2RequestStatusPending):
 		// nothing else to do
-	case string(v2db.V2RequestStatusCanceled):
+	case string(db.V2RequestStatusCanceled):
 		_, err = s.requestStore.CancelRequest(c.Request.Context(), req.State)
-	case string(v2db.V2RequestStatusCompleted):
+	case string(db.V2RequestStatusCompleted):
 		_, err = s.requestStore.CompleteRequest(c.Request.Context(), req.State, protocolv2.ResponseEnvelope{
 			TransportAlg: "ecdh-p256+mlkem768+a256gcm",
 			BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
@@ -328,7 +328,7 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 			Ciphertext:      "dGVzdC1yZXNwb25zZS1jaXBoZXJ0ZXh0",
 			ResultType:      "bytes",
 		})
-	case string(v2db.V2RequestStatusExpired):
+	case string(db.V2RequestStatusExpired):
 		execErr := s.requestStore.ForceExpireRequestForTests(c.Request.Context(), req.State, now.Add(-time.Second))
 		if execErr == nil {
 			err = s.requestStore.MarkExpired(c.Request.Context(), req.State)
@@ -344,8 +344,8 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 		return
 	}
 
-	if status == string(v2db.V2RequestStatusPending) {
-		s.publishListItem(&v2db.V2RequestListItem{
+	if status == string(db.V2RequestStatusPending) {
+		s.publishListItem(&db.V2RequestListItem{
 			State:     req.State,
 			Status:    status,
 			Operation: req.Operation,

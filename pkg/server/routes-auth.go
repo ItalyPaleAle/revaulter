@@ -20,10 +20,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
-	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
 type v2AuthRegisterBeginRequest struct {
@@ -388,10 +388,10 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 
 	err = s.authStore.FinalizeSignup(c.Request.Context(), userID, req.Canary, string(req.RequestEncEcdhPubkey), req.RequestEncMlkemPubkey)
 	switch {
-	case errors.Is(err, v2db.ErrAlreadyFinalized):
+	case errors.Is(err, db.ErrAlreadyFinalized):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Account is already finalized"))
 		return
-	case errors.Is(err, v2db.ErrUserNotFound):
+	case errors.Is(err, db.ErrUserNotFound):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
 		return
 	case err != nil:
@@ -522,7 +522,7 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	})
 }
 
-func (s *Server) setSessionCookie(c *gin.Context, sess *v2db.AuthSession) error {
+func (s *Server) setSessionCookie(c *gin.Context, sess *db.AuthSession) error {
 	if sess == nil {
 		return NewResponseError(http.StatusInternalServerError, "session is nil")
 	}
@@ -539,7 +539,7 @@ func secureCookie(c *gin.Context) bool {
 	return url.Scheme == "https" || config.Get().ForceSecureCookies
 }
 
-func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (*v2db.AuthSession, error) {
+func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (*db.AuthSession, error) {
 	if s.webAuthn == nil {
 		return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 	}
@@ -580,7 +580,7 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 		return nil, err
 	}
 
-	sess, err := s.authStore.RegisterUser(c.Request.Context(), v2db.RegisterUserInput{
+	sess, err := s.authStore.RegisterUser(c.Request.Context(), db.RegisterUserInput{
 		UserID:         payload.UserID,
 		DisplayName:    payload.DisplayName,
 		WebAuthnUserID: payload.WebAuthnUserID,
@@ -589,7 +589,7 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 		SignCount:      int64(cred.Authenticator.SignCount),
 		SessionTTL:     config.Get().SessionTimeout,
 	})
-	if errors.Is(err, v2db.ErrUserAlreadyExists) {
+	if errors.Is(err, db.ErrUserAlreadyExists) {
 		return nil, NewResponseError(http.StatusConflict, "User already exists")
 	} else if err != nil {
 		return nil, err
@@ -598,7 +598,7 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 	return sess, nil
 }
 
-func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v2db.AuthSession, *v2db.User, error) {
+func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*db.AuthSession, *db.User, error) {
 	if s.webAuthn == nil {
 		return nil, nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 	}
@@ -617,7 +617,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 
 	var (
 		discoveredUser   *v2WebAuthnUser
-		discoveredDBUser *v2db.User
+		discoveredDBUser *db.User
 	)
 	handler := func(rawID, userHandle []byte) (webauthnlib.User, error) {
 		webAuthnUserID := base64.RawURLEncoding.EncodeToString(userHandle)
@@ -662,7 +662,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*v
 
 	sess, err := s.createLoginSession(c.Request.Context(), discoveredUser.userID, cred)
 	if err != nil {
-		if errors.Is(err, v2db.ErrInvalidLogin) {
+		if errors.Is(err, db.ErrInvalidLogin) {
 			return nil, nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 		}
 		return nil, nil, err
@@ -718,8 +718,8 @@ func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2We
 	return NewResponseError(http.StatusForbidden, "Authenticator credential not recognized")
 }
 
-func (s *Server) createLoginSession(ctx context.Context, userID string, cred *webauthnlib.Credential) (*v2db.AuthSession, error) {
-	return s.authStore.Login(ctx, v2db.LoginInput{
+func (s *Server) createLoginSession(ctx context.Context, userID string, cred *webauthnlib.Credential) (*db.AuthSession, error) {
+	return s.authStore.Login(ctx, db.LoginInput{
 		UserID:       userID,
 		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
 		SignCount:    int64(cred.Authenticator.SignCount),
@@ -834,7 +834,7 @@ func (s *Server) v2LoadWebAuthnUser(ctx context.Context, userID string) (*v2WebA
 	}, nil
 }
 
-func sessionInfoFromSession(sess *v2db.AuthSession) *v2AuthSessionInfo {
+func sessionInfoFromSession(sess *db.AuthSession) *v2AuthSessionInfo {
 	if sess == nil {
 		return nil
 	}

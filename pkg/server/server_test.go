@@ -30,10 +30,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils/bufconn"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
-	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
 const (
@@ -583,18 +583,18 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 		"tLSCertPEM": cert,
 		"tLSKeyPEM":  key,
 	})
-	db := v2db.NewTestDatabaseForServerTests(t)
-	err = v2db.RunMigrations(t.Context(), db, log)
+	dbConn := db.NewTestDatabaseForServerTests(t)
+	err = db.RunMigrations(t.Context(), dbConn, log)
 	require.NoError(t, err)
-	authStore, err := v2db.NewAuthStore(db, log)
+	authStore, err := db.NewAuthStore(dbConn, log)
 	require.NoError(t, err)
-	requestStore, err := v2db.NewRequestStore(db, log)
+	requestStore, err := db.NewRequestStore(dbConn, log)
 	require.NoError(t, err)
 
 	srv, err := NewServer(NewServerOpts{
 		Log:          log,
 		Webhook:      wh,
-		DB:           db,
+		DB:           dbConn,
 		AuthStore:    authStore,
 		RequestStore: requestStore,
 	})
@@ -609,10 +609,10 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	return srv, cleanup
 }
 
-func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName string) (*http.Cookie, *v2db.User) {
+func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName string) (*http.Cookie, *db.User) {
 	t.Helper()
 
-	sess, err := srv.authStore.RegisterUser(t.Context(), v2db.RegisterUserInput{
+	sess, err := srv.authStore.RegisterUser(t.Context(), db.RegisterUserInput{
 		UserID:         userID,
 		DisplayName:    displayName,
 		WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("webauthn-" + userID)),

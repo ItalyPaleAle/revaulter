@@ -1,6 +1,6 @@
 //go:build unit
 
-package v2db
+package db
 
 import (
 	"crypto/sha256"

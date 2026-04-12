@@ -15,11 +15,11 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/db"
 	revaultermetrics "github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/server"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
-	"github.com/italypaleale/revaulter/pkg/v2db"
 )
 
 func main() {
@@ -34,8 +34,8 @@ func main() {
 	// Load config
 	err := loadConfig()
 	if err != nil {
-		var lce *loadConfigError
-		if errors.As(err, &lce) {
+		lce, ok := errors.AsType[*loadConfigError](err)
+		if ok {
 			lce.LogFatal(initLogger)
 		} else {
 			slogkit.FatalError(initLogger, "Failed to load configuration", err)
@@ -76,40 +76,42 @@ func main() {
 	webhook := webhook.NewWebhook()
 
 	// Initialize the database and stores in main so their lifecycle is explicit
-	var db *v2db.DB
-	var authStore *v2db.AuthStore
-	var requestStore *v2db.RequestStore
+	var (
+		dbConn       *db.DB
+		authStore    *db.AuthStore
+		requestStore *db.RequestStore
+	)
 	if conf.DatabaseDSN != "" {
 		connCtx, connCancel := context.WithTimeout(ctx, 20*time.Second)
-		db, err = v2db.Open(connCtx, conf.DatabaseDSN)
+		dbConn, err = db.Open(connCtx, conf.DatabaseDSN)
 		connCancel()
 		if err != nil {
 			slogkit.FatalError(log, "Failed to open database", err)
 			return
 		}
 
-		err = v2db.RunMigrations(ctx, db, log)
+		err = db.RunMigrations(ctx, dbConn, log)
 		if err != nil {
-			_ = db.Close(ctx)
+			_ = dbConn.Close(ctx)
 			slogkit.FatalError(log, "Failed to run database migrations", err)
 			return
 		}
 
-		authStore, err = v2db.NewAuthStore(db, log)
+		authStore, err = db.NewAuthStore(dbConn, log)
 		if err != nil {
-			_ = db.Close(ctx)
+			_ = dbConn.Close(ctx)
 			slogkit.FatalError(log, "Failed to initialize auth store", err)
 			return
 		}
 
-		requestStore, err = v2db.NewRequestStore(db, log)
+		requestStore, err = db.NewRequestStore(dbConn, log)
 		if err != nil {
-			_ = db.Close(ctx)
+			_ = dbConn.Close(ctx)
 			slogkit.FatalError(log, "Failed to initialize request store", err)
 			return
 		}
 
-		shutdownFns = append(shutdownFns, db.Close)
+		shutdownFns = append(shutdownFns, dbConn.Close)
 	}
 
 	// Init metrics
@@ -140,7 +142,7 @@ func main() {
 		Webhook:       webhook,
 		Metrics:       metrics,
 		TraceExporter: traceExporter,
-		DB:            db,
+		DB:            dbConn,
 		AuthStore:     authStore,
 		RequestStore:  requestStore,
 	})
