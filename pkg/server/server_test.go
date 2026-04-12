@@ -236,7 +236,7 @@ func TestServerV2PublicSignup(t *testing.T) {
 	require.Equal(t, "webauthn", regBegin["mode"])
 }
 
-func TestServerV2SessionMiddlewareBlocksUnreadyUsersFromAPI(t *testing.T) {
+func TestServerV2SessionMiddlewareAllowsUnreadyUsersOnListAPI(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
 		"databaseDSN":     tmpDir + "/v2-unready.db",
@@ -265,10 +265,10 @@ func TestServerV2SessionMiddlewareBlocksUnreadyUsersFromAPI(t *testing.T) {
 		res.Body.Close()
 	}()
 
-	var body map[string]any
-	_ = json.NewDecoder(res.Body).Decode(&body)
-	require.Equal(t, http.StatusForbidden, res.StatusCode)
-	require.Equal(t, "User account setup is not complete", body["error"])
+	var body []map[string]any
+	require.NoError(t, json.NewDecoder(res.Body).Decode(&body))
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Empty(t, body)
 }
 
 func TestServerV2SessionEndpointAllowsUnreadyUsers(t *testing.T) {
