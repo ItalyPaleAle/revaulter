@@ -33,6 +33,18 @@ let {
     uiState,
 }: Props = $props()
 
+let passwordConfirm = $state('')
+let confirmError = $state<string | null>(null)
+
+function handleSetPassword() {
+    confirmError = null
+    if (passwordInput !== passwordConfirm) {
+        confirmError = 'Passwords do not match'
+        return
+    }
+    void onSetPassword()
+}
+
 function authHeadline() {
     if (uiState === 'signup') {
         return 'Create a new account'
@@ -111,7 +123,7 @@ function authBodyCopy() {
                     onsubmit={(event) => {
                         event.preventDefault()
                         if (!authBusy) {
-                            void onSetPassword()
+                            handleSetPassword()
                         }
                     }}
                 >
@@ -122,10 +134,29 @@ function authBodyCopy() {
                             type="password"
                             value={passwordInput}
                             oninput={(event) => {
+                                confirmError = null
                                 onPasswordInput((event.currentTarget as HTMLInputElement).value)
                             }}
                         />
                     </div>
+
+                    <div class="space-y-2">
+                        <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-password-confirm">Confirm password</label>
+                        <TextField
+                            id="v2-password-confirm"
+                            type="password"
+                            bind:value={passwordConfirm}
+                            oninput={() => {
+                                confirmError = null
+                            }}
+                        />
+                    </div>
+
+                    {#if confirmError}
+                        <div class="rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+                            {confirmError}
+                        </div>
+                    {/if}
 
                     <div class="flex flex-col gap-3 sm:flex-row">
                         <Button

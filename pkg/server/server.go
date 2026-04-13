@@ -77,9 +77,10 @@ type Server struct {
 	authStore    *db.AuthStore
 	webAuthn     *webauthnlib.WebAuthn
 
-	// Per-user rate limiter for password canary delivery
-	// Refuses logins that try to harvest the canary too quickly
-	canaryLimiter *httprate.RateLimiter
+	// Per-user rate limiter for wrapped primary key delivery
+	// Protects delivery of the wrapped root-key blob to a WebAuthn-authenticated client
+	// and reduces abuse of the password-gated unwrap flow
+	wrappedKeyLimiter *httprate.RateLimiter
 
 	// Servers
 	appSrv *http.Server
@@ -130,8 +131,8 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 
 		httpClient: httpClient,
 
-		// Throttle password canary delivery to 5 successful logins per hour per user
-		canaryLimiter: httprate.NewRateLimiter(5, time.Hour),
+		// Throttle wrapped primary key delivery to 5 successful logins per hour per user
+		wrappedKeyLimiter: httprate.NewRateLimiter(5, time.Hour),
 	}
 
 	// Create the eventqueue processors for performing garbage collection

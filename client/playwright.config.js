@@ -1,5 +1,5 @@
-import { defineConfig, devices } from '@playwright/test'
 import process from 'node:process'
+import { defineConfig, devices } from '@playwright/test'
 
 const port = 41741
 const baseURL = `http://localhost:${port}`

@@ -24,7 +24,7 @@ let {
     placeholder,
     required = false,
     type = 'text',
-    value = '',
+    value = $bindable(''),
 }: Props = $props()
 </script>
 
@@ -36,7 +36,7 @@ let {
     {placeholder}
     {required}
     {type}
-    {value}
+    bind:value
     class={`w-full rounded-[1.35rem] border border-slate-300/90 bg-white/92 px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-600/80 dark:bg-slate-950/72 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950 ${className}`}
     oninput={oninput}
 />

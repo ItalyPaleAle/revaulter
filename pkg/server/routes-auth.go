@@ -85,15 +85,15 @@ type v2AuthLoginBeginResponse struct {
 }
 
 type v2AuthLoginFinishResponse struct {
-	Authenticated  bool               `json:"authenticated"`
-	Session        *v2AuthSessionInfo `json:"session,omitempty"`
-	PasswordCanary string             `json:"passwordCanary,omitempty"`
+	Authenticated     bool               `json:"authenticated"`
+	Session           *v2AuthSessionInfo `json:"session,omitempty"`
+	WrappedPrimaryKey string             `json:"wrappedPrimaryKey,omitempty"`
 }
 
 type v2AuthFinalizeSignupRequest struct {
 	RequestEncEcdhPubkey  json.RawMessage `json:"requestEncEcdhPubkey"`
 	RequestEncMlkemPubkey string          `json:"requestEncMlkemPubkey"`
-	Canary                string          `json:"canary,omitempty"`
+	WrappedPrimaryKey     string          `json:"wrappedPrimaryKey,omitempty"`
 }
 
 type v2AuthAllowedIPsRequest struct {
@@ -320,24 +320,25 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		Session:       sessionInfoFromSession(sess),
 	}
 
-	// Throttle password canary delivery
-	// The canary is the user's locally-derived password verifier; an attacker that controls a passkey can otherwise call /v2/auth/login/finish in a tight loop and harvest unlimited verifier samples for offline cracking
-	// We refuse the login so the client cannot bypass the password check by spamming this endpoint
-	if user != nil && user.PasswordCanary != "" {
-		overLimit := s.canaryLimiter.OnLimit(c.Writer, c.Request, "v2-canary:"+sess.UserID)
+	// Throttle wrapped primary key delivery
+	// The wrapped primary key is the user's encrypted root-key material; an attacker that controls a passkey
+	// could otherwise call /v2/auth/login/finish in a tight loop and harvest the blob for offline password cracking
+	// We refuse the login so the client cannot abuse this endpoint
+	if user != nil && user.WrappedPrimaryKey != "" {
+		overLimit := s.wrappedKeyLimiter.OnLimit(c.Writer, c.Request, "v2-wrapped-key:"+sess.UserID)
 		if overLimit {
-			// A WebAuthn-authenticated client that exceeds the budget has the new session revoked and a 429 returned by RouteV2AuthLoginFinish
+			// A WebAuthn-authenticated client that exceeds the budget has the new session revoked and a 429 returned
 			revokeErr := s.authStore.RevokeSession(c.Request.Context(), sess.ID)
 			if revokeErr != nil {
 				logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
-					"Failed to revoke session after canary rate-limit refusal",
+					"Failed to revoke session after wrapped-key rate-limit refusal",
 					slog.String("user_id", sess.UserID),
 					slog.Any("error", revokeErr),
 				)
 			}
 
 			logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
-				"Refused canary delivery: per-user rate limit exceeded",
+				"Refused wrapped-key delivery: per-user rate limit exceeded",
 				slog.String("user_id", sess.UserID),
 				slog.String("client_ip", c.ClientIP()),
 			)
@@ -346,9 +347,9 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 			return
 		}
 
-		resp.PasswordCanary = user.PasswordCanary
+		resp.WrappedPrimaryKey = user.WrappedPrimaryKey
 		logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(),
-			"Delivered password canary to authenticated client",
+			"Delivered wrapped primary key to authenticated client",
 			slog.String("user_id", sess.UserID),
 			slog.String("client_ip", c.ClientIP()),
 		)
@@ -404,12 +405,12 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
-	if req.Canary != "" && len(req.Canary) > 512 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "canary is too large"))
+	if req.WrappedPrimaryKey != "" && len(req.WrappedPrimaryKey) > 256 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "wrappedPrimaryKey is too large"))
 		return
 	}
 
-	err = s.authStore.FinalizeSignup(c.Request.Context(), userID, req.Canary, string(req.RequestEncEcdhPubkey), req.RequestEncMlkemPubkey)
+	err = s.authStore.FinalizeSignup(c.Request.Context(), userID, req.WrappedPrimaryKey, string(req.RequestEncEcdhPubkey), req.RequestEncMlkemPubkey)
 	switch {
 	case errors.Is(err, db.ErrAlreadyFinalized):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Account is already finalized"))

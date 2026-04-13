@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS v2_users (
 	display_name text NOT NULL DEFAULT '',
 	status text NOT NULL,
 	webauthn_user_id text NOT NULL,
-	password_canary text NOT NULL DEFAULT '',
+	wrapped_primary_key text NOT NULL DEFAULT '',
 	request_key text NOT NULL,
 	request_enc_ecdh_pubkey text NOT NULL DEFAULT '',
 	request_enc_mlkem_pubkey text NOT NULL DEFAULT '',

@@ -28,7 +28,7 @@ type User struct {
 	DisplayName           string
 	Status                string
 	WebAuthnUserID        string
-	PasswordCanary        string
+	WrappedPrimaryKey     string
 	RequestKey            string
 	RequestEncEcdhPubkey  string
 	RequestEncMlkemPubkey string
@@ -98,7 +98,7 @@ func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
-const userSelectCols = `id, display_name, status, webauthn_user_id, password_canary, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, allowed_ips, ready`
+const userSelectCols = `id, display_name, status, webauthn_user_id, wrapped_primary_key, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, allowed_ips, ready`
 
 func (s *AuthStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
 	return s.getUser(ctx, `SELECT `+userSelectCols+` FROM v2_users WHERE id = $1`, userID)
@@ -118,7 +118,7 @@ func (s *AuthStore) getUser(ctx context.Context, query string, arg string) (*Use
 		allowedIPsCSV string
 	)
 	err := s.db.db.QueryRow(ctx, query, arg).
-		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.PasswordCanary, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &allowedIPsCSV, &user.Ready)
+		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.WrappedPrimaryKey, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &allowedIPsCSV, &user.Ready)
 	if s.db.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
@@ -301,7 +301,7 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 
 	now := time.Now().UTC().Unix()
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, password_canary, request_key, allowed_ips, created_at, updated_at)
+		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, wrapped_primary_key, request_key, allowed_ips, created_at, updated_at)
 		VALUES ($1, $2, 'active', $3, '', $4, '', $5, $6)`,
 		in.UserID, in.DisplayName, in.WebAuthnUserID, requestKey, now, now,
 	)
@@ -412,13 +412,13 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 
 var ErrAlreadyFinalized = errors.New("account already finalized")
 
-// FinalizeSignup marks the account as ready, stores the request encryption public keys (ECDH and ML-KEM), and optionally sets the password canary
+// FinalizeSignup marks the account as ready, stores the request encryption public keys (ECDH and ML-KEM), and the wrapped primary key
 // It can only update records with ready = false
-func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, canary, requestEncEcdhPubkey, requestEncMlkemPubkey string) error {
+func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, wrappedPrimaryKey, requestEncEcdhPubkey, requestEncMlkemPubkey string) error {
 	now := time.Now().UTC().Unix()
 	affected, err := s.db.db.Exec(ctx,
-		`UPDATE v2_users SET password_canary = $1, request_enc_ecdh_pubkey = $2, request_enc_mlkem_pubkey = $3, ready = true, updated_at = $4 WHERE id = $5 AND ready = false`,
-		canary, requestEncEcdhPubkey, requestEncMlkemPubkey, now, userID,
+		`UPDATE v2_users SET wrapped_primary_key = $1, request_enc_ecdh_pubkey = $2, request_enc_mlkem_pubkey = $3, ready = true, updated_at = $4 WHERE id = $5 AND ready = false`,
+		wrappedPrimaryKey, requestEncEcdhPubkey, requestEncMlkemPubkey, now, userID,
 	)
 	if err != nil {
 		return err

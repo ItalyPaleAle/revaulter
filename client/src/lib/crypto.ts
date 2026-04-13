@@ -192,30 +192,213 @@ export async function decryptTransportEnvelope(
 }
 
 /**
+ * Generates a random 256-bit primary key
+ * This key is the root of all key derivation and is wrapped (encrypted) before storage
+ */
+export async function generatePrimaryKey(): Promise<Uint8Array> {
+    const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt'])
+    return new Uint8Array(await crypto.subtle.exportKey('raw', key))
+}
+
+/**
+ * Wrapped primary key envelope format
+ * Serialized as compact JSON then base64url-encoded for storage
+ */
+export type WrappedPrimaryKeyEnvelope = {
+    v: 1
+    passwordRequired: boolean
+    argon2id?: {
+        m: number
+        t: number
+        p: number
+        salt: string // base64url
+    }
+    nonce: string // base64url
+    ciphertext: string // base64url (AES-GCM ciphertext + tag)
+}
+
+/**
+ * Derives the wrapping key used to wrap/unwrap the primary key
+ * When a password is set, it is stretched via Argon2id before being used as HKDF salt
+ */
+export async function deriveWrappingKey(params: {
+    prfSecret: Uint8Array
+    userId: string
+    password?: string
+    argon2idSalt?: Uint8Array
+}): Promise<{ wrappingKeyBytes: Uint8Array; stretched?: Uint8Array; argon2idSalt?: Uint8Array }> {
+    let hkdfSalt: BufferSource = new Uint8Array()
+    let stretched: Uint8Array | undefined
+    let usedArgon2idSalt: Uint8Array | undefined
+
+    if (params.password) {
+        usedArgon2idSalt = params.argon2idSalt ?? crypto.getRandomValues(new Uint8Array(16))
+        // These settings roughly exceed the current OWASP Argon2id guidance as of April 2026 (m=128 MiB, t=4, p=1) and aim for well over 500 ms of work on modern laptops while still being tolerable in-browser
+        const stretchedBytes = await argon2id({
+            password: params.password,
+            salt: usedArgon2idSalt,
+            parallelism: 1,
+            iterations: 4,
+            memorySize: 128 << 10, // 128 MiB
+            hashLength: 32,
+            outputType: 'binary',
+        })
+        // Copy into a fresh ArrayBuffer-backed Uint8Array to satisfy
+        // BufferSource constraints (hash-wasm returns ArrayBufferLike)
+        const copy = new Uint8Array(stretchedBytes.byteLength)
+        copy.set(stretchedBytes)
+        stretched = copy
+        hkdfSalt = copy
+    }
+
+    const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret), 'HKDF', false, ['deriveBits'])
+    const info = new TextEncoder().encode(`revaulter/v2/primaryKeyWrap\nuserId=${params.userId}\nv=1`)
+
+    const bits = await crypto.subtle.deriveBits(
+        {
+            name: 'HKDF',
+            hash: 'SHA-256',
+            salt: hkdfSalt,
+            info: asBuf(info),
+        },
+        ikm,
+        256
+    )
+
+    return { wrappingKeyBytes: new Uint8Array(bits), stretched, argon2idSalt: usedArgon2idSalt }
+}
+
+/**
+ * Wraps (encrypts) the primary key using AES-256-GCM and returns a base64url-encoded JSON envelope
+ */
+export async function wrapPrimaryKey(params: {
+    primaryKey: Uint8Array
+    wrappingKeyBytes: Uint8Array
+    userId: string
+    passwordRequired: boolean
+    argon2idSalt?: Uint8Array
+}): Promise<string> {
+    const wrappingKey = await crypto.subtle.importKey(
+        'raw',
+        asBuf(params.wrappingKeyBytes),
+        { name: 'AES-GCM' },
+        false,
+        ['encrypt']
+    )
+    const nonce = crypto.getRandomValues(new Uint8Array(12))
+    const aad = new TextEncoder().encode(`revaulter/v2/wrapped-primary-key\nuserId=${params.userId}\nv=1`)
+
+    const ciphertext = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: asBuf(nonce), additionalData: asBuf(aad) },
+        wrappingKey,
+        asBuf(params.primaryKey)
+    )
+
+    const envelope: WrappedPrimaryKeyEnvelope = {
+        v: 1,
+        passwordRequired: params.passwordRequired,
+        nonce: bytesToBase64Url(nonce),
+        ciphertext: bytesToBase64Url(ciphertext),
+    }
+
+    if (params.passwordRequired && params.argon2idSalt) {
+        envelope.argon2id = {
+            m: 128 << 10, // 128 MB
+            t: 4,
+            p: 1,
+            salt: bytesToBase64Url(params.argon2idSalt),
+        }
+    }
+
+    const json = JSON.stringify(envelope)
+    return bytesToBase64Url(new TextEncoder().encode(json))
+}
+
+/**
+ * Parses and validates a wrapped primary key envelope from its base64url-encoded form
+ */
+export function parseWrappedPrimaryKeyEnvelope(wrapped: string): WrappedPrimaryKeyEnvelope {
+    const json = new TextDecoder().decode(base64UrlToBytes(wrapped))
+    const envelope = JSON.parse(json) as WrappedPrimaryKeyEnvelope
+
+    if (envelope.v !== 1) {
+        throw new Error(`Unsupported wrapped key version: ${envelope.v}`)
+    }
+    if (typeof envelope.passwordRequired !== 'boolean') {
+        throw new Error('Invalid wrapped key envelope: missing passwordRequired')
+    }
+    if (!envelope.nonce || !envelope.ciphertext) {
+        throw new Error('Invalid wrapped key envelope: missing nonce or ciphertext')
+    }
+
+    if (envelope.passwordRequired) {
+        if (
+            !envelope.argon2id ||
+            typeof envelope.argon2id.m !== 'number' ||
+            typeof envelope.argon2id.t !== 'number' ||
+            typeof envelope.argon2id.p !== 'number' ||
+            !envelope.argon2id.salt
+        ) {
+            throw new Error('Invalid wrapped key envelope: password required but argon2id params missing')
+        }
+    }
+
+    return envelope
+}
+
+/**
+ * Unwraps (decrypts) the primary key from a wrapped envelope
+ * Throws on authentication failure (wrong password or corrupted data)
+ */
+export async function unwrapPrimaryKey(params: {
+    wrapped: string
+    wrappingKeyBytes: Uint8Array
+    userId: string
+}): Promise<Uint8Array> {
+    const envelope = parseWrappedPrimaryKeyEnvelope(params.wrapped)
+
+    const wrappingKey = await crypto.subtle.importKey(
+        'raw',
+        asBuf(params.wrappingKeyBytes),
+        { name: 'AES-GCM' },
+        false,
+        ['decrypt']
+    )
+    const nonce = base64UrlToBytes(envelope.nonce)
+    const ciphertext = base64UrlToBytes(envelope.ciphertext)
+    const aad = new TextEncoder().encode(`revaulter/v2/wrapped-primary-key\nuserId=${params.userId}\nv=1`)
+
+    try {
+        const primaryKey = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: asBuf(nonce), additionalData: asBuf(aad) },
+            wrappingKey,
+            asBuf(ciphertext)
+        )
+        return new Uint8Array(primaryKey)
+    } catch {
+        throw new Error('Failed to unwrap primary key. The password or passkey may be incorrect.')
+    }
+}
+
+/**
  * Derives the logical operation key bytes used for application crypto such as
- * AES-GCM encryption/decryption. The derived key is bound to the user ID,
- * key label, algorithm, and optionally the password.
+ * AES-GCM encryption/decryption
+ * The derived key is bound to the user ID, key label, and algorithm
  */
 export async function deriveOperationKeyBytes(params: {
     userId: string
     keyLabel: string
     algorithm: string
-    prfSecret: Uint8Array
-    password?: string
+    primaryKey: Uint8Array
 }): Promise<Uint8Array> {
-    // Import the WebAuthn PRF output as the HKDF input keying material
-    const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret), 'HKDF', false, ['deriveBits'])
-
-    // If a password is present, mix it in as HKDF salt so the derived key depends on both factors
-    const salt = params.password ? new TextEncoder().encode(params.password) : new Uint8Array()
+    const ikm = await crypto.subtle.importKey('raw', asBuf(params.primaryKey), 'HKDF', false, ['deriveBits'])
     const infoObj = new InfoObj(params.userId, params.keyLabel, params.algorithm)
 
-    // Bind the key to the logical key identity so encrypt/decrypt requests derive the same bytes
     const bits = await crypto.subtle.deriveBits(
         {
             name: 'HKDF',
             hash: 'SHA-256',
-            salt: asBuf(salt),
+            salt: asBuf(new Uint8Array()),
             info: new TextEncoder().encode(infoObj.serialize()),
         },
         ikm,
@@ -270,60 +453,6 @@ export function buildTransportAAD(state: string, operation: 'encrypt' | 'decrypt
 }
 
 /**
- * Derives the AES key used to encrypt and verify the password canary value.
- *
- * Parameters are intentionally aggressive because the canary is a verifier for the password on the client side, and an attacker who has obtained the canary ciphertext (for example by stealing a passkey) would mount an offline Argon2id search against it.
- * These settings roughly exceed the current OWASP Argon2id guidance as of April 2026 (m=128 MiB, t=4, p=1) and aim for well over 500 ms of work on modern laptops while still being tolerable in-browser.
- */
-async function deriveCanaryKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
-    const keyBytes = await argon2id({
-        password,
-        salt,
-        parallelism: 1,
-        iterations: 4,
-        memorySize: 128 << 10, // 128 MiB
-        hashLength: 32,
-        outputType: 'binary',
-    })
-
-    return crypto.subtle.importKey('raw', asBuf(keyBytes), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
-}
-
-/** Encrypts a fixed canary string so the client can later verify a password locally. */
-export async function encryptPasswordCanary(password: string): Promise<string> {
-    const salt = crypto.getRandomValues(new Uint8Array(16))
-    const key = await deriveCanaryKey(password, salt)
-    const nonce = crypto.getRandomValues(new Uint8Array(12))
-    const plaintext = new TextEncoder().encode('revaulter-password-ok')
-
-    // AES-GCM output already contains the authentication tag appended to the ciphertext
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: asBuf(nonce) }, key, asBuf(plaintext))
-
-    // Persist the canary as `salt.nonce.ciphertext`, all encoded as base64url
-    return `${bytesToBase64Url(salt)}.${bytesToBase64Url(nonce)}.${bytesToBase64Url(ct)}`
-}
-
-/** Verifies that a password can decrypt the stored canary without authentication failure. */
-export async function verifyPasswordCanary(password: string, canary: string): Promise<boolean> {
-    const parts = canary.split('.')
-    if (parts.length !== 3) {
-        return false
-    }
-    try {
-        const salt = base64UrlToBytes(parts[0])
-        const nonce = base64UrlToBytes(parts[1])
-        const ct = base64UrlToBytes(parts[2])
-        const key = await deriveCanaryKey(password, salt)
-
-        // We do not need to inspect the plaintext here: AES-GCM auth failure is enough to reject the password
-        await crypto.subtle.decrypt({ name: 'AES-GCM', iv: asBuf(nonce) }, key, asBuf(ct))
-        return true
-    } catch {
-        return false
-    }
-}
-
-/**
  * Performs the requested AES-GCM operation with the derived key bytes. For decrypt,
  * callers may pass the authentication tag separately and it will be recombined into
  * the format expected by WebCrypto.
@@ -375,7 +504,7 @@ export async function performAesGcmOperation(params: {
         return new Uint8Array(res)
     } catch {
         throw new Error(
-            'Decryption failed. This normally means that the ciphertext could not be authenticated. Check that the key label, user ID, password, nonce, tag, and additional data match the original encryption request.'
+            'Decryption failed. This normally means that the ciphertext could not be authenticated. Check that the key label, user ID, nonce, tag, and additional data match the original encryption request.'
         )
     }
 }
@@ -394,23 +523,20 @@ export function splitAesGcmCiphertextAndTag(ciphertextWithTag: Uint8Array, tagLe
 }
 
 /**
- * Derives a deterministic ECDH P-256 key pair from the user's PRF secret
- * (and optional password) for request payload encryption. The browser stores
- * this key's public half on the server so the CLI can encrypt request payloads.
+ * Derives a deterministic ECDH P-256 key pair from the primary key for request payload encryption
+ * The browser stores this key's public half on the server so the CLI can encrypt request payloads
  */
 export async function deriveRequestEncKeyPair(params: {
     userId: string
-    prfSecret: Uint8Array
-    password?: string
+    primaryKey: Uint8Array
 }): Promise<{ privateKey: CryptoKey; publicKeyJwk: EcP256PublicJwk }> {
-    const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret), 'HKDF', false, ['deriveBits'])
+    const ikm = await crypto.subtle.importKey('raw', asBuf(params.primaryKey), 'HKDF', false, ['deriveBits'])
 
-    const salt = params.password ? new TextEncoder().encode(params.password) : new Uint8Array()
     const info = new TextEncoder().encode(`revaulter/v2/requestEncKey\nuserId=${params.userId}\nv=1`)
 
     // Derive 48 bytes (384 bits) so hashToP256Scalar has enough input to keep modular bias negligible
     const rawBits = await crypto.subtle.deriveBits(
-        { name: 'HKDF', hash: 'SHA-256', salt: asBuf(salt), info: asBuf(info) },
+        { name: 'HKDF', hash: 'SHA-256', salt: asBuf(new Uint8Array()), info: asBuf(info) },
         ikm,
         384
     )
@@ -431,24 +557,22 @@ export async function deriveRequestEncKeyPair(params: {
 }
 
 /**
- * Derives a deterministic ML-KEM-768 key pair from the user's PRF secret (and optional password) for hybrid request payload encryption.
- * The browser stores this key's public half on the server alongside the ECDH public key.
+ * Derives a deterministic ML-KEM-768 key pair from the primary key for hybrid request payload encryption
+ * The browser stores this key's public half on the server alongside the ECDH public key
  *
- * Returns the CryptoKey decapsulation key and the base64url-encoded raw public encapsulation key (for sending to the server).
+ * Returns the CryptoKey decapsulation key and the base64url-encoded raw public encapsulation key (for sending to the server)
  */
 export async function deriveRequestEncMlkemKeyPair(params: {
     userId: string
-    prfSecret: Uint8Array
-    password?: string
+    primaryKey: Uint8Array
 }): Promise<{ decapsulationKey: CryptoKey; encapsulationKeyB64: string }> {
-    const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret), 'HKDF', false, ['deriveBits'])
+    const ikm = await crypto.subtle.importKey('raw', asBuf(params.primaryKey), 'HKDF', false, ['deriveBits'])
 
-    const salt = params.password ? new TextEncoder().encode(params.password) : new Uint8Array()
     const info = new TextEncoder().encode(`revaulter/v2/requestEncMlkemSeed\nuserId=${params.userId}\nv=1`)
 
     // Derive 64 bytes (512 bits) as the ML-KEM seed (d || z)
     const seedBits = await crypto.subtle.deriveBits(
-        { name: 'HKDF', hash: 'SHA-256', salt: asBuf(salt), info: asBuf(info) },
+        { name: 'HKDF', hash: 'SHA-256', salt: asBuf(new Uint8Array()), info: asBuf(info) },
         ikm,
         512
     )
@@ -480,8 +604,7 @@ export function buildRequestEncAAD(algorithm: string, keyLabel: string, operatio
  */
 export async function decryptRequestPayload(params: {
     userId: string
-    prfSecret: Uint8Array
-    password?: string
+    primaryKey: Uint8Array
     cliEphemeralPublicKey: EcP256PublicJwk
     mlkemCiphertext: string
     nonce: string
@@ -491,15 +614,13 @@ export async function decryptRequestPayload(params: {
     // Derive the static ECDH private key
     const { privateKey: ecdhPrivKey } = await deriveRequestEncKeyPair({
         userId: params.userId,
-        prfSecret: params.prfSecret,
-        password: params.password,
+        primaryKey: params.primaryKey,
     })
 
     // Derive the static ML-KEM decapsulation key
     const { decapsulationKey: mlkemDK } = await deriveRequestEncMlkemKeyPair({
         userId: params.userId,
-        prfSecret: params.prfSecret,
-        password: params.password,
+        primaryKey: params.primaryKey,
     })
 
     // ECDH shared secret

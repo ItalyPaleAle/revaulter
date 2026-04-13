@@ -98,7 +98,7 @@ export type V2LoginBeginResponse = {
 export type V2LoginFinishResponse = {
     authenticated: boolean
     session?: V2AuthSessionInfo
-    passwordCanary?: string
+    wrappedPrimaryKey?: string
 }
 
 export type V2SessionResponse = {

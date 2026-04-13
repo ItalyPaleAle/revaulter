@@ -19,12 +19,11 @@ import type { V2PendingRequestItem, V2RequestDetail } from '$lib/v2-types'
 
 interface Props {
     item: V2PendingRequestItem
-    prfSecret: Uint8Array
-    password?: string
+    primaryKey: Uint8Array
     onRemoved?: (state: string) => void
 }
 
-let { item, prfSecret, password = '', onRemoved }: Props = $props()
+let { item, primaryKey, onRemoved }: Props = $props()
 
 let working = $state(false)
 let localStatus = $state<string>('pending')
@@ -100,8 +99,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
     const requestEncAAD = buildRequestEncAAD(req.algorithm, req.keyLabel, req.operation)
     const input = await decryptRequestPayload({
         userId: req.userId,
-        prfSecret,
-        password: password.trim() || undefined,
+        primaryKey,
         cliEphemeralPublicKey: req.encryptedRequest.cliEphemeralPublicKey,
         mlkemCiphertext: req.encryptedRequest.mlkemCiphertext,
         nonce: req.encryptedRequest.nonce,
@@ -113,8 +111,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
         userId: req.userId,
         keyLabel: req.keyLabel,
         algorithm: req.algorithm,
-        prfSecret,
-        password: password.trim() || undefined,
+        primaryKey,
     })
 
     const value = base64UrlToBytes(input.value)

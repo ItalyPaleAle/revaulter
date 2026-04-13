@@ -9,7 +9,6 @@ import SettingsPanel from '$components/SettingsPanel.svelte'
 import type { V2PendingRequestItem } from '$lib/v2-types'
 
 interface Props {
-    activePassword: string
     allowedIpsModalOpen: boolean
     allowedIpsSummary: string
     allowedIpsText: string
@@ -23,7 +22,7 @@ interface Props {
     onUpdateAllowedIps: () => Promise<void>
     pageError: string | null
     pendingItems: V2PendingRequestItem[]
-    prfSecret: Uint8Array | null
+    primaryKey: Uint8Array | null
     requestKey: string
     sessionLabel: string
     settingsBusy: boolean
@@ -32,7 +31,6 @@ interface Props {
 }
 
 let {
-    activePassword,
     allowedIpsModalOpen,
     allowedIpsSummary,
     allowedIpsText,
@@ -46,7 +44,7 @@ let {
     onUpdateAllowedIps,
     pageError,
     pendingItems,
-    prfSecret,
+    primaryKey,
     requestKey,
     sessionLabel,
     settingsBusy,
@@ -152,11 +150,10 @@ $effect(() => {
         {:else}
             <div class="space-y-3">
                 {#each pendingItems as item (item.state)}
-                    {#if prfSecret}
+                    {#if primaryKey}
                         <PendingItem
                             {item}
-                            {prfSecret}
-                            password={activePassword}
+                            {primaryKey}
                             onRemoved={onRemoveItem}
                         />
                     {/if}

@@ -1,5 +1,5 @@
-import { expect } from '@playwright/test'
 import { spawn } from 'node:child_process'
+import { expect } from '@playwright/test'
 
 import { createVirtualPasskey } from './passkeys.mjs'
 
@@ -177,7 +177,8 @@ export async function loginThroughUI(page) {
 export async function completePasswordSetup(page, password) {
     const authDebug = attachAuthDebugLogging(page)
 
-    await page.getByLabel('Password').fill(password)
+    await page.getByLabel('Password', { exact: true }).fill(password)
+    await page.getByLabel('Confirm password').fill(password)
     await page.getByRole('button', { name: 'Save password' }).click()
 
     try {

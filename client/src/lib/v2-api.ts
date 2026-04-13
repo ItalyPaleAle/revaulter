@@ -45,15 +45,15 @@ export async function v2LoginFinish(args: { challengeId: string; credential: unk
     return res.data
 }
 
-/** Finalizes the signup by storing the request encryption public keys (ECDH + ML-KEM) and optional password canary */
+/** Finalizes the signup by storing the request encryption public keys (ECDH + ML-KEM) and the wrapped primary key */
 export async function v2FinalizeSignup(
     requestEncEcdhPubkey: EcP256PublicJwk,
     requestEncMlkemPubkey: string,
-    canary?: string
+    wrappedPrimaryKey?: string
 ) {
     const body: Record<string, unknown> = { requestEncEcdhPubkey, requestEncMlkemPubkey }
-    if (canary) {
-        body.canary = canary
+    if (wrappedPrimaryKey) {
+        body.wrappedPrimaryKey = wrappedPrimaryKey
     }
     const res = await Request<{ ok: boolean }>('/v2/auth/finalize-signup', { postData: body })
     return res.data

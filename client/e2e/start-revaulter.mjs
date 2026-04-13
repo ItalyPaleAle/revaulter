@@ -1,8 +1,8 @@
+import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
-import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const args = new Map(

@@ -115,5 +115,5 @@ Example:
 ## Security notes
 
 - Sensitive request payloads and response envelopes are encrypted at rest in the DB.
-- Password canaries are stored only to support client-side password unlock after passkey authentication.
+- A wrapped primary key is stored per user; successful unwrap verifies both passkey and password (see `docs/06-crypto-architecture.md`)
 - The final operation result returned to the CLI is encrypted in transit with a per-request ECDH-derived AES-GCM key.

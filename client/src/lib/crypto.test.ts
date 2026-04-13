@@ -2,15 +2,21 @@ import { describe, expect, it } from 'vitest'
 import {
     buildRequestEncAAD,
     buildTransportAAD,
+    decryptTransportEnvelope,
     deriveOperationKeyBytes,
     deriveRequestEncKeyPair,
     deriveRequestEncMlkemKeyPair,
+    deriveWrappingKey,
     encryptTransportEnvelope,
-    decryptTransportEnvelope,
+    generatePrimaryKey,
+    generateTransportKeyPairJwk,
+    parseWrappedPrimaryKeyEnvelope,
     performAesGcmOperation,
     splitAesGcmCiphertextAndTag,
-    generateTransportKeyPairJwk,
+    unwrapPrimaryKey,
+    wrapPrimaryKey,
 } from './crypto'
+import { bytesToBase64Url } from './utils'
 
 function hexToBytes(hex: string): Uint8Array {
     const bytes = new Uint8Array(hex.length / 2)
@@ -26,8 +32,11 @@ function bytesToHex(bytes: Uint8Array): string {
         .join('')
 }
 
-// Shared test PRF secret: 32 bytes of 0xAA
-const TEST_PRF_SECRET = new Uint8Array(32).fill(0xaa)
+// Shared test primary key: 32 bytes of 0xAA (used as IKM for HKDF derivation tests)
+const TEST_PRIMARY_KEY = new Uint8Array(32).fill(0xaa)
+
+// Shared test PRF secret: 32 bytes of 0xBB (used for wrapping key derivation tests)
+const TEST_PRF_SECRET = new Uint8Array(32).fill(0xbb)
 
 describe('buildTransportAAD', () => {
     it('matches the Go CLI format', () => {
@@ -68,36 +77,262 @@ describe('buildRequestEncAAD', () => {
     })
 })
 
+describe('generatePrimaryKey', () => {
+    it('produces 32 bytes', async () => {
+        const pk = await generatePrimaryKey()
+        expect(pk.length).toBe(32)
+    })
+
+    it('produces different keys each call', async () => {
+        const pk1 = await generatePrimaryKey()
+        const pk2 = await generatePrimaryKey()
+        expect(bytesToHex(pk1)).not.toBe(bytesToHex(pk2))
+    })
+})
+
+describe('deriveWrappingKey', () => {
+    it('produces 32 bytes without password', async () => {
+        const { wrappingKeyBytes } = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+        })
+        expect(wrappingKeyBytes.length).toBe(32)
+    })
+
+    it('is deterministic without password', async () => {
+        const r1 = await deriveWrappingKey({ prfSecret: TEST_PRF_SECRET, userId: 'user-1' })
+        const r2 = await deriveWrappingKey({ prfSecret: TEST_PRF_SECRET, userId: 'user-1' })
+        expect(bytesToHex(r1.wrappingKeyBytes)).toBe(bytesToHex(r2.wrappingKeyBytes))
+    })
+
+    it('differs for different users', async () => {
+        const r1 = await deriveWrappingKey({ prfSecret: TEST_PRF_SECRET, userId: 'user-1' })
+        const r2 = await deriveWrappingKey({ prfSecret: TEST_PRF_SECRET, userId: 'user-2' })
+        expect(bytesToHex(r1.wrappingKeyBytes)).not.toBe(bytesToHex(r2.wrappingKeyBytes))
+    })
+
+    it('returns argon2idSalt and stretched when password is provided', async () => {
+        const { wrappingKeyBytes, stretched, argon2idSalt } = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+            password: 'hunter2',
+        })
+        expect(wrappingKeyBytes.length).toBe(32)
+        expect(stretched).toBeDefined()
+        expect(stretched?.length).toBe(32)
+        expect(argon2idSalt).toBeDefined()
+        expect(argon2idSalt?.length).toBe(16)
+    }, 30_000)
+
+    it('is deterministic with password and fixed salt', async () => {
+        const fixedSalt = new Uint8Array(16).fill(0x42)
+        const r1 = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+            password: 'hunter2',
+            argon2idSalt: fixedSalt,
+        })
+        const r2 = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+            password: 'hunter2',
+            argon2idSalt: fixedSalt,
+        })
+        expect(bytesToHex(r1.wrappingKeyBytes)).toBe(bytesToHex(r2.wrappingKeyBytes))
+    }, 30_000)
+
+    it('password changes the wrapping key', async () => {
+        const fixedSalt = new Uint8Array(16).fill(0x42)
+        const r1 = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+            password: 'password-a',
+            argon2idSalt: fixedSalt,
+        })
+        const r2 = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+            password: 'password-b',
+            argon2idSalt: fixedSalt,
+        })
+        expect(bytesToHex(r1.wrappingKeyBytes)).not.toBe(bytesToHex(r2.wrappingKeyBytes))
+    }, 30_000)
+})
+
+describe('wrapPrimaryKey / unwrapPrimaryKey', () => {
+    it('round-trips without password', async () => {
+        const pk = await generatePrimaryKey()
+        const { wrappingKeyBytes } = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+        })
+
+        const wrapped = await wrapPrimaryKey({
+            primaryKey: pk,
+            wrappingKeyBytes,
+            userId: 'user-1',
+            passwordRequired: false,
+        })
+
+        const unwrapped = await unwrapPrimaryKey({
+            wrapped,
+            wrappingKeyBytes,
+            userId: 'user-1',
+        })
+        expect(bytesToHex(unwrapped)).toBe(bytesToHex(pk))
+    })
+
+    it('round-trips with password', async () => {
+        const pk = await generatePrimaryKey()
+        const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+            password: 'test-password',
+        })
+
+        const wrapped = await wrapPrimaryKey({
+            primaryKey: pk,
+            wrappingKeyBytes,
+            userId: 'user-1',
+            passwordRequired: true,
+            argon2idSalt,
+        })
+
+        const unwrapped = await unwrapPrimaryKey({
+            wrapped,
+            wrappingKeyBytes,
+            userId: 'user-1',
+        })
+        expect(bytesToHex(unwrapped)).toBe(bytesToHex(pk))
+    }, 30_000)
+
+    it('envelope has correct structure without password', async () => {
+        const pk = await generatePrimaryKey()
+        const { wrappingKeyBytes } = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+        })
+
+        const wrapped = await wrapPrimaryKey({
+            primaryKey: pk,
+            wrappingKeyBytes,
+            userId: 'user-1',
+            passwordRequired: false,
+        })
+
+        const envelope = parseWrappedPrimaryKeyEnvelope(wrapped)
+        expect(envelope.v).toBe(1)
+        expect(envelope.passwordRequired).toBe(false)
+        expect(envelope.argon2id).toBeUndefined()
+        expect(envelope.nonce).toBeTruthy()
+        expect(envelope.ciphertext).toBeTruthy()
+    })
+
+    it('envelope has correct structure with password', async () => {
+        const pk = await generatePrimaryKey()
+        const salt = new Uint8Array(16).fill(0x11)
+        const { wrappingKeyBytes } = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+            password: 'pw',
+            argon2idSalt: salt,
+        })
+
+        const wrapped = await wrapPrimaryKey({
+            primaryKey: pk,
+            wrappingKeyBytes,
+            userId: 'user-1',
+            passwordRequired: true,
+            argon2idSalt: salt,
+        })
+
+        const envelope = parseWrappedPrimaryKeyEnvelope(wrapped)
+        expect(envelope.v).toBe(1)
+        expect(envelope.passwordRequired).toBe(true)
+        expect(envelope.argon2id).toBeDefined()
+        expect(envelope.argon2id?.m).toBe(131072)
+        expect(envelope.argon2id?.t).toBe(4)
+        expect(envelope.argon2id?.p).toBe(1)
+        expect(envelope.argon2id?.salt).toBeTruthy()
+    }, 30_000)
+
+    it('rejects wrong wrapping key', async () => {
+        const pk = await generatePrimaryKey()
+        const { wrappingKeyBytes } = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+        })
+
+        const wrapped = await wrapPrimaryKey({
+            primaryKey: pk,
+            wrappingKeyBytes,
+            userId: 'user-1',
+            passwordRequired: false,
+        })
+
+        const wrongKey = crypto.getRandomValues(new Uint8Array(32))
+        await expect(
+            unwrapPrimaryKey({
+                wrapped,
+                wrappingKeyBytes: wrongKey,
+                userId: 'user-1',
+            })
+        ).rejects.toThrow('Failed to unwrap')
+    })
+
+    it('rejects wrong userId (AAD mismatch)', async () => {
+        const pk = await generatePrimaryKey()
+        const { wrappingKeyBytes } = await deriveWrappingKey({
+            prfSecret: TEST_PRF_SECRET,
+            userId: 'user-1',
+        })
+
+        const wrapped = await wrapPrimaryKey({
+            primaryKey: pk,
+            wrappingKeyBytes,
+            userId: 'user-1',
+            passwordRequired: false,
+        })
+
+        await expect(
+            unwrapPrimaryKey({
+                wrapped,
+                wrappingKeyBytes,
+                userId: 'user-2',
+            })
+        ).rejects.toThrow('Failed to unwrap')
+    })
+})
+
+describe('parseWrappedPrimaryKeyEnvelope', () => {
+    it('rejects invalid version', () => {
+        const json = JSON.stringify({ v: 2, passwordRequired: false, nonce: 'aaa', ciphertext: 'bbb' })
+        const encoded = bytesToBase64Url(new TextEncoder().encode(json))
+        expect(() => parseWrappedPrimaryKeyEnvelope(encoded)).toThrow('Unsupported wrapped key version')
+    })
+
+    it('rejects missing passwordRequired', () => {
+        const json = JSON.stringify({ v: 1, nonce: 'aaa', ciphertext: 'bbb' })
+        const encoded = bytesToBase64Url(new TextEncoder().encode(json))
+        expect(() => parseWrappedPrimaryKeyEnvelope(encoded)).toThrow('missing passwordRequired')
+    })
+
+    it('rejects password-required envelope without argon2id params', () => {
+        const json = JSON.stringify({ v: 1, passwordRequired: true, nonce: 'aaa', ciphertext: 'bbb' })
+        const encoded = bytesToBase64Url(new TextEncoder().encode(json))
+        expect(() => parseWrappedPrimaryKeyEnvelope(encoded)).toThrow('argon2id params missing')
+    })
+})
+
 describe('deriveOperationKeyBytes', () => {
     it('produces 32 bytes', async () => {
         const key = await deriveOperationKeyBytes({
             userId: 'user-1',
             keyLabel: 'disk-key',
             algorithm: 'aes-gcm-256',
-            prfSecret: TEST_PRF_SECRET,
+            primaryKey: TEST_PRIMARY_KEY,
         })
         expect(key.length).toBe(32)
-    })
-
-    it('matches the Go HKDF output without password', async () => {
-        const key = await deriveOperationKeyBytes({
-            userId: 'user-1',
-            keyLabel: 'disk-key',
-            algorithm: 'aes-gcm-256',
-            prfSecret: TEST_PRF_SECRET,
-        })
-        expect(bytesToHex(key)).toBe('e105e4fbd91e213395c486229e05c167733d6b550a5a33dfaf7578228f305569')
-    })
-
-    it('matches the Go HKDF output with password', async () => {
-        const key = await deriveOperationKeyBytes({
-            userId: 'user-1',
-            keyLabel: 'disk-key',
-            algorithm: 'aes-gcm-256',
-            prfSecret: TEST_PRF_SECRET,
-            password: 'hunter2',
-        })
-        expect(bytesToHex(key)).toBe('4e6fcb13afaf0098d36e719bd83ba22c656851ceff12b2cacfcc23c78dac9b8c')
     })
 
     it('is deterministic', async () => {
@@ -105,23 +340,11 @@ describe('deriveOperationKeyBytes', () => {
             userId: 'user-1',
             keyLabel: 'disk-key',
             algorithm: 'aes-gcm-256',
-            prfSecret: TEST_PRF_SECRET,
+            primaryKey: TEST_PRIMARY_KEY,
         }
         const k1 = await deriveOperationKeyBytes(params)
         const k2 = await deriveOperationKeyBytes(params)
         expect(bytesToHex(k1)).toBe(bytesToHex(k2))
-    })
-
-    it('differs when password changes', async () => {
-        const base = {
-            userId: 'user-1',
-            keyLabel: 'disk-key',
-            algorithm: 'aes-gcm-256',
-            prfSecret: TEST_PRF_SECRET,
-        }
-        const k1 = await deriveOperationKeyBytes(base)
-        const k2 = await deriveOperationKeyBytes({ ...base, password: 'p' })
-        expect(bytesToHex(k1)).not.toBe(bytesToHex(k2))
     })
 
     it('differs when userId changes', async () => {
@@ -129,7 +352,7 @@ describe('deriveOperationKeyBytes', () => {
             userId: 'user-1',
             keyLabel: 'disk-key',
             algorithm: 'aes-gcm-256',
-            prfSecret: TEST_PRF_SECRET,
+            primaryKey: TEST_PRIMARY_KEY,
         }
         const k1 = await deriveOperationKeyBytes(base)
         const k2 = await deriveOperationKeyBytes({ ...base, userId: 'user-2' })
@@ -141,10 +364,25 @@ describe('deriveOperationKeyBytes', () => {
             userId: 'user-1',
             keyLabel: 'disk-key',
             algorithm: 'aes-gcm-256',
-            prfSecret: TEST_PRF_SECRET,
+            primaryKey: TEST_PRIMARY_KEY,
         }
         const k1 = await deriveOperationKeyBytes(base)
         const k2 = await deriveOperationKeyBytes({ ...base, keyLabel: 'other-key' })
+        expect(bytesToHex(k1)).not.toBe(bytesToHex(k2))
+    })
+
+    it('differs when primaryKey changes', async () => {
+        const base = {
+            userId: 'user-1',
+            keyLabel: 'disk-key',
+            algorithm: 'aes-gcm-256',
+            primaryKey: TEST_PRIMARY_KEY,
+        }
+        const k1 = await deriveOperationKeyBytes(base)
+        const k2 = await deriveOperationKeyBytes({
+            ...base,
+            primaryKey: new Uint8Array(32).fill(0xbb),
+        })
         expect(bytesToHex(k1)).not.toBe(bytesToHex(k2))
     })
 })
@@ -306,36 +544,31 @@ describe('generateTransportKeyPairJwk', () => {
 })
 
 describe('deriveRequestEncKeyPair', () => {
-    it('is deterministic without password', async () => {
-        const params = { userId: 'user-1', prfSecret: TEST_PRF_SECRET }
+    it('is deterministic', async () => {
+        const params = { userId: 'user-1', primaryKey: TEST_PRIMARY_KEY }
         const kp1 = await deriveRequestEncKeyPair(params)
         const kp2 = await deriveRequestEncKeyPair(params)
         expect(kp1.publicKeyJwk.x).toBe(kp2.publicKeyJwk.x)
         expect(kp1.publicKeyJwk.y).toBe(kp2.publicKeyJwk.y)
-    })
-
-    it('is deterministic with password', async () => {
-        const params = { userId: 'user-1', prfSecret: TEST_PRF_SECRET, password: 'hunter2' }
-        const kp1 = await deriveRequestEncKeyPair(params)
-        const kp2 = await deriveRequestEncKeyPair(params)
-        expect(kp1.publicKeyJwk.x).toBe(kp2.publicKeyJwk.x)
-        expect(kp1.publicKeyJwk.y).toBe(kp2.publicKeyJwk.y)
-    })
-
-    it('produces different keys with vs without password', async () => {
-        const kp1 = await deriveRequestEncKeyPair({ userId: 'user-1', prfSecret: TEST_PRF_SECRET })
-        const kp2 = await deriveRequestEncKeyPair({ userId: 'user-1', prfSecret: TEST_PRF_SECRET, password: 'p' })
-        expect(kp1.publicKeyJwk.x).not.toBe(kp2.publicKeyJwk.x)
     })
 
     it('produces different keys for different users', async () => {
-        const kp1 = await deriveRequestEncKeyPair({ userId: 'user-1', prfSecret: TEST_PRF_SECRET })
-        const kp2 = await deriveRequestEncKeyPair({ userId: 'user-2', prfSecret: TEST_PRF_SECRET })
+        const kp1 = await deriveRequestEncKeyPair({ userId: 'user-1', primaryKey: TEST_PRIMARY_KEY })
+        const kp2 = await deriveRequestEncKeyPair({ userId: 'user-2', primaryKey: TEST_PRIMARY_KEY })
+        expect(kp1.publicKeyJwk.x).not.toBe(kp2.publicKeyJwk.x)
+    })
+
+    it('produces different keys for different primary keys', async () => {
+        const kp1 = await deriveRequestEncKeyPair({ userId: 'user-1', primaryKey: TEST_PRIMARY_KEY })
+        const kp2 = await deriveRequestEncKeyPair({
+            userId: 'user-1',
+            primaryKey: new Uint8Array(32).fill(0xcc),
+        })
         expect(kp1.publicKeyJwk.x).not.toBe(kp2.publicKeyJwk.x)
     })
 
     it('returns a valid P-256 JWK', async () => {
-        const { publicKeyJwk } = await deriveRequestEncKeyPair({ userId: 'u', prfSecret: TEST_PRF_SECRET })
+        const { publicKeyJwk } = await deriveRequestEncKeyPair({ userId: 'u', primaryKey: TEST_PRIMARY_KEY })
         expect(publicKeyJwk.kty).toBe('EC')
         expect(publicKeyJwk.crv).toBe('P-256')
         expect(publicKeyJwk.x.length).toBeGreaterThan(0)
@@ -343,7 +576,7 @@ describe('deriveRequestEncKeyPair', () => {
     })
 
     it('private key is usable for ECDH', async () => {
-        const { privateKey } = await deriveRequestEncKeyPair({ userId: 'u', prfSecret: TEST_PRF_SECRET })
+        const { privateKey } = await deriveRequestEncKeyPair({ userId: 'u', primaryKey: TEST_PRIMARY_KEY })
         const peer = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits'])
         const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: peer.publicKey }, privateKey, 256)
         expect(shared.byteLength).toBe(32)
@@ -352,32 +585,31 @@ describe('deriveRequestEncKeyPair', () => {
 
 describe('deriveRequestEncMlkemKeyPair', () => {
     it('is deterministic', async () => {
-        const params = { userId: 'user-1', prfSecret: TEST_PRF_SECRET }
+        const params = { userId: 'user-1', primaryKey: TEST_PRIMARY_KEY }
         const kp1 = await deriveRequestEncMlkemKeyPair(params)
         const kp2 = await deriveRequestEncMlkemKeyPair(params)
         expect(kp1.encapsulationKeyB64).toBe(kp2.encapsulationKeyB64)
     })
 
-    it('produces different keys with vs without password', async () => {
-        const kp1 = await deriveRequestEncMlkemKeyPair({ userId: 'user-1', prfSecret: TEST_PRF_SECRET })
+    it('produces different keys for different primary keys', async () => {
+        const kp1 = await deriveRequestEncMlkemKeyPair({ userId: 'user-1', primaryKey: TEST_PRIMARY_KEY })
         const kp2 = await deriveRequestEncMlkemKeyPair({
             userId: 'user-1',
-            prfSecret: TEST_PRF_SECRET,
-            password: 'p',
+            primaryKey: new Uint8Array(32).fill(0xcc),
         })
         expect(kp1.encapsulationKeyB64).not.toBe(kp2.encapsulationKeyB64)
     })
 
     it('produces different keys for different users', async () => {
-        const kp1 = await deriveRequestEncMlkemKeyPair({ userId: 'user-1', prfSecret: TEST_PRF_SECRET })
-        const kp2 = await deriveRequestEncMlkemKeyPair({ userId: 'user-2', prfSecret: TEST_PRF_SECRET })
+        const kp1 = await deriveRequestEncMlkemKeyPair({ userId: 'user-1', primaryKey: TEST_PRIMARY_KEY })
+        const kp2 = await deriveRequestEncMlkemKeyPair({ userId: 'user-2', primaryKey: TEST_PRIMARY_KEY })
         expect(kp1.encapsulationKeyB64).not.toBe(kp2.encapsulationKeyB64)
     })
 
     it('encapsulation key is 1184 bytes (ML-KEM-768)', async () => {
         const { encapsulationKeyB64 } = await deriveRequestEncMlkemKeyPair({
             userId: 'u',
-            prfSecret: TEST_PRF_SECRET,
+            primaryKey: TEST_PRIMARY_KEY,
         })
         // base64url decode to check raw size
         const raw = Uint8Array.from(atob(encapsulationKeyB64.replace(/-/g, '+').replace(/_/g, '/')), (c) =>

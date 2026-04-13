@@ -8,7 +8,7 @@ import TextField from '$components/TextField.svelte'
 interface Props {
     authBusy: boolean
     authError: string | null
-    loginPasswordCanary: string | null
+    loginWrappedPrimaryKey: string | null
     onFinishPasswordLogin: () => Promise<void>
     onLogin: () => Promise<void>
     onOpenSignup: () => void
@@ -24,7 +24,7 @@ interface Props {
 let {
     authBusy,
     authError,
-    loginPasswordCanary,
+    loginWrappedPrimaryKey,
     onFinishPasswordLogin,
     onLogin,
     onOpenSignup,
@@ -52,7 +52,7 @@ function authBodyCopy() {
 }
 
 $effect(() => {
-    if (uiState !== 'password-login' || !loginPasswordCanary) {
+    if (uiState !== 'password-login' || !loginWrappedPrimaryKey) {
         return
     }
 
@@ -98,7 +98,7 @@ $effect(() => {
                     <LoadingSpinner size="1rem" />
                     Initializing…
                 </div>
-            {:else if uiState === 'password-login' && loginPasswordCanary}
+            {:else if uiState === 'password-login' && loginWrappedPrimaryKey}
                 <form
                     class="space-y-4"
                     onsubmit={(event) => {

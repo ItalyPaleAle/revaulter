@@ -8,8 +8,11 @@ import ReadyView from '$components/ReadyView.svelte'
 import {
     deriveRequestEncKeyPair,
     deriveRequestEncMlkemKeyPair,
-    encryptPasswordCanary,
-    verifyPasswordCanary,
+    deriveWrappingKey,
+    generatePrimaryKey,
+    parseWrappedPrimaryKeyEnvelope,
+    unwrapPrimaryKey,
+    wrapPrimaryKey,
 } from '$lib/crypto'
 import { ResponseNotOkError } from '$lib/request'
 import { base64UrlToBytes } from '$lib/utils'
@@ -38,8 +41,7 @@ let signupDisabled = $state(false)
 
 let displayName = $state('')
 let passwordInput = $state('')
-let activePassword = $state('')
-let loginPasswordCanary = $state<string | null>(null)
+let loginWrappedPrimaryKey = $state<string | null>(null)
 let allowedIpsText = $state('')
 let settingsBusy = $state(false)
 let settingsError = $state<string | null>(null)
@@ -48,6 +50,7 @@ let allowedIpsModalOpen = $state(false)
 
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
+let primaryKey = $state<Uint8Array | null>(null)
 
 let items = $state<Record<string, V2PendingRequestItem>>({})
 let listConnected = $state(false)
@@ -109,8 +112,8 @@ function clearLocalAuthState() {
     teardownListStream()
     session = null
     prfSecret = null
-    activePassword = ''
-    loginPasswordCanary = null
+    primaryKey = null
+    loginWrappedPrimaryKey = null
     allowedIpsText = ''
     settingsError = null
     settingsSuccess = null
@@ -129,14 +132,14 @@ function enterReadyView() {
 function openSignIn() {
     authError = null
     passwordInput = ''
-    loginPasswordCanary = null
+    loginWrappedPrimaryKey = null
     uiState = 'signin'
 }
 
 function openSignup() {
     authError = null
     passwordInput = ''
-    loginPasswordCanary = null
+    loginWrappedPrimaryKey = null
     uiState = 'signup'
 }
 
@@ -191,31 +194,66 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
 
     session = toSessionResponse(finish.session)
     setPrfSecret(assertion.prfSecret)
-    activePassword = ''
-    loginPasswordCanary = finish.passwordCanary ?? null
+    loginWrappedPrimaryKey = finish.wrappedPrimaryKey ?? null
 
-    if (finish.passwordCanary) {
-        return 'password-required'
+    if (finish.wrappedPrimaryKey) {
+        // Parse the envelope to determine whether a password is needed
+        const envelope = parseWrappedPrimaryKeyEnvelope(finish.wrappedPrimaryKey)
+        if (envelope.passwordRequired) {
+            return 'password-required'
+        }
+
+        // No password required — unwrap immediately with PRF only
+        const { wrappingKeyBytes } = await deriveWrappingKey({
+            prfSecret: assertion.prfSecret,
+            userId: finish.session.userId,
+        })
+        primaryKey = await unwrapPrimaryKey({
+            wrapped: finish.wrappedPrimaryKey,
+            wrappingKeyBytes,
+            userId: finish.session.userId,
+        })
+        loginWrappedPrimaryKey = null
     }
     return 'authenticated'
 }
 
 async function unlockWithPassword(password: string) {
-    const trimmedPassword = password.trim()
-    if (!loginPasswordCanary) {
+    if (!loginWrappedPrimaryKey) {
         throw new Error('Password unlock is not active')
     }
-    if (trimmedPassword === '') {
+    if (!prfSecret || !session) {
+        throw new Error('Missing local key material')
+    }
+
+    // Note: we are not trimming or otherwise normalizing the password as we must accept it as-is to ensure consistent key derivation
+    if (password === '') {
         throw new Error('Password is required')
     }
 
-    const passwordMatches = await verifyPasswordCanary(trimmedPassword, loginPasswordCanary)
-    if (!passwordMatches) {
-        throw new Error('Incorrect password')
+    // Parse Argon2id params from the wrapped-key envelope
+    const envelope = parseWrappedPrimaryKeyEnvelope(loginWrappedPrimaryKey)
+    if (!envelope.argon2id) {
+        throw new Error('Wrapped key envelope is missing Argon2id parameters')
     }
 
-    activePassword = trimmedPassword
-    loginPasswordCanary = null
+    const argon2idSalt = base64UrlToBytes(envelope.argon2id.salt)
+
+    // Derive the wrapping key using Argon2id-stretched password as HKDF salt
+    const { wrappingKeyBytes } = await deriveWrappingKey({
+        prfSecret,
+        userId: session.userId,
+        password,
+        argon2idSalt,
+    })
+
+    // Unwrap — success proves the password is correct (replaces canary)
+    primaryKey = await unwrapPrimaryKey({
+        wrapped: loginWrappedPrimaryKey,
+        wrappingKeyBytes,
+        userId: session.userId,
+    })
+    loginWrappedPrimaryKey = null
 }
 
 async function doLogin() {
@@ -296,8 +334,7 @@ async function doFinishPasswordLogin() {
 }
 
 async function doSetPassword() {
-    const trimmedPassword = passwordInput.trim()
-
+    // This method can be invoked with an empty password too
     if (!prfSecret || !session) {
         clearLocalAuthState()
         authError = 'Missing local key material. Sign in again to continue.'
@@ -309,26 +346,38 @@ async function doSetPassword() {
     authError = null
 
     try {
-        const password = trimmedPassword || undefined
+        // Generate a random primary key
+        const pk = await generatePrimaryKey()
+
+        // Derive wrapping key (with optional Argon2id if password is set)
+        const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+            prfSecret,
+            userId: session.userId,
+            password: passwordInput || undefined,
+        })
+
+        // Wrap the primary key
+        const wrapped = await wrapPrimaryKey({
+            primaryKey: pk,
+            wrappingKeyBytes,
+            userId: session.userId,
+            passwordRequired: !!passwordInput,
+            argon2idSalt,
+        })
+
+        // Derive request encryption keys from the primary key
         const { publicKeyJwk } = await deriveRequestEncKeyPair({
             userId: session.userId,
-            prfSecret,
-            password,
+            primaryKey: pk,
         })
         const { encapsulationKeyB64 } = await deriveRequestEncMlkemKeyPair({
             userId: session.userId,
-            prfSecret,
-            password,
+            primaryKey: pk,
         })
 
-        let canary: string | undefined
-        if (trimmedPassword) {
-            canary = await encryptPasswordCanary(trimmedPassword)
-        }
-
-        await v2FinalizeSignup(publicKeyJwk, encapsulationKeyB64, canary)
-        activePassword = trimmedPassword
-        loginPasswordCanary = null
+        await v2FinalizeSignup(publicKeyJwk, encapsulationKeyB64, wrapped)
+        primaryKey = pk
+        loginWrappedPrimaryKey = null
         enterReadyView()
     } catch (err) {
         authError = err instanceof Error ? err.message : String(err)
@@ -480,7 +529,6 @@ function allowedIpsSummary() {
 <div class="min-h-screen">
     {#if uiState === 'ready'}
         <ReadyView
-            activePassword={activePassword}
             allowedIpsModalOpen={allowedIpsModalOpen}
             allowedIpsSummary={allowedIpsSummary()}
             allowedIpsText={allowedIpsText}
@@ -496,7 +544,7 @@ function allowedIpsSummary() {
             onUpdateAllowedIps={doUpdateAllowedIps}
             pageError={pageError}
             pendingItems={sortedItems()}
-            {prfSecret}
+            {primaryKey}
             requestKey={session?.requestKey ?? ''}
             sessionLabel={sessionLabel()}
             settingsBusy={settingsBusy}
@@ -517,33 +565,7 @@ function allowedIpsSummary() {
             onRegister={doRegister}
             onReturnToSignIn={returnToSignIn}
             onSetPassword={doSetPassword}
-            onSkipPassword={async () => {
-                if (!prfSecret || !session) {
-                    clearLocalAuthState()
-                    authError = 'Missing local key material, sign in again to continue'
-                    uiState = 'signin'
-                    return
-                }
-                authBusy = true
-                authError = null
-                try {
-                    const { publicKeyJwk } = await deriveRequestEncKeyPair({
-                        userId: session.userId,
-                        prfSecret,
-                    })
-                    const { encapsulationKeyB64 } = await deriveRequestEncMlkemKeyPair({
-                        userId: session.userId,
-                        prfSecret,
-                    })
-                    await v2FinalizeSignup(publicKeyJwk, encapsulationKeyB64)
-                    activePassword = ''
-                    enterReadyView()
-                } catch (err) {
-                    authError = err instanceof Error ? err.message : String(err)
-                } finally {
-                    authBusy = false
-                }
-            }}
+            onSkipPassword={doSetPassword}
             pageError={pageError}
             passwordInput={passwordInput}
             uiState={uiState}
@@ -552,7 +574,7 @@ function allowedIpsSummary() {
         <AuthAccessView
             authBusy={authBusy}
             authError={authError}
-            loginPasswordCanary={loginPasswordCanary}
+            loginWrappedPrimaryKey={loginWrappedPrimaryKey}
             onFinishPasswordLogin={doFinishPasswordLogin}
             onLogin={doLogin}
             onOpenSignup={openSignup}
