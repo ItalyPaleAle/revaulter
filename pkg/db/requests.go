@@ -221,6 +221,30 @@ func (s *RequestStore) MarkExpired(ctx context.Context, state string) error {
 	return err
 }
 
+// ExpiredRequestRef identifies a request row that was just transitioned from pending to expired
+type ExpiredRequestRef struct {
+	State  string
+	UserID string
+}
+
+func (s *RequestStore) ExpirePendingAndReturnState(ctx context.Context, state string) (*ExpiredRequestRef, error) {
+	now := time.Now().Unix()
+	var ref ExpiredRequestRef
+
+	err := s.db.db.
+		QueryRow(ctx,
+			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4 AND expires_at < $5 RETURNING state, user_id`,
+			string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now,
+		).
+		Scan(&ref.State, &ref.UserID)
+	if s.db.db.IsNoRowsError(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return &ref, nil
+}
+
 func (s *RequestStore) ExpirePending(ctx context.Context, now time.Time) error {
 	n := now.Unix()
 	_, err := s.db.db.Exec(ctx,
@@ -228,36 +252,6 @@ func (s *RequestStore) ExpirePending(ctx context.Context, now time.Time) error {
 		string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
 	)
 	return err
-}
-
-// ExpiredRequestRef identifies a request row that was just transitioned from pending to expired
-type ExpiredRequestRef struct {
-	State  string
-	UserID string
-}
-
-func (s *RequestStore) ExpirePendingAndReturnStates(ctx context.Context, now time.Time) ([]ExpiredRequestRef, error) {
-	n := now.Unix()
-	rows, err := s.db.db.Query(ctx,
-		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4 RETURNING state, user_id`,
-		string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var refs []ExpiredRequestRef
-	for rows.Next() {
-		var ref ExpiredRequestRef
-		err = rows.Scan(&ref.State, &ref.UserID)
-		if err != nil {
-			return nil, err
-		}
-		refs = append(refs, ref)
-	}
-
-	return refs, rows.Err()
 }
 
 // CleanupOldRecords deletes non-pending requests that expired more than 10 minutes ago.
@@ -270,4 +264,13 @@ func (s *RequestStore) CleanupOldRecords(ctx context.Context, now time.Time) (in
 		return 0, err
 	}
 	return affected, nil
+}
+
+func (s *RequestStore) DeleteExpiredTerminalRequest(ctx context.Context, state string, now time.Time) error {
+	cutoff := now.Add(-10 * time.Minute).Unix()
+	_, err := s.db.db.Exec(ctx,
+		`DELETE FROM v2_requests WHERE state = $1 AND status != $2 AND expires_at < $3`,
+		state, string(V2RequestStatusPending), cutoff,
+	)
+	return err
 }

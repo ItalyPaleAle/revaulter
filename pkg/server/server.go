@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-chi/httprate"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
+	"github.com/italypaleale/go-kit/eventqueue"
 	slogkit "github.com/italypaleale/go-kit/slog"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -65,6 +66,10 @@ type Server struct {
 	pubsub *broker.Broker[*db.V2RequestListItem]
 	// Subscriptions to watch request status changes
 	subs map[string]chan struct{}
+
+	// Delayed work for request expiry and record deletion
+	requestExpiryQueue *eventqueue.Processor[string, requestExpiryEvent]
+	deleteQueue        *eventqueue.Processor[string, deleteEvent]
 
 	// Database and request store
 	db           *db.DB
@@ -128,6 +133,14 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 		// Throttle password canary delivery to 5 successful logins per hour per user
 		canaryLimiter: httprate.NewRateLimiter(5, time.Hour),
 	}
+
+	// Create the eventqueue processors for performing garbage collection
+	s.requestExpiryQueue = eventqueue.NewProcessor(eventqueue.Options[string, requestExpiryEvent]{
+		ExecuteFn: s.executeRequestExpiryEvent,
+	})
+	s.deleteQueue = eventqueue.NewProcessor(eventqueue.Options[string, deleteEvent]{
+		ExecuteFn: s.executeDeleteEvent,
+	})
 
 	// Init the object
 	err := s.init(opts.Log, opts.TraceExporter)
@@ -340,6 +353,11 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	defer s.running.Store(false)
 	defer s.wg.Wait()
+
+	// Stop the background eventqueue processors
+	defer s.requestExpiryQueue.Close()
+	defer s.deleteQueue.Close()
+
 	// App server
 	s.wg.Add(1)
 	err := s.startAppServer(ctx)
@@ -432,72 +450,40 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		}
 	}()
 
-	// Background request expiry sweeper to notify long-poll/list subscribers when requests time out.
 	if s.requestStore != nil {
-		s.wg.Go(func() {
-			ticker := time.NewTicker(500 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case now := <-ticker.C:
-					refs, err := s.requestStore.ExpirePendingAndReturnStates(ctx, now)
-					if err != nil {
-						log.WarnContext(ctx, "error cleaning expired requests", slog.Any("error", err))
-						continue
-					}
-					if len(refs) == 0 {
-						continue
-					}
-					s.lock.Lock()
-					for _, ref := range refs {
-						s.notifySubscriber(ref.State)
-						s.publishListItem(&db.V2RequestListItem{
-							State:  ref.State,
-							Status: "removed",
-							UserID: ref.UserID,
-						})
-					}
-					s.lock.Unlock()
-				}
+		now := time.Now()
+		err := s.requestStore.ExpirePending(ctx, now)
+		if err != nil {
+			return fmt.Errorf("failed to cleanup expired requests at startup: %w", err)
+		}
+		_, err = s.requestStore.CleanupOldRecords(ctx, now)
+		if err != nil {
+			return fmt.Errorf("failed to cleanup old request records at startup: %w", err)
+		}
+
+		// Load currently-pending items to enqueue for cleanup
+		list, err := s.requestStore.ListPending(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to initialize request expiry queue: %w", err)
+		}
+		for _, item := range list {
+			err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
+				State:  item.State,
+				UserID: item.UserID,
+				TTL:    time.Unix(item.Expiry, 0),
+			})
+			if err != nil {
+				return fmt.Errorf("failed to enqueue request expiry for %s: %w", item.State, err)
 			}
-		})
+		}
 	}
 
-	// Background cleanup of expired records every 60 seconds.
-	if s.requestStore != nil || s.authStore != nil {
-		s.wg.Go(func() {
-			cleanupTicker := time.NewTicker(60 * time.Second)
-			defer cleanupTicker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case now := <-cleanupTicker.C:
-					if s.requestStore != nil {
-						n, err := s.requestStore.CleanupOldRecords(ctx, now)
-						if err != nil {
-							log.WarnContext(ctx, "request cleanup failed", slog.Any("error", err))
-						} else if n > 0 {
-							log.InfoContext(ctx, "request cleanup", slog.Int64("deleted", n))
-						}
-					}
-					if s.authStore != nil {
-						err := s.authStore.CleanupExpired(ctx, now)
-						if err != nil {
-							log.WarnContext(ctx, "auth cleanup failed", slog.Any("error", err))
-						}
-						err = s.authStore.CleanupUnreadyUsers(ctx, now)
-						if err != nil {
-							log.WarnContext(ctx, "user cleanup failed", slog.Any("error", err))
-						}
-					}
-				}
-			}
-		})
+	if s.authStore != nil {
+		err := s.authStore.CleanupExpired(ctx, time.Now())
+		if err != nil {
+			return fmt.Errorf("failed to cleanup expired auth records at startup: %w", err)
+		}
 	}
-
 	return nil
 }
 

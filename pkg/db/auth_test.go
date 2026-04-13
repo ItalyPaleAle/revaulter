@@ -230,3 +230,227 @@ func TestNormalizeAllowedIPsInvalidCIDR(t *testing.T) {
 	require.Nil(t, result)
 	require.EqualError(t, err, "invalid CIDR: 10.0.0.0/33")
 }
+
+func TestAuthStoreDeleteExpiredAuthChallenge(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	expiredChallenge, err := store.BeginChallengeWithPayload(ctx, "login", "", "expired-challenge", now.Add(-11*time.Minute), nil)
+	require.NoError(t, err)
+	usedChallenge, err := store.BeginChallengeWithPayload(ctx, "login", "", "used-challenge", now.Add(5*time.Minute), nil)
+	require.NoError(t, err)
+	freshChallenge, err := store.BeginChallengeWithPayload(ctx, "login", "", "fresh-challenge", now.Add(5*time.Minute), nil)
+	require.NoError(t, err)
+
+	ok, err := store.ConsumeChallenge(ctx, usedChallenge.ID, "login")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	err = store.DeleteExpiredAuthChallenge(ctx, expiredChallenge.ID, now)
+	require.NoError(t, err)
+	err = store.DeleteExpiredAuthChallenge(ctx, usedChallenge.ID, now)
+	require.NoError(t, err)
+	err = store.DeleteExpiredAuthChallenge(ctx, freshChallenge.ID, now)
+	require.NoError(t, err)
+
+	ok, err = store.ConsumeChallenge(ctx, expiredChallenge.ID, "login")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = store.ConsumeChallenge(ctx, usedChallenge.ID, "login")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	ok, err = store.ConsumeChallenge(ctx, freshChallenge.ID, "login")
+	require.NoError(t, err)
+	require.True(t, ok)
+}
+
+func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	oldRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-revoked-old",
+		DisplayName:    "Old Revoked",
+		WebAuthnUserID: "webauthn-user-revoked-old",
+		CredentialID:   "cred-revoked-old",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Minute,
+	})
+	require.NoError(t, err)
+	tooFreshRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-revoked-fresh",
+		DisplayName:    "Fresh Revoked",
+		WebAuthnUserID: "webauthn-user-revoked-fresh",
+		CredentialID:   "cred-revoked-fresh",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Hour,
+	})
+	require.NoError(t, err)
+	notRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-not-revoked",
+		DisplayName:    "Not Revoked",
+		WebAuthnUserID: "webauthn-user-not-revoked",
+		CredentialID:   "cred-not-revoked",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Hour,
+	})
+	require.NoError(t, err)
+
+	_, err = conn.db.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $2, expires_at = $3 WHERE id = $1`, oldRevokedSession.ID, time.Now().Add(-30*time.Minute).Unix(), time.Now().Add(time.Hour).Unix())
+	require.NoError(t, err)
+	_, err = conn.db.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $2, expires_at = $3 WHERE id = $1`, tooFreshRevokedSession.ID, time.Now().Add(-5*time.Minute).Unix(), time.Now().Add(time.Hour).Unix())
+	require.NoError(t, err)
+
+	err = store.DeleteRevokedSession(ctx, oldRevokedSession.ID, time.Now().UTC(), true)
+	require.NoError(t, err)
+	err = store.DeleteRevokedSession(ctx, tooFreshRevokedSession.ID, time.Now().UTC(), true)
+	require.NoError(t, err)
+	err = store.DeleteRevokedSession(ctx, notRevokedSession.ID, time.Now().UTC(), true)
+	require.NoError(t, err)
+
+	var count int
+	err = conn.db.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, oldRevokedSession.ID).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 0, count)
+
+	err = conn.db.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, tooFreshRevokedSession.ID).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	err = conn.db.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, notRevokedSession.ID).Scan(&count)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
+func TestAuthStoreDeleteRevokedSessionImmediate(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	revokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-revoked-now",
+		DisplayName:    "Revoked Now",
+		WebAuthnUserID: "webauthn-user-revoked-now",
+		CredentialID:   "cred-revoked-now",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Hour,
+	})
+	require.NoError(t, err)
+	notRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-still-active",
+		DisplayName:    "Still Active",
+		WebAuthnUserID: "webauthn-user-still-active",
+		CredentialID:   "cred-still-active",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Hour,
+	})
+	require.NoError(t, err)
+
+	err = store.RevokeSession(ctx, revokedSession.ID)
+	require.NoError(t, err)
+
+	err = store.DeleteRevokedSession(ctx, revokedSession.ID, time.Now().UTC(), false)
+	require.NoError(t, err)
+	err = store.DeleteRevokedSession(ctx, notRevokedSession.ID, time.Now().UTC(), false)
+	require.NoError(t, err)
+
+	got, err := store.GetSession(ctx, revokedSession.ID)
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	got, err = store.GetSession(ctx, notRevokedSession.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+}
+
+func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	nonreadyOldSession, err := store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-nonready-old",
+		DisplayName:    "Old Nonready",
+		WebAuthnUserID: "webauthn-user-nonready-old",
+		CredentialID:   "cred-nonready-old",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Hour,
+	})
+	require.NoError(t, err)
+	nonreadyFreshSession, err := store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-nonready-fresh",
+		DisplayName:    "Fresh Nonready",
+		WebAuthnUserID: "webauthn-user-nonready-fresh",
+		CredentialID:   "cred-nonready-fresh",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Hour,
+	})
+	require.NoError(t, err)
+	readySession, err := store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-ready",
+		DisplayName:    "Ready User",
+		WebAuthnUserID: "webauthn-user-ready",
+		CredentialID:   "cred-ready",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Hour,
+	})
+	require.NoError(t, err)
+
+	_, err = conn.db.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyOldSession.UserID, time.Now().Add(-25*time.Hour).Unix())
+	require.NoError(t, err)
+	_, err = conn.db.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyFreshSession.UserID, time.Now().Add(-23*time.Hour).Unix())
+	require.NoError(t, err)
+	require.NoError(t, store.FinalizeSignup(ctx, readySession.UserID, "canary-ready", `{"kty":"EC"}`, "mlkem-ready"))
+	_, err = conn.db.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, readySession.UserID, time.Now().Add(-25*time.Hour).Unix())
+	require.NoError(t, err)
+
+	err = store.DeleteNonreadyUser(ctx, nonreadyOldSession.UserID, time.Now().UTC())
+	require.NoError(t, err)
+	err = store.DeleteNonreadyUser(ctx, nonreadyFreshSession.UserID, time.Now().UTC())
+	require.NoError(t, err)
+	err = store.DeleteNonreadyUser(ctx, readySession.UserID, time.Now().UTC())
+	require.NoError(t, err)
+
+	user, err := store.GetUserByID(ctx, nonreadyOldSession.UserID)
+	require.NoError(t, err)
+	require.Nil(t, user)
+
+	user, err = store.GetUserByID(ctx, nonreadyFreshSession.UserID)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.False(t, user.Ready)
+
+	user, err = store.GetUserByID(ctx, readySession.UserID)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.True(t, user.Ready)
+}

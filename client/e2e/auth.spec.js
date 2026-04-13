@@ -122,13 +122,13 @@ test('expired ready session forces the UI back to sign-in', async ({ page, reque
     }
 })
 
-test('reload during unready setup resumes via session endpoint', async ({ page, request, context }) => {
+test('reload during non-ready setup resumes via session endpoint', async ({ page, request, context }) => {
     await seedUser(request, {
-        userId: 'user-unready',
-        displayName: 'Unready User',
-        state: 'registered-unready',
+        userId: 'user-nonready',
+        displayName: 'Non-ready User',
+        state: 'registered-nonready',
     })
-    await installSessionCookie(context, request, 'user-unready')
+    await installSessionCookie(context, request, 'user-nonready')
 
     await page.goto('/')
     await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()

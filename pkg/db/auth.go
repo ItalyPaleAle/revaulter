@@ -438,20 +438,6 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, canary, requestE
 	return ErrAlreadyFinalized
 }
 
-// CleanupUnreadyUsers deletes user accounts that were created more than 24 hours ago but never finalized (ready = false)
-// Cascade delete removes associated credentials and sessions
-func (s *AuthStore) CleanupUnreadyUsers(ctx context.Context, now time.Time) error {
-	cutoff := now.Add(-24 * time.Hour).Unix()
-	_, err := s.db.db.Exec(ctx,
-		`DELETE FROM v2_users WHERE ready = false AND created_at < $1`,
-		cutoff,
-	)
-	if err != nil {
-		return fmt.Errorf("error cleaning up unready users: %w", err)
-	}
-	return nil
-}
-
 func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowedIPs []string) ([]string, error) {
 	normalized, err := NormalizeAllowedIPs(allowedIPs)
 	if err != nil {
@@ -540,6 +526,49 @@ func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 	)
 	if err != nil {
 		return fmt.Errorf("error deleting expired user sessions: %w", err)
+	}
+	return nil
+}
+
+func (s *AuthStore) DeleteExpiredAuthChallenge(ctx context.Context, id string, now time.Time) error {
+	cutoff := now.Add(-10 * time.Minute).Unix()
+	_, err := s.db.db.Exec(ctx,
+		`DELETE FROM v2_auth_challenges WHERE id = $1 AND (expires_at < $2 OR used_at IS NOT NULL)`,
+		id, cutoff,
+	)
+	if err != nil {
+		return fmt.Errorf("error deleting auth challenge: %w", err)
+	}
+	return nil
+}
+
+func (s *AuthStore) DeleteRevokedSession(ctx context.Context, id string, now time.Time, expiredOnly bool) error {
+	query := `DELETE FROM v2_user_sessions WHERE id = $1 AND `
+	args := make([]any, 1, 2)
+	args[0] = id
+	if expiredOnly {
+		cutoff := now.Add(-10 * time.Minute).Unix()
+		query += `(expires_at < $2 OR (revoked_at IS NOT NULL AND revoked_at < $2))`
+		args = append(args, cutoff)
+	} else {
+		query += `revoked_at IS NOT NULL`
+	}
+
+	_, err := s.db.db.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("error deleting revoked user session: %w", err)
+	}
+	return nil
+}
+
+func (s *AuthStore) DeleteNonreadyUser(ctx context.Context, id string, now time.Time) error {
+	cutoff := now.Add(-24*time.Hour - 10*time.Minute).Unix()
+	_, err := s.db.db.Exec(ctx,
+		`DELETE FROM v2_users WHERE id = $1 AND ready = false AND created_at < $2`,
+		id, cutoff,
+	)
+	if err != nil {
+		return fmt.Errorf("error deleting non-ready user: %w", err)
 	}
 	return nil
 }

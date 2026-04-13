@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/italypaleale/go-kit/eventqueue"
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
@@ -119,6 +121,16 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			CreatedAt:        now,
 			ExpiresAt:        now.Add(timeout),
 			EncryptedRequest: string(encEnvelopeJSON),
+		})
+		if err != nil {
+			AbortWithErrorJSON(c, err)
+			return
+		}
+
+		err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
+			State:  state,
+			UserID: user.ID,
+			TTL:    now.Add(timeout),
 		})
 		if err != nil {
 			AbortWithErrorJSON(c, err)
@@ -357,22 +369,22 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
+	rec, err := s.requestStore.GetRequest(c.Request.Context(), req.State)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if rec == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
+		return
+	}
+
+	if !s.authorizeUser(c, rec.UserID) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
+		return
+	}
+
 	if req.Cancel {
-		rec, err := s.requestStore.GetRequest(c.Request.Context(), req.State)
-		if err != nil {
-			AbortWithErrorJSON(c, err)
-			return
-		}
-		if rec == nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
-			return
-		}
-
-		if !s.authorizeUser(c, rec.UserID) {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
-			return
-		}
-
 		ok, err := s.requestStore.CancelRequest(c.Request.Context(), req.State)
 		if err != nil {
 			AbortWithErrorJSON(c, err)
@@ -390,6 +402,12 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			slog.String("user_id", userID),
 			slog.String("client_ip", c.ClientIP()),
 		)
+
+		err = s.requestExpiryQueue.Dequeue("request-expiry:" + req.State)
+		if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
+			AbortWithErrorJSON(c, err)
+			return
+		}
 
 		s.lock.Lock()
 		s.notifySubscriber(req.State)
@@ -415,21 +433,6 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
-	rec, err := s.requestStore.GetRequest(c.Request.Context(), req.State)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	if rec == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
-		return
-	}
-
-	if !s.authorizeUser(c, rec.UserID) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
-		return
-	}
-
 	ok, err := s.requestStore.CompleteRequest(c.Request.Context(), req.State, *req.ResponseEnvelope)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -447,6 +450,12 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		slog.Any("user_id", userID),
 		slog.String("client_ip", c.ClientIP()),
 	)
+
+	err = s.requestExpiryQueue.Dequeue("request-expiry:" + req.State)
+	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
+		AbortWithErrorJSON(c, err)
+		return
+	}
 
 	s.lock.Lock()
 	s.notifySubscriber(req.State)

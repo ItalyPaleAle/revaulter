@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -236,10 +237,10 @@ func TestServerV2PublicSignup(t *testing.T) {
 	require.Equal(t, "webauthn", regBegin["mode"])
 }
 
-func TestServerV2SessionMiddlewareAllowsUnreadyUsersOnListAPI(t *testing.T) {
+func TestServerV2SessionMiddlewareAllowsNonreadyUsersOnListAPI(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-unready.db",
+		"databaseDSN":     tmpDir + "/v2-nonready.db",
 		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
 		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
 		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
@@ -253,7 +254,7 @@ func TestServerV2SessionMiddlewareAllowsUnreadyUsersOnListAPI(t *testing.T) {
 	defer stopServerFn(t)
 	client := clientForListener(srv.appListener)
 
-	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-unready", "Unready")
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-nonready", "Non-ready")
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort), nil)
 	require.NoError(t, err)
 	req.AddCookie(sessionCookie)
@@ -271,10 +272,10 @@ func TestServerV2SessionMiddlewareAllowsUnreadyUsersOnListAPI(t *testing.T) {
 	require.Empty(t, body)
 }
 
-func TestServerV2SessionEndpointAllowsUnreadyUsers(t *testing.T) {
+func TestServerV2SessionEndpointAllowsNonreadyUsers(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-session-unready.db",
+		"databaseDSN":     tmpDir + "/v2-session-nonready.db",
 		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
 		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
 		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
@@ -288,7 +289,7 @@ func TestServerV2SessionEndpointAllowsUnreadyUsers(t *testing.T) {
 	defer stopServerFn(t)
 	client := clientForListener(srv.appListener)
 
-	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-unready-session", "Unready Session")
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-nonready-session", "Nonready Session")
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/auth/session", testServerPort), nil)
 	require.NoError(t, err)
 	req.AddCookie(sessionCookie)
@@ -304,7 +305,7 @@ func TestServerV2SessionEndpointAllowsUnreadyUsers(t *testing.T) {
 	_ = json.NewDecoder(res.Body).Decode(&body)
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, true, body["authenticated"])
-	require.Equal(t, "user-unready-session", body["userId"])
+	require.Equal(t, "user-nonready-session", body["userId"])
 }
 
 func TestServerV2DisableSignup(t *testing.T) {
@@ -560,6 +561,109 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 		require.Equal(t, "boot unlock", msg.Note)
 		require.NotEmpty(t, msg.StateId)
 	}
+}
+
+func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Cleanup(config.SetTestConfig(map[string]any{
+		"databaseDSN":     tmpDir + "/v2-expiry-callback.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+	}))
+
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	defer cleanup()
+
+	_, user := seedV2SessionCookie(t, srv, "user-expiry-callback", "Expiry Callback")
+	now := time.Now().UTC().Truncate(time.Second)
+	err := srv.requestStore.CreateRequest(t.Context(), db.CreateRequestInput{
+		State:            "state-expiry-callback",
+		UserID:           user.ID,
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "callback-key",
+		Algorithm:        "aes-gcm-256",
+		CreatedAt:        now.Add(-2 * time.Minute),
+		ExpiresAt:        now.Add(-1 * time.Minute),
+		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
+	})
+	require.NoError(t, err)
+
+	srv.executeRequestExpiryEvent(requestExpiryEvent{
+		State:  "state-expiry-callback",
+		UserID: user.ID,
+		TTL:    now.Add(-1 * time.Minute),
+	})
+
+	rec, err := srv.requestStore.GetRequest(t.Context(), "state-expiry-callback")
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(t, db.V2RequestStatusExpired, rec.Status)
+
+	srv.executeDeleteEvent(deleteEvent{
+		KeyName: "request-delete:state-expiry-callback",
+		Kind:    "request",
+		ID:      "state-expiry-callback",
+		TTL:     now.Add(10 * time.Minute),
+	})
+
+	rec, err = srv.requestStore.GetRequest(t.Context(), "state-expiry-callback")
+	require.NoError(t, err)
+	require.Nil(t, rec)
+}
+
+func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Cleanup(config.SetTestConfig(map[string]any{
+		"databaseDSN":     tmpDir + "/v2-logout.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+	}))
+
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	defer cleanup()
+
+	stopServerFn := startTestServer(t, srv)
+	defer stopServerFn(t)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-logout", "Logout User")
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "https://localhost/", nil)
+	ctx.Request.AddCookie(sessionCookie)
+	sessionID, _, err := getSecureCookieEncryptedJWT(ctx, sessionCookieNameSecure)
+	require.NoError(t, err)
+	require.NotEmpty(t, sessionID)
+
+	err = srv.deleteQueue.Enqueue(deleteEvent{
+		KeyName: "session-delete:" + sessionID,
+		Kind:    "session",
+		ID:      sessionID,
+		TTL:     time.Now().UTC().Add(time.Hour),
+	})
+	require.NoError(t, err)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/logout", testServerPort), bytes.NewReader([]byte(`{}`)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+
+	sess, err := srv.authStore.GetSession(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Nil(t, sess)
 }
 
 func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.RoundTripper, logDest io.Writer) (*Server, func()) {

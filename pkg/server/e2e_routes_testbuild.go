@@ -134,7 +134,7 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 	}
 
 	switch req.State {
-	case "registered-unready":
+	case "registered-nonready":
 		// Keep the user unfinalized
 	case "ready-no-password", "ready-with-password":
 		user, getUserErr := s.authStore.GetUserByID(c.Request.Context(), req.UserID)

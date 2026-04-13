@@ -19,6 +19,7 @@ import (
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 
+	"github.com/italypaleale/go-kit/eventqueue"
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
@@ -161,6 +162,17 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		return
 	}
 
+	err = s.deleteQueue.Enqueue(deleteEvent{
+		KeyName: "challenge-delete:" + ch.ID,
+		Kind:    "challenge",
+		ID:      ch.ID,
+		TTL:     ch.ExpiresAt.Add(10 * time.Minute),
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
 	c.JSON(http.StatusOK, v2AuthRegisterBeginResponse{
 		ChallengeID: ch.ID,
 		Challenge:   session.Challenge,
@@ -239,6 +251,17 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "login", "", session.Challenge, session.Expires, v2LoginChallengePayload{
 		Challenge:       session.Challenge,
 		WebAuthnSession: session,
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	err = s.deleteQueue.Enqueue(deleteEvent{
+		KeyName: "challenge-delete:" + ch.ID,
+		Kind:    "challenge",
+		ID:      ch.ID,
+		TTL:     ch.ExpiresAt.Add(10 * time.Minute),
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -399,6 +422,12 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
+	err = s.deleteQueue.Dequeue("user-delete:" + userID)
+	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
 	c.JSON(http.StatusOK,
 		struct {
 			OK bool `json:"ok"`
@@ -505,6 +534,18 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Failed to revoke session"))
 			return
 		}
+
+		err = s.authStore.DeleteRevokedSession(c.Request.Context(), id, time.Now().UTC(), false)
+		if err != nil {
+			AbortWithErrorJSON(c, err)
+			return
+		}
+
+		err = s.deleteQueue.Dequeue("session-delete:" + id)
+		if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
+			AbortWithErrorJSON(c, err)
+			return
+		}
 	}
 
 	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged out",
@@ -552,6 +593,12 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 	if !ok {
 		return nil, NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
 	}
+
+	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
+	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
+		return nil, err
+	}
+
 	if payload.WebAuthnSession == nil {
 		return nil, NewResponseError(http.StatusConflict, "Registration challenge is missing WebAuthn session data")
 	}
@@ -595,6 +642,27 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 		return nil, err
 	}
 
+	// Register the non-ready user for cleanup if it's not completed in 24 hours
+	err = s.deleteQueue.Enqueue(deleteEvent{
+		KeyName: "user-delete:" + sess.UserID,
+		Kind:    "nonready-user",
+		ID:      sess.UserID,
+		TTL:     sess.CreatedAt.Add(24*time.Hour + time.Minute),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	err = s.deleteQueue.Enqueue(deleteEvent{
+		KeyName: "session-delete:" + sess.ID,
+		Kind:    "session",
+		ID:      sess.ID,
+		TTL:     sess.ExpiresAt.Add(10 * time.Minute),
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return sess, nil
 }
 
@@ -611,6 +679,12 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*d
 	if !ok {
 		return nil, nil, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
 	}
+
+	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
+	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
+		return nil, nil, err
+	}
+
 	if payload.WebAuthnSession == nil {
 		return nil, nil, NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
 	}
@@ -719,12 +793,27 @@ func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2We
 }
 
 func (s *Server) createLoginSession(ctx context.Context, userID string, cred *webauthnlib.Credential) (*db.AuthSession, error) {
-	return s.authStore.Login(ctx, db.LoginInput{
+	sess, err := s.authStore.Login(ctx, db.LoginInput{
 		UserID:       userID,
 		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
 		SignCount:    int64(cred.Authenticator.SignCount),
 		SessionTTL:   config.Get().SessionTimeout,
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	err = s.deleteQueue.Enqueue(deleteEvent{
+		KeyName: "session-delete:" + sess.ID,
+		Kind:    "session",
+		ID:      sess.ID,
+		TTL:     sess.ExpiresAt.Add(10 * time.Minute),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return sess, nil
 }
 
 func newJSONHTTPRequest(c *gin.Context, raw json.RawMessage) (*http.Request, error) {
