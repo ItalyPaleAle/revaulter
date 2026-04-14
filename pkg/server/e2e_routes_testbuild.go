@@ -164,19 +164,20 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 				return
 			}
 
-			canary := ""
+			wrappedKey := ""
 			if req.State == "ready-with-password" {
 				if req.Password == "" {
 					AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "password is required for ready-with-password state"))
 					return
 				}
-				canary = req.Password
+				// Store a placeholder wrapped key so the login flow returns it
+				wrappedKey = "e2e-wrapped-key-" + req.UserID
 			}
 
 			keyErr = s.authStore.FinalizeSignup(
 				c.Request.Context(),
 				req.UserID,
-				canary,
+				wrappedKey,
 				string(requestEncJWKJSON),
 				base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey-"+req.UserID)),
 			)

@@ -405,7 +405,7 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
-	if req.WrappedPrimaryKey != "" && len(req.WrappedPrimaryKey) > 256 {
+	if req.WrappedPrimaryKey != "" && len(req.WrappedPrimaryKey) > 512 {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "wrappedPrimaryKey is too large"))
 		return
 	}

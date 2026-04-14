@@ -736,7 +736,7 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 	err = srv.authStore.FinalizeSignup(
 		t.Context(),
 		userID,
-		"test-canary",
+		"test-wrapped-primary-key",
 		string(requestEncJWKJSON),
 		base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey")),
 	)

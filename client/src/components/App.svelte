@@ -326,8 +326,8 @@ async function doFinishPasswordLogin() {
     try {
         await unlockWithPassword(passwordInput)
         enterReadyView()
-    } catch (err) {
-        authError = err instanceof Error ? err.message : String(err)
+    } catch {
+        authError = 'Incorrect password'
     } finally {
         authBusy = false
     }
