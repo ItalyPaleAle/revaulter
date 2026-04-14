@@ -29,12 +29,10 @@ func sessionCookieFor(c *gin.Context) (name, path string) {
 	return sessionCookieNameInsecure, "/v2"
 }
 
-func (s *Server) MiddlewareSession(required bool, requireReady bool) gin.HandlerFunc {
+func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if s.authStore == nil {
-			if required {
-				AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-			}
+			AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
 			return
 		}
 
@@ -44,9 +42,7 @@ func (s *Server) MiddlewareSession(required bool, requireReady bool) gin.Handler
 			if err != nil {
 				_ = c.Error(fmt.Errorf("cookie error: %w", err))
 			}
-			if required {
-				AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User is not authenticated"))
-			}
+			AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User is not authenticated"))
 			return
 		}
 
@@ -55,15 +51,11 @@ func (s *Server) MiddlewareSession(required bool, requireReady bool) gin.Handler
 			if err != nil {
 				_ = c.Error(fmt.Errorf("session lookup error: %w", err))
 			}
-			if required {
-				AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User session is invalid or expired"))
-			}
+			AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User session is invalid or expired"))
 			return
 		}
 		if requireReady && !sess.Ready {
-			if required {
-				AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account setup is not complete"))
-			}
+			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account setup is not complete"))
 			return
 		}
 

@@ -17,7 +17,11 @@ import {
 import { ResponseNotOkError } from '$lib/request'
 import { base64UrlToBytes } from '$lib/utils'
 import {
+    v2AddCredentialBegin,
+    v2AddCredentialFinish,
+    v2DeleteCredential,
     v2FinalizeSignup,
+    v2ListCredentials,
     v2ListStream,
     v2LoginBegin,
     v2LoginFinish,
@@ -25,10 +29,13 @@ import {
     v2RegenerateRequestKey,
     v2RegisterBegin,
     v2RegisterFinish,
+    v2RenameCredential,
     v2Session,
     v2SetAllowedIPs,
+    v2UpdateDisplayName,
+    v2UpdateWrappedKey,
 } from '$lib/v2-api'
-import type { V2AuthSessionInfo, V2PendingRequestItem, V2SessionResponse } from '$lib/v2-types'
+import type { V2AuthSessionInfo, V2CredentialItem, V2PendingRequestItem, V2SessionResponse } from '$lib/v2-types'
 import { webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
 
 type UIState = 'boot' | 'signin' | 'signup' | 'password-login' | 'password-setup' | 'ready'
@@ -46,7 +53,8 @@ let allowedIpsText = $state('')
 let settingsBusy = $state(false)
 let settingsError = $state<string | null>(null)
 let settingsSuccess = $state<string | null>(null)
-let allowedIpsModalOpen = $state(false)
+let credentials = $state<V2CredentialItem[]>([])
+let hasPassword = $state(false)
 
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
@@ -127,6 +135,7 @@ function enterReadyView() {
     settingsSuccess = null
     allowedIpsText = session?.allowedIps.join('\n') ?? ''
     startListStream()
+    void doLoadCredentials()
 }
 
 function openSignIn() {
@@ -141,18 +150,6 @@ function openSignup() {
     passwordInput = ''
     loginWrappedPrimaryKey = null
     uiState = 'signup'
-}
-
-function openAllowedIpsModal() {
-    settingsError = null
-    settingsSuccess = null
-    allowedIpsModalOpen = true
-}
-
-function closeAllowedIpsModal() {
-    settingsError = null
-    settingsSuccess = null
-    allowedIpsModalOpen = false
 }
 
 async function returnToSignIn() {
@@ -199,6 +196,7 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
     if (finish.wrappedPrimaryKey) {
         // Parse the envelope to determine whether a password is needed
         const envelope = parseWrappedPrimaryKeyEnvelope(finish.wrappedPrimaryKey)
+        hasPassword = envelope.passwordRequired
         if (envelope.passwordRequired) {
             return 'password-required'
         }
@@ -214,6 +212,8 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
             userId: finish.session.userId,
         })
         loginWrappedPrimaryKey = null
+    } else {
+        hasPassword = false
     }
     return 'authenticated'
 }
@@ -377,6 +377,7 @@ async function doSetPassword() {
 
         await v2FinalizeSignup(publicKeyJwk, encapsulationKeyB64, wrapped)
         primaryKey = pk
+        hasPassword = !!passwordInput
         loginWrappedPrimaryKey = null
         enterReadyView()
     } catch (err) {
@@ -440,6 +441,124 @@ async function doRegenerateRequestKey() {
     } finally {
         settingsBusy = false
     }
+}
+
+async function doLoadCredentials() {
+    try {
+        credentials = (await v2ListCredentials()) ?? []
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    }
+}
+
+async function doUpdateDisplayName(name: string) {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        const res = await v2UpdateDisplayName(name)
+        if (session) {
+            session = { ...session, displayName: res.displayName }
+        }
+        settingsSuccess = 'Display name updated.'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doAddPasskey(name: string) {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        const begin = await v2AddCredentialBegin(name)
+        const cred = await webauthnRegister({
+            displayName: name,
+            challenge: begin.challenge,
+            options: begin.options,
+        })
+        await v2AddCredentialFinish({
+            challengeId: begin.challengeId,
+            credential: (cred.raw as { credential?: unknown })?.credential ?? cred,
+            credentialName: name,
+        })
+        await doLoadCredentials()
+        settingsSuccess = 'Passkey added.'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doRenamePasskey(id: string, name: string) {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        await v2RenameCredential(id, name)
+        await doLoadCredentials()
+        settingsSuccess = 'Passkey renamed.'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doDeletePasskey(id: string) {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        await v2DeleteCredential(id)
+        await doLoadCredentials()
+        settingsSuccess = 'Passkey deleted.'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doChangePassword(password: string) {
+    if (!prfSecret || !session || !primaryKey) {
+        settingsError = 'Missing local key material'
+        return
+    }
+
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+            prfSecret,
+            userId: session.userId,
+            password: password || undefined,
+        })
+
+        const wrapped = await wrapPrimaryKey({
+            primaryKey,
+            wrappingKeyBytes,
+            userId: session.userId,
+            passwordRequired: !!password,
+            argon2idSalt,
+        })
+
+        await v2UpdateWrappedKey(wrapped)
+        hasPassword = !!password
+        settingsSuccess = password ? 'Password updated.' : 'Password removed.'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doRemovePassword() {
+    await doChangePassword('')
 }
 
 function startListStream() {
@@ -513,35 +632,29 @@ function removeItem(state: string) {
 function sortedItems() {
     return Object.values(items).sort((a, b) => a.date - b.date)
 }
-
-function allowedIpsSummary() {
-    const count = session?.allowedIps.length ?? 0
-    if (count === 0) {
-        return 'No IP restrictions configured'
-    }
-    if (count === 1) {
-        return '1 allowed IP configured'
-    }
-    return `${count} allowed IPs configured`
-}
 </script>
 
 <div class="min-h-screen">
     {#if uiState === 'ready'}
         <ReadyView
-            allowedIpsModalOpen={allowedIpsModalOpen}
-            allowedIpsSummary={allowedIpsSummary()}
             allowedIpsText={allowedIpsText}
+            {credentials}
+            displayName={session?.displayName ?? ''}
+            {hasPassword}
             listConnected={listConnected}
+            onAddPasskey={doAddPasskey}
             onAllowedIpsTextInput={(value) => {
                 allowedIpsText = value
             }}
-            onCloseAllowedIpsModal={closeAllowedIpsModal}
+            onChangePassword={doChangePassword}
+            onDeletePasskey={doDeletePasskey}
             onLogout={doLogout}
-            onOpenAllowedIpsModal={openAllowedIpsModal}
             onRegenerateRequestKey={doRegenerateRequestKey}
             onRemoveItem={removeItem}
+            onRemovePassword={doRemovePassword}
+            onRenamePasskey={doRenamePasskey}
             onUpdateAllowedIps={doUpdateAllowedIps}
+            onUpdateDisplayName={doUpdateDisplayName}
             pageError={pageError}
             pendingItems={sortedItems()}
             {primaryKey}
@@ -550,6 +663,7 @@ function allowedIpsSummary() {
             settingsBusy={settingsBusy}
             settingsError={settingsError}
             settingsSuccess={settingsSuccess}
+            userId={session?.userId ?? ''}
         />
     {:else if uiState === 'signup' || uiState === 'password-setup'}
         <AuthSetupView

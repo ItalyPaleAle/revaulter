@@ -64,6 +64,7 @@ func AddE2ETestRoutes(token string) func(s *Server, r gin.IRouter) {
 		group.POST("/seed-user", s.RouteE2ESeedUser)
 		group.POST("/seed-session", s.RouteE2ESeedSession)
 		group.POST("/seed-request", s.RouteE2ESeedRequest)
+		group.POST("/seed-credential", s.RouteE2ESeedCredential)
 		group.GET("/request/:state", s.RouteE2EGetRequest)
 		group.GET("/request/:state/result", s.RouteE2EGetRequestResult)
 	}
@@ -425,5 +426,46 @@ func (s *Server) RouteE2EGetRequestResult(c *gin.Context) {
 		"note":             rec.Note,
 		"encryptedRequest": json.RawMessage(rec.EncryptedRequest),
 		"responseEnvelope": responseEnvelope,
+	})
+}
+
+type e2eSeedCredentialRequest struct {
+	UserID      string `json:"userId"`
+	DisplayName string `json:"displayName"`
+}
+
+func (s *Server) RouteE2ESeedCredential(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	var req e2eSeedCredentialRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+	if req.UserID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "userId is required"))
+		return
+	}
+
+	credID := "e2e-cred-extra-" + uuid.NewString()[:8]
+	err = s.authStore.AddCredential(c.Request.Context(), db.AddCredentialInput{
+		UserID:       req.UserID,
+		CredentialID: credID,
+		DisplayName:  req.DisplayName,
+		PublicKey:    `{}`,
+		SignCount:    0,
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":           true,
+		"credentialId": credID,
 	})
 }

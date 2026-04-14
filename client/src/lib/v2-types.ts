@@ -109,3 +109,17 @@ export type V2SessionResponse = {
     allowedIps: string[]
     ttl: number
 }
+
+export type V2CredentialItem = {
+    id: string
+    displayName: string
+    createdAt: number
+    lastUsedAt: number
+}
+
+export type V2AddCredentialBeginResponse = {
+    challengeId: string
+    challenge: string
+    expiresAt: number
+    options?: unknown
+}

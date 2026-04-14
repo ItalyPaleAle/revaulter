@@ -2,24 +2,28 @@
 import Button from '$components/Button.svelte'
 import Icon from '$components/Icon.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
-import Modal from '$components/Modal.svelte'
 import PendingItem from '$components/PendingItem.svelte'
-import SettingsPanel from '$components/SettingsPanel.svelte'
+import UserSettingsModal from '$components/UserSettingsModal.svelte'
 
-import type { V2PendingRequestItem } from '$lib/v2-types'
+import type { V2CredentialItem, V2PendingRequestItem } from '$lib/v2-types'
 
 interface Props {
-    allowedIpsModalOpen: boolean
-    allowedIpsSummary: string
     allowedIpsText: string
+    credentials: V2CredentialItem[]
+    displayName: string
+    hasPassword: boolean
     listConnected: boolean
+    onAddPasskey: (name: string) => Promise<void>
     onAllowedIpsTextInput: (value: string) => void
-    onCloseAllowedIpsModal: () => void
+    onChangePassword: (password: string) => Promise<void>
+    onDeletePasskey: (id: string) => Promise<void>
     onLogout: () => Promise<void>
-    onOpenAllowedIpsModal: () => void
     onRegenerateRequestKey: () => Promise<void>
     onRemoveItem: (state: string) => void
+    onRemovePassword: () => Promise<void>
+    onRenamePasskey: (id: string, name: string) => Promise<void>
     onUpdateAllowedIps: () => Promise<void>
+    onUpdateDisplayName: (name: string) => Promise<void>
     pageError: string | null
     pendingItems: V2PendingRequestItem[]
     primaryKey: Uint8Array | null
@@ -28,20 +32,26 @@ interface Props {
     settingsBusy: boolean
     settingsError: string | null
     settingsSuccess: string | null
+    userId: string
 }
 
 let {
-    allowedIpsModalOpen,
-    allowedIpsSummary,
     allowedIpsText,
+    credentials,
+    displayName,
+    hasPassword,
     listConnected,
+    onAddPasskey,
     onAllowedIpsTextInput,
-    onCloseAllowedIpsModal,
+    onChangePassword,
+    onDeletePasskey,
     onLogout,
-    onOpenAllowedIpsModal,
     onRegenerateRequestKey,
     onRemoveItem,
+    onRemovePassword,
+    onRenamePasskey,
     onUpdateAllowedIps,
+    onUpdateDisplayName,
     pageError,
     pendingItems,
     primaryKey,
@@ -50,45 +60,23 @@ let {
     settingsBusy,
     settingsError,
     settingsSuccess,
+    userId,
 }: Props = $props()
 
-let settingsPanelOpen = $state(false)
+let settingsModalOpen = $state(false)
 
-function toggleSettingsPanel() {
-    settingsPanelOpen = !settingsPanelOpen
+function toggleSettingsModal() {
+    settingsModalOpen = !settingsModalOpen
 }
 
-function closeSettingsPanel() {
-    settingsPanelOpen = false
+function closeSettingsModal() {
+    settingsModalOpen = false
 }
 
-function openAllowedIpsFromPanel() {
-    closeSettingsPanel()
-    onOpenAllowedIpsModal()
-}
-
-function logoutFromPanel() {
-    closeSettingsPanel()
+function logoutFromSettings() {
+    closeSettingsModal()
     void onLogout()
 }
-
-$effect(() => {
-    if (!settingsPanelOpen) {
-        return
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-        if (event.key === 'Escape') {
-            closeSettingsPanel()
-        }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-
-    return () => {
-        document.removeEventListener('keydown', handleKeyDown)
-    }
-})
 </script>
 
 <div class="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-4 py-6 md:px-6 md:py-8">
@@ -107,10 +95,10 @@ $effect(() => {
                 <Button
                     variant="icon"
                     size="icon"
-                    ariaLabel="Open security settings"
-                    onclick={toggleSettingsPanel}
+                    ariaLabel="Open user settings"
+                    onclick={toggleSettingsModal}
                 >
-                    <Icon icon="settings" title="Security settings" size="5" />
+                    <Icon icon="settings" title="User settings" size="5" />
                 </Button>
             </div>
         </div>
@@ -162,67 +150,28 @@ $effect(() => {
         {/if}
     </section>
 
-    {#if allowedIpsModalOpen}
-        <Modal
-            title="Allowed IPs"
-            ariaLabel="Close allowed IPs modal"
-            onClose={onCloseAllowedIpsModal}
-        >
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                One IP or CIDR per line. Leave empty to allow requests from any IP.
-            </p>
-
-            <textarea
-                class="mt-4 min-h-40 w-full rounded-[1.35rem] border border-white/70 bg-white/80 px-4 py-3 font-mono text-sm text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-white/10 dark:bg-slate-950/70 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
-                value={allowedIpsText}
-                oninput={(event) => {
-                    onAllowedIpsTextInput((event.currentTarget as HTMLTextAreaElement).value)
-                }}
-                disabled={settingsBusy}
-            ></textarea>
-
-            {#if settingsError}
-                <div class="mt-4 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
-                    {settingsError}
-                </div>
-            {:else if settingsSuccess}
-                <div class="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200">
-                    {settingsSuccess}
-                </div>
-            {/if}
-
-            <div class="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                <Button
-                    variant="outline"
-                    type="button"
-                    onclick={onCloseAllowedIpsModal}
-                >
-                    Close
-                </Button>
-                <Button
-                    variant="neutral"
-                    type="button"
-                    onclick={onUpdateAllowedIps}
-                    disabled={settingsBusy}
-                >
-                    Save allowed IPs
-                </Button>
-            </div>
-        </Modal>
-    {/if}
-
-    {#if settingsPanelOpen}
-        <SettingsPanel
-            {allowedIpsModalOpen}
-            {allowedIpsSummary}
-            onClose={closeSettingsPanel}
-            onLogout={logoutFromPanel}
-            onOpenAllowedIps={openAllowedIpsFromPanel}
-            onRegenerateRequestKey={onRegenerateRequestKey}
+    {#if settingsModalOpen}
+        <UserSettingsModal
+            {userId}
+            {displayName}
             {requestKey}
-            {settingsBusy}
-            {settingsError}
-            {settingsSuccess}
+            {allowedIpsText}
+            {hasPassword}
+            {credentials}
+            busy={settingsBusy}
+            error={settingsError}
+            success={settingsSuccess}
+            onClose={closeSettingsModal}
+            {onUpdateDisplayName}
+            {onRegenerateRequestKey}
+            {onAllowedIpsTextInput}
+            {onUpdateAllowedIps}
+            {onChangePassword}
+            {onRemovePassword}
+            {onAddPasskey}
+            {onRenamePasskey}
+            {onDeletePasskey}
+            onLogout={logoutFromSettings}
         />
     {/if}
 </div>

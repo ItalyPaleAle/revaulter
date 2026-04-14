@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -889,4 +890,271 @@ func (w mockWebhook) SendWebhook(_ context.Context, data *webhook.WebhookRequest
 
 func (w mockWebhook) SetBaseURL(val string) {
 	// Nop
+}
+
+func TestServerV2UpdateDisplayName(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Cleanup(config.SetTestConfig(map[string]any{
+		"databaseDSN":     tmpDir + "/v2-display-name.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+	}))
+
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	defer cleanup()
+
+	stopServerFn := startTestServer(t, srv)
+	defer stopServerFn(t)
+	client := clientForListener(srv.appListener)
+
+	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
+	}
+
+	doGetJSON := func(t *testing.T, path string, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), nil)
+		require.NoError(t, err)
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
+	}
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	// Successful update
+	res, body := doPostJSON(t, "/v2/auth/update-display-name", map[string]any{"displayName": "New Name"}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, true, body["ok"])
+	require.Equal(t, "New Name", body["displayName"])
+
+	// Verify via session endpoint
+	res, body = doGetJSON(t, "/v2/auth/session", sessionCookie)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, "New Name", body["displayName"])
+
+	// Too-long name
+	longName := strings.Repeat("a", 101)
+	res, _ = doPostJSON(t, "/v2/auth/update-display-name", map[string]any{"displayName": longName}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+
+	// Without session cookie — 401
+	res, _ = doPostJSON(t, "/v2/auth/update-display-name", map[string]any{"displayName": "Test"})
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusUnauthorized, res.StatusCode)
+}
+
+func TestServerV2UpdateWrappedKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Cleanup(config.SetTestConfig(map[string]any{
+		"databaseDSN":     tmpDir + "/v2-wrapped-key.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+	}))
+
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	defer cleanup()
+
+	stopServerFn := startTestServer(t, srv)
+	defer stopServerFn(t)
+	client := clientForListener(srv.appListener)
+
+	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
+	}
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	// Successful update
+	res, body := doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"wrappedPrimaryKey": "new-key-blob"}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, true, body["ok"])
+
+	// Empty string is valid
+	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"wrappedPrimaryKey": ""}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, true, body["ok"])
+}
+
+func TestServerV2CredentialLifecycle(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Cleanup(config.SetTestConfig(map[string]any{
+		"databaseDSN":     tmpDir + "/v2-cred-lifecycle.db",
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+	}))
+
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	defer cleanup()
+
+	stopServerFn := startTestServer(t, srv)
+	defer stopServerFn(t)
+	client := clientForListener(srv.appListener)
+
+	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
+	}
+
+	doGetJSONArray := func(t *testing.T, path string, cookies ...*http.Cookie) (*http.Response, []map[string]any) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), nil)
+		require.NoError(t, err)
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out []map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
+	}
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	// List credentials — should have 1
+	res, creds := doGetJSONArray(t, "/v2/auth/credentials", sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Len(t, creds, 1)
+	credID, _ := creds[0]["id"].(string)
+	require.NotEmpty(t, credID)
+
+	// Rename credential
+	res2, body := doPostJSON(t, "/v2/auth/credentials/rename", map[string]any{
+		"id":          credID,
+		"displayName": "My Passkey",
+	}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res2.StatusCode)
+	require.Equal(t, true, body["ok"])
+
+	// Verify rename
+	res, creds = doGetJSONArray(t, "/v2/auth/credentials", sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, "My Passkey", creds[0]["displayName"])
+
+	// Delete last credential — should fail with 409
+	res2, _ = doPostJSON(t, "/v2/auth/credentials/delete", map[string]any{"id": credID}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res2.Body.Close()
+	}()
+	require.Equal(t, http.StatusConflict, res2.StatusCode)
+
+	// Delete nonexistent credential — still 409 because there's only one credential
+	res2, _ = doPostJSON(t, "/v2/auth/credentials/delete", map[string]any{"id": "nonexistent"}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res2.Body.Close()
+	}()
+	require.Equal(t, http.StatusConflict, res2.StatusCode)
 }

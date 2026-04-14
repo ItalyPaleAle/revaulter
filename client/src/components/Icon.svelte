@@ -184,5 +184,53 @@ const { icon, title, size = '12' }: Props = $props()
             <path d="M18 6 6 18" />
             <path d="m6 6 12 12" />
         </IconContainer>
+    {:else if icon == 'user'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+        </IconContainer>
+    {:else if icon == 'fingerprint'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4" />
+            <path d="M14 13.12c0 2.38 0 6.38-1 8.88" />
+            <path d="M17.29 21.02c.12-.6.43-2.3.5-3.02" />
+            <path d="M2 12a10 10 0 0 1 18-6" />
+            <path d="M2 16h.01" />
+            <path d="M21.8 16c.2-2 .131-5.354 0-6" />
+            <path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2" />
+            <path d="M8.65 22c.21-.66.45-1.32.57-2" />
+            <path d="M9 6.8a6 6 0 0 1 9 5.2v2" />
+        </IconContainer>
+    {:else if icon == 'trash'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M3 6h18" />
+            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+        </IconContainer>
+    {:else if icon == 'plus'}
+        <!--
+            lucide.dev
+            Copyright (c) Lucide Contributors
+            Licensed under ISC license: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+        -->
+        <IconContainer {title} {size}>
+            <path d="M5 12h14" />
+            <path d="M12 5v14" />
+        </IconContainer>
     {/if}
 </i>

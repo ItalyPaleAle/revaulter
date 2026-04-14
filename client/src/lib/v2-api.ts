@@ -2,7 +2,9 @@ import ndjson from '$lib/ndjson'
 import { Request } from '$lib/request'
 import type {
     EcP256PublicJwk,
+    V2AddCredentialBeginResponse,
     V2AuthSessionInfo,
+    V2CredentialItem,
     V2LoginBeginResponse,
     V2LoginFinishResponse,
     V2PendingRequestItem,
@@ -110,6 +112,64 @@ export async function v2Confirm(state: string, responseEnvelope: V2ResponseEnvel
 /** Cancels a pending request without returning any encrypted result payload */
 export async function v2Cancel(state: string) {
     const res = await Request<{ canceled: boolean }>('/v2/api/confirm', { postData: { state, cancel: true } })
+    return res.data
+}
+
+/** Updates the currently signed-in user's display name */
+export async function v2UpdateDisplayName(displayName: string) {
+    const res = await Request<{ ok: boolean; displayName: string }>('/v2/auth/update-display-name', {
+        postData: { displayName },
+    })
+    return res.data
+}
+
+/** Updates the wrapped primary key (used for password add/change/remove) */
+export async function v2UpdateWrappedKey(wrappedPrimaryKey: string) {
+    const res = await Request<{ ok: boolean }>('/v2/auth/update-wrapped-key', {
+        postData: { wrappedPrimaryKey },
+    })
+    return res.data
+}
+
+/** Lists all passkey credentials for the currently signed-in user */
+export async function v2ListCredentials() {
+    const res = await Request<V2CredentialItem[]>('/v2/auth/credentials')
+    return res.data
+}
+
+/** Begins WebAuthn registration ceremony for adding a new credential */
+export async function v2AddCredentialBegin(credentialName?: string) {
+    const res = await Request<V2AddCredentialBeginResponse>('/v2/auth/credentials/add/begin', {
+        postData: { credentialName: credentialName || '' },
+    })
+    return res.data
+}
+
+/** Completes WebAuthn registration ceremony for adding a new credential */
+export async function v2AddCredentialFinish(args: {
+    challengeId: string
+    credential: unknown
+    credentialName?: string
+}) {
+    const res = await Request<{ ok: boolean }>('/v2/auth/credentials/add/finish', {
+        postData: args,
+    })
+    return res.data
+}
+
+/** Renames a passkey credential */
+export async function v2RenameCredential(id: string, displayName: string) {
+    const res = await Request<{ ok: boolean }>('/v2/auth/credentials/rename', {
+        postData: { id, displayName },
+    })
+    return res.data
+}
+
+/** Deletes a passkey credential (must keep at least one) */
+export async function v2DeleteCredential(id: string) {
+    const res = await Request<{ ok: boolean }>('/v2/auth/credentials/delete', {
+        postData: { id },
+    })
     return res.data
 }
 

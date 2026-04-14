@@ -1,6 +1,7 @@
 package db
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -453,4 +454,179 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.True(t, user.Ready)
+}
+
+func TestAuthStoreUpdateDisplayName(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	_, err = store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-1",
+		DisplayName:    "Alice",
+		WebAuthnUserID: "webauthn-user-1",
+		CredentialID:   "cred-1",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Minute,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "", `{"kty":"EC"}`, "mlkem-pub"))
+
+	// Successful update
+	err = store.UpdateDisplayName(ctx, "user-1", "Bob")
+	require.NoError(t, err)
+	user, err := store.GetUserByID(ctx, "user-1")
+	require.NoError(t, err)
+	require.Equal(t, "Bob", user.DisplayName)
+
+	// Empty display name is valid
+	err = store.UpdateDisplayName(ctx, "user-1", "")
+	require.NoError(t, err)
+	user, err = store.GetUserByID(ctx, "user-1")
+	require.NoError(t, err)
+	require.Empty(t, user.DisplayName)
+
+	// Too-long display name
+	err = store.UpdateDisplayName(ctx, "user-1", strings.Repeat("a", 101))
+	require.ErrorIs(t, err, ErrDisplayNameTooLong)
+
+	// Non-existent user
+	err = store.UpdateDisplayName(ctx, "no-such-user", "Test")
+	require.ErrorIs(t, err, ErrUserNotFound)
+}
+
+func TestAuthStoreUpdateWrappedPrimaryKey(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	_, err = store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-1",
+		DisplayName:    "Alice",
+		WebAuthnUserID: "webauthn-user-1",
+		CredentialID:   "cred-1",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Minute,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "initial-key", `{"kty":"EC"}`, "mlkem-pub"))
+
+	// Successful update
+	err = store.UpdateWrappedPrimaryKey(ctx, "user-1", "new-wrapped-key")
+	require.NoError(t, err)
+	user, err := store.GetUserByID(ctx, "user-1")
+	require.NoError(t, err)
+	require.Equal(t, "new-wrapped-key", user.WrappedPrimaryKey)
+
+	// Empty string is valid (removes password)
+	err = store.UpdateWrappedPrimaryKey(ctx, "user-1", "")
+	require.NoError(t, err)
+	user, err = store.GetUserByID(ctx, "user-1")
+	require.NoError(t, err)
+	require.Empty(t, user.WrappedPrimaryKey)
+
+	// Oversized value
+	err = store.UpdateWrappedPrimaryKey(ctx, "user-1", strings.Repeat("x", 513))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "too large")
+
+	// Non-existent user
+	err = store.UpdateWrappedPrimaryKey(ctx, "no-such-user", "key")
+	require.ErrorIs(t, err, ErrUserNotFound)
+}
+
+func TestAuthStoreCredentialCRUD(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	_, err = store.RegisterUser(ctx, RegisterUserInput{
+		UserID:                "user-1",
+		DisplayName:           "Alice",
+		WebAuthnUserID:        "webauthn-user-1",
+		CredentialID:          "cred-1",
+		CredentialDisplayName: "My Laptop",
+		PublicKey:             `{"kty":"EC"}`,
+		SignCount:             1,
+		SessionTTL:            time.Minute,
+	})
+	require.NoError(t, err)
+
+	// List — should have 1 credential with display name and timestamps
+	creds, err := store.ListCredentials(ctx, "user-1")
+	require.NoError(t, err)
+	require.Len(t, creds, 1)
+	require.NotEmpty(t, creds[0].ID)
+	require.Equal(t, "cred-1", creds[0].CredentialID)
+	require.Equal(t, "My Laptop", creds[0].DisplayName)
+	require.NotZero(t, creds[0].CreatedAt)
+	require.NotZero(t, creds[0].LastUsedAt)
+
+	firstCredID := creds[0].ID
+
+	// Add a second credential
+	err = store.AddCredential(ctx, AddCredentialInput{
+		UserID:       "user-1",
+		CredentialID: "cred-2",
+		DisplayName:  "My Phone",
+		PublicKey:    `{"kty":"EC","crv":"P-256"}`,
+		SignCount:    0,
+	})
+	require.NoError(t, err)
+
+	creds, err = store.ListCredentials(ctx, "user-1")
+	require.NoError(t, err)
+	require.Len(t, creds, 2)
+
+	secondCredID := creds[1].ID
+	require.Equal(t, "My Phone", creds[1].DisplayName)
+
+	// Rename second credential
+	err = store.RenameCredential(ctx, secondCredID, "user-1", "Work Phone")
+	require.NoError(t, err)
+	creds, err = store.ListCredentials(ctx, "user-1")
+	require.NoError(t, err)
+	require.Equal(t, "Work Phone", creds[1].DisplayName)
+
+	// Rename with too-long name
+	err = store.RenameCredential(ctx, secondCredID, "user-1", strings.Repeat("a", 101))
+	require.ErrorIs(t, err, ErrDisplayNameTooLong)
+
+	// Rename nonexistent credential
+	err = store.RenameCredential(ctx, "nonexistent-id", "user-1", "test")
+	require.ErrorIs(t, err, ErrCredentialNotFound)
+
+	// Rename credential belonging to different user
+	err = store.RenameCredential(ctx, secondCredID, "other-user", "test")
+	require.ErrorIs(t, err, ErrCredentialNotFound)
+
+	// Delete second credential — should succeed
+	err = store.DeleteCredential(ctx, secondCredID, "user-1")
+	require.NoError(t, err)
+	creds, err = store.ListCredentials(ctx, "user-1")
+	require.NoError(t, err)
+	require.Len(t, creds, 1)
+	require.Equal(t, firstCredID, creds[0].ID)
+
+	// Delete last credential — should fail
+	err = store.DeleteCredential(ctx, firstCredID, "user-1")
+	require.ErrorIs(t, err, ErrLastCredential)
+
+	// Delete nonexistent credential
+	err = store.DeleteCredential(ctx, "nonexistent-id", "user-1")
+	require.ErrorIs(t, err, ErrLastCredential)
 }

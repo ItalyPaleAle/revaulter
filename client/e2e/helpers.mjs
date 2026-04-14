@@ -213,14 +213,22 @@ export async function waitForListStream(page) {
 }
 
 export async function openSettings(page) {
-    await page.getByRole('button', { name: 'Open security settings' }).click()
-    await expect(page.getByRole('button', { name: 'Close security settings' })).toBeVisible()
+    await page.getByRole('button', { name: 'Open user settings' }).click()
+    await expect(page.getByRole('button', { name: 'Close user settings' })).toBeVisible()
+}
+
+export async function openSettingsTab(page, tabName) {
+    await openSettings(page)
+    // Tab buttons have accessible name like "User User" (icon title + text), so use text selector
+    await page.locator('nav button', { hasText: tabName }).click()
 }
 
 export async function openAllowedIPs(page) {
-    await openSettings(page)
-    await page.getByRole('button', { name: 'Configure allowed IPs' }).click()
-    await expect(page.getByRole('heading', { name: 'Allowed IPs' })).toBeVisible()
+    await openSettingsTab(page, 'IP Restrictions')
+}
+
+export async function seedCredential(request, data) {
+    return e2eFetch(request, '/__e2e__/seed-credential', { data })
 }
 
 export async function readSession(page) {

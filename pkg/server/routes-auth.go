@@ -110,6 +110,47 @@ type v2AuthLogoutResponse struct {
 	LoggedOut bool `json:"loggedOut"`
 }
 
+type v2AuthUpdateDisplayNameRequest struct {
+	DisplayName string `json:"displayName"`
+}
+
+type v2AuthUpdateWrappedKeyRequest struct {
+	WrappedPrimaryKey string `json:"wrappedPrimaryKey"`
+}
+
+type v2AuthCredentialItem struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	CreatedAt   int64  `json:"createdAt"`
+	LastUsedAt  int64  `json:"lastUsedAt"`
+}
+
+type v2AddCredentialChallengePayload struct {
+	UserID          string                   `json:"userId"`
+	WebAuthnUserID  string                   `json:"webauthnUserId"`
+	DisplayName     string                   `json:"displayName"`
+	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
+}
+
+type v2AuthAddCredentialBeginRequest struct {
+	CredentialName string `json:"credentialName"`
+}
+
+type v2AuthAddCredentialFinishRequest struct {
+	ChallengeID    string          `json:"challengeId"`
+	Credential     json.RawMessage `json:"credential"`
+	CredentialName string          `json:"credentialName"`
+}
+
+type v2AuthRenameCredentialRequest struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+}
+
+type v2AuthDeleteCredentialRequest struct {
+	ID string `json:"id"`
+}
+
 func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	cfg := config.Get()
 	if cfg.DisableSignup {
@@ -561,6 +602,395 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 
 	c.JSON(http.StatusOK, v2AuthLogoutResponse{
 		LoggedOut: true,
+	})
+}
+
+func (s *Server) RouteV2AuthUpdateDisplayName(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	var req v2AuthUpdateDisplayNameRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+
+	err = s.authStore.UpdateDisplayName(c.Request.Context(), userID, req.DisplayName)
+	switch {
+	case errors.Is(err, db.ErrDisplayNameTooLong):
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Display name is too long"))
+		return
+	case errors.Is(err, db.ErrUserNotFound):
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+		return
+	case err != nil:
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, struct {
+		OK          bool   `json:"ok"`
+		DisplayName string `json:"displayName"`
+	}{
+		OK:          true,
+		DisplayName: strings.TrimSpace(req.DisplayName),
+	})
+}
+
+func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	var req v2AuthUpdateWrappedKeyRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+
+	err = s.authStore.UpdateWrappedPrimaryKey(c.Request.Context(), userID, req.WrappedPrimaryKey)
+	if errors.Is(err, db.ErrUserNotFound) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+		return
+	} else if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, err.Error()))
+		return
+	}
+
+	c.JSON(http.StatusOK, struct {
+		OK bool `json:"ok"`
+	}{
+		OK: true,
+	})
+}
+
+func (s *Server) RouteV2AuthListCredentials(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	records, err := s.authStore.ListCredentials(c.Request.Context(), userID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	items := make([]v2AuthCredentialItem, len(records))
+	for i, rec := range records {
+		items[i] = v2AuthCredentialItem{
+			ID:          rec.ID,
+			DisplayName: rec.DisplayName,
+			CreatedAt:   rec.CreatedAt,
+			LastUsedAt:  rec.LastUsedAt,
+		}
+	}
+
+	c.JSON(http.StatusOK, items)
+}
+
+func (s *Server) RouteV2AuthAddCredentialBegin(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+	if s.webAuthn == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server"))
+		return
+	}
+
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	var req v2AuthAddCredentialBeginRequest
+	_ = c.ShouldBindJSON(&req)
+
+	// Load the existing user with their current credentials to populate excludeCredentials
+	userRecord, err := s.v2LoadWebAuthnUser(c.Request.Context(), userID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if userRecord == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+		return
+	}
+
+	creation, session, err := s.webAuthn.BeginRegistration(userRecord,
+		webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
+		webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
+			"prf": map[string]any{},
+		}),
+	)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "add-credential", userID, session.Challenge, session.Expires, v2AddCredentialChallengePayload{
+		UserID:          userID,
+		WebAuthnUserID:  base64.RawURLEncoding.EncodeToString(userRecord.id),
+		DisplayName:     strings.TrimSpace(req.CredentialName),
+		WebAuthnSession: session,
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	err = s.deleteQueue.Enqueue(deleteEvent{
+		KeyName: "challenge-delete:" + ch.ID,
+		Kind:    "challenge",
+		ID:      ch.ID,
+		TTL:     ch.ExpiresAt.Add(10 * time.Minute),
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, struct {
+		ChallengeID string `json:"challengeId"`
+		Challenge   string `json:"challenge"`
+		ExpiresAt   int64  `json:"expiresAt"`
+		Options     any    `json:"options,omitempty"`
+	}{
+		ChallengeID: ch.ID,
+		Challenge:   session.Challenge,
+		ExpiresAt:   ch.ExpiresAt.Unix(),
+		Options:     creation,
+	})
+}
+
+func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+	if s.webAuthn == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server"))
+		return
+	}
+
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	var req v2AuthAddCredentialFinishRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+	if req.ChallengeID == "" || len(req.Credential) == 0 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing required fields"))
+		return
+	}
+
+	var payload v2AddCredentialChallengePayload
+	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "add-credential", &payload)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if !ok {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Challenge is invalid or expired"))
+		return
+	}
+
+	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
+	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	// Verify the challenge belongs to the authenticated user
+	if payload.UserID != userID {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Challenge does not belong to this user"))
+		return
+	}
+
+	if payload.WebAuthnSession == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Challenge is missing WebAuthn session data"))
+		return
+	}
+
+	// Load the user record with existing credentials for the verification
+	userRecord, err := s.v2LoadWebAuthnUser(c.Request.Context(), userID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if userRecord == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+		return
+	}
+
+	waReq, err := newJSONHTTPRequest(c, req.Credential)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	cred, err := s.webAuthn.FinishRegistration(userRecord, *payload.WebAuthnSession, waReq)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn registration verification failed: %v", err))
+		return
+	}
+
+	credJSON, err := json.Marshal(cred)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	// Use the credential name from the finish request, falling back to the begin request
+	credName := strings.TrimSpace(req.CredentialName)
+	if credName == "" {
+		credName = payload.DisplayName
+	}
+
+	err = s.authStore.AddCredential(c.Request.Context(), db.AddCredentialInput{
+		UserID:       userID,
+		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
+		DisplayName:  credName,
+		PublicKey:    string(credJSON),
+		SignCount:    int64(cred.Authenticator.SignCount),
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "Credential added to user",
+		slog.String("user_id", userID),
+		slog.String("client_ip", c.ClientIP()),
+	)
+
+	c.JSON(http.StatusOK, struct {
+		OK bool `json:"ok"`
+	}{
+		OK: true,
+	})
+}
+
+func (s *Server) RouteV2AuthRenameCredential(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	var req v2AuthRenameCredentialRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+	if req.ID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "id is required"))
+		return
+	}
+
+	err = s.authStore.RenameCredential(c.Request.Context(), req.ID, userID, req.DisplayName)
+	switch {
+	case errors.Is(err, db.ErrDisplayNameTooLong):
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Display name is too long"))
+		return
+	case errors.Is(err, db.ErrCredentialNotFound):
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Credential not found"))
+		return
+	case err != nil:
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, struct {
+		OK bool `json:"ok"`
+	}{
+		OK: true,
+	})
+}
+
+func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
+	if s.authStore == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
+		return
+	}
+
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	var req v2AuthDeleteCredentialRequest
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+	if req.ID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "id is required"))
+		return
+	}
+
+	err = s.authStore.DeleteCredential(c.Request.Context(), req.ID, userID)
+	switch {
+	case errors.Is(err, db.ErrLastCredential):
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Cannot delete the last credential"))
+		return
+	case errors.Is(err, db.ErrCredentialNotFound):
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Credential not found"))
+		return
+	case err != nil:
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "Credential deleted",
+		slog.String("user_id", userID),
+		slog.String("credential_id", req.ID),
+		slog.String("client_ip", c.ClientIP()),
+	)
+
+	c.JSON(http.StatusOK, struct {
+		OK bool `json:"ok"`
+	}{
+		OK: true,
 	})
 }
 

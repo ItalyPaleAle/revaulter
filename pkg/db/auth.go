@@ -56,19 +56,32 @@ type AuthChallenge struct {
 }
 
 type AuthCredentialRecord struct {
+	ID           string
 	CredentialID string
+	DisplayName  string
 	PublicKey    string
 	SignCount    int64
+	CreatedAt    int64
+	LastUsedAt   int64
 }
 
 type RegisterUserInput struct {
-	UserID         string
-	DisplayName    string
-	WebAuthnUserID string
-	CredentialID   string
-	PublicKey      string
-	SignCount      int64
-	SessionTTL     time.Duration
+	UserID                string
+	DisplayName           string
+	WebAuthnUserID        string
+	CredentialID          string
+	CredentialDisplayName string
+	PublicKey             string
+	SignCount             int64
+	SessionTTL            time.Duration
+}
+
+type AddCredentialInput struct {
+	UserID       string
+	CredentialID string
+	DisplayName  string
+	PublicKey    string
+	SignCount    int64
 }
 
 type LoginInput struct {
@@ -83,6 +96,9 @@ var (
 	ErrUserNotFound       = errors.New("user not found")
 	ErrInvalidLogin       = errors.New("invalid login")
 	ErrPasswordAlreadySet = errors.New("password already set")
+	ErrCredentialNotFound = errors.New("credential not found")
+	ErrLastCredential     = errors.New("cannot delete the last credential")
+	ErrDisplayNameTooLong = errors.New("display name is too long")
 )
 
 func NewAuthStore(db *DB, _ any) (*AuthStore, error) {
@@ -130,7 +146,7 @@ func (s *AuthStore) getUser(ctx context.Context, query string, arg string) (*Use
 
 func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthCredentialRecord, error) {
 	rows, err := s.db.db.Query(ctx,
-		`SELECT credential_id, public_key, sign_count
+		`SELECT id, credential_id, display_name, public_key, sign_count, created_at, last_used_at
 			FROM v2_user_credentials
 			WHERE user_id = $1
 			ORDER BY created_at ASC`,
@@ -144,7 +160,7 @@ func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthC
 	var out []AuthCredentialRecord
 	for rows.Next() {
 		var rec AuthCredentialRecord
-		err = rows.Scan(&rec.CredentialID, &rec.PublicKey, &rec.SignCount)
+		err = rows.Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.CreatedAt, &rec.LastUsedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -310,9 +326,9 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 	}
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_user_credentials (id, user_id, credential_id, public_key, sign_count, created_at, last_used_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		uuid.NewString(), in.UserID, in.CredentialID, in.PublicKey, in.SignCount, now, now,
+		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, created_at, last_used_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		uuid.NewString(), in.UserID, in.CredentialID, in.CredentialDisplayName, in.PublicKey, in.SignCount, now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -480,6 +496,120 @@ func (s *AuthStore) RegenerateRequestKey(ctx context.Context, userID string) (st
 	}
 
 	return requestKey, nil
+}
+
+func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID, displayName string) error {
+	displayName = strings.TrimSpace(displayName)
+	if len(displayName) > 100 {
+		return ErrDisplayNameTooLong
+	}
+
+	affected, err := s.db.db.Exec(ctx,
+		`UPDATE v2_users SET display_name = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
+		displayName, time.Now().UTC().Unix(), userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	if affected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+func (s *AuthStore) UpdateWrappedPrimaryKey(ctx context.Context, userID, wrappedPrimaryKey string) error {
+	if len(wrappedPrimaryKey) > 512 {
+		return errors.New("wrappedPrimaryKey is too large")
+	}
+
+	affected, err := s.db.db.Exec(ctx,
+		`UPDATE v2_users SET wrapped_primary_key = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
+		wrappedPrimaryKey, time.Now().UTC().Unix(), userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	if affected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) error {
+	now := time.Now().UTC().Unix()
+	_, err := s.db.db.Exec(ctx,
+		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, created_at, last_used_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount, now, now,
+	)
+	return err
+}
+
+func (s *AuthStore) RenameCredential(ctx context.Context, id, userID, displayName string) error {
+	displayName = strings.TrimSpace(displayName)
+	if len(displayName) > 100 {
+		return ErrDisplayNameTooLong
+	}
+
+	affected, err := s.db.db.Exec(ctx,
+		`UPDATE v2_user_credentials SET display_name = $1 WHERE id = $2 AND user_id = $3`,
+		displayName, id, userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	if affected == 0 {
+		return ErrCredentialNotFound
+	}
+
+	return nil
+}
+
+func (s *AuthStore) DeleteCredential(ctx context.Context, id, userID string) error {
+	tx, err := s.db.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		rollbackErr := tx.Rollback(ctx)
+		if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
+		}
+	}()
+
+	var count int
+	err = tx.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_credentials WHERE user_id = $1`, userID).Scan(&count)
+	if err != nil {
+		return err
+	}
+
+	if count <= 1 {
+		return ErrLastCredential
+	}
+
+	affected, err := tx.Exec(ctx,
+		`DELETE FROM v2_user_credentials WHERE id = $1 AND user_id = $2`,
+		id, userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	if affected == 0 {
+		return ErrCredentialNotFound
+	}
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *AuthStore) RevokeSession(ctx context.Context, id string) error {

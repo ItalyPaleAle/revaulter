@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS v2_user_credentials (
 	id text PRIMARY KEY,
 	user_id text NOT NULL REFERENCES v2_users(id) ON DELETE CASCADE,
 	credential_id text NOT NULL UNIQUE,
+	display_name text NOT NULL DEFAULT '',
 	public_key text NOT NULL,
 	sign_count bigint NOT NULL,
 	created_at bigint NOT NULL,
