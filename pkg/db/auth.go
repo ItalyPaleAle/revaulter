@@ -573,14 +573,15 @@ func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID
 }
 
 // HasPendingChallenge reports whether the user has an unconsumed, non-expired challenge of the given kind
-// Callers use this to reject mutations that would race with an in-flight WebAuthn ceremony
 func (s *AuthStore) HasPendingChallenge(ctx context.Context, userID, kind string) (bool, error) {
 	now := time.Now().UTC().Unix()
 	var exists bool
-	err := s.db.db.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM v2_auth_challenges WHERE user_id = $1 AND kind = $2 AND used_at IS NULL AND expires_at >= $3)`,
-		userID, kind, now,
-	).Scan(&exists)
+	err := s.db.db.
+		QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM v2_auth_challenges WHERE user_id = $1 AND kind = $2 AND used_at IS NULL AND expires_at >= $3)`,
+			userID, kind, now,
+		).
+		Scan(&exists)
 	if err != nil {
 		return false, err
 	}
