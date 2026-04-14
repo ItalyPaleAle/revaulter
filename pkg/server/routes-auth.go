@@ -115,6 +115,7 @@ type v2AuthUpdateDisplayNameRequest struct {
 }
 
 type v2AuthUpdateWrappedKeyRequest struct {
+	CredentialID      string `json:"credentialId"`
 	WrappedPrimaryKey string `json:"wrappedPrimaryKey"`
 }
 
@@ -137,9 +138,10 @@ type v2AuthAddCredentialBeginRequest struct {
 }
 
 type v2AuthAddCredentialFinishRequest struct {
-	ChallengeID    string          `json:"challengeId"`
-	Credential     json.RawMessage `json:"credential"`
-	CredentialName string          `json:"credentialName"`
+	ChallengeID       string          `json:"challengeId"`
+	Credential        json.RawMessage `json:"credential"`
+	CredentialName    string          `json:"credentialName"`
+	WrappedPrimaryKey string          `json:"wrappedPrimaryKey,omitempty"`
 }
 
 type v2AuthRenameCredentialRequest struct {
@@ -336,7 +338,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	sess, user, err := s.v2LoginFinish(c, req)
+	sess, credRec, err := s.v2LoginFinish(c, req)
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Login failed",
 			slog.String("client_ip", c.ClientIP()),
@@ -365,7 +367,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	// The wrapped primary key is the user's encrypted root-key material; an attacker that controls a passkey
 	// could otherwise call /v2/auth/login/finish in a tight loop and harvest the blob for offline password cracking
 	// We refuse the login so the client cannot abuse this endpoint
-	if user != nil && user.WrappedPrimaryKey != "" {
+	if credRec != nil && credRec.WrappedPrimaryKey != "" {
 		overLimit := s.wrappedKeyLimiter.OnLimit(c.Writer, c.Request, "v2-wrapped-key:"+sess.UserID)
 		if overLimit {
 			// A WebAuthn-authenticated client that exceeds the budget has the new session revoked and a 429 returned
@@ -388,7 +390,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 			return
 		}
 
-		resp.WrappedPrimaryKey = user.WrappedPrimaryKey
+		resp.WrappedPrimaryKey = credRec.WrappedPrimaryKey
 		logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(),
 			"Delivered wrapped primary key to authenticated client",
 			slog.String("user_id", sess.UserID),
@@ -664,10 +666,14 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
+	if req.CredentialID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "credentialId is required"))
+		return
+	}
 
-	err = s.authStore.UpdateWrappedPrimaryKey(c.Request.Context(), userID, req.WrappedPrimaryKey)
-	if errors.Is(err, db.ErrUserNotFound) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+	err = s.authStore.UpdateCredentialWrappedKey(c.Request.Context(), req.CredentialID, userID, req.WrappedPrimaryKey)
+	if errors.Is(err, db.ErrCredentialNotFound) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Credential not found"))
 		return
 	} else if err != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, err.Error()))
@@ -780,11 +786,13 @@ func (s *Server) RouteV2AuthAddCredentialBegin(c *gin.Context) {
 		Challenge   string `json:"challenge"`
 		ExpiresAt   int64  `json:"expiresAt"`
 		Options     any    `json:"options,omitempty"`
+		BasePrfSalt string `json:"basePrfSalt"`
 	}{
 		ChallengeID: ch.ID,
 		Challenge:   session.Challenge,
 		ExpiresAt:   ch.ExpiresAt.Unix(),
 		Options:     creation,
+		BasePrfSalt: config.Get().GetPRFSalt(),
 	})
 }
 
@@ -878,12 +886,18 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		credName = payload.DisplayName
 	}
 
+	if req.WrappedPrimaryKey != "" && len(req.WrappedPrimaryKey) > 512 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "wrappedPrimaryKey is too large"))
+		return
+	}
+
 	err = s.authStore.AddCredential(c.Request.Context(), db.AddCredentialInput{
-		UserID:       userID,
-		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
-		DisplayName:  credName,
-		PublicKey:    string(credJSON),
-		SignCount:    int64(cred.Authenticator.SignCount),
+		UserID:            userID,
+		CredentialID:      base64.RawURLEncoding.EncodeToString(cred.ID),
+		DisplayName:       credName,
+		PublicKey:         string(credJSON),
+		SignCount:         int64(cred.Authenticator.SignCount),
+		WrappedPrimaryKey: req.WrappedPrimaryKey,
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -1097,7 +1111,7 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 	return sess, nil
 }
 
-func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*db.AuthSession, *db.User, error) {
+func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*db.AuthSession, *db.AuthCredentialRecord, error) {
 	if s.webAuthn == nil {
 		return nil, nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
 	}
@@ -1173,7 +1187,13 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*d
 		return nil, nil, err
 	}
 
-	return sess, discoveredDBUser, nil
+	// Look up the credential record so the caller can access the per-credential wrapped primary key
+	credRec, err := s.authStore.GetCredentialByCredentialID(c.Request.Context(), base64.RawURLEncoding.EncodeToString(cred.ID), discoveredUser.userID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return sess, credRec, nil
 }
 
 func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2WebAuthnUser, cred *webauthnlib.Credential) error {

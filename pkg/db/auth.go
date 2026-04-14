@@ -28,7 +28,6 @@ type User struct {
 	DisplayName           string
 	Status                string
 	WebAuthnUserID        string
-	WrappedPrimaryKey     string
 	RequestKey            string
 	RequestEncEcdhPubkey  string
 	RequestEncMlkemPubkey string
@@ -56,13 +55,14 @@ type AuthChallenge struct {
 }
 
 type AuthCredentialRecord struct {
-	ID           string
-	CredentialID string
-	DisplayName  string
-	PublicKey    string
-	SignCount    int64
-	CreatedAt    int64
-	LastUsedAt   int64
+	ID                string
+	CredentialID      string
+	DisplayName       string
+	PublicKey         string
+	SignCount         int64
+	WrappedPrimaryKey string
+	CreatedAt         int64
+	LastUsedAt        int64
 }
 
 type RegisterUserInput struct {
@@ -77,11 +77,12 @@ type RegisterUserInput struct {
 }
 
 type AddCredentialInput struct {
-	UserID       string
-	CredentialID string
-	DisplayName  string
-	PublicKey    string
-	SignCount    int64
+	UserID            string
+	CredentialID      string
+	DisplayName       string
+	PublicKey         string
+	SignCount         int64
+	WrappedPrimaryKey string
 }
 
 type LoginInput struct {
@@ -114,7 +115,7 @@ func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
-const userSelectCols = `id, display_name, status, webauthn_user_id, wrapped_primary_key, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, allowed_ips, ready`
+const userSelectCols = `id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, allowed_ips, ready`
 
 func (s *AuthStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
 	return s.getUser(ctx, `SELECT `+userSelectCols+` FROM v2_users WHERE id = $1`, userID)
@@ -134,7 +135,7 @@ func (s *AuthStore) getUser(ctx context.Context, query string, arg string) (*Use
 		allowedIPsCSV string
 	)
 	err := s.db.db.QueryRow(ctx, query, arg).
-		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.WrappedPrimaryKey, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &allowedIPsCSV, &user.Ready)
+		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &allowedIPsCSV, &user.Ready)
 	if s.db.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
@@ -146,7 +147,7 @@ func (s *AuthStore) getUser(ctx context.Context, query string, arg string) (*Use
 
 func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthCredentialRecord, error) {
 	rows, err := s.db.db.Query(ctx,
-		`SELECT id, credential_id, display_name, public_key, sign_count, created_at, last_used_at
+		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at
 			FROM v2_user_credentials
 			WHERE user_id = $1
 			ORDER BY created_at ASC`,
@@ -160,7 +161,7 @@ func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthC
 	var out []AuthCredentialRecord
 	for rows.Next() {
 		var rec AuthCredentialRecord
-		err = rows.Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.CreatedAt, &rec.LastUsedAt)
+		err = rows.Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.CreatedAt, &rec.LastUsedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -317,8 +318,8 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 
 	now := time.Now().UTC().Unix()
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, wrapped_primary_key, request_key, allowed_ips, created_at, updated_at)
-		VALUES ($1, $2, 'active', $3, '', $4, '', $5, $6)`,
+		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, request_key, allowed_ips, created_at, updated_at)
+		VALUES ($1, $2, 'active', $3, $4, '', $5, $6)`,
 		in.UserID, in.DisplayName, in.WebAuthnUserID, requestKey, now, now,
 	)
 	if err != nil {
@@ -326,8 +327,8 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 	}
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, created_at, last_used_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, '', $7, $8)`,
 		uuid.NewString(), in.UserID, in.CredentialID, in.CredentialDisplayName, in.PublicKey, in.SignCount, now, now,
 	)
 	if err != nil {
@@ -430,28 +431,54 @@ var ErrAlreadyFinalized = errors.New("account already finalized")
 
 // FinalizeSignup marks the account as ready, stores the request encryption public keys (ECDH and ML-KEM), and the wrapped primary key
 // It can only update records with ready = false
+// The wrapped primary key is stored on the user's single existing credential
 func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, wrappedPrimaryKey, requestEncEcdhPubkey, requestEncMlkemPubkey string) error {
+	if len(wrappedPrimaryKey) > 512 {
+		return errors.New("wrappedPrimaryKey is too large")
+	}
+
+	tx, err := s.db.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		rollbackErr := tx.Rollback(ctx)
+		if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
+		}
+	}()
+
 	now := time.Now().UTC().Unix()
-	affected, err := s.db.db.Exec(ctx,
-		`UPDATE v2_users SET wrapped_primary_key = $1, request_enc_ecdh_pubkey = $2, request_enc_mlkem_pubkey = $3, ready = true, updated_at = $4 WHERE id = $5 AND ready = false`,
-		wrappedPrimaryKey, requestEncEcdhPubkey, requestEncMlkemPubkey, now, userID,
+	affected, err := tx.Exec(ctx,
+		`UPDATE v2_users SET request_enc_ecdh_pubkey = $1, request_enc_mlkem_pubkey = $2, ready = true, updated_at = $3 WHERE id = $4 AND ready = false`,
+		requestEncEcdhPubkey, requestEncMlkemPubkey, now, userID,
 	)
 	if err != nil {
 		return err
 	}
-	if affected == 1 {
-		return nil
+	if affected != 1 {
+		// Determine whether the user was already finalized or simply does not exist, using the open transaction to avoid contention with the pending UPDATE
+		var exists bool
+		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, userID).Scan(&exists)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return ErrUserNotFound
+		}
+		return ErrAlreadyFinalized
 	}
 
-	// If no rows affected, check if it's because the user was already finalized or just not found
-	user, err := s.GetUserByID(ctx, userID)
+	// Store the wrapped primary key on the user's single credential (the one created during registration)
+	_, err = tx.Exec(ctx,
+		`UPDATE v2_user_credentials SET wrapped_primary_key = $1 WHERE user_id = $2`,
+		wrappedPrimaryKey, userID,
+	)
 	if err != nil {
 		return err
 	}
-	if user == nil {
-		return ErrUserNotFound
-	}
-	return ErrAlreadyFinalized
+
+	return tx.Commit(ctx)
 }
 
 func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowedIPs []string) ([]string, error) {
@@ -519,32 +546,56 @@ func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID, displayName s
 	return nil
 }
 
-func (s *AuthStore) UpdateWrappedPrimaryKey(ctx context.Context, userID, wrappedPrimaryKey string) error {
+// UpdateCredentialWrappedKey updates the wrapped primary key associated with a single credential
+// The credential must belong to the given user
+func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID, userID, wrappedPrimaryKey string) error {
 	if len(wrappedPrimaryKey) > 512 {
 		return errors.New("wrappedPrimaryKey is too large")
 	}
 
 	affected, err := s.db.db.Exec(ctx,
-		`UPDATE v2_users SET wrapped_primary_key = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
-		wrappedPrimaryKey, time.Now().UTC().Unix(), userID,
+		`UPDATE v2_user_credentials SET wrapped_primary_key = $1
+			WHERE credential_id = $2 AND user_id = $3`,
+		wrappedPrimaryKey, credentialID, userID,
 	)
 	if err != nil {
 		return err
 	}
 
 	if affected == 0 {
-		return ErrUserNotFound
+		return ErrCredentialNotFound
 	}
 
 	return nil
 }
 
+// GetCredentialByCredentialID returns the credential record matching credential_id (base64url encoded WebAuthn credential ID) for the given user
+func (s *AuthStore) GetCredentialByCredentialID(ctx context.Context, credentialID, userID string) (*AuthCredentialRecord, error) {
+	var rec AuthCredentialRecord
+	err := s.db.db.QueryRow(ctx,
+		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at
+			FROM v2_user_credentials
+			WHERE credential_id = $1 AND user_id = $2`,
+		credentialID, userID,
+	).Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.CreatedAt, &rec.LastUsedAt)
+	if s.db.db.IsNoRowsError(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
 func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) error {
+	if len(in.WrappedPrimaryKey) > 512 {
+		return errors.New("wrappedPrimaryKey is too large")
+	}
+
 	now := time.Now().UTC().Unix()
 	_, err := s.db.db.Exec(ctx,
-		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, created_at, last_used_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount, now, now,
+		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount, in.WrappedPrimaryKey, now, now,
 	)
 	return err
 }

@@ -15,7 +15,7 @@ import {
     wrapPrimaryKey,
 } from '$lib/crypto'
 import { ResponseNotOkError } from '$lib/request'
-import { base64UrlToBytes } from '$lib/utils'
+import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import {
     v2AddCredentialBegin,
     v2AddCredentialFinish,
@@ -49,6 +49,10 @@ let signupDisabled = $state(false)
 let displayName = $state('')
 let passwordInput = $state('')
 let loginWrappedPrimaryKey = $state<string | null>(null)
+// The credential ID (base64url) of the currently signed-in passkey, needed for per-credential wrapped-key operations
+let sessionCredentialId = $state<string | null>(null)
+// The plaintext password is kept in memory while the session is active so add-passkey and change-password can wrap new keys without re-prompting
+let sessionPassword = $state<string | null>(null)
 let allowedIpsText = $state('')
 let settingsBusy = $state(false)
 let settingsError = $state<string | null>(null)
@@ -122,6 +126,8 @@ function clearLocalAuthState() {
     prfSecret = null
     primaryKey = null
     loginWrappedPrimaryKey = null
+    sessionCredentialId = null
+    sessionPassword = null
     allowedIpsText = ''
     settingsError = null
     settingsSuccess = null
@@ -191,6 +197,7 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
 
     session = toSessionResponse(finish.session)
     setPrfSecret(assertion.prfSecret)
+    sessionCredentialId = assertion.id
     loginWrappedPrimaryKey = finish.wrappedPrimaryKey ?? null
 
     if (finish.wrappedPrimaryKey) {
@@ -254,6 +261,8 @@ async function unlockWithPassword(password: string) {
         userId: session.userId,
     })
     loginWrappedPrimaryKey = null
+    // Keep the password in memory for the rest of the session so we can re-wrap the primary key when adding new passkeys or changing credentials without re-prompting
+    sessionPassword = password
 }
 
 async function doLogin() {
@@ -378,6 +387,8 @@ async function doSetPassword() {
         await v2FinalizeSignup(publicKeyJwk, encapsulationKeyB64, wrapped)
         primaryKey = pk
         hasPassword = !!passwordInput
+        // Remember the password used during signup so subsequent add-passkey operations can wrap the new credential with the same password
+        sessionPassword = passwordInput || null
         loginWrappedPrimaryKey = null
         enterReadyView()
     } catch (err) {
@@ -469,6 +480,11 @@ async function doUpdateDisplayName(name: string) {
 }
 
 async function doAddPasskey(name: string) {
+    if (!session || !primaryKey) {
+        settingsError = 'Missing local key material'
+        return
+    }
+
     settingsBusy = true
     settingsError = null
     settingsSuccess = null
@@ -479,10 +495,45 @@ async function doAddPasskey(name: string) {
             challenge: begin.challenge,
             options: begin.options,
         })
+
+        // The new credential has its own unique PRF secret, so we must perform a PRF assertion with the newly created credential to derive its wrapping key
+        // Use a client-generated random challenge since this ceremony is only used to evaluate PRF locally and is not sent back to the server
+        const prfChallenge = bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)))
+        const prfAssertion = await webauthnLoginWithPrf({
+            challenge: prfChallenge,
+            prfSalt: base64UrlToBytes(begin.basePrfSalt),
+            options: {
+                publicKey: {
+                    allowCredentials: [{ type: 'public-key', id: cred.id }],
+                    userVerification: 'preferred',
+                },
+            },
+        })
+        if (!prfAssertion.prfSecret || prfAssertion.prfSecret.length === 0) {
+            throw new Error('Authenticator did not return PRF output for the new credential')
+        }
+
+        // Derive the wrapping key for the new credential, re-using the current session password (if any) so all passkeys added while signed in share the same password gate
+        const password = sessionPassword ?? undefined
+        const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+            prfSecret: prfAssertion.prfSecret,
+            userId: session.userId,
+            password,
+        })
+
+        const wrapped = await wrapPrimaryKey({
+            primaryKey,
+            wrappingKeyBytes,
+            userId: session.userId,
+            passwordRequired: !!password,
+            argon2idSalt,
+        })
+
         await v2AddCredentialFinish({
             challengeId: begin.challengeId,
             credential: (cred.raw as { credential?: unknown })?.credential ?? cred,
             credentialName: name,
+            wrappedPrimaryKey: wrapped,
         })
         await doLoadCredentials()
         settingsSuccess = 'Passkey added.'
@@ -524,7 +575,7 @@ async function doDeletePasskey(id: string) {
 }
 
 async function doChangePassword(password: string) {
-    if (!prfSecret || !session || !primaryKey) {
+    if (!prfSecret || !session || !primaryKey || !sessionCredentialId) {
         settingsError = 'Missing local key material'
         return
     }
@@ -547,8 +598,11 @@ async function doChangePassword(password: string) {
             argon2idSalt,
         })
 
-        await v2UpdateWrappedKey(wrapped)
+        // The wrapped primary key lives on the specific credential that signed us in, not on the user record
+        await v2UpdateWrappedKey(sessionCredentialId, wrapped)
         hasPassword = !!password
+        // Keep the new password in memory so subsequent add-passkey calls wrap with it (or clear it when removed)
+        sessionPassword = password || null
         settingsSuccess = password ? 'Password updated.' : 'Password removed.'
     } catch (err) {
         settingsError = err instanceof Error ? err.message : String(err)

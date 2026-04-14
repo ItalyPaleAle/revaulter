@@ -3,7 +3,6 @@ CREATE TABLE IF NOT EXISTS v2_users (
 	display_name text NOT NULL DEFAULT '',
 	status text NOT NULL,
 	webauthn_user_id text NOT NULL,
-	wrapped_primary_key text NOT NULL DEFAULT '',
 	request_key text NOT NULL,
 	request_enc_ecdh_pubkey text NOT NULL DEFAULT '',
 	request_enc_mlkem_pubkey text NOT NULL DEFAULT '',
@@ -24,6 +23,7 @@ CREATE TABLE IF NOT EXISTS v2_user_credentials (
 	display_name text NOT NULL DEFAULT '',
 	public_key text NOT NULL,
 	sign_count bigint NOT NULL,
+	wrapped_primary_key text NOT NULL DEFAULT '',
 	created_at bigint NOT NULL,
 	last_used_at bigint NOT NULL
 );
