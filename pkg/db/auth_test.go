@@ -273,6 +273,58 @@ func TestAuthStoreDeleteExpiredAuthChallenge(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestAuthStoreHasPendingChallenge(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Nothing in the table yet, so no pending challenge exists
+	pending, err := store.HasPendingChallenge(ctx, "user-1", "add-credential")
+	require.NoError(t, err)
+	require.False(t, pending)
+
+	// A fresh add-credential challenge for user-1 makes the check return true
+	freshAdd, err := store.BeginChallengeWithPayload(ctx, "add-credential", "user-1", "fresh-add", now.Add(5*time.Minute), nil)
+	require.NoError(t, err)
+
+	pending, err = store.HasPendingChallenge(ctx, "user-1", "add-credential")
+	require.NoError(t, err)
+	require.True(t, pending)
+
+	// Challenges of a different kind do not count
+	pending, err = store.HasPendingChallenge(ctx, "user-1", "login")
+	require.NoError(t, err)
+	require.False(t, pending)
+
+	// Challenges belonging to a different user do not count
+	pending, err = store.HasPendingChallenge(ctx, "user-other", "add-credential")
+	require.NoError(t, err)
+	require.False(t, pending)
+
+	// Once consumed the challenge is no longer pending
+	ok, err := store.ConsumeChallenge(ctx, freshAdd.ID, "add-credential")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	pending, err = store.HasPendingChallenge(ctx, "user-1", "add-credential")
+	require.NoError(t, err)
+	require.False(t, pending)
+
+	// An expired (but not consumed) challenge is also not pending
+	_, err = store.BeginChallengeWithPayload(ctx, "add-credential", "user-1", "expired-add", now.Add(-time.Minute), nil)
+	require.NoError(t, err)
+
+	pending, err = store.HasPendingChallenge(ctx, "user-1", "add-credential")
+	require.NoError(t, err)
+	require.False(t, pending)
+}
+
 func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
@@ -500,7 +552,7 @@ func TestAuthStoreUpdateDisplayName(t *testing.T) {
 	require.ErrorIs(t, err, ErrUserNotFound)
 }
 
-func TestAuthStoreUpdateWrappedPrimaryKey(t *testing.T) {
+func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
 
@@ -521,28 +573,38 @@ func TestAuthStoreUpdateWrappedPrimaryKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "initial-key", `{"kty":"EC"}`, "mlkem-pub"))
 
+	// The initial wrapped primary key was set on the single credential via FinalizeSignup
+	rec, err := store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(t, "initial-key", rec.WrappedPrimaryKey)
+
 	// Successful update
-	err = store.UpdateWrappedPrimaryKey(ctx, "user-1", "new-wrapped-key")
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "new-wrapped-key")
 	require.NoError(t, err)
-	user, err := store.GetUserByID(ctx, "user-1")
+	rec, err = store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
 	require.NoError(t, err)
-	require.Equal(t, "new-wrapped-key", user.WrappedPrimaryKey)
+	require.Equal(t, "new-wrapped-key", rec.WrappedPrimaryKey)
 
 	// Empty string is valid (removes password)
-	err = store.UpdateWrappedPrimaryKey(ctx, "user-1", "")
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "")
 	require.NoError(t, err)
-	user, err = store.GetUserByID(ctx, "user-1")
+	rec, err = store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
 	require.NoError(t, err)
-	require.Empty(t, user.WrappedPrimaryKey)
+	require.Empty(t, rec.WrappedPrimaryKey)
 
 	// Oversized value
-	err = store.UpdateWrappedPrimaryKey(ctx, "user-1", strings.Repeat("x", 513))
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", strings.Repeat("x", 513))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "too large")
 
-	// Non-existent user
-	err = store.UpdateWrappedPrimaryKey(ctx, "no-such-user", "key")
-	require.ErrorIs(t, err, ErrUserNotFound)
+	// Non-existent credential
+	err = store.UpdateCredentialWrappedKey(ctx, "no-such-cred", "user-1", "key")
+	require.ErrorIs(t, err, ErrCredentialNotFound)
+
+	// Credential belonging to a different user
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "other-user", "key")
+	require.ErrorIs(t, err, ErrCredentialNotFound)
 }
 
 func TestAuthStoreCredentialCRUD(t *testing.T) {

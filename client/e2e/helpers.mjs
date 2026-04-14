@@ -3,6 +3,8 @@ import { expect } from '@playwright/test'
 
 import { createVirtualPasskey } from './passkeys.mjs'
 
+export { createVirtualPasskeyManager as createPasskeyManager } from './passkeys.mjs'
+
 function attachAuthDebugLogging(page) {
     const failures = []
     const trackedPaths = new Set(['/v2/auth/register/finish', '/v2/auth/login/finish', '/v2/auth/finalize-signup'])
@@ -273,6 +275,70 @@ function decodeCliJSON(stdout) {
         parsed.decodedData = Buffer.from(parsed.data, 'base64').toString('utf8')
     }
     return parsed
+}
+
+// Completes signup using a passkey manager's authenticator as the active one
+// Leaves the UI on the post-signup password-setup screen so the caller can decide whether to skip or set a password
+export async function registerWithManager(page, manager, displayName = 'Playwright User') {
+    const authDebug = attachAuthDebugLogging(page)
+    const authenticatorId = await manager.addAuthenticator({ active: true })
+    await manager.setActive(authenticatorId)
+
+    try {
+        await page.goto('/')
+        await page.getByRole('button', { name: 'Create a new account' }).click()
+        await page.getByLabel('Display name (optional)').fill(displayName)
+        await page.getByRole('button', { name: 'Create account with passkey' }).click()
+        await expect(page.getByRole('heading', { name: 'Add a password' })).toBeVisible()
+        authDebug.assertNoFailures()
+        return authenticatorId
+    } catch (err) {
+        authDebug.assertNoFailures()
+        throw err
+    } finally {
+        authDebug.detach()
+    }
+}
+
+// Forces the manager's specified authenticator to be the only active one and completes a passkey sign-in up to the ready or password-prompt screen
+// Caller is responsible for unlocking with a password when needed
+export async function signInWithAuthenticator(page, manager, authenticatorId) {
+    await manager.setActive(authenticatorId)
+    await page.goto('/')
+    await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
+    await page.getByRole('button', { name: 'Continue with passkey' }).click()
+}
+
+// Signs out the current session, returning the UI to the sign-in screen
+export async function signOutThroughUI(page) {
+    await openSettings(page)
+    await page.getByRole('button', { name: 'Sign out' }).first().click()
+    await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
+}
+
+// Adds a new passkey through the settings Passkeys tab using whichever authenticator is currently active on the manager
+// The add-passkey flow performs two WebAuthn ceremonies (create + PRF get), both of which rely on the active authenticator
+export async function addPasskeyThroughSettings(page, manager, name) {
+    await openSettingsTab(page, 'Passkeys')
+    await page.getByRole('button', { name: 'Add passkey' }).click()
+    await page.getByLabel('Passkey name (optional)').fill(name)
+    await page.getByRole('button', { name: 'Register passkey' }).click()
+    await expect(page.getByText('Passkey added.')).toBeVisible()
+    // Close the settings modal so the ready view is interactable again
+    await page.getByRole('button', { name: 'Close user settings' }).click()
+    // Touch the manager reference so the linter is aware the caller must have set the active authenticator beforehand
+    void manager
+}
+
+// Sets a password from the Settings → Password tab (used when the account was created without a password)
+export async function setPasswordThroughSettings(page, password) {
+    await openSettingsTab(page, 'Password')
+    // Target the password inputs by their specific placeholder text since the tab navigation button also has accessible name "Password"
+    await page.locator('input[placeholder="Enter password"]').fill(password)
+    await page.locator('input[placeholder="Confirm password"]').fill(password)
+    await page.getByRole('button', { name: 'Set password' }).click()
+    await expect(page.getByText('Password updated.')).toBeVisible()
+    await page.getByRole('button', { name: 'Close user settings' }).click()
 }
 
 export function startCLIRequest(args) {

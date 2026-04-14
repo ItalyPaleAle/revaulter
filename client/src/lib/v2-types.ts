@@ -122,4 +122,5 @@ export type V2AddCredentialBeginResponse = {
     challenge: string
     expiresAt: number
     options?: unknown
+    basePrfSalt: string
 }

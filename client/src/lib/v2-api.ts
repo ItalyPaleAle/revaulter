@@ -123,10 +123,10 @@ export async function v2UpdateDisplayName(displayName: string) {
     return res.data
 }
 
-/** Updates the wrapped primary key (used for password add/change/remove) */
-export async function v2UpdateWrappedKey(wrappedPrimaryKey: string) {
+/** Updates the wrapped primary key for a specific credential (used for password add/change/remove on the signed-in passkey) */
+export async function v2UpdateWrappedKey(credentialId: string, wrappedPrimaryKey: string) {
     const res = await Request<{ ok: boolean }>('/v2/auth/update-wrapped-key', {
-        postData: { wrappedPrimaryKey },
+        postData: { credentialId, wrappedPrimaryKey },
     })
     return res.data
 }
@@ -150,6 +150,7 @@ export async function v2AddCredentialFinish(args: {
     challengeId: string
     credential: unknown
     credentialName?: string
+    wrappedPrimaryKey?: string
 }) {
     const res = await Request<{ ok: boolean }>('/v2/auth/credentials/add/finish', {
         postData: args,

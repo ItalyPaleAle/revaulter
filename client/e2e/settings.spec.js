@@ -7,10 +7,6 @@ import {
     registerAndReachReady,
     resetBrowserState,
     resetState,
-    seedCredential,
-    seedUser,
-    installSessionCookie,
-    gotoReadyPage,
 } from './helpers.mjs'
 
 test.beforeEach(async ({ page, request }) => {
