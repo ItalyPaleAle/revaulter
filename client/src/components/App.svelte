@@ -49,9 +49,9 @@ let signupDisabled = $state(false)
 let displayName = $state('')
 let passwordInput = $state('')
 let loginWrappedPrimaryKey = $state<string | null>(null)
-// The credential ID (base64url) of the currently signed-in passkey, needed for per-credential wrapped-key operations
+// The credential ID (base64url) of the currently signed-in passkey
 let sessionCredentialId = $state<string | null>(null)
-// The plaintext password is kept in memory while the session is active so add-passkey and change-password can wrap new keys without re-prompting
+// The plaintext password is kept in memory while the session is active adding passkeys and the changing password can wrap new keys without re-prompting
 let sessionPassword = $state<string | null>(null)
 let allowedIpsText = $state('')
 let settingsBusy = $state(false)
@@ -261,6 +261,7 @@ async function unlockWithPassword(password: string) {
         userId: session.userId,
     })
     loginWrappedPrimaryKey = null
+
     // Keep the password in memory for the rest of the session so we can re-wrap the primary key when adding new passkeys or changing credentials without re-prompting
     sessionPassword = password
 }
@@ -387,6 +388,7 @@ async function doSetPassword() {
         await v2FinalizeSignup(publicKeyJwk, encapsulationKeyB64, wrapped)
         primaryKey = pk
         hasPassword = !!passwordInput
+
         // Remember the password used during signup so subsequent add-passkey operations can wrap the new credential with the same password
         sessionPassword = passwordInput || null
         loginWrappedPrimaryKey = null
@@ -601,6 +603,7 @@ async function doChangePassword(password: string) {
         // The wrapped primary key lives on the specific credential that signed us in, not on the user record
         await v2UpdateWrappedKey(sessionCredentialId, wrapped)
         hasPassword = !!password
+
         // Keep the new password in memory so subsequent add-passkey calls wrap with it (or clear it when removed)
         sessionPassword = password || null
         settingsSuccess = password ? 'Password updated.' : 'Password removed.'

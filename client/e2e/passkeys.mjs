@@ -31,7 +31,7 @@ export async function createVirtualPasskeyManager(page) {
                 hasUserVerification: true,
                 hasPrf: true,
                 isUserVerified: true,
-                automaticPresenceSimulation: options.active !== false,
+                automaticPresenceSimulation: !!options.active,
             },
         })
         authenticatorIds.push(result.authenticatorId)
@@ -62,9 +62,8 @@ export async function createVirtualPasskeyManager(page) {
     async function dispose() {
         try {
             for (const id of authenticatorIds) {
-                await cdpSession
-                    .send('WebAuthn.removeVirtualAuthenticator', { authenticatorId: id })
-                    .catch(() => null)
+                // Ignore errors
+                await cdpSession.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId: id }).catch(() => null)
             }
         } finally {
             await cdpSession.send('WebAuthn.disable').catch(() => null)

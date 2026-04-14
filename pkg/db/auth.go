@@ -134,7 +134,8 @@ func (s *AuthStore) getUser(ctx context.Context, query string, arg string) (*Use
 		user          User
 		allowedIPsCSV string
 	)
-	err := s.db.db.QueryRow(ctx, query, arg).
+	err := s.db.db.
+		QueryRow(ctx, query, arg).
 		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &allowedIPsCSV, &user.Ready)
 	if s.db.db.IsNoRowsError(err) {
 		return nil, nil
@@ -319,8 +320,8 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 	now := time.Now().UTC().Unix()
 	_, err = tx.Exec(ctx,
 		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, request_key, allowed_ips, created_at, updated_at)
-		VALUES ($1, $2, 'active', $3, $4, '', $5, $6)`,
-		in.UserID, in.DisplayName, in.WebAuthnUserID, requestKey, now, now,
+		VALUES ($1, $2, 'active', $3, $4, '', $5, $5)`,
+		in.UserID, in.DisplayName, in.WebAuthnUserID, requestKey, now,
 	)
 	if err != nil {
 		return nil, err
@@ -328,8 +329,8 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 
 	_, err = tx.Exec(ctx,
 		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, '', $7, $8)`,
-		uuid.NewString(), in.UserID, in.CredentialID, in.CredentialDisplayName, in.PublicKey, in.SignCount, now, now,
+		 VALUES ($1, $2, $3, $4, $5, $6, '', $7, $7)`,
+		uuid.NewString(), in.UserID, in.CredentialID, in.CredentialDisplayName, in.PublicKey, in.SignCount, now,
 	)
 	if err != nil {
 		return nil, err
@@ -457,9 +458,11 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, wrappedPrimaryKe
 		return err
 	}
 	if affected != 1 {
-		// Determine whether the user was already finalized or simply does not exist, using the open transaction to avoid contention with the pending UPDATE
+		// Determine whether the user was already finalized or simply does not exist
 		var exists bool
-		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, userID).Scan(&exists)
+		err = tx.
+			QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, userID).
+			Scan(&exists)
 		if err != nil {
 			return err
 		}

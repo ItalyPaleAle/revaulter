@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process'
 import { expect } from '@playwright/test'
 
-import { createVirtualPasskey, createVirtualPasskeyManager } from './passkeys.mjs'
+import { createVirtualPasskey } from './passkeys.mjs'
+
+export { createVirtualPasskeyManager as createPasskeyManager } from './passkeys.mjs'
 
 function attachAuthDebugLogging(page) {
     const failures = []
@@ -273,12 +275,6 @@ function decodeCliJSON(stdout) {
         parsed.decodedData = Buffer.from(parsed.data, 'base64').toString('utf8')
     }
     return parsed
-}
-
-// Creates a manager that owns multiple virtual authenticators on the same page
-// Use this when a test needs to distinguish between two passkeys and force a particular one to sign in
-export async function createPasskeyManager(page) {
-    return createVirtualPasskeyManager(page)
 }
 
 // Completes signup using a passkey manager's authenticator as the active one
