@@ -1049,6 +1049,18 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 	}()
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, true, body["ok"])
+
+	// Starting an add-credential WebAuthn ceremony must block concurrent password changes
+	_, err := srv.authStore.BeginChallengeWithPayload(t.Context(), "add-credential", "user-alice", "pending-add", time.Now().UTC().Add(5*time.Minute), nil)
+	require.NoError(t, err)
+
+	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "blocked-while-pending"}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusConflict, res.StatusCode)
+	require.Contains(t, body["error"], "passkey registration is in progress")
 }
 
 func TestServerV2CredentialLifecycle(t *testing.T) {

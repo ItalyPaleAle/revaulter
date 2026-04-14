@@ -273,6 +273,58 @@ func TestAuthStoreDeleteExpiredAuthChallenge(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestAuthStoreHasPendingChallenge(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Nothing in the table yet, so no pending challenge exists
+	pending, err := store.HasPendingChallenge(ctx, "user-1", "add-credential")
+	require.NoError(t, err)
+	require.False(t, pending)
+
+	// A fresh add-credential challenge for user-1 makes the check return true
+	freshAdd, err := store.BeginChallengeWithPayload(ctx, "add-credential", "user-1", "fresh-add", now.Add(5*time.Minute), nil)
+	require.NoError(t, err)
+
+	pending, err = store.HasPendingChallenge(ctx, "user-1", "add-credential")
+	require.NoError(t, err)
+	require.True(t, pending)
+
+	// Challenges of a different kind do not count
+	pending, err = store.HasPendingChallenge(ctx, "user-1", "login")
+	require.NoError(t, err)
+	require.False(t, pending)
+
+	// Challenges belonging to a different user do not count
+	pending, err = store.HasPendingChallenge(ctx, "user-other", "add-credential")
+	require.NoError(t, err)
+	require.False(t, pending)
+
+	// Once consumed the challenge is no longer pending
+	ok, err := store.ConsumeChallenge(ctx, freshAdd.ID, "add-credential")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	pending, err = store.HasPendingChallenge(ctx, "user-1", "add-credential")
+	require.NoError(t, err)
+	require.False(t, pending)
+
+	// An expired (but not consumed) challenge is also not pending
+	_, err = store.BeginChallengeWithPayload(ctx, "add-credential", "user-1", "expired-add", now.Add(-time.Minute), nil)
+	require.NoError(t, err)
+
+	pending, err = store.HasPendingChallenge(ctx, "user-1", "add-credential")
+	require.NoError(t, err)
+	require.False(t, pending)
+}
+
 func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)

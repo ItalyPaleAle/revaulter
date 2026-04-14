@@ -671,6 +671,18 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 		return
 	}
 
+	// Refuse the update while an add-credential WebAuthn ceremony is in flight for this user
+	// The in-flight ceremony will wrap the new credential's primary key with the current password, and letting the password change land in between would leave that new credential wrapped with the old password while the signed-in credential picks up the new one
+	pending, err := s.authStore.HasPendingChallenge(c.Request.Context(), userID, "add-credential")
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Failed to check pending challenges"))
+		return
+	}
+	if pending {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Cannot change password while a passkey registration is in progress"))
+		return
+	}
+
 	err = s.authStore.UpdateCredentialWrappedKey(c.Request.Context(), req.CredentialID, userID, req.WrappedPrimaryKey)
 	if errors.Is(err, db.ErrCredentialNotFound) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Credential not found"))
