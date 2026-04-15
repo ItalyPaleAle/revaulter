@@ -34,6 +34,7 @@ Supported operations:
 3. [Using the Revaulter CLI (v2)](./docs/03-interacting-with-revaulter-cli.md)
 4. [Using the REST APIs (v2)](./docs/04-using-rest-api.md)
 5. [Architecture and protocol overview (v2)](./docs/05-revaulter-v2.md)
+6. [Cryptography architecture](./docs/06-crypto-architecture.md)
 
 ## End-to-end tests
 
