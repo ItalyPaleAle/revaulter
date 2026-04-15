@@ -622,7 +622,7 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 	now := time.Now().UTC().Unix()
 	_, err := s.db.Exec(ctx,
 		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_key_epoch, created_at, last_used_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $6, (
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, (
 			SELECT wrapped_key_epoch FROM v2_users WHERE id = $2
 		 ), $8, $8)`,
 		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount, in.WrappedPrimaryKey, now,
