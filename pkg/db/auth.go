@@ -624,7 +624,7 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_key_epoch, created_at, last_used_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $6, (
 			SELECT wrapped_key_epoch FROM v2_users WHERE id = $2
-		 ), $8, $9)`,
+		 ), $8, $8)`,
 		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount, in.WrappedPrimaryKey, now,
 	)
 	return err
