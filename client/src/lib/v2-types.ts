@@ -82,6 +82,7 @@ export type V2AuthSessionInfo = {
     userId: string
     displayName: string
     requestKey: string
+    wrappedKeyEpoch: number
     allowedIps: string[]
     ttl: number
 }
@@ -99,6 +100,8 @@ export type V2LoginFinishResponse = {
     authenticated: boolean
     session?: V2AuthSessionInfo
     wrappedPrimaryKey?: string
+    credentialWrappedKeyEpoch?: number
+    wrappedKeyStale: boolean
 }
 
 export type V2SessionResponse = {
@@ -106,6 +109,7 @@ export type V2SessionResponse = {
     userId: string
     displayName: string
     requestKey: string
+    wrappedKeyEpoch: number
     allowedIps: string[]
     ttl: number
 }
@@ -113,6 +117,8 @@ export type V2SessionResponse = {
 export type V2CredentialItem = {
     id: string
     displayName: string
+    wrappedKeyEpoch: number
+    wrappedKeyStale: boolean
     createdAt: number
     lastUsedAt: number
 }

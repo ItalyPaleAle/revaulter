@@ -63,11 +63,12 @@ type v2AuthRegisterBeginResponse struct {
 }
 
 type v2AuthSessionInfo struct {
-	UserID      string   `json:"userId"`
-	DisplayName string   `json:"displayName"`
-	RequestKey  string   `json:"requestKey"`
-	AllowedIPs  []string `json:"allowedIps"`
-	TTL         int      `json:"ttl"`
+	UserID          string   `json:"userId"`
+	DisplayName     string   `json:"displayName"`
+	RequestKey      string   `json:"requestKey"`
+	WrappedKeyEpoch int64    `json:"wrappedKeyEpoch"`
+	AllowedIPs      []string `json:"allowedIps"`
+	TTL             int      `json:"ttl"`
 }
 
 type v2AuthRegisterFinishResponse struct {
@@ -85,9 +86,11 @@ type v2AuthLoginBeginResponse struct {
 }
 
 type v2AuthLoginFinishResponse struct {
-	Authenticated     bool               `json:"authenticated"`
-	Session           *v2AuthSessionInfo `json:"session,omitempty"`
-	WrappedPrimaryKey string             `json:"wrappedPrimaryKey,omitempty"`
+	Authenticated             bool               `json:"authenticated"`
+	Session                   *v2AuthSessionInfo `json:"session,omitempty"`
+	WrappedPrimaryKey         string             `json:"wrappedPrimaryKey,omitempty"`
+	CredentialWrappedKeyEpoch int64              `json:"credentialWrappedKeyEpoch,omitempty"`
+	WrappedKeyStale           bool               `json:"wrappedKeyStale"`
 }
 
 type v2AuthFinalizeSignupRequest struct {
@@ -147,10 +150,12 @@ type v2AuthUpdateWrappedKeyRequest struct {
 }
 
 type v2AuthCredentialItem struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
-	CreatedAt   int64  `json:"createdAt"`
-	LastUsedAt  int64  `json:"lastUsedAt"`
+	ID              string `json:"id"`
+	DisplayName     string `json:"displayName"`
+	WrappedKeyEpoch int64  `json:"wrappedKeyEpoch"`
+	WrappedKeyStale bool   `json:"wrappedKeyStale"`
+	CreatedAt       int64  `json:"createdAt"`
+	LastUsedAt      int64  `json:"lastUsedAt"`
 }
 
 type v2AddCredentialChallengePayload struct {
@@ -368,6 +373,8 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	// could otherwise call /v2/auth/login/finish in a tight loop and harvest the blob for offline password cracking
 	// We refuse the login so the client cannot abuse this endpoint
 	if credRec != nil && credRec.WrappedPrimaryKey != "" {
+		resp.CredentialWrappedKeyEpoch = credRec.WrappedKeyEpoch
+		resp.WrappedKeyStale = credRec.WrappedKeyEpoch > 0 && credRec.WrappedKeyEpoch < sess.WrappedKeyEpoch
 		overLimit := s.wrappedKeyLimiter.OnLimit(c.Writer, c.Request, "v2-wrapped-key:"+sess.UserID)
 		if overLimit {
 			// A WebAuthn-authenticated client that exceeds the budget has the new session revoked and a 429 returned
@@ -644,6 +651,15 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 		return
 	}
 
+	_, err = s.authStore.AdvanceWrappedKeyEpoch(c.Request.Context(), userID)
+	if errors.Is(err, db.ErrUserNotFound) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+		return
+	} else if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Failed to update password state"))
+		return
+	}
+
 	err = s.authStore.UpdateCredentialWrappedKey(c.Request.Context(), req.CredentialID, userID, req.WrappedPrimaryKey)
 	if errors.Is(err, db.ErrCredentialNotFound) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Credential not found"))
@@ -665,6 +681,22 @@ func (s *Server) RouteV2AuthListCredentials(c *gin.Context) {
 		return
 	}
 
+	sessID := c.GetString(contextKeySessionID)
+	if sessID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	sess, err := s.authStore.GetSession(c.Request.Context(), sessID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if sess == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
 	records, err := s.authStore.ListCredentials(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -674,10 +706,12 @@ func (s *Server) RouteV2AuthListCredentials(c *gin.Context) {
 	items := make([]v2AuthCredentialItem, len(records))
 	for i, rec := range records {
 		items[i] = v2AuthCredentialItem{
-			ID:          rec.ID,
-			DisplayName: rec.DisplayName,
-			CreatedAt:   rec.CreatedAt,
-			LastUsedAt:  rec.LastUsedAt,
+			ID:              rec.ID,
+			DisplayName:     rec.DisplayName,
+			WrappedKeyEpoch: rec.WrappedKeyEpoch,
+			WrappedKeyStale: rec.WrappedKeyEpoch > 0 && rec.WrappedKeyEpoch < sess.WrappedKeyEpoch,
+			CreatedAt:       rec.CreatedAt,
+			LastUsedAt:      rec.LastUsedAt,
 		}
 	}
 
@@ -1301,10 +1335,11 @@ func sessionInfoFromSession(sess *db.AuthSession) *v2AuthSessionInfo {
 		allowedIPs = []string{}
 	}
 	return &v2AuthSessionInfo{
-		UserID:      sess.UserID,
-		DisplayName: sess.DisplayName,
-		RequestKey:  sess.RequestKey,
-		AllowedIPs:  allowedIPs,
-		TTL:         int(time.Until(sess.ExpiresAt).Seconds()),
+		UserID:          sess.UserID,
+		DisplayName:     sess.DisplayName,
+		RequestKey:      sess.RequestKey,
+		WrappedKeyEpoch: sess.WrappedKeyEpoch,
+		AllowedIPs:      allowedIPs,
+		TTL:             int(time.Until(sess.ExpiresAt).Seconds()),
 	}
 }

@@ -51,6 +51,8 @@ let passwordInput = $state('')
 let loginWrappedPrimaryKey = $state<string | null>(null)
 // The credential ID (base64url) of the currently signed-in passkey
 let sessionCredentialId = $state<string | null>(null)
+let sessionCredentialWrappedKeyEpoch = $state<number>(1)
+let loginWrappedKeyStale = $state(false)
 // The plaintext password is kept in memory while the session is active adding passkeys and the changing password can wrap new keys without re-prompting
 let sessionPassword = $state<string | null>(null)
 let allowedIpsText = $state('')
@@ -105,6 +107,7 @@ function toSessionResponse(authSession: V2AuthSessionInfo): V2SessionResponse {
         userId: authSession.userId,
         displayName: authSession.displayName,
         requestKey: authSession.requestKey,
+        wrappedKeyEpoch: authSession.wrappedKeyEpoch,
         allowedIps: authSession.allowedIps,
         ttl: authSession.ttl,
     }
@@ -127,6 +130,8 @@ function clearLocalAuthState() {
     primaryKey = null
     loginWrappedPrimaryKey = null
     sessionCredentialId = null
+    sessionCredentialWrappedKeyEpoch = 1
+    loginWrappedKeyStale = false
     sessionPassword = null
     allowedIpsText = ''
     settingsError = null
@@ -198,7 +203,9 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
     session = toSessionResponse(finish.session)
     setPrfSecret(assertion.prfSecret)
     sessionCredentialId = assertion.id
+    sessionCredentialWrappedKeyEpoch = finish.credentialWrappedKeyEpoch ?? finish.session.wrappedKeyEpoch
     loginWrappedPrimaryKey = finish.wrappedPrimaryKey ?? null
+    loginWrappedKeyStale = finish.wrappedKeyStale
 
     if (finish.wrappedPrimaryKey) {
         // Parse the envelope to determine whether a password is needed
@@ -260,6 +267,31 @@ async function unlockWithPassword(password: string) {
         wrappingKeyBytes,
         userId: session.userId,
     })
+
+    if (loginWrappedKeyStale) {
+        const { wrappingKeyBytes: updatedWrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+            prfSecret,
+            userId: session.userId,
+            password,
+        })
+
+        const updatedWrapped = await wrapPrimaryKey({
+            primaryKey,
+            wrappingKeyBytes: updatedWrappingKeyBytes,
+            userId: session.userId,
+            passwordRequired: true,
+            argon2idSalt,
+        })
+
+        if (!sessionCredentialId) {
+            throw new Error('Missing session credential')
+        }
+
+        await v2UpdateWrappedKey(sessionCredentialId, updatedWrapped)
+        sessionCredentialWrappedKeyEpoch = session.wrappedKeyEpoch
+        loginWrappedKeyStale = false
+    }
+
     loginWrappedPrimaryKey = null
 
     // Keep the password in memory for the rest of the session so we can re-wrap the primary key when adding new passkeys or changing credentials without re-prompting
@@ -586,6 +618,9 @@ async function doChangePassword(password: string) {
     settingsError = null
     settingsSuccess = null
     try {
+        const currentEpoch = session.wrappedKeyEpoch
+        session = { ...session, wrappedKeyEpoch: currentEpoch + 1 }
+
         const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
             prfSecret,
             userId: session.userId,
@@ -602,11 +637,12 @@ async function doChangePassword(password: string) {
 
         // The wrapped primary key lives on the specific credential that signed us in, not on the user record
         await v2UpdateWrappedKey(sessionCredentialId, wrapped)
+        sessionCredentialWrappedKeyEpoch = currentEpoch + 1
         hasPassword = !!password
 
         // Keep the new password in memory so subsequent add-passkey calls wrap with it (or clear it when removed)
         sessionPassword = password || null
-        settingsSuccess = password ? 'Password updated.' : 'Password removed.'
+        settingsSuccess = password ? 'Password updated for this passkey. Other passkeys will ask to refresh on next use.' : 'Password removed for this passkey. Other passkeys will refresh on next use.'
     } catch (err) {
         settingsError = err instanceof Error ? err.message : String(err)
     } finally {

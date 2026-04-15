@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS v2_users (
 	request_key text NOT NULL,
 	request_enc_ecdh_pubkey text NOT NULL DEFAULT '',
 	request_enc_mlkem_pubkey text NOT NULL DEFAULT '',
+	wrapped_key_epoch bigint NOT NULL DEFAULT 1,
 	allowed_ips text NOT NULL DEFAULT '',
 	ready boolean NOT NULL DEFAULT false,
 	created_at bigint NOT NULL,
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS v2_user_credentials (
 	public_key text NOT NULL,
 	sign_count bigint NOT NULL,
 	wrapped_primary_key text NOT NULL DEFAULT '',
+	wrapped_key_epoch bigint NOT NULL DEFAULT 1,
 	created_at bigint NOT NULL,
 	last_used_at bigint NOT NULL
 );

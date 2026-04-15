@@ -31,19 +31,21 @@ type User struct {
 	RequestKey            string
 	RequestEncEcdhPubkey  string
 	RequestEncMlkemPubkey string
+	WrappedKeyEpoch       int64
 	AllowedIPs            []string
 	Ready                 bool
 }
 
 type AuthSession struct {
-	ID          string
-	UserID      string
-	DisplayName string
-	RequestKey  string
-	AllowedIPs  []string
-	Ready       bool
-	ExpiresAt   time.Time
-	CreatedAt   time.Time
+	ID              string
+	UserID          string
+	DisplayName     string
+	RequestKey      string
+	WrappedKeyEpoch int64
+	AllowedIPs      []string
+	Ready           bool
+	ExpiresAt       time.Time
+	CreatedAt       time.Time
 }
 
 type AuthChallenge struct {
@@ -61,6 +63,7 @@ type AuthCredentialRecord struct {
 	PublicKey         string
 	SignCount         int64
 	WrappedPrimaryKey string
+	WrappedKeyEpoch   int64
 	CreatedAt         int64
 	LastUsedAt        int64
 }
@@ -134,12 +137,12 @@ func (s *AuthStore) getUser(ctx context.Context, column string, value string) (*
 		user          User
 		allowedIPsCSV string
 	)
-	query := `SELECT id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, allowed_ips, ready
+	query := `SELECT id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, wrapped_key_epoch, allowed_ips, ready
 		FROM v2_users
 		WHERE ` + column + ` = $1`
 	err := s.db.
 		QueryRow(ctx, query, value).
-		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &allowedIPsCSV, &user.Ready)
+		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &user.WrappedKeyEpoch, &allowedIPsCSV, &user.Ready)
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
@@ -152,7 +155,7 @@ func (s *AuthStore) getUser(ctx context.Context, column string, value string) (*
 
 func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthCredentialRecord, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at
+		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_key_epoch, created_at, last_used_at
 			FROM v2_user_credentials
 			WHERE user_id = $1
 			ORDER BY created_at ASC`,
@@ -166,7 +169,7 @@ func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthC
 	var out []AuthCredentialRecord
 	for rows.Next() {
 		var rec AuthCredentialRecord
-		err = rows.Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.CreatedAt, &rec.LastUsedAt)
+		err = rows.Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -323,8 +326,8 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 
 	now := time.Now().UTC().Unix()
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, request_key, allowed_ips, created_at, updated_at)
-		VALUES ($1, $2, 'active', $3, $4, '', $5, $5)`,
+		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, request_key, wrapped_key_epoch, allowed_ips, created_at, updated_at)
+		VALUES ($1, $2, 'active', $3, $4, 1, '', $5, $5)`,
 		in.UserID, in.DisplayName, in.WebAuthnUserID, requestKey, now,
 	)
 	if err != nil {
@@ -332,8 +335,8 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 	}
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, '', $7, $7)`,
+		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_key_epoch, created_at, last_used_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, '', 1, $7, $7)`,
 		uuid.NewString(), in.UserID, in.CredentialID, in.CredentialDisplayName, in.PublicKey, in.SignCount, now,
 	)
 	if err != nil {
@@ -407,13 +410,13 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 	)
 	err := s.db.
 		QueryRow(ctx,
-			`SELECT s.id, s.user_id, u.display_name, u.request_key, u.allowed_ips, u.ready, s.expires_at, s.created_at, s.revoked_at
+			`SELECT s.id, s.user_id, u.display_name, u.request_key, u.wrapped_key_epoch, u.allowed_ips, u.ready, s.expires_at, s.created_at, s.revoked_at
 			FROM v2_user_sessions s
 			INNER JOIN v2_users u ON u.id = s.user_id
 			WHERE s.id = $1 AND u.status = 'active'`,
 			id,
 		).
-		Scan(&sess.ID, &sess.UserID, &sess.DisplayName, &sess.RequestKey, &allowedIPsCSV, &sess.Ready, &expiresAt, &createdAt, &revokedAt)
+		Scan(&sess.ID, &sess.UserID, &sess.DisplayName, &sess.RequestKey, &sess.WrappedKeyEpoch, &allowedIPsCSV, &sess.Ready, &expiresAt, &createdAt, &revokedAt)
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
@@ -478,7 +481,7 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, wrappedPrimaryKe
 
 	// Store the wrapped primary key on the user's single credential (the one created during registration)
 	_, err = tx.Exec(ctx,
-		`UPDATE v2_user_credentials SET wrapped_primary_key = $1 WHERE user_id = $2`,
+		`UPDATE v2_user_credentials SET wrapped_primary_key = $1, wrapped_key_epoch = 1 WHERE user_id = $2`,
 		wrappedPrimaryKey, userID,
 	)
 	if err != nil {
@@ -561,7 +564,9 @@ func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID
 	}
 
 	affected, err := s.db.Exec(ctx,
-		`UPDATE v2_user_credentials SET wrapped_primary_key = $1
+		`UPDATE v2_user_credentials SET wrapped_primary_key = $1, wrapped_key_epoch = (
+			SELECT wrapped_key_epoch FROM v2_users WHERE id = $3
+		)
 			WHERE credential_id = $2 AND user_id = $3`,
 		wrappedPrimaryKey, credentialID, userID,
 	)
@@ -596,11 +601,11 @@ func (s *AuthStore) HasPendingChallenge(ctx context.Context, userID, kind string
 func (s *AuthStore) GetCredentialByCredentialID(ctx context.Context, credentialID, userID string) (*AuthCredentialRecord, error) {
 	var rec AuthCredentialRecord
 	err := s.db.QueryRow(ctx,
-		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at
+		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_key_epoch, created_at, last_used_at
 			FROM v2_user_credentials
 			WHERE credential_id = $1 AND user_id = $2`,
 		credentialID, userID,
-	).Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.CreatedAt, &rec.LastUsedAt)
+	).Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt)
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
@@ -616,11 +621,30 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 
 	now := time.Now().UTC().Unix()
 	_, err := s.db.Exec(ctx,
-		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount, in.WrappedPrimaryKey, now, now,
+		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_key_epoch, created_at, last_used_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $6, (
+			SELECT wrapped_key_epoch FROM v2_users WHERE id = $2
+		 ), $8, $9)`,
+		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount, in.WrappedPrimaryKey, now,
 	)
 	return err
+}
+
+func (s *AuthStore) AdvanceWrappedKeyEpoch(ctx context.Context, userID string) (int64, error) {
+	var epoch int64
+	err := s.db.
+		QueryRow(ctx,
+			`UPDATE v2_users SET wrapped_key_epoch = wrapped_key_epoch + 1, updated_at = $1 WHERE id = $2 AND status = 'active' AND ready = true RETURNING wrapped_key_epoch`,
+			time.Now().UTC().Unix(), userID,
+		).
+		Scan(&epoch)
+	if s.db.IsNoRowsError(err) {
+		return 0, ErrUserNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	return epoch, nil
 }
 
 func (s *AuthStore) RenameCredential(ctx context.Context, id, userID, displayName string) error {
