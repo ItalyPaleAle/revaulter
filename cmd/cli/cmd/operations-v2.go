@@ -319,7 +319,10 @@ func getV2HTTPClient(log *slog.Logger, flags v2OperationFlags) (*http.Client, er
 		if log != nil {
 			log.Warn("The '--insecure' flag is enabled: skipping TLS certificate validation")
 		}
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402
+		transport.TLSClientConfig = &tls.Config{
+			// #nosec G402
+			InsecureSkipVerify: true,
+		}
 	}
 	return &http.Client{Transport: transport}, nil
 }
