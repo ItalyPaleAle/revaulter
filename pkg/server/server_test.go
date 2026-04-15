@@ -416,6 +416,11 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	res, _ := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", invalidCreateBody)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
+	invalidNoteBody := newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK)
+	invalidNoteBody["note"] = "boot unlock!"
+	res, _ = doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", invalidNoteBody)
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+
 	// Create a valid request targeted to alice.
 	res, create := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK))
 	require.Equal(t, http.StatusAccepted, res.StatusCode)

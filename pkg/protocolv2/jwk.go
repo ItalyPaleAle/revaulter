@@ -21,7 +21,7 @@ type ECP256PublicJWK struct {
 	Use string `json:"use,omitempty"`
 }
 
-func (j ECP256PublicJWK) ValidatePublic() error {
+func (j *ECP256PublicJWK) ValidatePublic() error {
 	if j.Kty != "EC" {
 		return fmt.Errorf("invalid JWK 'kty': %q", j.Kty)
 	}
@@ -37,11 +37,11 @@ func (j ECP256PublicJWK) ValidatePublic() error {
 	if j.Kid != "" || j.Alg != "" || j.Use != "" {
 		return errors.New("JWK must not include 'kid', 'alg', or 'use' fields")
 	}
-	_, err := decodeB64URL32(j.X)
+	_, err := decodeB64URL256(j.X)
 	if err != nil {
 		return fmt.Errorf("invalid JWK 'x': %w", err)
 	}
-	_, err = decodeB64URL32(j.Y)
+	_, err = decodeB64URL256(j.Y)
 	if err != nil {
 		return fmt.Errorf("invalid JWK 'y': %w", err)
 	}
@@ -49,14 +49,14 @@ func (j ECP256PublicJWK) ValidatePublic() error {
 }
 
 // ToECDHPublicKey converts the JWK into an ecdh public key.
-func (j ECP256PublicJWK) ToECDHPublicKey() (*ecdh.PublicKey, error) {
+func (j *ECP256PublicJWK) ToECDHPublicKey() (*ecdh.PublicKey, error) {
 	err := j.ValidatePublic()
 	if err != nil {
 		return nil, err
 	}
 
-	x, _ := decodeB64URL32(j.X)
-	y, _ := decodeB64URL32(j.Y)
+	x, _ := decodeB64URL256(j.X)
+	y, _ := decodeB64URL256(j.Y)
 
 	// SEC1 uncompressed point encoding: 0x04 || X || Y
 	buf := make([]byte, 1+32+32)
@@ -90,7 +90,8 @@ func ECP256PublicJWKFromECDH(pk *ecdh.PublicKey) (ECP256PublicJWK, error) {
 	}, nil
 }
 
-func decodeB64URL32(s string) ([]byte, error) {
+// Decodes a base64-url formatted string and enforces a length of 256 bits
+func decodeB64URL256(s string) ([]byte, error) {
 	b, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
 		return nil, err

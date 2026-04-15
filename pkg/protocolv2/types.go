@@ -1,5 +1,10 @@
 package protocolv2
 
+import (
+	"strconv"
+	"time"
+)
+
 type RequestCreateBody struct {
 	KeyLabel  string `json:"keyLabel,omitempty"`
 	Algorithm string `json:"algorithm,omitempty"`
@@ -13,6 +18,43 @@ type RequestCreateBody struct {
 	MlkemCiphertext       string          `json:"mlkemCiphertext"`
 	EncryptedPayloadNonce string          `json:"encryptedPayloadNonce"`
 	EncryptedPayload      string          `json:"encryptedPayload"`
+}
+
+// ValidateNote validates the Note property
+func (r *RequestCreateBody) ValidateNote() bool {
+	for i := 0; i < len(r.Note); i++ {
+		ch := r.Note[i]
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
+			continue
+		}
+		switch ch {
+		case ' ', '.', '/', '_', '-':
+			continue
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+// GetTimeout returns the request timeout as a time.Duration
+func (r *RequestCreateBody) GetTimeout() time.Duration {
+	if r.Timeout == "" {
+		return 0
+	}
+
+	timeoutInt, err := strconv.Atoi(r.Timeout)
+	if err == nil && timeoutInt > 0 {
+		return time.Duration(timeoutInt) * time.Second
+	}
+
+	d, err := time.ParseDuration(r.Timeout)
+	if err == nil && d >= time.Second {
+		return d
+	}
+
+	return 0
 }
 
 // RequestPayloadInner is the plaintext payload encrypted inside the E2EE envelope
