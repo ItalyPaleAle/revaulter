@@ -1,8 +1,11 @@
 package protocolv2
 
 import (
+	"errors"
 	"strconv"
 	"time"
+
+	"github.com/italypaleale/revaulter/pkg/utils"
 )
 
 const TransportAlg = "ecdh-p256+mlkem768+a256gcm"
@@ -86,6 +89,44 @@ type ResponseEnvelope struct {
 	Nonce                     string          `json:"nonce"`
 	Ciphertext                string          `json:"ciphertext"`
 	ResultType                string          `json:"resultType,omitempty"`
+}
+
+// Validate the request object
+func (env *ResponseEnvelope) Validate() error {
+	if env.TransportAlg != TransportAlg {
+		return errors.New("unsupported transportAlg")
+	}
+
+	// Validate the browser's ephemeral ECDH public key
+	err := env.BrowserEphemeralPublicKey.ValidatePublic()
+	if err != nil {
+		return err
+	}
+
+	// Validate ML-KEM ciphertext
+	if env.MlkemCiphertext == "" {
+		return errors.New("missing mlkemCiphertext")
+	}
+	_, err = utils.DecodeBase64String(env.MlkemCiphertext)
+	if err != nil {
+		return errors.New("invalid mlkemCiphertext format")
+	}
+
+	// Validate required fields
+	if env.Nonce == "" || env.Ciphertext == "" {
+		return errors.New("nonce and ciphertext are required")
+	}
+
+	// Validate base64-encoded fields
+	_, err = utils.DecodeBase64String(env.Nonce)
+	if err != nil {
+		return errors.New("invalid nonce format")
+	}
+	_, err = utils.DecodeBase64String(env.Ciphertext)
+	if err != nil {
+		return errors.New("invalid ciphertext format")
+	}
+	return nil
 }
 
 type RequestResultResponse struct {

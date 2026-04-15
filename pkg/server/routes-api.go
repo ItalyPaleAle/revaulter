@@ -13,7 +13,6 @@ import (
 	"github.com/italypaleale/go-kit/eventqueue"
 	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
-	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
@@ -108,6 +107,9 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 }
 
 func (s *Server) RouteV2APIConfirm(c *gin.Context) {
+	log := logging.LogFromContext(c.Request.Context())
+	userID := c.GetString(contextKeyUserID)
+
 	var req confirmRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -144,14 +146,11 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		if err != nil {
 			AbortWithErrorJSON(c, err)
 			return
-		}
-		if !ok {
+		} else if !ok {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be canceled"))
 			return
 		}
 
-		log := logging.LogFromContext(c.Request.Context())
-		userID := c.GetString(contextKeyUserID)
 		log.InfoContext(c.Request.Context(), "Request canceled",
 			slog.String("state", req.State),
 			slog.String("user_id", userID),
@@ -184,7 +183,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
-	err = validateV2ResponseEnvelope(req.ResponseEnvelope)
+	err = req.ResponseEnvelope.Validate()
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid responseEnvelope: %v", err))
 		return
@@ -194,14 +193,11 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
-	}
-	if !ok {
+	} else if !ok {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be confirmed"))
 		return
 	}
 
-	log := logging.LogFromContext(c.Request.Context())
-	userID := c.GetString(contextKeyUserID)
 	log.InfoContext(c.Request.Context(), "Request confirmed",
 		slog.String("state", req.State),
 		slog.Any("user_id", userID),
@@ -217,9 +213,11 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	s.lock.Lock()
 	s.notifySubscriber(req.State)
 	s.lock.Unlock()
+
 	c.JSON(http.StatusOK, v2APIConfirmedResponse{
 		Confirmed: true,
 	})
+
 	s.publishListItem(&db.V2RequestListItem{
 		State:  req.State,
 		Status: "removed",
@@ -230,43 +228,6 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 func (s *Server) authorizeUser(c *gin.Context, userID string) bool {
 	sessionUserID := c.GetString(contextKeyUserID)
 	return sessionUserID != "" && sessionUserID == userID
-}
-
-func validateV2ResponseEnvelope(env *protocolv2.ResponseEnvelope) error {
-	if env.TransportAlg != protocolv2.TransportAlg {
-		return NewResponseError(http.StatusBadRequest, "unsupported transportAlg")
-	}
-
-	// Validate the browser's ephemeral ECDH public key
-	err := env.BrowserEphemeralPublicKey.ValidatePublic()
-	if err != nil {
-		return err
-	}
-
-	// Validate ML-KEM ciphertext
-	if env.MlkemCiphertext == "" {
-		return NewResponseError(http.StatusBadRequest, "missing mlkemCiphertext")
-	}
-	_, err = utils.DecodeBase64String(env.MlkemCiphertext)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid mlkemCiphertext format")
-	}
-
-	// Validate required fields
-	if env.Nonce == "" || env.Ciphertext == "" {
-		return NewResponseError(http.StatusBadRequest, "nonce and ciphertext are required")
-	}
-
-	// Validate base64-encoded fields
-	_, err = utils.DecodeBase64String(env.Nonce)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid nonce format")
-	}
-	_, err = utils.DecodeBase64String(env.Ciphertext)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid ciphertext format")
-	}
-	return nil
 }
 
 func (s *Server) routeV2APIListStream(c *gin.Context) {
@@ -291,11 +252,11 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 
 	sent := false
 	for _, item := range list {
-		if item.UserID != userID {
-			continue
+		if item.UserID == userID {
+			_ = enc.Encode(item)
+			sent = true
+			break
 		}
-		_ = enc.Encode(item)
-		sent = true
 	}
 
 	events, err := s.pubsub.Subscribe()

@@ -39,7 +39,7 @@ func (s *Server) serveClient() []gin.HandlerFunc {
 // Invoked before serving static files from embedded FS or proxy
 func prepareStaticResponse(c *gin.Context) (ok bool) {
 	// Only respond to GET requests
-	if c.Request.Method != "GET" {
+	if c.Request.Method != http.MethodGet {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Not found"))
 		return false
 	}

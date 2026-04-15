@@ -150,6 +150,8 @@ type Config struct {
 type Dev struct {
 	// If true, disables caching on the client
 	DisableClientCache bool
+	// If true, disables serving the client-side app
+	DisableClientServing bool
 }
 
 // Internal properties

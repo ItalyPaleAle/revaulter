@@ -87,3 +87,22 @@ func validateTrustedRequestID(v string) bool {
 func (s *Server) MiddlewareNoCache(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 }
+
+// MiddlewareCSRF offers CSRF protection for browser-facing endpoints
+// This rejects cross-origin requests on state-changing methods (POST, PUT, DELETE, etc) by checking the Sec-Fetch-Site and Origin headers
+func (s *Server) MiddlewareCSRF() func(c *gin.Context) {
+	cop := http.NewCrossOriginProtection()
+	return func(c *gin.Context) {
+		cop.
+			Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c.Next()
+			})).
+			ServeHTTP(c.Writer, c.Request)
+
+		// If CrossOriginProtection rejected the request, abort the Gin chain
+		if c.Writer.Status() == http.StatusForbidden {
+			c.Abort()
+			return
+		}
+	}
+}

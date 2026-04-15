@@ -253,21 +253,12 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	}
 	healthzGroup.GET("/healthz", gin.WrapF(s.RouteHealthzHandler))
 
-	// CSRF protection for browser-facing endpoints.
-	// This rejects cross-origin requests on state-changing methods (POST, PUT, DELETE, etc) by checking the Sec-Fetch-Site and Origin headers
-	cop := http.NewCrossOriginProtection()
-	csrfMw := func(c *gin.Context) {
-		cop.
-			Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				c.Next()
-			})).
-			ServeHTTP(c.Writer, c.Request)
+	// CSRF middleware for browser-facing endpoints
+	csrfMw := s.MiddlewareCSRF()
 
-		// If CrossOriginProtection rejected the request, abort the Gin chain
-		if c.Writer.Status() == http.StatusForbidden {
-			c.Abort()
-		}
-	}
+	// Session middleware with and without requireReady
+	sessionMw := s.MiddlewareSession(false)
+	sessionReadyMw := s.MiddlewareSession(true)
 
 	// Rate limiters for request creation and authentication endpoints
 	requestRateLimiter := MiddlewareRateLimit(requestRateLimit)
@@ -287,7 +278,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 
 	// API and auth groups are browser-facing, apply CSRF protection
 	v2APIGroup := v2RouteGroup.Group("/api")
-	v2APIGroup.Use(csrfMw, s.MiddlewareSession(true))
+	v2APIGroup.Use(csrfMw, sessionReadyMw)
 	v2APIGroup.GET("/list", s.RouteV2APIList)
 	v2APIGroup.GET("/request/:state", s.RouteV2APIRequestGet)
 	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
@@ -298,26 +289,29 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
 	v2AuthGroup.POST("/login/finish", s.RouteV2AuthLoginFinish)
-	v2AuthGroup.GET("/session", s.MiddlewareSession(false), s.RouteV2AuthSession)
-	v2AuthGroup.POST("/finalize-signup", s.MiddlewareSession(false), s.RouteV2AuthFinalizeSignup)
-	v2AuthGroup.POST("/allowed-ips", s.MiddlewareSession(true), s.RouteV2AuthAllowedIPs)
-	v2AuthGroup.POST("/regenerate-request-key", s.MiddlewareSession(true), s.RouteV2AuthRequestKeyRegenerate)
-	v2AuthGroup.POST("/update-display-name", s.MiddlewareSession(true), s.RouteV2AuthUpdateDisplayName)
-	v2AuthGroup.POST("/update-wrapped-key", s.MiddlewareSession(true), s.RouteV2AuthUpdateWrappedKey)
-	v2AuthGroup.GET("/credentials", s.MiddlewareSession(true), s.RouteV2AuthListCredentials)
-	v2AuthGroup.POST("/credentials/add/begin", s.MiddlewareSession(true), s.RouteV2AuthAddCredentialBegin)
-	v2AuthGroup.POST("/credentials/add/finish", s.MiddlewareSession(true), s.RouteV2AuthAddCredentialFinish)
-	v2AuthGroup.POST("/credentials/rename", s.MiddlewareSession(true), s.RouteV2AuthRenameCredential)
-	v2AuthGroup.POST("/credentials/delete", s.MiddlewareSession(true), s.RouteV2AuthDeleteCredential)
-	v2AuthGroup.POST("/logout", s.MiddlewareSession(false), s.RouteV2AuthLogout)
+	v2AuthGroup.GET("/session", sessionMw, s.RouteV2AuthSession)
+	v2AuthGroup.POST("/finalize-signup", sessionMw, s.RouteV2AuthFinalizeSignup)
+	v2AuthGroup.POST("/allowed-ips", sessionReadyMw, s.RouteV2AuthAllowedIPs)
+	v2AuthGroup.POST("/regenerate-request-key", sessionReadyMw, s.RouteV2AuthRequestKeyRegenerate)
+	v2AuthGroup.POST("/update-display-name", sessionReadyMw, s.RouteV2AuthUpdateDisplayName)
+	v2AuthGroup.POST("/update-wrapped-key", sessionReadyMw, s.RouteV2AuthUpdateWrappedKey)
+	v2AuthGroup.GET("/credentials", sessionReadyMw, s.RouteV2AuthListCredentials)
+	v2AuthGroup.POST("/credentials/add/begin", sessionReadyMw, s.RouteV2AuthAddCredentialBegin)
+	v2AuthGroup.POST("/credentials/add/finish", sessionReadyMw, s.RouteV2AuthAddCredentialFinish)
+	v2AuthGroup.POST("/credentials/rename", sessionReadyMw, s.RouteV2AuthRenameCredential)
+	v2AuthGroup.POST("/credentials/delete", sessionReadyMw, s.RouteV2AuthDeleteCredential)
+	v2AuthGroup.POST("/logout", sessionMw, s.RouteV2AuthLogout)
 
+	// Add test routes if any
 	for _, addRoutes := range testRoutes {
 		addRoutes(s, s.appRouter)
 	}
 
 	// Static files as fallback
 	// This doesn't include most middlewares
-	s.appRouter.NoRoute(s.serveClient()...)
+	if !cfg.Dev.DisableClientServing {
+		s.appRouter.NoRoute(s.serveClient()...)
+	}
 
 	return nil
 }
