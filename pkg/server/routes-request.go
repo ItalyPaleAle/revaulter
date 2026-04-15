@@ -19,6 +19,16 @@ import (
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
+type v2RequestCreateResponse struct {
+	State   string `json:"state"`
+	Pending bool   `json:"pending"`
+}
+
+type v2RequestPubkeyResponse struct {
+	EcdhP256 json.RawMessage `json:"ecdhP256"`
+	Mlkem768 string          `json:"mlkem768"`
+}
+
 func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := config.Get()
@@ -99,9 +109,9 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
-		c.JSON(http.StatusAccepted, gin.H{
-			"state":   state,
-			"pending": true,
+		c.JSON(http.StatusAccepted, v2RequestCreateResponse{
+			State:   state,
+			Pending: true,
 		})
 		s.publishListItem(&db.V2RequestListItem{
 			State:     state,
@@ -156,9 +166,9 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"ecdhP256": json.RawMessage(user.RequestEncEcdhPubkey),
-		"mlkem768": user.RequestEncMlkemPubkey,
+	c.JSON(http.StatusOK, v2RequestPubkeyResponse{
+		EcdhP256: json.RawMessage(user.RequestEncEcdhPubkey),
+		Mlkem768: user.RequestEncMlkemPubkey,
 	})
 }
 
@@ -253,7 +263,7 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 	}
 
 	// Validate E2EE envelope fields
-	if body.RequestEncAlg != "ecdh-p256+mlkem768+a256gcm" {
+	if body.RequestEncAlg != protocolv2.TransportAlg {
 		return NewResponseError(http.StatusBadRequest, "unsupported requestEncAlg")
 	}
 	err := body.CliEphemeralPublicKey.ValidatePublic()

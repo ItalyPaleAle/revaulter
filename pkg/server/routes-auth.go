@@ -110,6 +110,33 @@ type v2AuthLogoutResponse struct {
 	LoggedOut bool `json:"loggedOut"`
 }
 
+type v2AuthOKResponse struct {
+	OK bool `json:"ok"`
+}
+
+type v2AuthAllowedIPsResponse struct {
+	OK         bool     `json:"ok"`
+	AllowedIPs []string `json:"allowedIps"`
+}
+
+type v2AuthRequestKeyResponse struct {
+	OK         bool   `json:"ok"`
+	RequestKey string `json:"requestKey"`
+}
+
+type v2AuthDisplayNameResponse struct {
+	OK          bool   `json:"ok"`
+	DisplayName string `json:"displayName"`
+}
+
+type v2AuthAddCredentialBeginResponse struct {
+	ChallengeID string `json:"challengeId"`
+	Challenge   string `json:"challenge"`
+	ExpiresAt   int64  `json:"expiresAt"`
+	Options     any    `json:"options,omitempty"`
+	BasePrfSalt string `json:"basePrfSalt"`
+}
+
 type v2AuthUpdateDisplayNameRequest struct {
 	DisplayName string `json:"displayName"`
 }
@@ -468,10 +495,7 @@ func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, struct {
-		OK         bool     `json:"ok"`
-		AllowedIPs []string `json:"allowedIps"`
-	}{
+	c.JSON(http.StatusOK, v2AuthAllowedIPsResponse{
 		OK:         true,
 		AllowedIPs: allowedIPs,
 	})
@@ -490,10 +514,7 @@ func (s *Server) RouteV2AuthRequestKeyRegenerate(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, struct {
-		OK         bool   `json:"ok"`
-		RequestKey string `json:"requestKey"`
-	}{
+	c.JSON(http.StatusOK, v2AuthRequestKeyResponse{
 		OK:         true,
 		RequestKey: requestKey,
 	})
@@ -587,10 +608,7 @@ func (s *Server) RouteV2AuthUpdateDisplayName(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, struct {
-		OK          bool   `json:"ok"`
-		DisplayName string `json:"displayName"`
-	}{
+	c.JSON(http.StatusOK, v2AuthDisplayNameResponse{
 		OK:          true,
 		DisplayName: strings.TrimSpace(req.DisplayName),
 	})
@@ -635,9 +653,7 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, struct {
-		OK bool `json:"ok"`
-	}{
+	c.JSON(http.StatusOK, v2AuthOKResponse{
 		OK: true,
 	})
 }
@@ -722,13 +738,7 @@ func (s *Server) RouteV2AuthAddCredentialBegin(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, struct {
-		ChallengeID string `json:"challengeId"`
-		Challenge   string `json:"challenge"`
-		ExpiresAt   int64  `json:"expiresAt"`
-		Options     any    `json:"options,omitempty"`
-		BasePrfSalt string `json:"basePrfSalt"`
-	}{
+	c.JSON(http.StatusOK, v2AuthAddCredentialBeginResponse{
 		ChallengeID: ch.ID,
 		Challenge:   session.Challenge,
 		ExpiresAt:   ch.ExpiresAt.Unix(),
@@ -841,9 +851,7 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		slog.String("client_ip", c.ClientIP()),
 	)
 
-	c.JSON(http.StatusOK, struct {
-		OK bool `json:"ok"`
-	}{
+	c.JSON(http.StatusOK, v2AuthOKResponse{
 		OK: true,
 	})
 }
@@ -879,9 +887,7 @@ func (s *Server) RouteV2AuthRenameCredential(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, struct {
-		OK bool `json:"ok"`
-	}{
+	c.JSON(http.StatusOK, v2AuthOKResponse{
 		OK: true,
 	})
 }
@@ -923,9 +929,7 @@ func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
 		slog.String("client_ip", c.ClientIP()),
 	)
 
-	c.JSON(http.StatusOK, struct {
-		OK bool `json:"ok"`
-	}{
+	c.JSON(http.StatusOK, v2AuthOKResponse{
 		OK: true,
 	})
 }

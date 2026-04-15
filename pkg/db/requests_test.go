@@ -60,7 +60,7 @@ func TestRequestStoreLifecycle(t *testing.T) {
 	require.Nil(t, rec.ResponseEnvelope)
 
 	ok, err := store.CompleteRequest(ctx, "state-1", protocolv2.ResponseEnvelope{
-		TransportAlg: "ecdh-p256+mlkem768+a256gcm",
+		TransportAlg: protocolv2.TransportAlg,
 		BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 			Kty: "EC", Crv: "P-256",
 			X: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -77,7 +77,7 @@ func TestRequestStoreLifecycle(t *testing.T) {
 	require.NotNil(t, rec)
 	require.Equal(t, V2RequestStatusCompleted, rec.Status)
 	require.NotNil(t, rec.ResponseEnvelope)
-	require.Equal(t, "ecdh-p256+mlkem768+a256gcm", rec.ResponseEnvelope.TransportAlg)
+	require.Equal(t, protocolv2.TransportAlg, rec.ResponseEnvelope.TransportAlg)
 }
 
 func TestRequestStoreCancel(t *testing.T) {
@@ -187,7 +187,7 @@ func TestRequestStoreExpirePendingAndReturnState(t *testing.T) {
 	require.NoError(t, err)
 
 	ok, err := store.CompleteRequest(ctx, "state-completed", protocolv2.ResponseEnvelope{
-		TransportAlg: "ecdh-p256+mlkem768+a256gcm",
+		TransportAlg: protocolv2.TransportAlg,
 		BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 			Kty: "EC", Crv: "P-256",
 			X: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",

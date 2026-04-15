@@ -17,6 +17,28 @@ import (
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
+type v2APIRequestDetailResponse struct {
+	State            string          `json:"state"`
+	Status           string          `json:"status"`
+	Operation        string          `json:"operation"`
+	UserID           string          `json:"userId"`
+	KeyLabel         string          `json:"keyLabel"`
+	Algorithm        string          `json:"algorithm"`
+	Requestor        string          `json:"requestor"`
+	Date             int64           `json:"date"`
+	Expiry           int64           `json:"expiry"`
+	Note             string          `json:"note"`
+	EncryptedRequest json.RawMessage `json:"encryptedRequest"`
+}
+
+type v2APICanceledResponse struct {
+	Canceled bool `json:"canceled"`
+}
+
+type v2APIConfirmedResponse struct {
+	Confirmed bool `json:"confirmed"`
+}
+
 type confirmRequest struct {
 	State            string                       `json:"state"`
 	Confirm          bool                         `json:"confirm,omitempty"`
@@ -70,18 +92,18 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 	if rec.EncryptedRequest != "" {
 		encReq = json.RawMessage(rec.EncryptedRequest)
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"state":            rec.State,
-		"status":           rec.Status,
-		"operation":        rec.Operation,
-		"userId":           rec.UserID,
-		"keyLabel":         rec.KeyLabel,
-		"algorithm":        rec.Algorithm,
-		"requestor":        rec.RequestorIP,
-		"date":             rec.CreatedAt.Unix(),
-		"expiry":           rec.ExpiresAt.Unix(),
-		"note":             rec.Note,
-		"encryptedRequest": encReq,
+	c.JSON(http.StatusOK, v2APIRequestDetailResponse{
+		State:            rec.State,
+		Status:           string(rec.Status),
+		Operation:        rec.Operation,
+		UserID:           rec.UserID,
+		KeyLabel:         rec.KeyLabel,
+		Algorithm:        rec.Algorithm,
+		Requestor:        rec.RequestorIP,
+		Date:             rec.CreatedAt.Unix(),
+		Expiry:           rec.ExpiresAt.Unix(),
+		Note:             rec.Note,
+		EncryptedRequest: encReq,
 	})
 }
 
@@ -146,7 +168,9 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		s.notifySubscriber(req.State)
 		s.lock.Unlock()
 
-		c.JSON(http.StatusOK, gin.H{"canceled": true})
+		c.JSON(http.StatusOK, v2APICanceledResponse{
+			Canceled: true,
+		})
 		s.publishListItem(&db.V2RequestListItem{
 			State:  req.State,
 			Status: "removed",
@@ -193,7 +217,9 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	s.lock.Lock()
 	s.notifySubscriber(req.State)
 	s.lock.Unlock()
-	c.JSON(http.StatusOK, gin.H{"confirmed": true})
+	c.JSON(http.StatusOK, v2APIConfirmedResponse{
+		Confirmed: true,
+	})
 	s.publishListItem(&db.V2RequestListItem{
 		State:  req.State,
 		Status: "removed",
@@ -207,7 +233,7 @@ func (s *Server) authorizeUser(c *gin.Context, userID string) bool {
 }
 
 func validateV2ResponseEnvelope(env *protocolv2.ResponseEnvelope) error {
-	if env.TransportAlg != "ecdh-p256+mlkem768+a256gcm" {
+	if env.TransportAlg != protocolv2.TransportAlg {
 		return NewResponseError(http.StatusBadRequest, "unsupported transportAlg")
 	}
 

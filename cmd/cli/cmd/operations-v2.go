@@ -161,7 +161,7 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 		Algorithm:             o.flags.GetAlgorithm(),
 		Timeout:               o.flags.GetTimeout(),
 		Note:                  o.flags.GetNote(),
-		RequestEncAlg:         "ecdh-p256+mlkem768+a256gcm",
+		RequestEncAlg:         protocolv2.TransportAlg,
 		CliEphemeralPublicKey: cliEphPub,
 		MlkemCiphertext:       mlkemCiphertext,
 		EncryptedPayloadNonce: nonce,

@@ -116,7 +116,7 @@ func deriveV2TransportKey(sharedSecret []byte, state string) ([]byte, error) {
 }
 
 func validateV2EnvelopeForCLI(env *protocolv2.ResponseEnvelope) error {
-	if env.TransportAlg != "ecdh-p256+mlkem768+a256gcm" {
+	if env.TransportAlg != protocolv2.TransportAlg {
 		return fmt.Errorf("unsupported transportAlg: %s", env.TransportAlg)
 	}
 

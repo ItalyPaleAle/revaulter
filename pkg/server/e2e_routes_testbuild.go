@@ -25,6 +25,61 @@ import (
 
 const e2eHeaderToken = "x-revaulter-e2e-token"
 
+type e2eOKResponse struct {
+	OK bool `json:"ok"`
+}
+
+type e2eSeedUserResponse struct {
+	OK          bool   `json:"ok"`
+	UserID      string `json:"userId"`
+	DisplayName string `json:"displayName"`
+	RequestKey  string `json:"requestKey"`
+	Ready       bool   `json:"ready"`
+}
+
+type e2eSeedSessionResponse struct {
+	OK          bool   `json:"ok"`
+	SessionID   string `json:"sessionId"`
+	CookieName  string `json:"cookieName"`
+	CookiePath  string `json:"cookiePath"`
+	CookieValue string `json:"cookieValue"`
+}
+
+type e2eSeedRequestResponse struct {
+	OK     bool   `json:"ok"`
+	State  string `json:"state"`
+	Status string `json:"status"`
+}
+
+type e2eGetRequestResponse struct {
+	State     string `json:"state"`
+	Status    string `json:"status"`
+	Operation string `json:"operation"`
+	UserID    string `json:"userId"`
+	KeyLabel  string `json:"keyLabel"`
+	Algorithm string `json:"algorithm"`
+	Requestor string `json:"requestor"`
+	Note      string `json:"note"`
+}
+
+type e2eGetRequestResultResponse struct {
+	State            string          `json:"state"`
+	Status           string          `json:"status"`
+	Operation        string          `json:"operation"`
+	UserID           string          `json:"userId"`
+	KeyLabel         string          `json:"keyLabel"`
+	Algorithm        string          `json:"algorithm"`
+	Requestor        string          `json:"requestor"`
+	Note             string          `json:"note"`
+	EncryptedRequest json.RawMessage `json:"encryptedRequest"`
+	ResponseEnvelope any             `json:"responseEnvelope"`
+}
+
+type e2eSeedCredentialResponse struct {
+	OK           bool   `json:"ok"`
+	CredentialID string `json:"credentialId"`
+}
+
 type e2eSeedUserRequest struct {
 	UserID      string `json:"userId"`
 	DisplayName string `json:"displayName"`
@@ -97,7 +152,7 @@ func (s *Server) RouteE2EReset(c *gin.Context) {
 	s.subs = map[string]chan struct{}{}
 	s.lock.Unlock()
 
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	c.JSON(http.StatusOK, e2eOKResponse{OK: true})
 }
 
 func (s *Server) RouteE2ESeedUser(c *gin.Context) {
@@ -197,12 +252,12 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"ok":          true,
-		"userId":      user.ID,
-		"displayName": user.DisplayName,
-		"requestKey":  user.RequestKey,
-		"ready":       user.Ready,
+	c.JSON(http.StatusOK, e2eSeedUserResponse{
+		OK:          true,
+		UserID:      user.ID,
+		DisplayName: user.DisplayName,
+		RequestKey:  user.RequestKey,
+		Ready:       user.Ready,
 	})
 }
 
@@ -242,12 +297,12 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"ok":          true,
-		"sessionId":   sess.ID,
-		"cookieName":  cookieName,
-		"cookiePath":  cookiePath,
-		"cookieValue": cookieValue,
+	c.JSON(http.StatusOK, e2eSeedSessionResponse{
+		OK:          true,
+		SessionID:   sess.ID,
+		CookieName:  cookieName,
+		CookiePath:  cookiePath,
+		CookieValue: cookieValue,
 	})
 }
 
@@ -303,7 +358,7 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 		_, err = s.requestStore.CancelRequest(c.Request.Context(), req.State)
 	case string(db.V2RequestStatusCompleted):
 		_, err = s.requestStore.CompleteRequest(c.Request.Context(), req.State, protocolv2.ResponseEnvelope{
-			TransportAlg: "ecdh-p256+mlkem768+a256gcm",
+			TransportAlg: protocolv2.TransportAlg,
 			BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 				Kty: "EC",
 				Crv: "P-256",
@@ -346,7 +401,11 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"ok": true, "state": req.State, "status": status})
+	c.JSON(http.StatusOK, e2eSeedRequestResponse{
+		OK:     true,
+		State:  req.State,
+		Status: status,
+	})
 }
 
 func (s *Server) RouteE2EGetRequest(c *gin.Context) {
@@ -361,15 +420,15 @@ func (s *Server) RouteE2EGetRequest(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"state":     rec.State,
-		"status":    rec.Status,
-		"operation": rec.Operation,
-		"userId":    rec.UserID,
-		"keyLabel":  rec.KeyLabel,
-		"algorithm": rec.Algorithm,
-		"requestor": rec.RequestorIP,
-		"note":      rec.Note,
+	c.JSON(http.StatusOK, e2eGetRequestResponse{
+		State:     rec.State,
+		Status:    string(rec.Status),
+		Operation: rec.Operation,
+		UserID:    rec.UserID,
+		KeyLabel:  rec.KeyLabel,
+		Algorithm: rec.Algorithm,
+		Requestor: rec.RequestorIP,
+		Note:      rec.Note,
 	})
 }
 
@@ -390,17 +449,17 @@ func (s *Server) RouteE2EGetRequestResult(c *gin.Context) {
 		responseEnvelope = rec.ResponseEnvelope
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"state":            rec.State,
-		"status":           rec.Status,
-		"operation":        rec.Operation,
-		"userId":           rec.UserID,
-		"keyLabel":         rec.KeyLabel,
-		"algorithm":        rec.Algorithm,
-		"requestor":        rec.RequestorIP,
-		"note":             rec.Note,
-		"encryptedRequest": json.RawMessage(rec.EncryptedRequest),
-		"responseEnvelope": responseEnvelope,
+	c.JSON(http.StatusOK, e2eGetRequestResultResponse{
+		State:            rec.State,
+		Status:           string(rec.Status),
+		Operation:        rec.Operation,
+		UserID:           rec.UserID,
+		KeyLabel:         rec.KeyLabel,
+		Algorithm:        rec.Algorithm,
+		Requestor:        rec.RequestorIP,
+		Note:             rec.Note,
+		EncryptedRequest: json.RawMessage(rec.EncryptedRequest),
+		ResponseEnvelope: responseEnvelope,
 	})
 }
 
@@ -434,8 +493,8 @@ func (s *Server) RouteE2ESeedCredential(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"ok":           true,
-		"credentialId": credID,
+	c.JSON(http.StatusOK, e2eSeedCredentialResponse{
+		OK:           true,
+		CredentialID: credID,
 	})
 }

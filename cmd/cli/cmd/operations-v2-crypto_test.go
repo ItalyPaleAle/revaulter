@@ -56,7 +56,7 @@ func TestDecryptV2ResponseEnvelope(t *testing.T) {
 	require.NoError(t, err)
 
 	out, err := decryptV2ResponseEnvelope("state-1", kp, &protocolv2.ResponseEnvelope{
-		TransportAlg:              "ecdh-p256+mlkem768+a256gcm",
+		TransportAlg:              protocolv2.TransportAlg,
 		BrowserEphemeralPublicKey: browserEcdhPubJWK,
 		MlkemCiphertext:           base64.RawURLEncoding.EncodeToString(mlkemCT),
 		Nonce:                     base64.RawURLEncoding.EncodeToString(nonce),

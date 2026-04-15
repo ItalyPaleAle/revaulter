@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const TransportAlg = "ecdh-p256+mlkem768+a256gcm"
+
 type RequestCreateBody struct {
 	KeyLabel  string `json:"keyLabel,omitempty"`
 	Algorithm string `json:"algorithm,omitempty"`

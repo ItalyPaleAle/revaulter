@@ -785,7 +785,7 @@ func newV2CreateRequestBody(keyLabel string, algorithm string, cliJWK protocolv2
 	return map[string]any{
 		"keyLabel":      keyLabel,
 		"algorithm":     algorithm,
-		"requestEncAlg": "ecdh-p256+mlkem768+a256gcm",
+		"requestEncAlg": protocolv2.TransportAlg,
 		"cliEphemeralPublicKey": map[string]any{
 			"kty": cliJWK.Kty,
 			"crv": cliJWK.Crv,
@@ -800,7 +800,7 @@ func newV2CreateRequestBody(keyLabel string, algorithm string, cliJWK protocolv2
 
 func newV2ResponseEnvelope(browserJWK protocolv2.ECP256PublicJWK) map[string]any {
 	return map[string]any{
-		"transportAlg": "ecdh-p256+mlkem768+a256gcm",
+		"transportAlg": protocolv2.TransportAlg,
 		"browserEphemeralPublicKey": map[string]any{
 			"kty": browserJWK.Kty,
 			"crv": browserJWK.Crv,
@@ -1004,7 +1004,7 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
 
 	// The wrapped primary key lives on the credential that authenticated the session, so the route requires its credential_id
-	credentialID := "cred-user-alice"
+	const credentialID = "cred-user-alice"
 
 	// Successful update
 	res, body := doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "new-key-blob"}, sessionCookie)

@@ -93,7 +93,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			if req.KeyLabel != "disk-key" || req.Algorithm != "aes-gcm-256" || req.RequestEncAlg != "ecdh-p256+mlkem768+a256gcm" {
+			if req.KeyLabel != "disk-key" || req.Algorithm != "aes-gcm-256" || req.RequestEncAlg != protocolv2.TransportAlg {
 				http.Error(w, "unexpected request fields", http.StatusBadRequest)
 				return
 			}
@@ -268,7 +268,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 				State: state,
 				Done:  true,
 				ResponseEnvelope: &protocolv2.ResponseEnvelope{
-					TransportAlg:              "ecdh-p256+mlkem768+a256gcm",
+					TransportAlg:              protocolv2.TransportAlg,
 					BrowserEphemeralPublicKey: browserJWK,
 					MlkemCiphertext:           base64.RawURLEncoding.EncodeToString(mlkemCT),
 					Nonce:                     base64.RawURLEncoding.EncodeToString(nonce),
@@ -331,7 +331,7 @@ func TestV2OperationCmdGetResultStateMismatch(t *testing.T) {
 			State: "other",
 			Done:  true,
 			ResponseEnvelope: &protocolv2.ResponseEnvelope{
-				TransportAlg: "ecdh-p256+mlkem768+a256gcm",
+				TransportAlg: protocolv2.TransportAlg,
 				BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 					Kty: "EC", Crv: "P-256",
 					X: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -362,7 +362,7 @@ func TestV2OperationCmdGetResultRejectsMalformedEnvelope(t *testing.T) {
 			State: "s1",
 			Done:  true,
 			ResponseEnvelope: &protocolv2.ResponseEnvelope{
-				TransportAlg: "ecdh-p256+mlkem768+a256gcm",
+				TransportAlg: protocolv2.TransportAlg,
 				BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 					Kty: "EC", Crv: "P-256",
 					X: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
