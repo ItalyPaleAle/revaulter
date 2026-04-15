@@ -479,37 +479,6 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.Equal(t, true, result["failed"])
 }
 
-func TestServerV2RegisterRequiresWebAuthn(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-register-requires-webauthn.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
-
-	srv, cleanup := newTestServer(t, nil, nil, nil)
-	require.NotNil(t, srv)
-	defer cleanup()
-	srv.webAuthn = nil
-
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
-	client := clientForListener(srv.appListener)
-
-	body := bytes.NewBufferString(`{"displayName":"Alice"}`)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/register/begin", testServerPort), body)
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	res, err := client.Do(req)
-	require.NoError(t, err)
-	defer func() {
-		_, _ = io.Copy(io.Discard, res.Body)
-		res.Body.Close()
-	}()
-	require.Equal(t, http.StatusServiceUnavailable, res.StatusCode)
-}
-
 func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(config.SetTestConfig(map[string]any{

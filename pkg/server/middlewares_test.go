@@ -43,9 +43,9 @@ func TestGetRequestIDRejectsInvalidTrustedHeader(t *testing.T) {
 }
 
 func TestValidTrustedRequestID(t *testing.T) {
-	require.True(t, validTrustedRequestID("abc-DEF_123.trace:edge"))
-	require.False(t, validTrustedRequestID(""))
-	require.False(t, validTrustedRequestID("bad value"))
-	require.False(t, validTrustedRequestID("bad/value"))
-	require.False(t, validTrustedRequestID("bad\nvalue"))
+	require.True(t, validateTrustedRequestID("abc-DEF_123.trace:edge"))
+	require.False(t, validateTrustedRequestID(""))
+	require.False(t, validateTrustedRequestID("bad value"))
+	require.False(t, validateTrustedRequestID("bad/value"))
+	require.False(t, validateTrustedRequestID("bad\nvalue"))
 }

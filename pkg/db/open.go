@@ -24,8 +24,9 @@ const (
 )
 
 type DB struct {
+	adapter.DatabaseConn
+
 	kind BackendKind
-	db   adapter.DatabaseConn
 	sql  *sql.DB
 	pgx  *pgxpool.Pool
 }
@@ -45,7 +46,7 @@ func (db *DB) Close(_ context.Context) error {
 		db.pgx = nil
 	}
 
-	db.db = nil
+	db.DatabaseConn = nil
 
 	return nil
 }
@@ -72,9 +73,9 @@ func Open(ctx context.Context, connString string) (*DB, error) {
 			return nil, fmt.Errorf("failed to connect to Postgres: %w", err)
 		}
 		return &DB{
-			kind: BackendPostgres,
-			pgx:  conn,
-			db:   postgresadapter.AdaptPgxConn(conn),
+			kind:         BackendPostgres,
+			pgx:          conn,
+			DatabaseConn: postgresadapter.AdaptPgxConn(conn),
 		}, nil
 
 	// Default to sqlite
@@ -87,9 +88,9 @@ func Open(ctx context.Context, connString string) (*DB, error) {
 			return nil, fmt.Errorf("failed to open SQLite database: %w", err)
 		}
 		return &DB{
-			kind: BackendSQLite,
-			sql:  conn,
-			db:   sqladapter.AdaptDatabaseSQLConn(conn),
+			kind:         BackendSQLite,
+			sql:          conn,
+			DatabaseConn: sqladapter.AdaptDatabaseSQLConn(conn),
 		}, nil
 	}
 }

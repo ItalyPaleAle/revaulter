@@ -38,15 +38,6 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 		log := logging.LogFromContext(c.Request.Context())
 		span := trace.SpanFromContext(c.Request.Context())
 
-		if s.requestStore == nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
-			return
-		}
-		if s.authStore == nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-			return
-		}
-
 		requestKey := c.Param("requestKey")
 		if requestKey == "" {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing request key"))
@@ -183,11 +174,6 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 }
 
 func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	requestKey := c.Param("requestKey")
 	if requestKey == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing request key"))
@@ -215,10 +201,6 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 }
 
 func (s *Server) RouteV2RequestResult(c *gin.Context) {
-	if s.requestStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
-		return
-	}
 	state := c.Param("state")
 	if state == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing parameter state"))
@@ -279,10 +261,6 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 }
 
 func (s *Server) RouteV2APIList(c *gin.Context) {
-	if s.requestStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
-		return
-	}
 	if strings.ToLower(c.GetHeader("accept")) == ndJSONContentType {
 		s.routeV2APIListStream(c)
 		return
@@ -310,10 +288,6 @@ func (s *Server) RouteV2APIList(c *gin.Context) {
 }
 
 func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
-	if s.requestStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
-		return
-	}
 	state := c.Param("state")
 	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
 	if err != nil {
@@ -348,11 +322,6 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 }
 
 func (s *Server) RouteV2APIConfirm(c *gin.Context) {
-	if s.requestStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
-		return
-	}
-
 	var req confirmRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {

@@ -159,14 +159,6 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Account creation is disabled"))
 		return
 	}
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-	if s.webAuthn == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server"))
-		return
-	}
 
 	var req v2AuthRegisterBeginRequest
 	err := c.ShouldBindJSON(&req)
@@ -233,11 +225,6 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	var req v2AuthRegisterFinishRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -276,15 +263,6 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-	if s.webAuthn == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server"))
-		return
-	}
-
 	assertion, session, err := s.webAuthn.BeginDiscoverableLogin()
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -322,11 +300,6 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	var req v2AuthLoginFinishRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -402,11 +375,6 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -481,11 +449,6 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -515,11 +478,6 @@ func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthRequestKeyRegenerate(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -565,11 +523,6 @@ func (s *Server) RouteV2AuthSession(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthLogout(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	id := c.GetString(contextKeySessionID)
 	if id != "" {
@@ -608,11 +561,6 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthUpdateDisplayName(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -649,11 +597,6 @@ func (s *Server) RouteV2AuthUpdateDisplayName(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -700,11 +643,6 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthListCredentials(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -731,15 +669,6 @@ func (s *Server) RouteV2AuthListCredentials(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthAddCredentialBegin(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-	if s.webAuthn == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -809,15 +738,6 @@ func (s *Server) RouteV2AuthAddCredentialBegin(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-	if s.webAuthn == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -929,11 +849,6 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthRenameCredential(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -972,11 +887,6 @@ func (s *Server) RouteV2AuthRenameCredential(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
@@ -1038,10 +948,6 @@ func secureCookie(c *gin.Context) bool {
 }
 
 func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (*db.AuthSession, error) {
-	if s.webAuthn == nil {
-		return nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
-	}
-
 	var payload v2RegisterChallengePayload
 	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "register", &payload)
 	if err != nil {
@@ -1124,10 +1030,6 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 }
 
 func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*db.AuthSession, *db.AuthCredentialRecord, error) {
-	if s.webAuthn == nil {
-		return nil, nil, NewResponseError(http.StatusServiceUnavailable, "WebAuthn is not available on this server")
-	}
-
 	var payload v2LoginChallengePayload
 	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", &payload)
 	if err != nil {

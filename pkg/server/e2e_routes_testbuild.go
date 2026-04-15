@@ -101,11 +101,6 @@ func (s *Server) RouteE2EReset(c *gin.Context) {
 }
 
 func (s *Server) RouteE2ESeedUser(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	var req e2eSeedUserRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -212,11 +207,6 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 }
 
 func (s *Server) RouteE2ESeedSession(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	var req e2eSeedSessionRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -262,11 +252,6 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 }
 
 func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
-	if s.requestStore == nil || s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
-		return
-	}
-
 	var req e2eSeedRequestRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -365,11 +350,6 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 }
 
 func (s *Server) RouteE2EGetRequest(c *gin.Context) {
-	if s.requestStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
-		return
-	}
-
 	state := c.Param("state")
 	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
 	if err != nil {
@@ -394,11 +374,6 @@ func (s *Server) RouteE2EGetRequest(c *gin.Context) {
 }
 
 func (s *Server) RouteE2EGetRequestResult(c *gin.Context) {
-	if s.requestStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
-		return
-	}
-
 	state := c.Param("state")
 	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
 	if err != nil {
@@ -435,11 +410,6 @@ type e2eSeedCredentialRequest struct {
 }
 
 func (s *Server) RouteE2ESeedCredential(c *gin.Context) {
-	if s.authStore == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-		return
-	}
-
 	var req e2eSeedCredentialRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {

@@ -3,7 +3,6 @@ package server
 import (
 	"log/slog"
 	"net/http"
-	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -108,13 +107,4 @@ func (s *Server) MiddlewareCountMetrics(c *gin.Context) {
 
 	// Emit the metric
 	s.metrics.RecordServerRequest(route, c.Writer.Status(), time.Since(start))
-}
-
-// MiddlewareLoggerMask returns a Gin middleware that adds the "log-mask" to mask the path using a regular expression
-func (s *Server) MiddlewareLoggerMask(exp *regexp.Regexp, replace string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Set("log-mask", func(path string) string {
-			return exp.ReplaceAllString(path, replace)
-		})
-	}
 }

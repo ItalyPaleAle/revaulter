@@ -111,43 +111,47 @@ func NewAuthStore(db *DB, _ any) (*AuthStore, error) {
 
 func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
 	var n int
-	err := s.db.db.QueryRow(ctx, `SELECT COUNT(*) FROM v2_users`).Scan(&n)
+	err := s.db.
+		QueryRow(ctx, `SELECT COUNT(*) FROM v2_users`).
+		Scan(&n)
 	return n, err
 }
 
-const userSelectCols = `id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, allowed_ips, ready`
-
 func (s *AuthStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
-	return s.getUser(ctx, `SELECT `+userSelectCols+` FROM v2_users WHERE id = $1`, userID)
+	return s.getUser(ctx, "id", userID)
 }
 
 func (s *AuthStore) GetUserByWebAuthnUserID(ctx context.Context, webAuthnUserID string) (*User, error) {
-	return s.getUser(ctx, `SELECT `+userSelectCols+` FROM v2_users WHERE webauthn_user_id = $1`, webAuthnUserID)
+	return s.getUser(ctx, "webauthn_user_id", webAuthnUserID)
 }
 
 func (s *AuthStore) GetUserByRequestKey(ctx context.Context, requestKey string) (*User, error) {
-	return s.getUser(ctx, `SELECT `+userSelectCols+` FROM v2_users WHERE request_key = $1`, requestKey)
+	return s.getUser(ctx, "request_key", requestKey)
 }
 
-func (s *AuthStore) getUser(ctx context.Context, query string, arg string) (*User, error) {
+func (s *AuthStore) getUser(ctx context.Context, column string, value string) (*User, error) {
 	var (
 		user          User
 		allowedIPsCSV string
 	)
-	err := s.db.db.
-		QueryRow(ctx, query, arg).
+	query := `SELECT id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, allowed_ips, ready
+		FROM v2_users
+		WHERE ` + column + ` = $1`
+	err := s.db.
+		QueryRow(ctx, query, value).
 		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &allowedIPsCSV, &user.Ready)
-	if s.db.db.IsNoRowsError(err) {
+	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
 	}
+
 	user.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
 	return &user, nil
 }
 
 func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthCredentialRecord, error) {
-	rows, err := s.db.db.Query(ctx,
+	rows, err := s.db.Query(ctx,
 		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at
 			FROM v2_user_credentials
 			WHERE user_id = $1
@@ -225,7 +229,7 @@ func (s *AuthStore) BeginChallengeWithPayload(ctx context.Context, kind, userID 
 }
 
 func (s *AuthStore) insertChallenge(ctx context.Context, rec *AuthChallenge, payload []byte) error {
-	tx, err := s.db.db.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -264,9 +268,9 @@ func (s *AuthStore) insertChallenge(ctx context.Context, rec *AuthChallenge, pay
 
 func (s *AuthStore) ConsumeChallenge(ctx context.Context, id, kind string) (bool, error) {
 	now := time.Now().Unix()
-	affected, err := s.db.db.Exec(ctx,
-		`UPDATE v2_auth_challenges SET used_at = $1 WHERE id = $2 AND kind = $3 AND used_at IS NULL AND expires_at >= $4`,
-		now, id, kind, now,
+	affected, err := s.db.Exec(ctx,
+		`UPDATE v2_auth_challenges SET used_at = $1 WHERE id = $2 AND kind = $3 AND used_at IS NULL AND expires_at >= $1`,
+		now, id, kind,
 	)
 	if err != nil {
 		return false, err
@@ -284,10 +288,10 @@ func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind string
 	}
 
 	var payload string
-	err = s.db.db.
+	err = s.db.
 		QueryRow(ctx, `SELECT session_data FROM v2_auth_challenge_payloads WHERE challenge_id = $1`, id).
 		Scan(&payload)
-	if s.db.db.IsNoRowsError(err) {
+	if s.db.IsNoRowsError(err) {
 		return true, nil
 	} else if err != nil {
 		return false, err
@@ -301,7 +305,7 @@ func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind string
 }
 
 func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*AuthSession, error) {
-	tx, err := s.db.db.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +353,7 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 }
 
 func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, error) {
-	tx, err := s.db.db.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +377,7 @@ func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, err
 			in.SignCount, now, in.CredentialID, in.UserID,
 		).
 		Scan(&in.UserID)
-	if s.db.db.IsNoRowsError(err) {
+	if s.db.IsNoRowsError(err) {
 		return nil, ErrInvalidLogin
 	}
 	if err != nil {
@@ -401,7 +405,7 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 		revokedAt     sql.NullInt64
 		allowedIPsCSV string
 	)
-	err := s.db.db.
+	err := s.db.
 		QueryRow(ctx,
 			`SELECT s.id, s.user_id, u.display_name, u.request_key, u.allowed_ips, u.ready, s.expires_at, s.created_at, s.revoked_at
 			FROM v2_user_sessions s
@@ -410,7 +414,7 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 			id,
 		).
 		Scan(&sess.ID, &sess.UserID, &sess.DisplayName, &sess.RequestKey, &allowedIPsCSV, &sess.Ready, &expiresAt, &createdAt, &revokedAt)
-	if s.db.db.IsNoRowsError(err) {
+	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -438,7 +442,7 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, wrappedPrimaryKe
 		return errors.New("wrappedPrimaryKey is too large")
 	}
 
-	tx, err := s.db.db.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -491,7 +495,7 @@ func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowed
 	}
 
 	// Only allow mutations for users that are active and have completed setup
-	affected, err := s.db.db.Exec(ctx,
+	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_users SET allowed_ips = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
 		strings.Join(normalized, ","), time.Now().UTC().Unix(), userID,
 	)
@@ -513,7 +517,7 @@ func (s *AuthStore) RegenerateRequestKey(ctx context.Context, userID string) (st
 	}
 
 	// Only allow mutations for users that are active and have completed setup
-	affected, err := s.db.db.Exec(ctx,
+	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_users SET request_key = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
 		requestKey, time.Now().UTC().Unix(), userID,
 	)
@@ -534,7 +538,7 @@ func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID, displayName s
 		return ErrDisplayNameTooLong
 	}
 
-	affected, err := s.db.db.Exec(ctx,
+	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_users SET display_name = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
 		displayName, time.Now().UTC().Unix(), userID,
 	)
@@ -556,7 +560,7 @@ func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID
 		return errors.New("wrappedPrimaryKey is too large")
 	}
 
-	affected, err := s.db.db.Exec(ctx,
+	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_user_credentials SET wrapped_primary_key = $1
 			WHERE credential_id = $2 AND user_id = $3`,
 		wrappedPrimaryKey, credentialID, userID,
@@ -576,7 +580,7 @@ func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID
 func (s *AuthStore) HasPendingChallenge(ctx context.Context, userID, kind string) (bool, error) {
 	now := time.Now().UTC().Unix()
 	var exists bool
-	err := s.db.db.
+	err := s.db.
 		QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM v2_auth_challenges WHERE user_id = $1 AND kind = $2 AND used_at IS NULL AND expires_at >= $3)`,
 			userID, kind, now,
@@ -591,13 +595,13 @@ func (s *AuthStore) HasPendingChallenge(ctx context.Context, userID, kind string
 // GetCredentialByCredentialID returns the credential record matching credential_id (base64url encoded WebAuthn credential ID) for the given user
 func (s *AuthStore) GetCredentialByCredentialID(ctx context.Context, credentialID, userID string) (*AuthCredentialRecord, error) {
 	var rec AuthCredentialRecord
-	err := s.db.db.QueryRow(ctx,
+	err := s.db.QueryRow(ctx,
 		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at
 			FROM v2_user_credentials
 			WHERE credential_id = $1 AND user_id = $2`,
 		credentialID, userID,
 	).Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.CreatedAt, &rec.LastUsedAt)
-	if s.db.db.IsNoRowsError(err) {
+	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -611,7 +615,7 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 	}
 
 	now := time.Now().UTC().Unix()
-	_, err := s.db.db.Exec(ctx,
+	_, err := s.db.Exec(ctx,
 		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, created_at, last_used_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount, in.WrappedPrimaryKey, now, now,
@@ -625,7 +629,7 @@ func (s *AuthStore) RenameCredential(ctx context.Context, id, userID, displayNam
 		return ErrDisplayNameTooLong
 	}
 
-	affected, err := s.db.db.Exec(ctx,
+	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_user_credentials SET display_name = $1 WHERE id = $2 AND user_id = $3`,
 		displayName, id, userID,
 	)
@@ -641,7 +645,7 @@ func (s *AuthStore) RenameCredential(ctx context.Context, id, userID, displayNam
 }
 
 func (s *AuthStore) DeleteCredential(ctx context.Context, id, userID string) error {
-	tx, err := s.db.db.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -683,7 +687,7 @@ func (s *AuthStore) DeleteCredential(ctx context.Context, id, userID string) err
 }
 
 func (s *AuthStore) RevokeSession(ctx context.Context, id string) error {
-	_, err := s.db.db.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $1 WHERE id = $2`, time.Now().UTC().Unix(), id)
+	_, err := s.db.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $1 WHERE id = $2`, time.Now().UTC().Unix(), id)
 	return err
 }
 
@@ -712,7 +716,7 @@ func insertSession(ctx context.Context, tx txExec, userID string, ttl time.Durat
 func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 	cutoff := now.Add(-10 * time.Minute).Unix()
 
-	_, err := s.db.db.Exec(ctx,
+	_, err := s.db.Exec(ctx,
 		`DELETE FROM v2_auth_challenges WHERE expires_at < $1 OR used_at IS NOT NULL`,
 		cutoff,
 	)
@@ -720,7 +724,7 @@ func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("error deleting expired auth challenges: %w", err)
 	}
 
-	_, err = s.db.db.Exec(ctx,
+	_, err = s.db.Exec(ctx,
 		`DELETE FROM v2_user_sessions WHERE expires_at < $1 OR (revoked_at IS NOT NULL AND revoked_at < $2)`,
 		cutoff, cutoff,
 	)
@@ -732,7 +736,7 @@ func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 
 func (s *AuthStore) DeleteExpiredAuthChallenge(ctx context.Context, id string, now time.Time) error {
 	cutoff := now.Add(-10 * time.Minute).Unix()
-	_, err := s.db.db.Exec(ctx,
+	_, err := s.db.Exec(ctx,
 		`DELETE FROM v2_auth_challenges WHERE id = $1 AND (expires_at < $2 OR used_at IS NOT NULL)`,
 		id, cutoff,
 	)
@@ -754,7 +758,7 @@ func (s *AuthStore) DeleteRevokedSession(ctx context.Context, id string, now tim
 		query += `revoked_at IS NOT NULL`
 	}
 
-	_, err := s.db.db.Exec(ctx, query, args...)
+	_, err := s.db.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("error deleting revoked user session: %w", err)
 	}
@@ -763,7 +767,7 @@ func (s *AuthStore) DeleteRevokedSession(ctx context.Context, id string, now tim
 
 func (s *AuthStore) DeleteNonreadyUser(ctx context.Context, id string, now time.Time) error {
 	cutoff := now.Add(-24*time.Hour - 10*time.Minute).Unix()
-	_, err := s.db.db.Exec(ctx,
+	_, err := s.db.Exec(ctx,
 		`DELETE FROM v2_users WHERE id = $1 AND ready = false AND created_at < $2`,
 		id, cutoff,
 	)

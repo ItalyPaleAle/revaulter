@@ -365,9 +365,9 @@ func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = conn.db.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $2, expires_at = $3 WHERE id = $1`, oldRevokedSession.ID, time.Now().Add(-30*time.Minute).Unix(), time.Now().Add(time.Hour).Unix())
+	_, err = conn.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $2, expires_at = $3 WHERE id = $1`, oldRevokedSession.ID, time.Now().Add(-30*time.Minute).Unix(), time.Now().Add(time.Hour).Unix())
 	require.NoError(t, err)
-	_, err = conn.db.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $2, expires_at = $3 WHERE id = $1`, tooFreshRevokedSession.ID, time.Now().Add(-5*time.Minute).Unix(), time.Now().Add(time.Hour).Unix())
+	_, err = conn.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $2, expires_at = $3 WHERE id = $1`, tooFreshRevokedSession.ID, time.Now().Add(-5*time.Minute).Unix(), time.Now().Add(time.Hour).Unix())
 	require.NoError(t, err)
 
 	err = store.DeleteRevokedSession(ctx, oldRevokedSession.ID, time.Now().UTC(), true)
@@ -378,15 +378,15 @@ func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
 	require.NoError(t, err)
 
 	var count int
-	err = conn.db.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, oldRevokedSession.ID).Scan(&count)
+	err = conn.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, oldRevokedSession.ID).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 0, count)
 
-	err = conn.db.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, tooFreshRevokedSession.ID).Scan(&count)
+	err = conn.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, tooFreshRevokedSession.ID).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
-	err = conn.db.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, notRevokedSession.ID).Scan(&count)
+	err = conn.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, notRevokedSession.ID).Scan(&count)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 }
@@ -478,12 +478,12 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = conn.db.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyOldSession.UserID, time.Now().Add(-25*time.Hour).Unix())
+	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyOldSession.UserID, time.Now().Add(-25*time.Hour).Unix())
 	require.NoError(t, err)
-	_, err = conn.db.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyFreshSession.UserID, time.Now().Add(-23*time.Hour).Unix())
+	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyFreshSession.UserID, time.Now().Add(-23*time.Hour).Unix())
 	require.NoError(t, err)
 	require.NoError(t, store.FinalizeSignup(ctx, readySession.UserID, "canary-ready", `{"kty":"EC"}`, "mlkem-ready"))
-	_, err = conn.db.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, readySession.UserID, time.Now().Add(-25*time.Hour).Unix())
+	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, readySession.UserID, time.Now().Add(-25*time.Hour).Unix())
 	require.NoError(t, err)
 
 	err = store.DeleteNonreadyUser(ctx, nonreadyOldSession.UserID, time.Now().UTC())

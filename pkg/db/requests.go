@@ -89,7 +89,7 @@ func NewRequestStore(db *DB, logger *slog.Logger) (*RequestStore, error) {
 func (s *RequestStore) CreateRequest(ctx context.Context, in CreateRequestInput) error {
 	now := in.CreatedAt.Unix()
 	expires := in.ExpiresAt.Unix()
-	_, err := s.db.db.Exec(ctx,
+	_, err := s.db.Exec(ctx,
 		`INSERT INTO v2_requests
 			(state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, encrypted_request)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
@@ -119,7 +119,7 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 	}
 	var row rowT
 
-	err := s.db.db.
+	err := s.db.
 		QueryRow(ctx,
 			`SELECT state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, encrypted_request, encrypted_result FROM v2_requests WHERE state = $1`,
 			state,
@@ -127,7 +127,7 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 		Scan(
 			&row.State, &row.Status, &row.Operation, &row.UserID, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.EncryptedRequest, &row.EncryptedResult,
 		)
-	if s.db.db.IsNoRowsError(err) {
+	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -162,7 +162,7 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 func (s *RequestStore) ListPending(ctx context.Context) ([]V2RequestListItem, error) {
 	_ = s.ExpirePending(ctx, time.Now())
 	var out []V2RequestListItem
-	rows, err := s.db.db.Query(ctx,
+	rows, err := s.db.Query(ctx,
 		`SELECT state,status,operation,user_id,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = $1 ORDER BY created_at ASC`,
 		string(V2RequestStatusPending),
 	)
@@ -190,7 +190,7 @@ func (s *RequestStore) CompleteRequest(ctx context.Context, state string, env pr
 	}
 
 	now := time.Now().Unix()
-	affected, err := s.db.db.Exec(ctx,
+	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_requests SET status = $1, updated_at = $2, encrypted_result = $3 WHERE state = $4 AND status = $5 AND expires_at >= $6`,
 		string(V2RequestStatusCompleted), now, string(envJSON), state, string(V2RequestStatusPending), now,
 	)
@@ -202,7 +202,7 @@ func (s *RequestStore) CompleteRequest(ctx context.Context, state string, env pr
 
 func (s *RequestStore) CancelRequest(ctx context.Context, state string) (bool, error) {
 	now := time.Now().Unix()
-	affected, err := s.db.db.Exec(ctx,
+	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4`,
 		string(V2RequestStatusCanceled), now, state, string(V2RequestStatusPending),
 	)
@@ -214,7 +214,7 @@ func (s *RequestStore) CancelRequest(ctx context.Context, state string) (bool, e
 
 func (s *RequestStore) MarkExpired(ctx context.Context, state string) error {
 	now := time.Now().Unix()
-	_, err := s.db.db.Exec(ctx,
+	_, err := s.db.Exec(ctx,
 		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4 AND expires_at < $5`,
 		string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now,
 	)
@@ -231,13 +231,13 @@ func (s *RequestStore) ExpirePendingAndReturnState(ctx context.Context, state st
 	now := time.Now().Unix()
 	var ref ExpiredRequestRef
 
-	err := s.db.db.
+	err := s.db.
 		QueryRow(ctx,
 			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4 AND expires_at < $5 RETURNING state, user_id`,
 			string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now,
 		).
 		Scan(&ref.State, &ref.UserID)
-	if s.db.db.IsNoRowsError(err) {
+	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
@@ -247,7 +247,7 @@ func (s *RequestStore) ExpirePendingAndReturnState(ctx context.Context, state st
 
 func (s *RequestStore) ExpirePending(ctx context.Context, now time.Time) error {
 	n := now.Unix()
-	_, err := s.db.db.Exec(ctx,
+	_, err := s.db.Exec(ctx,
 		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4`,
 		string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
 	)
@@ -257,7 +257,7 @@ func (s *RequestStore) ExpirePending(ctx context.Context, now time.Time) error {
 // CleanupOldRecords deletes non-pending requests that expired more than 10 minutes ago.
 func (s *RequestStore) CleanupOldRecords(ctx context.Context, now time.Time) (int64, error) {
 	cutoff := now.Add(-10 * time.Minute).Unix()
-	affected, err := s.db.db.Exec(ctx,
+	affected, err := s.db.Exec(ctx,
 		`DELETE FROM v2_requests WHERE status != $1 AND expires_at < $2`,
 		string(V2RequestStatusPending), cutoff)
 	if err != nil {
@@ -268,7 +268,7 @@ func (s *RequestStore) CleanupOldRecords(ctx context.Context, now time.Time) (in
 
 func (s *RequestStore) DeleteExpiredTerminalRequest(ctx context.Context, state string, now time.Time) error {
 	cutoff := now.Add(-10 * time.Minute).Unix()
-	_, err := s.db.db.Exec(ctx,
+	_, err := s.db.Exec(ctx,
 		`DELETE FROM v2_requests WHERE state = $1 AND status != $2 AND expires_at < $3`,
 		state, string(V2RequestStatusPending), cutoff,
 	)

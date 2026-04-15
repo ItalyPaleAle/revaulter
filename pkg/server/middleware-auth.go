@@ -15,8 +15,6 @@ const (
 	sessionCookieNameInsecure = "_s"
 	contextKeySessionID       = "SessionID"
 	contextKeyUserID          = "UserID"
-	contextKeyUserDisplayName = "UserDisplayName"
-	contextKeySessionExpiry   = "SessionExpiry"
 )
 
 // sessionCookieFor returns the appropriate cookie name and path for the connection
@@ -31,11 +29,6 @@ func sessionCookieFor(c *gin.Context) (name, path string) {
 
 func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if s.authStore == nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "auth is not configured"))
-			return
-		}
-
 		cookieName, _ := sessionCookieFor(c)
 		sessID, ttl, err := getSecureCookieEncryptedJWT(c, cookieName)
 		if err != nil || sessID == "" {
@@ -70,7 +63,5 @@ func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 		c.Header(headerSessionTTL, strconv.Itoa(int(ttl.Seconds())))
 		c.Set(contextKeySessionID, sess.ID)
 		c.Set(contextKeyUserID, sess.UserID)
-		c.Set(contextKeyUserDisplayName, sess.DisplayName)
-		c.Set(contextKeySessionExpiry, sess.ExpiresAt)
 	}
 }

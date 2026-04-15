@@ -13,7 +13,7 @@ import (
 // ResetAllForTests removes all v2 rows in dependency order.
 // This is only intended for deterministic test harness setup.
 func (db *DB) ResetAllForTests(ctx context.Context) error {
-	if db == nil || db.db == nil {
+	if db == nil || db.DatabaseConn == nil {
 		return fmt.Errorf("db is not initialized")
 	}
 
@@ -26,7 +26,7 @@ func (db *DB) ResetAllForTests(ctx context.Context) error {
 		"v2_users",
 	}
 	for _, table := range tables {
-		_, err := db.db.Exec(ctx, "DELETE FROM "+table)
+		_, err := db.Exec(ctx, "DELETE FROM "+table)
 		if err != nil {
 			return fmt.Errorf("failed to reset table %s: %w", table, err)
 		}
@@ -37,11 +37,11 @@ func (db *DB) ResetAllForTests(ctx context.Context) error {
 
 // ForceExpireRequestForTests sets the request expiry in the past for deterministic test setup.
 func (s *RequestStore) ForceExpireRequestForTests(ctx context.Context, state string, expiresAt time.Time) error {
-	if s == nil || s.db == nil || s.db.db == nil {
+	if s == nil || s.db == nil || s.db.DatabaseConn == nil {
 		return fmt.Errorf("request store is not initialized")
 	}
 
-	_, err := s.db.db.Exec(ctx, `UPDATE v2_requests SET expires_at = $1 WHERE state = $2`, expiresAt.Unix(), state)
+	_, err := s.db.Exec(ctx, `UPDATE v2_requests SET expires_at = $1 WHERE state = $2`, expiresAt.Unix(), state)
 	if err != nil {
 		return fmt.Errorf("failed to force-expire request %s: %w", state, err)
 	}

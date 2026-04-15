@@ -46,7 +46,7 @@ func (s *Server) getRequestID(c *gin.Context) (string, error) {
 	headerName := config.Get().TrustedRequestIdHeader
 	if headerName != "" {
 		v := strings.TrimSpace(c.GetHeader(headerName))
-		if validTrustedRequestID(v) {
+		if validateTrustedRequestID(v) {
 			return v, nil
 		}
 	}
@@ -61,8 +61,8 @@ func (s *Server) getRequestID(c *gin.Context) (string, error) {
 	return v, nil
 }
 
-// validTrustedRequestID validates that the request ID header matches `[A-Za-z0-9._:-]{1,128}`
-func validTrustedRequestID(v string) bool {
+// validateTrustedRequestID validates that the request ID header matches `[A-Za-z0-9._:-]{1,128}`
+func validateTrustedRequestID(v string) bool {
 	if v == "" || len(v) > 128 {
 		return false
 	}
