@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -26,32 +25,14 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 		log := logging.LogFromContext(c.Request.Context())
 		span := trace.SpanFromContext(c.Request.Context())
 
-		requestKey := c.Param("requestKey")
-		if requestKey == "" {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing request key"))
-			return
-		}
-
-		user, err := s.authStore.GetUserByRequestKey(c.Request.Context(), requestKey)
-		if err != nil {
-			AbortWithErrorJSON(c, err)
-			return
-		}
-		if user == nil || user.Status != "active" {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request key not found"))
-			return
-		}
-		if !user.Ready {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusPreconditionFailed, "User account setup is not complete"))
-			return
-		}
-		if !clientIPAllowed(c.ClientIP(), user.AllowedIPs) {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "This client's IP is not allowed to perform this request"))
+		user := getRequestUserFromCtx(c)
+		if user == nil {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Missing request user in context"))
 			return
 		}
 
 		var body protocolv2.RequestCreateBody
-		err = c.ShouldBindJSON(&body)
+		err := c.ShouldBindJSON(&body)
 		if err != nil {
 			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid request body: %v", err))
 			return
@@ -164,21 +145,12 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 }
 
 func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
-	requestKey := c.Param("requestKey")
-	if requestKey == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing request key"))
+	user := getRequestUserFromCtx(c)
+	if user == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Missing request user in context"))
 		return
 	}
 
-	user, err := s.authStore.GetUserByRequestKey(c.Request.Context(), requestKey)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	if user == nil || user.Status != "active" || !user.Ready {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request key not found or user setup is not complete"))
-		return
-	}
 	if user.RequestEncEcdhPubkey == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusPreconditionFailed, "User has not configured request encryption key"))
 		return
@@ -311,24 +283,4 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 	}
 
 	return nil
-}
-
-func parseRequestTimeout(raw string) time.Duration {
-	cfg := config.Get()
-
-	if raw == "" {
-		return cfg.RequestTimeout
-	}
-
-	rawInt, err := strconv.Atoi(raw)
-	if err == nil && rawInt > 0 {
-		return time.Duration(rawInt) * time.Second
-	}
-
-	d, err := time.ParseDuration(raw)
-	if err == nil && d >= time.Second {
-		return d
-	}
-
-	return cfg.RequestTimeout
 }

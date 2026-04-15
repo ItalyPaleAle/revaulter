@@ -178,6 +178,7 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+
 	var res protocolv2.RequestResultResponse
 	err = doJSONRequest(httpClient, req, &res)
 	if err != nil {

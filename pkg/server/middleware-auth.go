@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/italypaleale/revaulter/pkg/db"
 )
 
 const (
@@ -15,6 +16,7 @@ const (
 	sessionCookieNameInsecure = "_s"
 	contextKeySessionID       = "SessionID"
 	contextKeyUserID          = "UserID"
+	contextKeyRequestUser     = "RequestUser"
 )
 
 // sessionCookieFor returns the appropriate cookie name and path for the connection
@@ -64,4 +66,52 @@ func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 		c.Set(contextKeySessionID, sess.ID)
 		c.Set(contextKeyUserID, sess.UserID)
 	}
+}
+
+// MiddlewareRequestKey gets the request key from the params and retrieves the user
+func (s *Server) MiddlewareRequestKey(c *gin.Context) {
+	// Get the request key from the URL parameter
+	requestKey := c.Param("requestKey")
+	if requestKey == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing request key"))
+		return
+	}
+
+	// Get the user
+	user, err := s.authStore.GetUserByRequestKey(c.Request.Context(), requestKey)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if user == nil || user.Status != "active" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request key not found"))
+		return
+	}
+	if !user.Ready {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusPreconditionFailed, "User account setup is not complete"))
+		return
+	}
+
+	// Check if the client IP is allowed
+	if !clientIPAllowed(c.ClientIP(), user.AllowedIPs) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "This client's IP is not allowed to perform this request"))
+		return
+	}
+
+	// Set the user in the context
+	c.Set(contextKeyRequestUser, user)
+}
+
+func getRequestUserFromCtx(c *gin.Context) *db.User {
+	val, ok := c.Get(contextKeyRequestUser)
+	if !ok {
+		return nil
+	}
+
+	user, ok := val.(*db.User)
+	if !ok {
+		return nil
+	}
+
+	return user
 }

@@ -22,7 +22,7 @@ type RequestCreateBody struct {
 
 // ValidateNote validates the Note property
 func (r *RequestCreateBody) ValidateNote() bool {
-	for i := 0; i < len(r.Note); i++ {
+	for i := range len(r.Note) {
 		ch := r.Note[i]
 		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
 			continue
