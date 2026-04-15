@@ -2,7 +2,7 @@
 // The returned object owns a CDP session that lives for the lifetime of the test
 export async function createVirtualPasskey(page) {
     const manager = await createVirtualPasskeyManager(page)
-    await manager.addAuthenticator()
+    await manager.addAuthenticator({ active: true })
     return {
         async dispose() {
             await manager.dispose()
