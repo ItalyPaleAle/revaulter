@@ -333,11 +333,21 @@ export async function addPasskeyThroughSettings(page, manager, name) {
 // Sets a password from the Settings → Password tab (used when the account was created without a password)
 export async function setPasswordThroughSettings(page, password) {
     await openSettingsTab(page, 'Password')
-    // Target the password inputs by their specific placeholder text since the tab navigation button also has accessible name "Password"
-    await page.locator('input[placeholder="Enter password"]').fill(password)
-    await page.locator('input[placeholder="Confirm password"]').fill(password)
-    await page.getByRole('button', { name: 'Set password' }).click()
-    await expect(page.getByText('Password updated.')).toBeVisible()
+
+    const setPasswordInput = page.locator('input[placeholder="Enter password"]')
+    const changePasswordInput = page.locator('input[placeholder="Enter new password"]')
+
+    if (await setPasswordInput.count()) {
+        await setPasswordInput.fill(password)
+        await page.locator('input[placeholder="Confirm password"]').fill(password)
+        await page.getByRole('button', { name: 'Set password' }).click()
+    } else {
+        await changePasswordInput.fill(password)
+        await page.locator('input[placeholder="Confirm new password"]').fill(password)
+        await page.getByRole('button', { name: 'Change password' }).click()
+    }
+
+    await expect(page.getByRole('button', { name: 'Close user settings' })).toBeVisible()
     await page.getByRole('button', { name: 'Close user settings' }).click()
 }
 

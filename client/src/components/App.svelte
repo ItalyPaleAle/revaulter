@@ -642,7 +642,9 @@ async function doChangePassword(password: string) {
 
         // Keep the new password in memory so subsequent add-passkey calls wrap with it (or clear it when removed)
         sessionPassword = password || null
-        settingsSuccess = password ? 'Password updated for this passkey. Other passkeys will ask to refresh on next use.' : 'Password removed for this passkey. Other passkeys will refresh on next use.'
+        settingsSuccess = password
+            ? 'Password updated for this passkey. Other passkeys will ask to refresh on next use.'
+            : 'Password removed for this passkey. Other passkeys will refresh on next use.'
     } catch (err) {
         settingsError = err instanceof Error ? err.message : String(err)
     } finally {

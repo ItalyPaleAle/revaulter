@@ -138,43 +138,58 @@ test('two passkeys with a password set before the second passkey share the prima
     }
 })
 
-test('password added on the second passkey still keeps the first passkey able to decrypt', async ({ page }) => {
+test('changing the password on one passkey leaves the other on the old password until it is refreshed', async ({
+    page,
+}) => {
     const manager = await createPasskeyManager(page)
 
     try {
-        // Register the first passkey and skip password setup so both passkeys start off without password wrapping
-        const firstId = await registerWithManager(page, manager, 'Multi Passkey Late Password')
-        await skipPasswordSetup(page)
+        // Register the first passkey with an initial password so both credentials start on the same wrapping epoch
+        const firstId = await registerWithManager(page, manager, 'Multi Passkey Password Rotation')
+        const oldPassword = 'hunter2'
+        await page.getByLabel('Password', { exact: true }).fill(oldPassword)
+        await page.getByLabel('Confirm password').fill(oldPassword)
+        await page.getByRole('button', { name: 'Save password' }).click()
+        await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
 
-        // Add a second passkey while still password-less; both credentials share a primary key wrapped without a password
+        // Add a second passkey while the first password is still active so both passkeys initially use the same password
         const secondId = await manager.addAuthenticator({ active: false })
         await manager.setActive(secondId)
         await addPasskeyThroughSettings(page, manager, 'Second Passkey')
 
-        // Sign out and sign back in with the second passkey, then add a password through settings
-        // The password change only re-wraps the primary key for the currently signed-in credential, which is the second one
-        await signOutThroughUI(page)
-        await signInWithAuthenticator(page, manager, secondId)
-        await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
-        const password = 'hunter2'
-        await setPasswordThroughSettings(page, password)
-
-        // Sign out then sign in with the first passkey; because only the second credential was re-wrapped the first still unlocks without a password
+        // Change the password while signed in with the first passkey; that should only update this credential immediately
         await signOutThroughUI(page)
         await signInWithAuthenticator(page, manager, firstId)
+        await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
+        await unlockWithPassword(page, oldPassword)
         await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
-        const firstSession = await readSession(page)
-        const encrypted = await runEncryptThroughUI(page, firstSession.requestKey, 'hello world', 'pk1')
 
-        // Finally sign back in with the second passkey which now requires the password; verify the decrypt round-trips the same plaintext
+        const newPassword = 'hunter3'
+        await setPasswordThroughSettings(page, newPassword)
+
+        // The second passkey should still be on the old password until it logs in and refreshes its wrapper
         await signOutThroughUI(page)
         await signInWithAuthenticator(page, manager, secondId)
         await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
-        await unlockWithPassword(page, password)
+
+        await unlockWithPassword(page, newPassword)
+        await expect(page.getByText('Incorrect password')).toBeVisible()
+        await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
+
+        await unlockWithPassword(page, oldPassword)
         await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
         const secondSession = await readSession(page)
-        expect(secondSession.userId).toBe(firstSession.userId)
-        const decrypted = await runDecryptThroughUI(page, secondSession.requestKey, encrypted, 'pk2')
+        const encrypted = await runEncryptThroughUI(page, secondSession.requestKey, 'hello world', 'pk2-old-password')
+
+        // The first passkey should also have moved to the new password because it was the one used to initiate the change
+        await signOutThroughUI(page)
+        await signInWithAuthenticator(page, manager, firstId)
+        await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
+        await unlockWithPassword(page, newPassword)
+        await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
+        const firstSession = await readSession(page)
+        expect(firstSession.userId).toBe(secondSession.userId)
+        const decrypted = await runDecryptThroughUI(page, firstSession.requestKey, encrypted, 'pk1-new-password')
         expect(decrypted.decodedValue).toBe('hello world')
     } finally {
         await manager.dispose()
