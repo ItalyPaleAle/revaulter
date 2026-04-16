@@ -1,0 +1,233 @@
+# Installing Revaulter
+
+Revaulter is distributed as a container image and runs as a single-container service.
+
+## Requirements
+
+- A container runtime (Docker, Podman, etc.)
+- A database: **SQLite** or **PostgreSQL**
+- HTTPS access for the web UI: TLS certificates or a reverse proxy (this is required because of WebCrypto)
+- A webhook endpoint for notifications (Discord, Slack, or any HTTP endpoint)
+
+## Container images
+
+| Image | Description |
+|-------|-------------|
+| `ghcr.io/italypaleale/revaulter:2` | Revaulter server |
+| `ghcr.io/italypaleale/revaulter-cli:2` | Revaulter CLI |
+
+Both images are available for `amd64` and `arm64`.
+
+## Configuration
+
+Revaulter is configured via a YAML file and/or environment variables. Inside the container, it looks for `config.yaml` at:
+
+1. The path set in the `REVAULTER_CONFIG` environment variable
+2. `/etc/revaulter/config.yaml`
+3. `$HOME/.revaulter/config.yaml`
+4. The same directory as the binary
+
+### Required configuration
+
+| Key | Env var | Description |
+|-----|---------|-------------|
+| `webhookUrl` | `WEBHOOKURL` | Webhook endpoint for notifications |
+| `databaseDSN` | `DATABASEDSN` | Database connection string (see [Database](#database) below) |
+| `secretKey` | `SECRETKEY` | Instance-wide secret for key derivation (see [Secret key](#secret-key) below) |
+
+### Recommended configuration
+
+| Key | Env var | Default | Description |
+|-----|---------|---------|-------------|
+| `baseUrl` | `BASEURL` | `https://localhost:<port>` | Public URL where users access the web UI. Used for webhook links and WebAuthn origin validation. |
+| `tlsPath` | `TLSPATH` | Config file directory | Directory containing `tls-cert.pem` and `tls-key.pem`. Revaulter watches for changes and auto-reloads. |
+| `tlsCertPEM` | `TLSCERTPEM` | | PEM-encoded TLS certificate (alternative to `tlsPath`) |
+| `tlsKeyPEM` | `TLSKEYPEM` | | PEM-encoded TLS key (alternative to `tlsPath`) |
+
+### Optional configuration
+
+| Key | Env var | Default | Description |
+|-----|---------|---------|-------------|
+| `webhookFormat` | `WEBHOOKFORMAT` | `plain` | Webhook format: `plain`, `slack`, or `discord` |
+| `webhookKey` | `WEBHOOKKEY` | | Value sent as `Authorization` header on webhook requests (include the scheme, e.g. `Bearer abc123`) |
+| `port` | `PORT` | `8080` | Port to bind to |
+| `bind` | `BIND` | `0.0.0.0` | Address/interface to bind to |
+| `disableSignup` | `DISABLESIGNUP` | `false` | Disable creation of new user accounts |
+| `sessionTimeout` | `SESSIONTIMEOUT` | `5m` | Session duration before re-authentication is required (max: `1h`) |
+| `requestTimeout` | `REQUESTTIMEOUT` | `5m` | Default timeout for requests (can be overridden per-request; max: `24h`) |
+| `trustedProxies` | `TRUSTEDPROXIES` | | Comma-separated list of IPs/CIDRs to trust for `X-Forwarded-*` headers |
+| `forceSecureCookies` | `FORCESECURECOOKIES` | `false` | Force the `Secure` flag on cookies (set to `true` when behind a TLS-terminating reverse proxy) |
+| `trustedRequestIdHeader` | `TRUSTEDREQUESTIDHEADER` | | Header to trust as request ID (e.g. `X-Request-ID`, `CF-Ray`) |
+| `omitHealthCheckLogs` | `OMITHEALTHCHECKLOGS` | `false` | Suppress `/healthz` logs |
+| `logLevel` | `LOGLEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
+| `logAsJson` | `LOGASJSON` | auto | Emit JSON logs (defaults to `true` when no TTY is attached) |
+
+### Optional WebAuthn configuration
+
+These settings are necessary in some scenarios only. Revaulter derives sensible defaults from `baseUrl`.
+
+| Key | Env var | Default | Description |
+|-----|---------|---------|-------------|
+| `webauthnRpId` | `WEBAUTHNRPID` | Derived from `baseUrl` | WebAuthn Relying Party ID |
+| `webauthnRpName` | `WEBAUTHNRPNAME` | `Revaulter` | WebAuthn Relying Party display name |
+| `webauthnOrigins` | `WEBAUTHNORIGINS` | `baseUrl` | Allowed WebAuthn origins |
+
+## Database
+
+Revaulter supports SQLite and PostgreSQL. The backend is detected automatically from the DSN:
+
+| DSN format | Backend |
+|------------|---------|
+| `postgres://user:pass@host:5432/dbname` | PostgreSQL |
+| `sqlite:///path/to/file.db` | SQLite |
+| `/path/to/file.db` (no scheme) | SQLite |
+
+SQLite requires no external dependencies and is a good default for single-node deployments.
+
+For PostgreSQL, use a standard connection string with `sslmode=require` in production:
+
+```
+postgres://revaulter:password@db.example.com:5432/revaulter?sslmode=require
+```
+
+> ⚠️ **Warning:** When using SQLite, the database file must **not** be stored on a networked filesystem, like NFS or SMB.
+
+## Secret key
+
+Generate a secret key:
+
+```bash
+openssl rand -base64 32
+```
+
+> ⚠️ **Warning:** Rotating `secretKey` bricks every existing account on the instance. The secret key is used to derive the WebAuthn PRF salt that every user's in-browser key derivation is bound to. Treat this value as **immutable** for the lifetime of the instance. If you must rotate it, every user will need to re-register from scratch.
+
+> 📝 **Note:** `secretKey` is **not** used to encrypt anything stored in the database. All request payloads and responses are end-to-end encrypted in the browser; the server only stores opaque envelopes.
+
+## TLS
+
+Revaulter requires HTTPS for WebAuthn to work (browsers enforce a secure context). You have two options:
+
+1. **Reverse proxy** (recommended): Terminate TLS at a reverse proxy (Caddy, Traefik, Nginx, etc.) and forward plain HTTP to Revaulter.
+   - Set `forceSecureCookies: true` in this case.
+2. **Direct TLS**: Provide certificates via `tlsPath` (a directory containing `tls-cert.pem` and `tls-key.pem`) or via `tlsCertPEM`/`tlsKeyPEM`. Revaulter watches the `tlsPath` directory and auto-reloads certificates.
+
+## Docker Compose example
+
+```yaml
+services:
+  revaulter:
+    image: ghcr.io/italypaleale/revaulter:2
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/etc/revaulter/config.yaml:ro
+      - revaulter-data:/data
+    restart: unless-stopped
+
+volumes:
+  revaulter-data:
+```
+
+With a `config.yaml`:
+
+```yaml
+webhookUrl: "https://discord.com/api/webhooks/your-webhook-id/your-webhook-token"
+webhookFormat: "discord"
+databaseDSN: "/data/revaulter.db"
+secretKey: "<your-secret-key>"
+baseUrl: "https://revaulter.example.com"
+```
+
+If you want Revaulter to handle TLS directly:
+
+```yaml
+services:
+  revaulter:
+    image: ghcr.io/italypaleale/revaulter:2
+    ports:
+      - "443:8080"
+    volumes:
+      - ./config.yaml:/etc/revaulter/config.yaml:ro
+      - ./tls:/etc/revaulter/tls:ro
+      - revaulter-data:/data
+    restart: unless-stopped
+
+volumes:
+  revaulter-data:
+```
+
+And add to `config.yaml`:
+
+```yaml
+tlsPath: "/etc/revaulter/tls"
+port: 8080
+```
+
+Place `tls-cert.pem` and `tls-key.pem` in the `./tls` directory.
+
+## Podman Quadlet example
+
+First, store the config file as a Podman secret:
+
+```bash
+podman secret create revaulter-config ~/.config/revaulter/config.yaml
+```
+
+Create a container unit file at `~/.config/containers/systemd/revaulter.container` (rootless) or `/etc/containers/systemd/revaulter.container` (rootful):
+
+```ini
+[Unit]
+Description=Revaulter
+After=network-online.target
+
+[Container]
+Image=ghcr.io/italypaleale/revaulter:latest
+PublishPort=8080:8080
+Secret=revaulter-config,target=/etc/revaulter/config.yaml
+Volume=revaulter-data.volume:/data
+AutoUpdate=registry
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+Create a volume unit file at the same location, `revaulter-data.volume`:
+
+```ini
+[Volume]
+```
+
+Then reload and start:
+
+```bash
+# Rootless
+systemctl --user daemon-reload
+systemctl --user enable --now revaulter
+
+# Rootful
+systemctl daemon-reload
+systemctl enable --now revaulter
+```
+
+To update the config later, recreate the secret and restart the service:
+
+```bash
+podman secret rm revaulter-config
+podman secret create revaulter-config ~/.config/revaulter/config.yaml
+systemctl --user restart revaulter
+```
+
+## User setup
+
+After starting Revaulter:
+
+1. Open the web UI at your configured `baseUrl`.
+2. Create an account: registration uses WebAuthn, so you'll need a passkey-capable authenticator with PRF support.
+3. After registration, the UI shows your **request key**: this is the per-user key that CLI requests are routed by.
+4. Optionally configure allowed IP addresses for your account from the settings page.
+
+> Account self-registration can be disabled by setting `disableSignup: true` after initial setup.
