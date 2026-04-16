@@ -12,12 +12,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/italypaleale/revaulter/client"
+	"github.com/italypaleale/revaulter/client/web"
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
 )
 
-//go:generate ../../client/build.sh
+//go:generate ../../client/web/build.sh
 
 const staticBaseDir = "dist"
 
@@ -31,7 +31,7 @@ func (s *Server) serveClient() []gin.HandlerFunc {
 			}
 
 			// Serve the request from the embedded FS
-			serveStaticFiles(c, c.Request.URL.Path, client.StaticFS)
+			serveStaticFiles(c, c.Request.URL.Path, web.StaticFS)
 		},
 	}
 }

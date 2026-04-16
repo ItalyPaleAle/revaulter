@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"github.com/italypaleale/revaulter/client"
+	"github.com/italypaleale/revaulter/client/web"
 )
 
 func TestServeStaticFilesSetsSecurityHeadersForRootIndex(t *testing.T) {
@@ -19,7 +19,7 @@ func TestServeStaticFilesSetsSecurityHeadersForRootIndex(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 
-	serveStaticFiles(c, "/", client.StaticFS)
+	serveStaticFiles(c, "/", web.StaticFS)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.NotEmpty(t, w.Header().Get("Content-Security-Policy"))
