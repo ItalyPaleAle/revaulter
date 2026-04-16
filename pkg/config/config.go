@@ -2,17 +2,13 @@ package config
 
 import (
 	"crypto/hkdf"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"time"
-
-	"github.com/lestrrat-go/jwx/v2/jwk"
 )
 
 // Config is the struct containing configuration
@@ -108,14 +104,6 @@ type Config struct {
 	// +default false
 	OmitHealthCheckLogs bool `env:"OMITHEALTHCHECKLOGS" yaml:"omitHealthCheckLogs"`
 
-	// String used as key to sign state tokens. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
-	// +default randomly-generated when the application starts
-	TokenSigningKey string `env:"TOKENSIGNINGKEY" yaml:"tokenSigningKey"`
-
-	// String used as key to encrypt cookies. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
-	// +default randomly-generated when the application starts
-	CookieEncryptionKey string `env:"COOKIEENCRYPTIONKEY" yaml:"cookieEncryptionKey"`
-
 	// String with the name of a header to trust as ID of each request. The ID is included in logs and in responses as `X-Request-ID` header.
 	// Common values can include:
 	//
@@ -156,27 +144,9 @@ type Dev struct {
 
 // Internal properties
 type internal struct {
-	instanceID                string
-	configFileLoaded          string // Path to the config file that was loaded
-	tokenSigningKeyParsed     []byte
-	cookieEncryptionKeyParsed jwk.Key
-	cookieSigningKeyParsed    jwk.Key
-	prfSalt                   string // base64-encoded
-}
-
-// GetTokenSigningKey returns the (parsed) token signing key
-func (c *Config) GetTokenSigningKey() []byte {
-	return c.internal.tokenSigningKeyParsed
-}
-
-// GetCookieEncryptionKey returns the (parsed) cookie encryption key
-func (c *Config) GetCookieEncryptionKey() jwk.Key {
-	return c.internal.cookieEncryptionKeyParsed
-}
-
-// GetCookieSigningKey returns the (parsed) cookie signing key
-func (c *Config) GetCookieSigningKey() jwk.Key {
-	return c.internal.cookieSigningKeyParsed
+	instanceID       string
+	configFileLoaded string // Path to the config file that was loaded
+	prfSalt          string // base64-encoded
 }
 
 // GetPRFSalt returns the PRF salt
@@ -246,96 +216,9 @@ func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
 	return nil
 }
 
-// SetTokenSigningKey parses the token signing key.
-// If it's empty, will generate a new one.
-func (c *Config) SetTokenSigningKey(logger *slog.Logger) (err error) {
-	b := []byte(c.TokenSigningKey)
-	if len(b) == 0 {
-		if logger != nil {
-			logger.Info("No 'tokenSigningKey' found in the configuration: a random one will be generated")
-		}
-
-		c.internal.tokenSigningKeyParsed = make([]byte, 32)
-		_, err = io.ReadFull(rand.Reader, c.internal.tokenSigningKeyParsed)
-		if err != nil {
-			return fmt.Errorf("failed to generate random bytes: %w", err)
-		}
-		return nil
-	}
-
-	// Use HKDF to ensure the key is 256-bit long
-	c.internal.tokenSigningKeyParsed, err = hkdf.Key(sha256.New, b, nil, "revaulter-token-signing-key", 32)
-	if err != nil {
-		return fmt.Errorf("failed to derive token signing key: %w", err)
-	}
-
-	return nil
-}
-
-// SetCookieKeys sets the cookie encryption and signing keys.
-func (c *Config) SetCookieKeys(logger *slog.Logger) (err error) {
-	// If we have cookieEncryptionKey set, derive the keys from that
-	// Otherwise, generate the keys randomly
-	var (
-		// Cookie Encryption Key, 128-bit (for AES-KW)
-		cekRaw []byte
-		// Cookie Signing Key, 256-bit (for HMAC-SHA256)
-		cskRaw []byte
-	)
-	if c.CookieEncryptionKey != "" {
-		var material []byte
-		material, err = hkdf.Key(sha256.New, []byte(c.CookieEncryptionKey), nil, "revaulter-cookie-keys", 48)
-		if err != nil {
-			return fmt.Errorf("failed to derive cookie keys: %w", err)
-		}
-		cekRaw = material[0:16]
-		cskRaw = material[16:]
-	} else {
-		if logger != nil {
-			logger.Info("No 'cookieEncryptionKey' found in the configuration: a random one will be generated")
-		}
-
-		cekRaw = make([]byte, 16)
-		_, err = io.ReadFull(rand.Reader, cekRaw)
-		if err != nil {
-			return fmt.Errorf("failed to generate random cookieEncryptionKey: %w", err)
-		}
-
-		cskRaw = make([]byte, 32)
-		_, err = io.ReadFull(rand.Reader, cskRaw)
-		if err != nil {
-			return fmt.Errorf("failed to generate random cookieSigningKey: %w", err)
-		}
-	}
-
-	// Calculate the key ID
-	kid := computeKeyId(cskRaw)
-
-	// Import the keys as JWKs
-	c.internal.cookieEncryptionKeyParsed, err = jwk.FromRaw(cekRaw)
-	if err != nil {
-		return fmt.Errorf("failed to import cookieEncryptionKey as jwk.Key: %w", err)
-	}
-	_ = c.internal.cookieEncryptionKeyParsed.Set("kid", kid)
-
-	c.internal.cookieSigningKeyParsed, err = jwk.FromRaw(cskRaw)
-	if err != nil {
-		return fmt.Errorf("failed to import cookieSigningKey as jwk.Key: %w", err)
-	}
-	_ = c.internal.cookieSigningKeyParsed.Set("kid", kid)
-
-	return nil
-}
-
 // String implements fmt.Stringer and is used for debugging
 // Returns the entire configuration as JSON
 func (c *Config) String() string {
 	enc, _ := json.Marshal(c)
 	return string(enc)
-}
-
-// Returns the key ID from a key
-func computeKeyId(k []byte) string {
-	h := sha256.Sum256(k)
-	return base64.RawURLEncoding.EncodeToString(h[0:12])
 }

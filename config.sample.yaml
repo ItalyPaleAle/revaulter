@@ -127,18 +127,6 @@ secretKey:
 ## Default: false
 #omitHealthCheckLogs: 
 
-## tokenSigningKey (string)
-## Description:
-##   String used as key to sign state tokens. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
-## Default: randomly-generated when the application starts
-#tokenSigningKey: 
-
-## cookieEncryptionKey (string)
-## Description:
-##   String used as key to encrypt cookies. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
-## Default: randomly-generated when the application starts
-#cookieEncryptionKey: 
-
 ## trustedRequestIdHeader (string)
 ## Description:
 ##   String with the name of a header to trust as ID of each request. The ID is included in logs and in responses as `X-Request-ID` header.

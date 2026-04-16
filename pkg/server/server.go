@@ -268,6 +268,9 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2RouteGroup := s.appRouter.Group("/v2")
 	addStandardMiddlewares(v2RouteGroup)
 
+	// Unauthenticated info endpoint for server discovery
+	v2RouteGroup.GET("/info", s.RouteV2Info)
+
 	// Request group is API-to-server (not browser-originated), so no CSRF middleware
 	v2RequestGroup := v2RouteGroup.Group("/request")
 	v2RequestGroup.Use(requestRateLimiter)

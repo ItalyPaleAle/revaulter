@@ -1,5 +1,3 @@
-//go:build unit
-
 package server
 
 import (
@@ -22,7 +20,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -45,16 +42,14 @@ const (
 
 func TestMain(m *testing.M) {
 	_ = config.SetTestConfig(map[string]any{
-		"logLevel":            "info",
-		"port":                testServerPort,
-		"bind":                "127.0.0.1",
-		"sessionTimeout":      5 * time.Minute,
-		"requestTimeout":      5 * time.Minute,
-		"webhookUrl":          "http://test.local",
-		"databaseDSN":         ":memory:",
-		"secretKey":           "dGVzdC12Mi1kYi1rZXk",
-		"cookieEncryptionKey": "hello-world",
-		"tokenSigningKey":     "hello-world",
+		"logLevel":       "info",
+		"port":           testServerPort,
+		"bind":           "127.0.0.1",
+		"sessionTimeout": 5 * time.Minute,
+		"requestTimeout": 5 * time.Minute,
+		"webhookUrl":     "http://test.local",
+		"databaseDSN":    ":memory:",
+		"secretKey":      "dGVzdC12Mi1kYi1rZXk",
 	})
 
 	gin.SetMode(gin.ReleaseMode)
@@ -607,18 +602,12 @@ func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
 	client := clientForListener(srv.appListener)
 
 	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-logout", "Logout User")
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "https://localhost/", nil)
-	ctx.Request.AddCookie(sessionCookie)
-	sessionID, _, err := getSecureCookieEncryptedJWT(ctx, sessionCookieNameSecure)
-	require.NoError(t, err)
-	require.NotEmpty(t, sessionID)
+	require.NotEmpty(t, sessionCookie.Value)
 
-	err = srv.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "session-delete:" + sessionID,
+	err := srv.deleteQueue.Enqueue(deleteEvent{
+		KeyName: "session-delete:" + sessionCookie.Value,
 		Kind:    "session",
-		ID:      sessionID,
+		ID:      sessionCookie.Value,
 		TTL:     time.Now().UTC().Add(time.Hour),
 	})
 	require.NoError(t, err)
@@ -636,7 +625,7 @@ func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
 	}()
 	require.Equal(t, http.StatusOK, res.StatusCode)
 
-	sess, err := srv.authStore.GetSession(t.Context(), sessionID)
+	sess, err := srv.authStore.GetSession(t.Context(), sessionCookie.Value)
 	require.NoError(t, err)
 	require.Nil(t, sess)
 }
@@ -721,12 +710,9 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 	require.NoError(t, err)
 	require.NotNil(t, user)
 
-	cookieValue, err := serializeSecureCookieEncryptedJWT(sessionCookieNameSecure, sess.ID, time.Until(sess.ExpiresAt))
-	require.NoError(t, err)
-
 	return &http.Cookie{
 		Name:  sessionCookieNameSecure,
-		Value: cookieValue,
+		Value: sess.ID,
 		Path:  "/",
 	}, user
 }

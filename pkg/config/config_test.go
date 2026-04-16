@@ -1,14 +1,9 @@
 package config
 
 import (
-	"bytes"
-	"encoding/base64"
-	"encoding/hex"
-	"log/slog"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,94 +96,5 @@ func TestValidateConfig(t *testing.T) {
 		err := config.Validate(nil)
 		require.Error(t, err)
 		require.ErrorContains(t, err, "'databaseDSN' missing")
-	})
-}
-
-func TestSetTokenSigningKey(t *testing.T) {
-	logs := &bytes.Buffer{}
-	logger := slog.New(slog.NewTextHandler(logs, nil))
-
-	t.Run("tokenSigningKey present", func(t *testing.T) {
-		t.Cleanup(SetTestConfig(map[string]any{
-			"tokenSigningKey": "hello-world",
-		}))
-
-		err := config.SetTokenSigningKey(logger)
-		require.NoError(t, err)
-		assert.Equal(t, "106f91bd03b5e3735cd6efcb50474f50c4b6de2ff28084af01642056aaa93e9e", hex.EncodeToString(config.GetTokenSigningKey()))
-	})
-
-	t.Run("tokenSigningKey not present", func(t *testing.T) {
-		t.Cleanup(SetTestConfig(map[string]any{
-			"tokenSigningKey": "",
-		}))
-
-		err := config.SetTokenSigningKey(logger)
-		require.NoError(t, err)
-		val := config.GetTokenSigningKey()
-		require.Len(t, val, 32)
-
-		logsMsg := logs.String()
-		require.Contains(t, logsMsg, "No 'tokenSigningKey' found in the configuration")
-
-		// Should be different every time
-		err = config.SetTokenSigningKey(logger)
-		require.NoError(t, err)
-		assert.NotEqual(t, val, config.GetTokenSigningKey())
-	})
-}
-
-func TestSetCookieKeys(t *testing.T) {
-	t.Run("cookieEncryptionKey present", func(t *testing.T) {
-		t.Cleanup(SetTestConfig(map[string]any{
-			"cookieEncryptionKey": "some-key",
-		}))
-
-		err := config.SetCookieKeys(nil)
-		require.NoError(t, err)
-
-		cek := config.GetCookieEncryptionKey()
-		csk := config.GetCookieSigningKey()
-		require.NotNil(t, cek)
-		require.NotNil(t, csk)
-
-		var cekRaw, cskRaw []byte
-		err = cek.Raw(&cekRaw)
-		require.NoError(t, err)
-		err = csk.Raw(&cskRaw)
-		require.NoError(t, err)
-
-		require.Equal(t, "wJEZU13IzSYiJoN1p91LZQ", base64.RawStdEncoding.EncodeToString(cekRaw))
-		require.Equal(t, "WXuBILBbwdBXqCeLPbpumAyQygAh3XyO0Wh7UIJqb6I", base64.RawStdEncoding.EncodeToString(cskRaw))
-
-		require.Equal(t, "Tx-KPWjsUo_5iMRe", cek.KeyID())
-		require.Equal(t, "Tx-KPWjsUo_5iMRe", csk.KeyID())
-	})
-
-	t.Run("cookieEncryptionKey no present", func(t *testing.T) {
-		t.Cleanup(SetTestConfig(map[string]any{
-			"cookieEncryptionKey": "",
-		}))
-
-		err := config.SetCookieKeys(nil)
-		require.NoError(t, err)
-
-		cek := config.GetCookieEncryptionKey()
-		csk := config.GetCookieSigningKey()
-		require.NotNil(t, cek)
-		require.NotNil(t, csk)
-
-		var cekRaw, cskRaw []byte
-		err = cek.Raw(&cekRaw)
-		require.NoError(t, err)
-		err = csk.Raw(&cskRaw)
-		require.NoError(t, err)
-
-		require.Len(t, cekRaw, 16)
-		require.Len(t, cskRaw, 32)
-		require.NotEqual(t, make([]byte, 32), cskRaw)
-
-		require.NotEmpty(t, cek.KeyID())
-		require.NotEmpty(t, csk.KeyID())
 	})
 }

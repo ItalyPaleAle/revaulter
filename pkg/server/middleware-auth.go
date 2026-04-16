@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/italypaleale/revaulter/pkg/db"
 )
 
@@ -31,14 +33,16 @@ func sessionCookieFor(c *gin.Context) (name, path string) {
 
 func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		cookieName, _ := sessionCookieFor(c)
-		sessID, ttl, err := getSecureCookieEncryptedJWT(c, cookieName)
-		if err != nil || sessID == "" {
-			if err != nil {
-				_ = c.Error(fmt.Errorf("cookie error: %w", err))
+		// Try bearer token first, then fall back to cookie
+		sessID := getBearerToken(c)
+		if sessID == "" {
+			cookieName, _ := sessionCookieFor(c)
+			var err error
+			sessID, err = c.Cookie(cookieName)
+			if err != nil || sessID == "" {
+				AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User is not authenticated"))
+				return
 			}
-			AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User is not authenticated"))
-			return
 		}
 
 		sess, err := s.authStore.GetSession(c.Request.Context(), sessID)
@@ -54,14 +58,7 @@ func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 			return
 		}
 
-		// Use the minimum of cookie TTL and DB TTL.
-		dbTTL := time.Until(sess.ExpiresAt)
-		if dbTTL < ttl {
-			ttl = dbTTL
-		}
-		if ttl < 0 {
-			ttl = 0
-		}
+		ttl := max(time.Until(sess.ExpiresAt), 0)
 		c.Header(headerSessionTTL, strconv.Itoa(int(ttl.Seconds())))
 		c.Set(contextKeySessionID, sess.ID)
 		c.Set(contextKeyUserID, sess.UserID)
@@ -114,4 +111,19 @@ func getRequestUserFromCtx(c *gin.Context) *db.User {
 	}
 
 	return user
+}
+
+// getBearerToken extracts a bearer token from the Authorization header.
+// Returns empty string if no bearer token is present.
+func getBearerToken(c *gin.Context) string {
+	const bearerPrefix = "bearer "
+
+	h := c.GetHeader("Authorization")
+
+	// Remove the bearer prefix
+	if len(h) > len(bearerPrefix)+1 && strings.ToLower(h[0:len(bearerPrefix)]) == bearerPrefix {
+		return h[len(bearerPrefix):]
+	}
+
+	return ""
 }

@@ -291,18 +291,12 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 		cookiePath = "/"
 	}
 
-	cookieValue, err := serializeSecureCookieEncryptedJWT(cookieName, sess.ID, time.Until(sess.ExpiresAt))
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
 	c.JSON(http.StatusOK, e2eSeedSessionResponse{
 		OK:          true,
 		SessionID:   sess.ID,
 		CookieName:  cookieName,
 		CookiePath:  cookiePath,
-		CookieValue: cookieValue,
+		CookieValue: sess.ID,
 	})
 }
 

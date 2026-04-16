@@ -90,9 +90,16 @@ func (s *Server) MiddlewareNoCache(c *gin.Context) {
 
 // MiddlewareCSRF offers CSRF protection for browser-facing endpoints
 // This rejects cross-origin requests on state-changing methods (POST, PUT, DELETE, etc) by checking the Sec-Fetch-Site and Origin headers
+// Requests with an Authorization header are exempt because bearer tokens cannot be auto-attached by a browser, making them immune to CSRF
 func (s *Server) MiddlewareCSRF() func(c *gin.Context) {
 	cop := http.NewCrossOriginProtection()
 	return func(c *gin.Context) {
+		// Bearer-authenticated requests are immune to CSRF by definition
+		if c.GetHeader("Authorization") != "" {
+			c.Next()
+			return
+		}
+
 		cop.
 			Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				c.Next()

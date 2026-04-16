@@ -33,15 +33,7 @@ func SetTestConfig(values map[string]any) func() {
 		panic(err)
 	}
 
-	// Set the token signing key and cookie keys
-	err = config.SetCookieKeys(nil)
-	if err != nil {
-		panic(err)
-	}
-	err = config.SetTokenSigningKey(nil)
-	if err != nil {
-		panic(err)
-	}
+	// Set the secret key
 	if config.SecretKey != "" {
 		err = config.SetSecretKey(nil)
 		if err != nil {

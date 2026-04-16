@@ -34,8 +34,6 @@ Recommended:
 
 - `baseUrl`
 - `tlsPath` (or `tlsCertPEM` + `tlsKeyPEM`)
-- `cookieEncryptionKey`
-- `tokenSigningKey`
 
 Optional auth settings:
 

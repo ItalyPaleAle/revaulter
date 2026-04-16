@@ -72,8 +72,9 @@ type v2AuthSessionInfo struct {
 }
 
 type v2AuthRegisterFinishResponse struct {
-	Registered bool               `json:"registered"`
-	Session    *v2AuthSessionInfo `json:"session,omitempty"`
+	Registered   bool               `json:"registered"`
+	Session      *v2AuthSessionInfo `json:"session,omitempty"`
+	SessionToken string             `json:"sessionToken,omitempty"`
 }
 
 type v2AuthLoginBeginResponse struct {
@@ -88,6 +89,7 @@ type v2AuthLoginBeginResponse struct {
 type v2AuthLoginFinishResponse struct {
 	Authenticated             bool               `json:"authenticated"`
 	Session                   *v2AuthSessionInfo `json:"session,omitempty"`
+	SessionToken              string             `json:"sessionToken,omitempty"`
 	WrappedPrimaryKey         string             `json:"wrappedPrimaryKey,omitempty"`
 	CredentialWrappedKeyEpoch int64              `json:"credentialWrappedKeyEpoch,omitempty"`
 	WrappedKeyStale           bool               `json:"wrappedKeyStale"`
@@ -282,15 +284,16 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		slog.String("client_ip", c.ClientIP()),
 	)
 
-	err = s.setSessionCookie(c, sess)
+	bearerToken, err := s.setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, v2AuthRegisterFinishResponse{
-		Registered: true,
-		Session:    sessionInfoFromSession(sess),
+		Registered:   true,
+		Session:      sessionInfoFromSession(sess),
+		SessionToken: bearerToken,
 	})
 }
 
@@ -352,7 +355,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	err = s.setSessionCookie(c, sess)
+	bearerToken, err := s.setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -366,6 +369,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	resp := v2AuthLoginFinishResponse{
 		Authenticated: true,
 		Session:       sessionInfoFromSession(sess),
+		SessionToken:  bearerToken,
 	}
 
 	// Throttle wrapped primary key delivery
@@ -968,16 +972,18 @@ func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
 	})
 }
 
-func (s *Server) setSessionCookie(c *gin.Context, sess *db.AuthSession) error {
+func (s *Server) setSessionCookie(c *gin.Context, sess *db.AuthSession) (sessionToken string, err error) {
 	if sess == nil {
-		return NewResponseError(http.StatusInternalServerError, "session is nil")
+		return "", NewResponseError(http.StatusInternalServerError, "session is nil")
 	}
 
 	ttl := max(time.Until(sess.ExpiresAt), time.Second)
 
 	cookieName, cookiePath := sessionCookieFor(c)
 	c.SetSameSite(http.SameSiteLaxMode)
-	return setSecureCookie(c, cookieName, sess.ID, ttl, cookiePath, secureCookie(c), true, serializeSecureCookieEncryptedJWT)
+	c.SetCookie(cookieName, sess.ID, int(ttl.Seconds()), cookiePath, "", secureCookie(c), true)
+
+	return sess.ID, nil
 }
 
 func secureCookie(c *gin.Context) bool {
