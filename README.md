@@ -47,9 +47,11 @@ revaulter-cli decrypt \
 
 Use Revaulter to wrap (encrypt) database encryption keys, TLS private keys, or any other key material. The wrapped key can be stored alongside the data it protects, only someone with the right passkey can unwrap it.
 
+For example, you can use Revaulter together with age to encrypt large files: [see full example](./docs/06-examples.md#encrypting-large-files-with-age-and-revaulter) in the docs.
+
 ### Unlock encrypted disks at boot
 
-Integrate Revaulter into your boot process to unlock LUKS/dm-crypt volumes. A script calls `revaulter-cli decrypt` to retrieve the disk encryption key, and an admin authenticates with their passkey to release it. No unattended keys on disk.
+Integrate Revaulter into your boot process to unlock LUKS/dm-crypt volumes. A script calls `revaulter-cli decrypt` to retrieve the disk encryption key, and an admin authenticates with their passkey to release it. No unattended keys on disk. [See full example](./docs/06-examples.md#unlocking-luks-encrypted-drives-at-boot) in the docs
 
 ## Key features
 
@@ -95,6 +97,7 @@ Then start the server, open the web UI, and create your first account.
 - [Using the CLI](./docs/03-revaulter-cli.md) — commands, flags, and examples
 - [Cryptography architecture](./docs/04-crypto-architecture.md) — key layers, wrapping, derivation, transport encryption
 - [REST API reference](./docs/05-rest-api-reference.md) — all endpoints with request/response schemas
+- [Examples](./docs/06-examples.md) — LUKS disk unlock at boot, encrypting files with age
 
 ## License
 
