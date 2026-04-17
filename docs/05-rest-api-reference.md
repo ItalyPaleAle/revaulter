@@ -16,7 +16,7 @@ Health check endpoint.
 
 ---
 
-### `GET /v2/info`
+### `GET /info`
 
 Returns API version information.
 

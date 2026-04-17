@@ -17,7 +17,8 @@ type v2InfoResponse struct {
 	APIVersion int    `json:"apiVersion"`
 }
 
-func (s *Server) RouteV2Info(c *gin.Context) {
+// RouteInfoHandler is the handler for the GET /info request
+func (s *Server) RouteInfoHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, v2InfoResponse{
 		Product:    "revaulter",
 		APIVersion: 2,

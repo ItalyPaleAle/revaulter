@@ -244,14 +244,19 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	// Add routes
 	// Start with the healthz route
 	// This has less middlewares
-	healthzGroup := s.appRouter.Group("")
+	healthzGroup := s.appRouter.Group("/healthz", s.MiddlewareNoCache)
 	if s.metrics != nil {
 		healthzGroup.Use(s.MiddlewareCountMetrics)
 	}
 	if !cfg.OmitHealthCheckLogs {
 		healthzGroup.Use(loggerMw)
 	}
-	healthzGroup.GET("/healthz", gin.WrapF(s.RouteHealthzHandler))
+	healthzGroup.GET("", gin.WrapF(s.RouteHealthzHandler))
+
+	// Unauthenticated info endpoint for server discovery
+	infoGroup := s.appRouter.Group("/info")
+	addStandardMiddlewares(infoGroup)
+	infoGroup.GET("", s.RouteInfoHandler)
 
 	// CSRF middleware for browser-facing endpoints
 	csrfMw := s.MiddlewareCSRF()
@@ -267,9 +272,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	// v2 routes (WebAuthn + browser crypto flow)
 	v2RouteGroup := s.appRouter.Group("/v2")
 	addStandardMiddlewares(v2RouteGroup)
-
-	// Unauthenticated info endpoint for server discovery
-	v2RouteGroup.GET("/info", s.RouteV2Info)
 
 	// Request group is API-to-server (not browser-originated), so no CSRF middleware
 	v2RequestGroup := v2RouteGroup.Group("/request")
