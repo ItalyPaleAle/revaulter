@@ -20,7 +20,7 @@ if (!Number.isFinite(port) || port <= 0) {
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
 const clientDir = resolve(currentDir, '..')
-const repoRoot = resolve(clientDir, '..')
+const repoRoot = resolve(clientDir, '..', '..')
 const binaryPath = join(repoRoot, '.bin', 'revaulter-e2e')
 
 if (!existsSync(binaryPath)) {
