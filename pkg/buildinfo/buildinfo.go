@@ -16,6 +16,10 @@ var (
 	BuildDate       string
 	Production      string
 	ConfigEnvPrefix string = "REVAULTER_"
+
+	// RepoURL is the canonical source repo for this build, set to the GitHub URL at build time
+	// Defaults to a local/dev placeholder
+	RepoURL string = "dev.local"
 )
 
 // Set during initialization

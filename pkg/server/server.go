@@ -257,6 +257,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	infoGroup := s.appRouter.Group("/info")
 	addStandardMiddlewares(infoGroup)
 	infoGroup.GET("", s.RouteInfoHandler)
+	infoGroup.GET("/integrity", s.RouteInfoIntegrityHandler)
 
 	// CSRF middleware for browser-facing endpoints
 	csrfMw := s.MiddlewareCSRF()

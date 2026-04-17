@@ -1,0 +1,3 @@
+# These files are checked into git but added to gitignore to prevent changes in builds or testing to show up as dirty
+manifest.sigstore.json
+manifest.txt

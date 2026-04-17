@@ -91,7 +91,8 @@ jobs:
           echo "COMMIT_HASH: '$COMMIT_HASH'"
 
           BUILDINFO_PKG="github.com/italypaleale/revaulter/pkg/buildinfo"
-          BUILD_LDFLAGS="-X ${BUILDINFO_PKG}.Production=1 -X ${BUILDINFO_PKG}.AppVersion=${BUILD_VERSION} -X ${BUILDINFO_PKG}.BuildId=${BUILD_ID} -X ${BUILDINFO_PKG}.BuildDate=${BUILD_DATE} -X ${BUILDINFO_PKG}.CommitHash=${COMMIT_HASH} -buildid=${BUILD_ID}"
+          REPO_URL="https://github.com/${{ github.repository }}"
+          BUILD_LDFLAGS="-X ${BUILDINFO_PKG}.Production=1 -X ${BUILDINFO_PKG}.AppVersion=${BUILD_VERSION} -X ${BUILDINFO_PKG}.BuildId=${BUILD_ID} -X ${BUILDINFO_PKG}.BuildDate=${BUILD_DATE} -X ${BUILDINFO_PKG}.CommitHash=${COMMIT_HASH} -X ${BUILDINFO_PKG}.RepoURL=${REPO_URL} -buildid=${BUILD_ID}"
 
           echo "BUILD_LDFLAGS=$BUILD_LDFLAGS" >> $GITHUB_ENV
 
@@ -112,6 +113,49 @@ jobs:
       - name: Run go-generate
         run: |
           go generate -v ./...
+
+      # Integrity manifest: signs the web client dist/ contents with cosign keyless
+      # Always runs on tag releases; on main-branch pushes, only when the head commit
+      # carries a `Sign-Web-Client` trailer (parsed via `git interpret-trailers`)
+      - name: Decide whether to sign web client
+        id: sign_gate
+        run: |
+          should_sign=false
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            should_sign=true
+          elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
+            if git log -1 --format=%B \
+               | git interpret-trailers --parse \
+               | grep -qi '^Sign-Web-Client:'; then
+              should_sign=true
+            fi
+          fi
+          echo "should_sign=$should_sign" >> "$GITHUB_OUTPUT"
+          echo "Signing web client: $should_sign"
+
+      - name: Install cosign
+        if: steps.sign_gate.outputs.should_sign == 'true'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Build integrity manifest
+        if: steps.sign_gate.outputs.should_sign == 'true'
+        run: |
+          mkdir -p pkg/server/integrity
+          go run ./tools/build-manifest \
+            --dist client/web/dist \
+            --version "${BUILD_VERSION}" \
+            --commit "${COMMIT_HASH}" \
+            --build-date "${BUILD_DATE}" \
+            --out pkg/server/integrity/manifest.txt
+
+      - name: Sign integrity manifest (cosign keyless)
+        if: steps.sign_gate.outputs.should_sign == 'true'
+        env:
+          COSIGN_YES: "true"
+        run: |
+          cosign sign-blob \
+            --bundle pkg/server/integrity/manifest.sigstore.json \
+            pkg/server/integrity/manifest.txt
 
       - name: Build for all platforms
         env:

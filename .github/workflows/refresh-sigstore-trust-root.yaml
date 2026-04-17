@@ -1,0 +1,104 @@
+name: Refresh Sigstore trust root
+
+on:
+  # Run on the 3rd of each month at 07:17 UTC
+  # Sigstore rotates TUF metadata on the order of ~yearly, so monthly is ample
+  schedule:
+    - cron: "17 7 3 * *"
+  # Allow manual runs from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: Check for updated trust root
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    env:
+      TRUST_ROOT_PATH: pkg/integrity/sigstore_trust_root.json
+      TRUST_ROOT_URL: https://raw.githubusercontent.com/sigstore/sigstore-go/main/examples/trusted-root-public-good.json
+      # Canonical Rekor pubkey, published directly by Sigstore (not via the sigstore-go repo)
+      # Used as an independent cross-check so a compromise of sigstore-go alone can't poison the refresh
+      REKOR_PUB_URL: https://raw.githubusercontent.com/sigstore/root-signing/main/targets/rekor.pub
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Download latest trust root
+        run: |
+          curl -fsSL -o "${TRUST_ROOT_PATH}.new" "${TRUST_ROOT_URL}"
+
+      - name: Compare against embedded copy
+        id: diff
+        run: |
+          if cmp -s "${TRUST_ROOT_PATH}" "${TRUST_ROOT_PATH}.new"; then
+            echo "No changes — embedded trust root is already current."
+            rm "${TRUST_ROOT_PATH}.new"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            mv "${TRUST_ROOT_PATH}.new" "${TRUST_ROOT_PATH}"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cross-check Rekor pubkey against sigstore/root-signing
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          # Download the canonical Rekor pubkey, published by Sigstore at a different repo
+          # than the trust-root JSON we just pulled — a compromise of sigstore-go alone
+          # wouldn't be able to forge a matching key here
+          curl -fsSL -o /tmp/rekor-canonical.pem "${REKOR_PUB_URL}"
+
+          # Convert the canonical PEM to its raw DER bytes (base64-encoded) so we can
+          # look it up inside the JSON's tlogs[].publicKey.rawBytes field
+          canonical_b64=$(openssl pkey -pubin -inform PEM -outform DER -in /tmp/rekor-canonical.pem | base64 -w0)
+
+          # The JSON may list multiple tlogs (e.g. during a rotation overlap window)
+          # Require that the canonical key appears among them — otherwise the JSON
+          # has drifted from Sigstore's published source and we refuse to merge
+          if ! jq -e --arg key "$canonical_b64" '.tlogs[] | select(.publicKey.rawBytes == $key)' "${TRUST_ROOT_PATH}" > /dev/null; then
+            echo "::error::Canonical Rekor pubkey (from ${REKOR_PUB_URL}) was NOT found in the updated trust root's tlogs list"
+            echo "Listing tlogs[].publicKey.rawBytes sha256 fingerprints for diagnosis:"
+            jq -r '.tlogs[].publicKey.rawBytes' "${TRUST_ROOT_PATH}" | while read -r b; do
+              echo "  tlog entry: $(echo -n "$b" | base64 -d | sha256sum | awk '{print $1}')"
+            done
+            echo "Canonical rekor.pub sha256: $(openssl pkey -pubin -inform PEM -outform DER -in /tmp/rekor-canonical.pem | sha256sum | awk '{print $1}')"
+            exit 1
+          fi
+          echo "Rekor pubkey cross-check passed."
+
+      - uses: actions/setup-go@v6
+        if: steps.diff.outputs.changed == 'true'
+        with:
+          go-version-file: "go.mod"
+
+      - name: Verify integrity tests still pass with the new trust root
+        if: steps.diff.outputs.changed == 'true'
+        run: go test -tags unit ./pkg/integrity/...
+
+      - name: Open pull request
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/refresh-sigstore-trust-root
+          commit-message: "chore: refresh Sigstore trust root"
+          title: "chore: refresh Sigstore trust root"
+          body: |
+            Automated refresh of `${{ env.TRUST_ROOT_PATH }}` from
+            ${{ env.TRUST_ROOT_URL }}.
+
+            Please review the diff carefully — this file is the root of trust
+            for the `revaulter-cli check` web-client integrity verifier.
+            Rotating it changes which Sigstore infrastructure keys the CLI will
+            accept when verifying signatures made after this merge.
+
+            `go test -tags unit ./pkg/integrity/...` was run against the
+            updated file and passed.
+          labels: |
+            dependencies

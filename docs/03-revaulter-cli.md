@@ -124,6 +124,24 @@ revaulter-cli decrypt \
 
 ---
 
+### `check`
+
+Verify that a Revaulter server is serving unmodified web client assets, signed by this repo's release workflow. See [Verifying the web client's integrity](./07-web-client-integrity.md) for a deeper explanation of the trust model and when to run this.
+
+```bash
+revaulter-cli check --server https://revaulter.example.com
+```
+
+| Flag | Short | Required | Description |
+|------|-------|----------|-------------|
+| `--server` | `-s` | Yes | Address of the Revaulter server |
+| `--timeout` | `-t` | No | Overall timeout for the check (e.g. `60s`, `2m`); defaults to 60s |
+| `--insecure` | | No | Skip TLS certificate validation |
+| `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
+| `--verbose` | `-V` | No | Show debug-level logs |
+
+---
+
 ### `version`
 
 Print the CLI version.
