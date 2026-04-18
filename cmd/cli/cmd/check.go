@@ -36,7 +36,7 @@ verifies its cosign keyless signature against Sigstore's public infrastructure r
 then downloads every listed asset and compares its SHA-256 against the signed manifest.
 
 A release is considered genuine only if the signature identity matches this CLI's release workflow
-(%s/.github/workflows/release.yaml) on a tag or main-branch build,
+(%s/.github/workflows/release.yaml) on a tag, main-branch build, or the temporary v2-devel branch,
 and its entry is present in the Rekor transparency log.`, buildinfo.RepoURL),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runCheck(cmd.Context(), f)
