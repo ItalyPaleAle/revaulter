@@ -9,8 +9,10 @@ import {
     buildTransportAAD,
     decryptRequestPayload,
     deriveOperationKeyBytes,
+    deriveSigningKeyPair,
     encryptTransportEnvelope,
     performAesGcmOperation,
+    signDigestEs256,
     splitAesGcmCiphertextAndTag,
 } from '$lib/crypto'
 import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
@@ -91,8 +93,23 @@ async function doConfirm() {
 }
 
 async function buildResponseEnvelope(req: V2RequestDetail) {
-    if (req.algorithm !== 'aes-gcm-256') {
-        throw new Error(`Unsupported algorithm: ${req.algorithm}`)
+    // Validate the algorithm against what the operation supports
+    switch (req.operation) {
+        case 'sign':
+            if (req.algorithm !== 'ES256') {
+                throw new Error(`Unsupported signing algorithm: ${req.algorithm}`)
+            }
+            break
+
+        case 'encrypt':
+        case 'decrypt':
+            if (req.algorithm !== 'A256GCM') {
+                throw new Error(`Unsupported algorithm: ${req.algorithm}`)
+            }
+            break
+
+        default:
+            throw new Error(`Unsupported operation: ${req.operation}`)
     }
 
     // Decrypt the E2EE request payload using hybrid ECDH + ML-KEM
@@ -107,19 +124,54 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
         aad: requestEncAAD,
     })
 
-    const operationKey = await deriveOperationKeyBytes({
-        userId: req.userId,
-        keyLabel: req.keyLabel,
-        algorithm: req.algorithm,
-        primaryKey,
-    })
-
     const value = base64UrlToBytes(input.value)
     const aad = input.additionalData ? base64UrlToBytes(input.additionalData) : new Uint8Array()
 
     let resultPlain: Uint8Array
     switch (req.operation) {
+        case 'sign': {
+            // Sign operations carry only a 32-byte SHA-256 digest in `value`
+            // `nonce`, `tag`, and `additionalData` must be empty — enforced here because the server cannot inspect the decrypted inner payload
+            if (value.length !== 32) {
+                throw new Error('sign: digest must be exactly 32 bytes')
+            }
+            if (input.nonce) {
+                throw new Error('sign: nonce must be empty')
+            }
+            if (input.tag) {
+                throw new Error('sign: tag must be empty')
+            }
+            if (input.additionalData) {
+                throw new Error('sign: additionalData must be empty')
+            }
+
+            const { privateKey } = await deriveSigningKeyPair({
+                userId: req.userId,
+                keyLabel: req.keyLabel,
+                algorithm: req.algorithm,
+                primaryKey,
+            })
+            const signature = await signDigestEs256(privateKey, value)
+            resultPlain = new TextEncoder().encode(
+                JSON.stringify({
+                    state: req.state,
+                    operation: req.operation,
+                    algorithm: req.algorithm,
+                    keyLabel: req.keyLabel,
+                    signature: bytesToBase64Url(signature),
+                })
+            )
+            break
+        }
+
         case 'encrypt': {
+            const operationKey = await deriveOperationKeyBytes({
+                userId: req.userId,
+                keyLabel: req.keyLabel,
+                algorithm: req.algorithm,
+                primaryKey,
+            })
+
             const nonce = input.nonce ? base64UrlToBytes(input.nonce) : crypto.getRandomValues(new Uint8Array(12))
             const combined = await performAesGcmOperation({
                 mode: 'encrypt',
@@ -128,7 +180,9 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
                 nonce,
                 aad,
             })
+
             const split = splitAesGcmCiphertextAndTag(combined)
+
             resultPlain = new TextEncoder().encode(
                 JSON.stringify({
                     state: req.state,
@@ -144,14 +198,23 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
         }
 
         case 'decrypt': {
+            const operationKey = await deriveOperationKeyBytes({
+                userId: req.userId,
+                keyLabel: req.keyLabel,
+                algorithm: req.algorithm,
+                primaryKey,
+            })
+
             const nonce = input.nonce ? base64UrlToBytes(input.nonce) : new Uint8Array()
             if (nonce.length === 0) {
                 throw new Error('Missing nonce for decrypt')
             }
+
             const tag = input.tag ? base64UrlToBytes(input.tag) : new Uint8Array()
             if (tag.length === 0) {
                 throw new Error('Missing authentication tag for decrypt')
             }
+
             const plain = await performAesGcmOperation({
                 mode: 'decrypt',
                 keyBytes: operationKey,
@@ -160,6 +223,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
                 aad,
                 tag,
             })
+
             resultPlain = new TextEncoder().encode(
                 JSON.stringify({
                     state: req.state,
@@ -170,6 +234,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
             )
             break
         }
+
         default:
             throw new Error(`Unsupported operation: ${req.operation}`)
     }
@@ -190,8 +255,68 @@ function operationTitle(op: V2PendingRequestItem['operation']) {
             return 'Encrypt'
         case 'decrypt':
             return 'Decrypt'
+        case 'sign':
+            return 'Sign'
     }
 }
+
+/** Renders a SHA-256 digest (32 bytes, base64url) as an uppercase hex string with spaces for display */
+function formatDigest(digestB64Url: string): string {
+    try {
+        const bytes = base64UrlToBytes(digestB64Url)
+        if (bytes.length !== 32) {
+            return digestB64Url
+        }
+        let hex = ''
+        for (let i = 0; i < bytes.length; i++) {
+            hex += bytes[i].toString(16).padStart(2, '0').toUpperCase()
+            if (i < bytes.length - 1 && (i + 1) % 2 === 0) {
+                hex += ' '
+            }
+        }
+        return hex
+    } catch {
+        return digestB64Url
+    }
+}
+
+/**
+ * For sign requests, decrypts the E2EE inner payload so the user can review the
+ * SHA-256 digest before approving. Triggered lazily when the item is a sign
+ * request — other operations don't need to expose inner payload contents.
+ */
+let digestHex = $state<string | null>(null)
+let digestLoading = $state(false)
+let digestError = $state<string | null>(null)
+$effect(() => {
+    if (item.operation !== 'sign') {
+        return
+    }
+    if (digestHex || digestLoading || digestError) {
+        return
+    }
+    digestLoading = true
+    void (async () => {
+        try {
+            const req = await ensureDetail()
+            const requestEncAAD = buildRequestEncAAD(req.algorithm, req.keyLabel, req.operation)
+            const inner = await decryptRequestPayload({
+                userId: req.userId,
+                primaryKey,
+                cliEphemeralPublicKey: req.encryptedRequest.cliEphemeralPublicKey,
+                mlkemCiphertext: req.encryptedRequest.mlkemCiphertext,
+                nonce: req.encryptedRequest.nonce,
+                ciphertext: req.encryptedRequest.ciphertext,
+                aad: requestEncAAD,
+            })
+            digestHex = formatDigest(inner.value)
+        } catch (err) {
+            digestError = err instanceof Error ? err.message : String(err)
+        } finally {
+            digestLoading = false
+        }
+    })()
+})
 
 function expiresIn(item: V2PendingRequestItem) {
     return formatDistanceToNowStrict(new Date(item.expiry * 1000), { addSuffix: true })
@@ -213,6 +338,18 @@ function expiresIn(item: V2PendingRequestItem) {
             {/if}
             {#if item.note}
                 <div class="text-sm italic text-slate-700 dark:text-slate-300">“{item.note}”</div>
+            {/if}
+            {#if item.operation === 'sign'}
+                <div class="mt-2 text-xs text-slate-500 dark:text-slate-400">SHA-256 digest to sign:</div>
+                {#if digestLoading}
+                    <div class="text-xs text-slate-500 dark:text-slate-400">Loading…</div>
+                {:else if digestError}
+                    <div class="text-xs text-rose-700 dark:text-rose-300">Could not decrypt digest: {digestError}</div>
+                {:else if digestHex}
+                    <div class="break-all rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-800 dark:bg-slate-900 dark:text-slate-200">
+                        {digestHex}
+                    </div>
+                {/if}
             {/if}
             <div class="text-xs text-slate-500 dark:text-slate-400">
                 Expires {expiresIn(item)} · <span class="font-mono">{item.state}</span>

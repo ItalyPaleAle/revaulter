@@ -52,6 +52,9 @@ var (
 	// Rate limit for auth endpoints
 	// 30 req/m
 	authRateLimitRPM = 30
+	// Rate limit for unauthenticated public signing key fetch
+	// 120 req/m
+	publicKeyRateLimitRPM = 120
 )
 
 // Server is the server based on Gin
@@ -72,10 +75,11 @@ type Server struct {
 	deleteQueue        *eventqueue.Processor[string, deleteEvent]
 
 	// Database and request store
-	db           *db.DB
-	requestStore *db.RequestStore
-	authStore    *db.AuthStore
-	webAuthn     *webauthnlib.WebAuthn
+	db              *db.DB
+	requestStore    *db.RequestStore
+	authStore       *db.AuthStore
+	signingKeyStore *db.SigningKeyStore
+	webAuthn        *webauthnlib.WebAuthn
 
 	// Per-user rate limiter for wrapped primary key delivery
 	// Protects delivery of the wrapped root-key blob to a WebAuthn-authenticated client
@@ -102,13 +106,14 @@ type Server struct {
 
 // NewServerOpts contains options for the NewServer method
 type NewServerOpts struct {
-	Log           *slog.Logger
-	Webhook       webhook.Webhook
-	Metrics       *metrics.RevaulterMetrics
-	TraceExporter sdkTrace.SpanExporter
-	DB            *db.DB
-	RequestStore  *db.RequestStore
-	AuthStore     *db.AuthStore
+	Log             *slog.Logger
+	Webhook         webhook.Webhook
+	Metrics         *metrics.RevaulterMetrics
+	TraceExporter   sdkTrace.SpanExporter
+	DB              *db.DB
+	RequestStore    *db.RequestStore
+	AuthStore       *db.AuthStore
+	SigningKeyStore *db.SigningKeyStore
 }
 
 // NewServer creates a new Server object and initializes it
@@ -121,13 +126,14 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		subs:         map[string]chan struct{}{},
-		pubsub:       broker.NewBroker[*db.V2RequestListItem](),
-		webhook:      opts.Webhook,
-		metrics:      opts.Metrics,
-		db:           opts.DB,
-		authStore:    opts.AuthStore,
-		requestStore: opts.RequestStore,
+		subs:            map[string]chan struct{}{},
+		pubsub:          broker.NewBroker[*db.V2RequestListItem](),
+		webhook:         opts.Webhook,
+		metrics:         opts.Metrics,
+		db:              opts.DB,
+		authStore:       opts.AuthStore,
+		requestStore:    opts.RequestStore,
+		signingKeyStore: opts.SigningKeyStore,
 
 		httpClient: httpClient,
 
@@ -269,6 +275,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	// Rate limiters for request creation and authentication endpoints
 	requestRateLimiter := MiddlewareRateLimit(requestRateLimit)
 	authRateLimiter := MiddlewareRateLimit(authRateLimitRPM)
+	publicKeyRateLimiter := MiddlewareRateLimit(publicKeyRateLimitRPM)
 
 	// v2 routes (WebAuthn + browser crypto flow)
 	v2RouteGroup := s.appRouter.Group("/v2")
@@ -279,8 +286,17 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2RequestGroup.Use(requestRateLimiter)
 	v2RequestGroup.POST("/:requestKey/encrypt", s.MiddlewareRequestKey, s.RouteV2RequestCreate("encrypt"))
 	v2RequestGroup.POST("/:requestKey/decrypt", s.MiddlewareRequestKey, s.RouteV2RequestCreate("decrypt"))
+	v2RequestGroup.POST("/:requestKey/sign", s.MiddlewareRequestKey, s.RouteV2RequestCreate("sign"))
 	v2RequestGroup.GET("/:requestKey/pubkey", s.MiddlewareRequestKey, s.RouteV2RequestPubkey)
 	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
+
+	// Public (unauthenticated) signing key fetch endpoints, rate-limited
+	// Paths carry the format as a dot-extension
+	// - JWK: <id>.jwk and <id>.json
+	// - PEM: <id>.pem and <id>.pub
+	v2SigningKeysGroup := v2RouteGroup.Group("/signing-keys")
+	v2SigningKeysGroup.Use(publicKeyRateLimiter)
+	v2SigningKeysGroup.GET("/:filename", s.RouteV2SigningKeyPublic)
 
 	// API and auth groups are browser-facing, apply CSRF protection
 	v2APIGroup := v2RouteGroup.Group("/api")
@@ -288,6 +304,9 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2APIGroup.GET("/list", s.RouteV2APIList)
 	v2APIGroup.GET("/request/:state", s.RouteV2APIRequestGet)
 	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
+	v2APIGroup.GET("/signing-keys", s.RouteV2APISigningKeyList)
+	v2APIGroup.POST("/signing-keys/publish", s.RouteV2APISigningKeyPublish)
+	v2APIGroup.POST("/signing-keys/unpublish", s.RouteV2APISigningKeyUnpublish)
 
 	v2AuthGroup := v2RouteGroup.Group("/auth")
 	v2AuthGroup.Use(csrfMw, authRateLimiter)

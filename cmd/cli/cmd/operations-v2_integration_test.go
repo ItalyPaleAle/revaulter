@@ -93,7 +93,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			if req.KeyLabel != "disk-key" || req.Algorithm != "aes-gcm-256" || req.RequestEncAlg != protocolv2.TransportAlg {
+			if req.KeyLabel != "disk-key" || req.Algorithm != "A256GCM" || req.RequestEncAlg != protocolv2.TransportAlg {
 				http.Error(w, "unexpected request fields", http.StatusBadRequest)
 				return
 			}
@@ -158,7 +158,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			aad := buildRequestEncAAD("aes-gcm-256", "disk-key", "encrypt")
+			aad := buildRequestEncAAD("A256GCM", "disk-key", "encrypt")
 			plaintext, err := gcm.Open(nil, nonce, ct, aad)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -255,7 +255,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			aadBytes := buildTransportAAD(state, "encrypt", "aes-gcm-256")
+			aadBytes := buildTransportAAD(state, "encrypt", "A256GCM")
 			ct := aead.Seal(nil, nonce, plainResp, aadBytes)
 			browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserEcdhPriv.PublicKey())
 			if err != nil {
@@ -291,7 +291,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 		flags: &testV2Flags{
 			server:   srv.URL,
 			keyLabel: "disk-key",
-			alg:      "aes-gcm-256",
+			alg:      "A256GCM",
 		},
 	}
 	kp, err := newV2TransportKeyPair()
@@ -299,7 +299,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 	gotState, err := impl.createRequest(context.Background(), srv.Client(), kp)
 	require.NoError(t, err)
 	require.Equal(t, state, gotState)
-	got, err := impl.getResult(context.Background(), srv.Client(), gotState, kp, buildTransportAAD(gotState, "encrypt", "aes-gcm-256"))
+	got, err := impl.getResult(context.Background(), srv.Client(), gotState, kp, buildTransportAAD(gotState, "encrypt", "A256GCM"))
 	require.NoError(t, err)
 	require.JSONEq(t, string(plainResp), string(got))
 	require.True(t, createSeen.Load())
@@ -317,11 +317,11 @@ func TestV2OperationCmdGetResultFailed(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, alg: "aes-gcm-256", keyLabel: "k"}}
+	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, alg: "A256GCM", keyLabel: "k"}}
 
 	kp, err := newV2TransportKeyPair()
 	require.NoError(t, err)
-	_, err = impl.getResult(context.Background(), srv.Client(), "s1", kp, buildTransportAAD("s1", "", "aes-gcm-256"))
+	_, err = impl.getResult(context.Background(), srv.Client(), "s1", kp, buildTransportAAD("s1", "", "A256GCM"))
 	require.ErrorContains(t, err, "canceled, denied, or failed")
 }
 
@@ -348,11 +348,11 @@ func TestV2OperationCmdGetResultStateMismatch(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, alg: "aes-gcm-256", keyLabel: "k"}}
+	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, alg: "A256GCM", keyLabel: "k"}}
 
 	kp, err := newV2TransportKeyPair()
 	require.NoError(t, err)
-	_, err = impl.getResult(context.Background(), srv.Client(), "expected", kp, buildTransportAAD("expected", "", "aes-gcm-256"))
+	_, err = impl.getResult(context.Background(), srv.Client(), "expected", kp, buildTransportAAD("expected", "", "A256GCM"))
 	require.ErrorContains(t, err, "response state mismatch")
 }
 
@@ -380,10 +380,10 @@ func TestV2OperationCmdGetResultRejectsMalformedEnvelope(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, alg: "aes-gcm-256", keyLabel: "k"}}
+	impl := &v2OperationCmd{flags: &testV2Flags{server: srv.URL, alg: "A256GCM", keyLabel: "k"}}
 
 	kp, err := newV2TransportKeyPair()
 	require.NoError(t, err)
-	_, err = impl.getResult(context.Background(), srv.Client(), "s1", kp, buildTransportAAD("s1", "", "aes-gcm-256"))
+	_, err = impl.getResult(context.Background(), srv.Client(), "s1", kp, buildTransportAAD("s1", "", "A256GCM"))
 	require.Error(t, err)
 }

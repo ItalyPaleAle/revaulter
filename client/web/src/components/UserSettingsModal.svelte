@@ -5,9 +5,9 @@ import Button from '$components/Button.svelte'
 import Icon from '$components/Icon.svelte'
 import TextField from '$components/TextField.svelte'
 
-import type { V2CredentialItem } from '$lib/v2-types'
+import type { DerivedSigningKey, V2CredentialItem, V2PublishedSigningKey } from '$lib/v2-types'
 
-type SettingsTab = 'user' | 'ip-restrictions' | 'password' | 'passkeys'
+type SettingsTab = 'user' | 'ip-restrictions' | 'password' | 'passkeys' | 'signing-keys'
 
 interface Props {
     userId: string
@@ -16,6 +16,7 @@ interface Props {
     allowedIpsText: string
     hasPassword: boolean
     credentials: V2CredentialItem[]
+    signingKeys: V2PublishedSigningKey[]
     busy: boolean
     error: string | null
     success: string | null
@@ -29,6 +30,9 @@ interface Props {
     onAddPasskey: (name: string) => Promise<void>
     onRenamePasskey: (id: string, name: string) => Promise<void>
     onDeletePasskey: (id: string) => Promise<void>
+    onDeriveSigningKey: (keyLabel: string, algorithm: string) => Promise<DerivedSigningKey>
+    onPublishSigningKey: (derived: DerivedSigningKey) => Promise<void>
+    onUnpublishSigningKey: (id: string) => Promise<void>
     onLogout: () => void
 }
 
@@ -39,6 +43,7 @@ let {
     allowedIpsText,
     hasPassword,
     credentials,
+    signingKeys,
     busy,
     error,
     success,
@@ -52,6 +57,9 @@ let {
     onAddPasskey,
     onRenamePasskey,
     onDeletePasskey,
+    onDeriveSigningKey,
+    onPublishSigningKey,
+    onUnpublishSigningKey,
     onLogout,
 }: Props = $props()
 
@@ -74,6 +82,16 @@ let renamingCredentialId = $state<string | null>(null)
 let renameValue = $state('')
 let addPasskeyName = $state('')
 let showAddPasskey = $state(false)
+
+// Signing keys tab state
+const SIGNING_ALGORITHMS = ['ES256'] as const
+let derivingKey = $state(false)
+let deriveLabel = $state('')
+let deriveAlgorithm = $state<string>(SIGNING_ALGORITHMS[0])
+let derivedKey = $state<DerivedSigningKey | null>(null)
+let deriveError = $state<string | null>(null)
+let copiedFetchId = $state<string | null>(null)
+let confirmingUnpublishId = $state<string | null>(null)
 
 $effect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -173,11 +191,92 @@ function formatTimestamp(unix: number): string {
     return formatDistanceToNowStrict(new Date(unix * 1000), { addSuffix: true })
 }
 
+function shortenId(id: string): string {
+    if (id.length <= 16) {
+        return id
+    }
+    return `${id.slice(0, 8)}…${id.slice(-8)}`
+}
+
+function publicFetchUrl(id: string, kind: 'jwk' | 'pem'): string {
+    const origin = typeof window !== 'undefined' ? window.location.origin : ''
+    return `${origin}/v2/signing-keys/${id}.${kind}`
+}
+
+function triggerDownload(filename: string, contents: string, mimeType: string) {
+    const blob = new Blob([contents], { type: mimeType })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
+}
+
+async function handleDeriveSigningKey() {
+    deriveError = null
+    if (deriveLabel.trim() === '') {
+        deriveError = 'Key label is required'
+        return
+    }
+    derivingKey = true
+    try {
+        derivedKey = await onDeriveSigningKey(deriveLabel.trim(), deriveAlgorithm)
+    } catch (err) {
+        deriveError = err instanceof Error ? err.message : String(err)
+        derivedKey = null
+    } finally {
+        derivingKey = false
+    }
+}
+
+function downloadDerivedJwk() {
+    if (!derivedKey) return
+    triggerDownload(
+        `${derivedKey.keyLabel}-${derivedKey.algorithm}.jwk.json`,
+        JSON.stringify(derivedKey.jwk, null, 2),
+        'application/json'
+    )
+}
+
+function downloadDerivedPem() {
+    if (!derivedKey) return
+    triggerDownload(`${derivedKey.keyLabel}-${derivedKey.algorithm}.pem`, derivedKey.pem, 'application/x-pem-file')
+}
+
+async function handlePublishDerived() {
+    if (!derivedKey) return
+    await onPublishSigningKey(derivedKey)
+}
+
+async function handleUnpublish(id: string) {
+    confirmingUnpublishId = null
+    await onUnpublishSigningKey(id)
+}
+
+async function copyFetchUrl(id: string, kind: 'jwk' | 'pem') {
+    await navigator.clipboard.writeText(publicFetchUrl(id, kind))
+    copiedFetchId = `${id}/${kind}`
+    setTimeout(() => {
+        if (copiedFetchId === `${id}/${kind}`) {
+            copiedFetchId = null
+        }
+    }, 2000)
+}
+
+function isDerivedPublished(): boolean {
+    if (!derivedKey) return false
+    return signingKeys.some((k) => k.id === derivedKey?.id)
+}
+
 const tabs: { id: SettingsTab; label: string; icon: string }[] = [
     { id: 'user', label: 'User', icon: 'user' },
     { id: 'ip-restrictions', label: 'IP Restrictions', icon: 'shield' },
     { id: 'password', label: 'Password', icon: 'lock-closed' },
     { id: 'passkeys', label: 'Passkeys', icon: 'fingerprint' },
+    { id: 'signing-keys', label: 'Signing keys', icon: 'pen-line' },
 ]
 </script>
 
@@ -531,6 +630,176 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                 Add passkey
                             </Button>
                         {/if}
+                    </div>
+                {:else if activeTab === 'signing-keys'}
+                    <!-- Signing keys tab -->
+                    <div class="space-y-6">
+                        <div>
+                            <div class="text-sm font-medium text-slate-900 dark:text-white">Signing keys</div>
+                            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                Signing keys are derived deterministically from your primary key. Publishing a key makes its public half retrievable without authentication so verifiers can check signatures.
+                            </p>
+                        </div>
+
+                        <!-- Derive key form -->
+                        <div class="rounded-2xl border border-slate-200/80 p-4 dark:border-white/10">
+                            <div class="text-sm font-medium text-slate-900 dark:text-white">Derive a signing key</div>
+                            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                Same key label and algorithm always produce the same key.
+                            </p>
+
+                            <div class="mt-3 grid gap-3 md:grid-cols-2">
+                                <div class="space-y-1">
+                                    <label class="block text-xs font-medium text-slate-600 dark:text-slate-400" for="signing-key-label">Key label</label>
+                                    <TextField
+                                        id="signing-key-label"
+                                        type="text"
+                                        placeholder="e.g. prod-signing"
+                                        bind:value={deriveLabel}
+                                        disabled={busy || derivingKey}
+                                    />
+                                </div>
+                                <div class="space-y-1">
+                                    <label class="block text-xs font-medium text-slate-600 dark:text-slate-400" for="signing-key-algorithm">Algorithm</label>
+                                    <select
+                                        id="signing-key-algorithm"
+                                        bind:value={deriveAlgorithm}
+                                        disabled={busy || derivingKey}
+                                        class="w-full rounded-[1.35rem] border border-white/70 bg-white/80 px-4 py-2.5 text-sm text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-white/10 dark:bg-slate-950/70 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950"
+                                    >
+                                        {#each SIGNING_ALGORITHMS as alg}
+                                            <option value={alg}>{alg}</option>
+                                        {/each}
+                                    </select>
+                                </div>
+                            </div>
+
+                            {#if deriveError}
+                                <div class="mt-3 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+                                    {deriveError}
+                                </div>
+                            {/if}
+
+                            <div class="mt-3 flex gap-2">
+                                <Button variant="neutral" onclick={handleDeriveSigningKey} disabled={busy || derivingKey}>
+                                    <Icon icon="pen-line" title="Derive" size="4" />
+                                    Derive key
+                                </Button>
+                            </div>
+
+                            {#if derivedKey}
+                                <div class="mt-4 space-y-3 rounded-2xl border border-slate-200/80 bg-slate-50/60 p-4 dark:border-white/10 dark:bg-white/4">
+                                    <div>
+                                        <div class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Derived key</div>
+                                        <div class="mt-1 text-sm text-slate-900 dark:text-white">
+                                            <span class="font-medium">{derivedKey.keyLabel}</span>
+                                            <span class="ml-2 text-xs text-slate-500 dark:text-slate-400">{derivedKey.algorithm}</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Key ID</div>
+                                        <div class="mt-1 break-all font-mono text-xs text-slate-700 dark:text-slate-300">{derivedKey.id}</div>
+                                    </div>
+
+                                    <div class="flex flex-wrap gap-2">
+                                        <Button variant="outline" size="sm" onclick={downloadDerivedJwk} disabled={busy}>
+                                            <Icon icon="download" title="Download JWK" size="3.5" />
+                                            Download JWK
+                                        </Button>
+                                        <Button variant="outline" size="sm" onclick={downloadDerivedPem} disabled={busy}>
+                                            <Icon icon="download" title="Download PEM" size="3.5" />
+                                            Download PEM
+                                        </Button>
+                                        {#if !isDerivedPublished()}
+                                            <Button variant="neutral" size="sm" onclick={handlePublishDerived} disabled={busy}>
+                                                <Icon icon="upload-cloud" title="Publish" size="3.5" />
+                                                Publish
+                                            </Button>
+                                        {:else}
+                                            <span class="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200">
+                                                <Icon icon="check" title="Published" size="3" />
+                                                Already published
+                                            </span>
+                                        {/if}
+                                    </div>
+                                </div>
+                            {/if}
+                        </div>
+
+                        <!-- Published list -->
+                        <div>
+                            <div class="text-sm font-medium text-slate-900 dark:text-white">Published signing keys</div>
+                            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                Published public keys are retrievable without authentication at the URLs shown. Unpublishing removes the key from the server.
+                            </p>
+
+                            {#if signingKeys.length === 0}
+                                <div class="mt-3 rounded-2xl border border-dashed border-slate-300/90 bg-white/25 px-6 py-8 text-center text-sm text-slate-500 dark:border-white/12 dark:bg-white/4 dark:text-slate-400">
+                                    No published signing keys yet.
+                                </div>
+                            {:else}
+                                <div class="mt-3 space-y-3">
+                                    {#each signingKeys as sk (sk.id)}
+                                        <div class="rounded-2xl border border-slate-200/80 p-4 dark:border-white/10">
+                                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                                <div class="min-w-0">
+                                                    <div class="text-sm font-medium text-slate-900 dark:text-white">
+                                                        {sk.keyLabel}
+                                                        <span class="ml-2 text-xs font-normal text-slate-500 dark:text-slate-400">{sk.algorithm}</span>
+                                                    </div>
+                                                    <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                                        Published {formatTimestamp(sk.createdAt)}
+                                                        {#if sk.updatedAt && sk.updatedAt !== sk.createdAt}
+                                                            · Updated {formatTimestamp(sk.updatedAt)}
+                                                        {/if}
+                                                    </div>
+                                                    <div class="mt-1 break-all font-mono text-xs text-slate-600 dark:text-slate-400" title={sk.id}>
+                                                        {shortenId(sk.id)}
+                                                    </div>
+                                                </div>
+                                                <div class="flex shrink-0 items-center gap-1">
+                                                    {#if confirmingUnpublishId === sk.id}
+                                                        <Button variant="danger" size="sm" onclick={() => handleUnpublish(sk.id)} disabled={busy}>
+                                                            Confirm unpublish
+                                                        </Button>
+                                                        <Button variant="outline" size="sm" onclick={() => { confirmingUnpublishId = null }}>
+                                                            Cancel
+                                                        </Button>
+                                                    {:else}
+                                                        <Button variant="icon" size="icon" ariaLabel="Unpublish key" onclick={() => { confirmingUnpublishId = sk.id }} disabled={busy}>
+                                                            <Icon icon="trash" title="Unpublish" size="3.5" />
+                                                        </Button>
+                                                    {/if}
+                                                </div>
+                                            </div>
+
+                                            <div class="mt-3 space-y-2">
+                                                {#each ['jwk', 'pem'] as const as kind}
+                                                    <div class="flex items-center gap-2">
+                                                        <div class="w-10 shrink-0 text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{kind}</div>
+                                                        <div class="flex min-w-0 flex-1 items-center rounded-[1.2rem] bg-slate-50/90 ring-1 ring-slate-200/80 dark:bg-white/6 dark:ring-white/10">
+                                                            <div class="min-w-0 flex-1 overflow-x-auto whitespace-nowrap px-3 py-2 font-mono text-xs text-slate-900 dark:text-slate-100">{publicFetchUrl(sk.id, kind)}</div>
+                                                            <button
+                                                                type="button"
+                                                                class="flex shrink-0 cursor-pointer items-center justify-center rounded-r-[1.2rem] border-l border-slate-200/80 px-2 py-2 text-slate-500 transition hover:bg-slate-100/80 hover:text-slate-700 dark:border-white/10 dark:text-slate-400 dark:hover:bg-white/8 dark:hover:text-slate-200"
+                                                                aria-label="Copy to clipboard"
+                                                                onclick={() => copyFetchUrl(sk.id, kind)}
+                                                            >
+                                                                {#if copiedFetchId === `${sk.id}/${kind}`}
+                                                                    <Icon icon="check" title="Copied" size="3.5" />
+                                                                {:else}
+                                                                    <Icon icon="clipboard-copy" title="Copy to clipboard" size="3.5" />
+                                                                {/if}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                {/each}
+                                            </div>
+                                        </div>
+                                    {/each}
+                                </div>
+                            {/if}
+                        </div>
                     </div>
                 {/if}
 

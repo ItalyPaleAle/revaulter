@@ -76,3 +76,16 @@ CREATE TABLE IF NOT EXISTS v2_requests (
 CREATE INDEX IF NOT EXISTS idx_v2_requests_status_expires ON v2_requests(status, expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_v2_requests_user_status_created ON v2_requests(user_id, status, created_at);
+
+CREATE TABLE IF NOT EXISTS v2_published_signing_keys (
+	id text PRIMARY KEY,
+	user_id text NOT NULL REFERENCES v2_users(id) ON DELETE CASCADE,
+	algorithm text NOT NULL,
+	key_label text NOT NULL,
+	jwk text NOT NULL,
+	pem text NOT NULL,
+	created_at bigint NOT NULL,
+	updated_at bigint NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_published_signing_keys_user_alg_label ON v2_published_signing_keys(user_id, algorithm, key_label);

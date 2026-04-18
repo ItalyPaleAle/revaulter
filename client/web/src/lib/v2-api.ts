@@ -8,10 +8,12 @@ import type {
     V2LoginBeginResponse,
     V2LoginFinishResponse,
     V2PendingRequestItem,
+    V2PublishedSigningKey,
     V2RegisterBeginResponse,
     V2RequestDetail,
     V2ResponseEnvelope,
     V2SessionResponse,
+    V2SigningJwk,
 } from '$lib/v2-types'
 
 /** Starts the public registration flow and returns the WebAuthn challenge/options payload */
@@ -169,6 +171,33 @@ export async function v2RenameCredential(id: string, displayName: string) {
 /** Deletes a passkey credential (must keep at least one) */
 export async function v2DeleteCredential(id: string) {
     const res = await Request<{ ok: boolean }>('/v2/auth/credentials/delete', {
+        postData: { id },
+    })
+    return res.data
+}
+
+/** Lists the current user's published signing keys (metadata only) */
+export async function v2ListSigningKeys() {
+    const res = await Request<V2PublishedSigningKey[]>('/v2/api/signing-keys')
+    return res.data
+}
+
+/** Publishes (or replaces) a signing key for the current user */
+export async function v2PublishSigningKey(args: {
+    algorithm: string
+    keyLabel: string
+    jwk: V2SigningJwk
+    pem: string
+}) {
+    const res = await Request<V2PublishedSigningKey>('/v2/api/signing-keys/publish', {
+        postData: args,
+    })
+    return res.data
+}
+
+/** Unpublishes (hard-deletes) a signing key by its stable ID */
+export async function v2UnpublishSigningKey(id: string) {
+    const res = await Request<{ deleted: boolean }>('/v2/api/signing-keys/unpublish', {
         postData: { id },
     })
     return res.data

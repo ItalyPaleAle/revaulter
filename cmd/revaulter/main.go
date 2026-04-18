@@ -83,9 +83,10 @@ func main() {
 
 	// Initialize the database and stores in main so their lifecycle is explicit
 	var (
-		dbConn       *db.DB
-		authStore    *db.AuthStore
-		requestStore *db.RequestStore
+		dbConn          *db.DB
+		authStore       *db.AuthStore
+		requestStore    *db.RequestStore
+		signingKeyStore *db.SigningKeyStore
 	)
 	if conf.DatabaseDSN != "" {
 		connCtx, connCancel := context.WithTimeout(ctx, 20*time.Second)
@@ -117,6 +118,13 @@ func main() {
 			return
 		}
 
+		signingKeyStore, err = db.NewSigningKeyStore(dbConn, log)
+		if err != nil {
+			_ = dbConn.Close(ctx)
+			slogkit.FatalError(log, "Failed to initialize signing key store", err)
+			return
+		}
+
 		shutdownFns = append(shutdownFns, dbConn.Close)
 	}
 
@@ -144,13 +152,14 @@ func main() {
 
 	// Create the Server object
 	srv, err := server.NewServer(server.NewServerOpts{
-		Log:           log,
-		Webhook:       webhook,
-		Metrics:       metrics,
-		TraceExporter: traceExporter,
-		DB:            dbConn,
-		AuthStore:     authStore,
-		RequestStore:  requestStore,
+		Log:             log,
+		Webhook:         webhook,
+		Metrics:         metrics,
+		TraceExporter:   traceExporter,
+		DB:              dbConn,
+		AuthStore:       authStore,
+		RequestStore:    requestStore,
+		SigningKeyStore: signingKeyStore,
 	})
 	if err != nil {
 		slogkit.FatalError(log, "Cannot initialize the server", err)

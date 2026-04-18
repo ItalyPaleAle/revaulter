@@ -129,7 +129,7 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create request
-	res, createResp := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK))
+	res, createResp := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 	state, _ := createResp["state"].(string)
 	require.NotEmpty(t, state)
@@ -421,7 +421,7 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.NoError(t, err)
 
 	// Reject malformed client transport JWK (private material present).
-	invalidCreateBody := newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK)
+	invalidCreateBody := newV2CreateRequestBody("disk-key", "A256GCM", clientJWK)
 	invalidCreateBody["cliEphemeralPublicKey"] = map[string]any{
 		"kty": "EC", "crv": "P-256",
 		"x": clientJWK.X, "y": clientJWK.Y,
@@ -430,13 +430,13 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	res, _ := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", invalidCreateBody)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
-	invalidNoteBody := newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK)
+	invalidNoteBody := newV2CreateRequestBody("disk-key", "A256GCM", clientJWK)
 	invalidNoteBody["note"] = "boot unlock!"
 	res, _ = doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", invalidNoteBody)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
 	// Create a valid request targeted to alice.
-	res, create := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK))
+	res, create := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 	state, _ := create["state"].(string)
 	require.NotEmpty(t, state)
@@ -486,13 +486,13 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
 	// Expiry path: short timeout should transition to failed/expired on result polling.
-	expiringCreateBody := newV2CreateRequestBody("expiring-key", "aes-gcm-256", clientJWK)
+	expiringCreateBody := newV2CreateRequestBody("expiring-key", "A256GCM", clientJWK)
 	expiringCreateBody["timeout"] = "1s"
 	res, create = doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", expiringCreateBody)
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 	expState, _ := create["state"].(string)
 	require.NotEmpty(t, expState)
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(1_500 * time.Millisecond)
 	res, result := doGetJSON(t, "/v2/request/result/"+expState)
 	require.Equal(t, http.StatusConflict, res.StatusCode)
 	require.Equal(t, true, result["failed"])
@@ -525,7 +525,7 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 
 	_, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
 
-	createBody := newV2CreateRequestBody("disk-key", "aes-gcm-256", clientJWK)
+	createBody := newV2CreateRequestBody("disk-key", "A256GCM", clientJWK)
 	createBody["note"] = "boot unlock"
 	body, err := json.Marshal(createBody)
 	require.NoError(t, err)
@@ -549,7 +549,7 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 		require.Equal(t, "encrypt", msg.OperationName)
 		require.Equal(t, "Alice", msg.AssignedUser)
 		require.Equal(t, "disk-key", msg.KeyLabel)
-		require.Equal(t, "aes-gcm-256", msg.Algorithm)
+		require.Equal(t, "A256GCM", msg.Algorithm)
 		require.Equal(t, "boot unlock", msg.Note)
 		require.NotEmpty(t, msg.StateId)
 	}
@@ -579,7 +579,7 @@ func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T
 		Operation:        "encrypt",
 		RequestorIP:      "127.0.0.1",
 		KeyLabel:         "callback-key",
-		Algorithm:        "aes-gcm-256",
+		Algorithm:        "A256GCM",
 		CreatedAt:        now.Add(-2 * time.Minute),
 		ExpiresAt:        now.Add(-1 * time.Minute),
 		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
@@ -685,13 +685,16 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	require.NoError(t, err)
 	requestStore, err := db.NewRequestStore(dbConn, log)
 	require.NoError(t, err)
+	signingKeyStore, err := db.NewSigningKeyStore(dbConn, log)
+	require.NoError(t, err)
 
 	srv, err := NewServer(NewServerOpts{
-		Log:          log,
-		Webhook:      wh,
-		DB:           dbConn,
-		AuthStore:    authStore,
-		RequestStore: requestStore,
+		Log:             log,
+		Webhook:         wh,
+		DB:              dbConn,
+		AuthStore:       authStore,
+		RequestStore:    requestStore,
+		SigningKeyStore: signingKeyStore,
 	})
 	require.NoError(t, err)
 

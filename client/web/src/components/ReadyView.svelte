@@ -5,7 +5,7 @@ import LoadingSpinner from '$components/LoadingSpinner.svelte'
 import PendingItem from '$components/PendingItem.svelte'
 import UserSettingsModal from '$components/UserSettingsModal.svelte'
 
-import type { V2CredentialItem, V2PendingRequestItem } from '$lib/v2-types'
+import type { DerivedSigningKey, V2CredentialItem, V2PendingRequestItem, V2PublishedSigningKey } from '$lib/v2-types'
 
 interface Props {
     allowedIpsText: string
@@ -17,11 +17,14 @@ interface Props {
     onAllowedIpsTextInput: (value: string) => void
     onChangePassword: (password: string) => Promise<void>
     onDeletePasskey: (id: string) => Promise<void>
+    onDeriveSigningKey: (keyLabel: string, algorithm: string) => Promise<DerivedSigningKey>
     onLogout: () => Promise<void>
+    onPublishSigningKey: (derived: DerivedSigningKey) => Promise<void>
     onRegenerateRequestKey: () => Promise<void>
     onRemoveItem: (state: string) => void
     onRemovePassword: () => Promise<void>
     onRenamePasskey: (id: string, name: string) => Promise<void>
+    onUnpublishSigningKey: (id: string) => Promise<void>
     onUpdateAllowedIps: () => Promise<void>
     onUpdateDisplayName: (name: string) => Promise<void>
     pageError: string | null
@@ -32,6 +35,7 @@ interface Props {
     settingsBusy: boolean
     settingsError: string | null
     settingsSuccess: string | null
+    signingKeys: V2PublishedSigningKey[]
     userId: string
 }
 
@@ -45,11 +49,14 @@ let {
     onAllowedIpsTextInput,
     onChangePassword,
     onDeletePasskey,
+    onDeriveSigningKey,
     onLogout,
+    onPublishSigningKey,
     onRegenerateRequestKey,
     onRemoveItem,
     onRemovePassword,
     onRenamePasskey,
+    onUnpublishSigningKey,
     onUpdateAllowedIps,
     onUpdateDisplayName,
     pageError,
@@ -60,6 +67,7 @@ let {
     settingsBusy,
     settingsError,
     settingsSuccess,
+    signingKeys,
     userId,
 }: Props = $props()
 
@@ -158,6 +166,7 @@ function logoutFromSettings() {
             {allowedIpsText}
             {hasPassword}
             {credentials}
+            {signingKeys}
             busy={settingsBusy}
             error={settingsError}
             success={settingsSuccess}
@@ -171,6 +180,9 @@ function logoutFromSettings() {
             {onAddPasskey}
             {onRenamePasskey}
             {onDeletePasskey}
+            {onDeriveSigningKey}
+            {onPublishSigningKey}
+            {onUnpublishSigningKey}
             onLogout={logoutFromSettings}
         />
     {/if}

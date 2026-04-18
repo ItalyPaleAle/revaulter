@@ -4,16 +4,23 @@
 
 Never define variables inside `if` conditions. Always declare variables on a separate line before the conditional check.
 
-If you modify `pkg/config.Config` or any struct referenced from it, always run `make gen-config` before finishing the task.
-
 ```go
 // Wrong
 if err := something(); err != nil { ... }
 
+// Wrong
+if val, ok := something.(string); ok { ... }
+
 // Right
 err := something()
 if err != nil { ... }
+
+// Right
+val, ok := something.(string)
+if ok { ... }
 ```
+
+If you modify `pkg/config.Config` or any struct referenced from it, always run `make gen-config` before finishing the task.
 
 ## JavaScript, TypeScript, JSX, and TSX
 

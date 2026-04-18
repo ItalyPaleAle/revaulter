@@ -75,9 +75,10 @@ An optional `webhookKey` configuration value lets you send an `Authorization` he
 
 ## Supported operations
 
-Revaulter currently supports two operations:
+Revaulter supports three operations:
 
-- **Encrypt** — encrypt a plaintext value
-- **Decrypt** — decrypt a ciphertext value
+- **Encrypt** — encrypt a plaintext value (`A256GCM` / AES-256-GCM)
+- **Decrypt** — decrypt a ciphertext value (`A256GCM` / AES-256-GCM)
+- **Sign** — produce a digital signature over a SHA-256 digest (`ES256` / ECDSA P-256 + SHA-256)
 
-Both operations use the `aes-gcm-256` algorithm. The key used for each operation is derived deterministically from the passkey holder's primary key, the key label, and the algorithm. See the [cryptography architecture](./04-crypto-architecture.md) for details.
+Encryption/decryption keys and signing keys are derived deterministically from the passkey holder's primary key, the key label, and the algorithm. Published signing public keys can optionally be fetched by a stable key ID in JWK or PEM form. See the [cryptography architecture](./04-crypto-architecture.md) for details.

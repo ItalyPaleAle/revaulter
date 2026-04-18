@@ -226,15 +226,42 @@ info = "algorithm={algorithm}\nkeyLabel={keyLabel}\nuserId={userId}\nv=1"
 
 This means the same account root key can deterministically produce distinct operation keys for different labels and algorithms.
 
+### Signing keys
+
+For the `sign` operation, the browser derives a deterministic ECDSA P-256 private scalar from the `primaryKey`:
+
+1. HKDF derives 384 bits with `info = "revaulter/v2/signingKey\nalgorithm={algorithm}\nkeyLabel={keyLabel}\nuserId={userId}\nv=1"`
+2. The 384-bit output is reduced to a valid P-256 scalar using the FIPS 186-5 Appendix A.2.1 candidate-reduction method
+3. The scalar is imported as a P-256 ECDSA private key via WebCrypto
+
+Because this info string is distinct from `revaulter/v2/requestEncKey`, `revaulter/v2/requestEncMlkemSeed`, and the symmetric operation info format, signing keys are domain-separated from every other key family — deriving the same scalar as any other key family is computationally infeasible.
+
+Key stability:
+
+- The signing key is a pure function of `primaryKey`, `userId`, `keyLabel`, and `algorithm`
+- Password changes and credential changes only re-wrap the `primaryKey`; they do not change it
+- Therefore, published signing public keys remain stable across password rotation and passkey management
+- The browser does not cache derived signing keys on disk; they are re-derived from the in-memory `primaryKey` as needed
+
 ```mermaid
 flowchart TD
     PK[primaryKey] --> HK1[HKDF info: requestEncKey]
     PK --> HK2[HKDF info: requestEncMlkemSeed]
     PK --> HK3[HKDF info: algorithm + keyLabel + userId]
+    PK --> HK4[HKDF info: signingKey + algorithm + keyLabel + userId]
     HK1 --> ECDH[Static P-256 request key pair]
     HK2 --> MLKEM[Static ML-KEM-768 request key pair]
     HK3 --> OP[Per-operation AES-256 key]
+    HK4 --> SIG[Deterministic ECDSA P-256 signing key]
 ```
+
+### Publication of signing public keys
+
+Signing public keys can optionally be published on the server so external verifiers can fetch them by a stable key ID.
+
+- The key ID is the RFC 7638 JWK thumbprint of the EC public key: hex-encoded SHA-256 over the canonical JSON `{"crv":"P-256","kty":"EC","x":"…","y":"…"}`
+- There is no soft-delete or revocation list. Consumers should treat a "not found" (i.e. 404 status code) on a known key ID as revocation
+- Public endpoints are unauthenticated and take only the opaque key ID; there is no listing or enumeration endpoint
 
 ## Signup flow
 
@@ -377,7 +404,7 @@ This design avoids global re-encryption work while still converging every creden
 
 ## Request encryption path
 
-When the CLI submits an encrypt or decrypt request, it does not send the sensitive request body in plaintext to the server.
+When the CLI submits an encrypt, decrypt, or sign request, it does not send the sensitive request body in plaintext to the server.
 Instead it encrypts the request to the browser's static request keys derived from the `primaryKey`.
 
 High-level shape:
@@ -390,10 +417,12 @@ High-level shape:
 The request AAD format is deterministic and currently follows:
 
 ```text
-aad = "algorithm={algorithm}\nkeyLabel={keyLabel}\noperation={encrypt|decrypt}\nv=1"
+aad = "algorithm={algorithm}\nkeyLabel={keyLabel}\noperation={encrypt|decrypt|sign}\nv=1"
 ```
 
 That binds the encrypted request to the intended algorithm and key label.
+
+For `sign`, the inner payload carries only the 32-byte SHA-256 digest of the message (base64url). The CLI always pre-hashes client-side, so the browser and server only ever see the digest, never the original message.
 
 ## Response transport encryption path
 
@@ -417,7 +446,7 @@ info = "revaulter/v2/transport/{state}"
 The transport AAD is deterministic and currently serialized as:
 
 ```text
-aad = "algorithm={algorithm}\noperation={encrypt|decrypt}\nstate={state}\nv=1"
+aad = "algorithm={algorithm}\noperation={encrypt|decrypt|sign}\nstate={state}\nv=1"
 ```
 
 ```mermaid
@@ -452,6 +481,8 @@ This hybrid transport gives the response envelope both conventional ECDH confide
 | Key derivation | HKDF-SHA-256 |
 | Wrapped primary key encryption | AES-256-GCM |
 | Application encrypt/decrypt operation | AES-GCM via WebCrypto |
+| Application sign operation | ECDSA P-256 + SHA-256 (`ES256`) via WebCrypto |
+| Published signing key ID | RFC 7638 JWK thumbprint (SHA-256, hex) |
 | Static request key agreement | ECDH P-256 |
 | Response transport KEM | ML-KEM-768 |
 | Response transport AEAD | AES-256-GCM |

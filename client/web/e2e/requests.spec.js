@@ -34,7 +34,7 @@ test('seeded encrypt request appears in the list', async ({ page, request }) => 
         userId: auth.session.userId,
         operation: 'encrypt',
         keyLabel: 'disk-key',
-        algorithm: 'aes-gcm-256',
+        algorithm: 'A256GCM',
         requestor: '203.0.113.20',
         note: 'boot unlock',
     })
@@ -55,7 +55,7 @@ test('seeded decrypt request appears in the list', async ({ page, request }) => 
         userId: auth.session.userId,
         operation: 'decrypt',
         keyLabel: 'db-key',
-        algorithm: 'aes-gcm-256',
+        algorithm: 'A256GCM',
         requestor: '203.0.113.21',
     })
 
@@ -73,7 +73,7 @@ test('canceling a pending request removes it from the UI and updates state', asy
         userId: auth.session.userId,
         operation: 'encrypt',
         keyLabel: 'cancel-key',
-        algorithm: 'aes-gcm-256',
+        algorithm: 'A256GCM',
         requestor: '203.0.113.22',
     })
 
@@ -99,7 +99,7 @@ test('requests for another user are not shown', async ({ page, request }) => {
         userId: 'other-user',
         operation: 'encrypt',
         keyLabel: 'other-key',
-        algorithm: 'aes-gcm-256',
+        algorithm: 'A256GCM',
         requestor: '203.0.113.23',
     })
 
@@ -123,7 +123,7 @@ test('new seeded request appears without reload after stream is connected', asyn
             userId: auth.session.userId,
             operation: 'encrypt',
             keyLabel: 'stream-key',
-            algorithm: 'aes-gcm-256',
+            algorithm: 'A256GCM',
             requestor: '203.0.113.24',
         })
 
@@ -171,7 +171,7 @@ test('cli encrypt then decrypt round-trips hello world', async ({ page }) => {
             operation: 'encrypt',
             requestKey: auth.session.requestKey,
             keyLabel: 'disk-key',
-            algorithm: 'aes-gcm-256',
+            algorithm: 'A256GCM',
             note: 'cli round trip encrypt',
             value: 'hello world',
         })
@@ -189,7 +189,7 @@ test('cli encrypt then decrypt round-trips hello world', async ({ page }) => {
             operation: 'decrypt',
             requestKey: auth.session.requestKey,
             keyLabel: 'disk-key',
-            algorithm: 'aes-gcm-256',
+            algorithm: 'A256GCM',
             note: 'cli round trip decrypt',
             value: encryptResult.json.value,
             nonce: encryptResult.json.nonce,

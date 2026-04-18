@@ -1,8 +1,14 @@
 import { argon2id } from 'hash-wasm'
 import mlkem from 'mlkem-wasm'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
-import type { EcP256PublicJwk, V2RequestPayloadInner, V2ResponseEnvelope } from '$lib/v2-types'
-import { hashToP256Scalar, importP256ScalarAsEcdhKey } from './crypto-p256'
+import type {
+    EcP256PublicJwk,
+    V2Operation,
+    V2RequestPayloadInner,
+    V2ResponseEnvelope,
+    V2SigningJwk,
+} from '$lib/v2-types'
+import { hashToP256Scalar, importP256ScalarAsEcdhKey, importP256ScalarAsEcdsaKey } from './crypto-p256'
 
 /**
  * Generates an ephemeral ECDH P-256 key pair for transport encryption and exports
@@ -410,10 +416,10 @@ export async function deriveOperationKeyBytes(params: {
 class TransportAADInfo {
     private v = 1
     public state: string
-    public operation: 'encrypt' | 'decrypt'
+    public operation: V2Operation
     public algorithm: string
 
-    constructor(state: string, operation: 'encrypt' | 'decrypt', algorithm: string) {
+    constructor(state: string, operation: V2Operation, algorithm: string) {
         this.state = state
         this.operation = operation
         this.algorithm = algorithm
@@ -448,7 +454,7 @@ class InfoObj {
 /**
  * Builds the canonical AES-GCM additional authenticated data used for transport response envelopes shared between the browser and the CLI
  */
-export function buildTransportAAD(state: string, operation: 'encrypt' | 'decrypt', algorithm: string): Uint8Array {
+export function buildTransportAAD(state: string, operation: V2Operation, algorithm: string): Uint8Array {
     return new TextEncoder().encode(new TransportAADInfo(state, operation, algorithm).serialize())
 }
 
@@ -643,4 +649,97 @@ export async function decryptRequestPayload(params: {
     )
 
     return JSON.parse(new TextDecoder().decode(plain)) as V2RequestPayloadInner
+}
+
+/**
+ * Derives a deterministic ECDSA P-256 signing key pair from the primary key.
+ * The derivation is bound to userId, keyLabel, and algorithm, and is domain-separated from request-encryption and symmetric operation keys.
+ */
+export async function deriveSigningKeyPair(params: {
+    userId: string
+    keyLabel: string
+    algorithm: string
+    primaryKey: Uint8Array
+}): Promise<{ privateKey: CryptoKey; publicJwk: V2SigningJwk }> {
+    if (params.algorithm !== 'ES256') {
+        throw new Error(`Unsupported signing algorithm: ${params.algorithm}`)
+    }
+
+    const ikm = await crypto.subtle.importKey('raw', asBuf(params.primaryKey), 'HKDF', false, ['deriveBits'])
+    const info = new TextEncoder().encode(
+        `revaulter/v2/signingKey\nalgorithm=${params.algorithm}\nkeyLabel=${params.keyLabel}\nuserId=${params.userId}\nv=1`
+    )
+
+    // Derive 384 bits so hashToP256Scalar has enough input to keep modular bias negligible
+    const rawBits = await crypto.subtle.deriveBits(
+        { name: 'HKDF', hash: 'SHA-256', salt: asBuf(new Uint8Array()), info: asBuf(info) },
+        ikm,
+        384
+    )
+    const scalarBytes = hashToP256Scalar(new Uint8Array(rawBits))
+    const privateKey = await importP256ScalarAsEcdsaKey(scalarBytes)
+
+    const jwk = (await crypto.subtle.exportKey('jwk', privateKey)) as JsonWebKey
+    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) {
+        throw new Error('Failed to export signing public key as P-256 JWK')
+    }
+
+    return {
+        privateKey,
+        publicJwk: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y },
+    }
+}
+
+/**
+ * Signs a 32-byte digest using an ECDSA P-256 private key. Returns the raw r||s concatenation (64 bytes) produced by WebCrypto
+ */
+export async function signDigestEs256(privateKey: CryptoKey, digest: Uint8Array): Promise<Uint8Array> {
+    if (digest.length !== 32) {
+        throw new Error(`Expected 32-byte digest, got ${digest.length}`)
+    }
+    const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privateKey, asBuf(digest) as BufferSource)
+    return new Uint8Array(sig)
+}
+
+/**
+ * Computes the RFC 7638 JWK thumbprint for an EC P-256 public key and returns it as a lowercase hex-encoded SHA-256 digest. The thumbprint is computed only over the required members (crv, kty, x, y) in lexicographic order.
+ */
+export async function computeEcP256ThumbprintHex(jwk: V2SigningJwk): Promise<string> {
+    const canonical = `{"crv":${JSON.stringify(jwk.crv)},"kty":${JSON.stringify(jwk.kty)},"x":${JSON.stringify(jwk.x)},"y":${JSON.stringify(jwk.y)}}`
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
+    const bytes = new Uint8Array(hash)
+    let out = ''
+    for (const b of bytes) {
+        out += b.toString(16).padStart(2, '0')
+    }
+    return out
+}
+
+/**
+ * Converts an EC P-256 public JWK to a PEM-encoded PKIX public key.
+ * The returned string is the canonical "-----BEGIN PUBLIC KEY-----" envelope suitable for standard ES256 verification libraries.
+ */
+export async function ecP256JwkToPem(jwk: V2SigningJwk): Promise<string> {
+    // Re-import as an extractable ECDSA public key so we can export SPKI (PKIX DER)
+    const pub = await crypto.subtle.importKey(
+        'jwk',
+        { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y, ext: true } as JsonWebKey,
+        { name: 'ECDSA', namedCurve: 'P-256' },
+        true,
+        ['verify']
+    )
+    const spki = new Uint8Array(await crypto.subtle.exportKey('spki', pub))
+
+    // Encode DER as base64 and wrap at 64 chars per PEM convention
+    let binary = ''
+    for (const b of spki) {
+        binary += String.fromCharCode(b)
+    }
+    const b64 = btoa(binary)
+    const lines: string[] = []
+    for (let i = 0; i < b64.length; i += 64) {
+        lines.push(b64.slice(i, i + 64))
+    }
+
+    return `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----\n`
 }

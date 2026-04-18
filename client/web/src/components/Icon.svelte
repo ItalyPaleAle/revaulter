@@ -142,5 +142,22 @@ const { icon, title, size = '12' }: Props = $props()
             <path d="M5 12h14" />
             <path d="M12 5v14" />
         </IconContainer>
+    {:else if icon == 'pen-line'}
+        <IconContainer {title} {size}>
+            <path d="M12 20h9" />
+            <path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z" />
+        </IconContainer>
+    {:else if icon == 'download'}
+        <IconContainer {title} {size}>
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <path d="M7 10l5 5 5-5" />
+            <path d="M12 15V3" />
+        </IconContainer>
+    {:else if icon == 'upload-cloud'}
+        <IconContainer {title} {size}>
+            <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
+            <path d="M12 12v9" />
+            <path d="m16 16-4-4-4 4" />
+        </IconContainer>
     {/if}
 </i>

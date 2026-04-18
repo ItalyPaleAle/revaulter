@@ -2,16 +2,20 @@ import { describe, expect, it } from 'vitest'
 import {
     buildRequestEncAAD,
     buildTransportAAD,
+    computeEcP256ThumbprintHex,
     decryptTransportEnvelope,
     deriveOperationKeyBytes,
     deriveRequestEncKeyPair,
     deriveRequestEncMlkemKeyPair,
+    deriveSigningKeyPair,
     deriveWrappingKey,
+    ecP256JwkToPem,
     encryptTransportEnvelope,
     generatePrimaryKey,
     generateTransportKeyPairJwk,
     parseWrappedPrimaryKeyEnvelope,
     performAesGcmOperation,
+    signDigestEs256,
     splitAesGcmCiphertextAndTag,
     unwrapPrimaryKey,
     wrapPrimaryKey,
@@ -40,16 +44,16 @@ const TEST_PRF_SECRET = new Uint8Array(32).fill(0xbb)
 
 describe('buildTransportAAD', () => {
     it('matches the Go CLI format', () => {
-        const aad = buildTransportAAD('state-42', 'encrypt', 'aes-gcm-256')
+        const aad = buildTransportAAD('state-42', 'encrypt', 'A256GCM')
         expect(bytesToHex(aad)).toBe(
-            '616c676f726974686d3d6165732d67636d2d3235360a6f7065726174696f6e3d656e63727970740a73746174653d73746174652d34320a763d31'
+            '616c676f726974686d3d4132353647434d0a6f7065726174696f6e3d656e63727970740a73746174653d73746174652d34320a763d31'
         )
     })
 
     it('produces the expected human-readable string', () => {
-        const aad = buildTransportAAD('s1', 'decrypt', 'aes-gcm-256')
+        const aad = buildTransportAAD('s1', 'decrypt', 'A256GCM')
         const str = new TextDecoder().decode(aad)
-        expect(str).toBe('algorithm=aes-gcm-256\noperation=decrypt\nstate=s1\nv=1')
+        expect(str).toBe('algorithm=A256GCM\noperation=decrypt\nstate=s1\nv=1')
     })
 
     it('sorts fields alphabetically', () => {
@@ -64,16 +68,16 @@ describe('buildTransportAAD', () => {
 
 describe('buildRequestEncAAD', () => {
     it('matches the Go CLI format', () => {
-        const aad = buildRequestEncAAD('aes-gcm-256', 'disk-key', 'encrypt')
+        const aad = buildRequestEncAAD('A256GCM', 'disk-key', 'encrypt')
         expect(bytesToHex(aad)).toBe(
-            '616c676f726974686d3d6165732d67636d2d3235360a6b65794c6162656c3d6469736b2d6b65790a6f7065726174696f6e3d656e63727970740a763d31'
+            '616c676f726974686d3d4132353647434d0a6b65794c6162656c3d6469736b2d6b65790a6f7065726174696f6e3d656e63727970740a763d31'
         )
     })
 
     it('produces the expected human-readable string', () => {
-        const aad = buildRequestEncAAD('aes-gcm-256', 'disk-key', 'decrypt')
+        const aad = buildRequestEncAAD('A256GCM', 'disk-key', 'decrypt')
         const str = new TextDecoder().decode(aad)
-        expect(str).toBe('algorithm=aes-gcm-256\nkeyLabel=disk-key\noperation=decrypt\nv=1')
+        expect(str).toBe('algorithm=A256GCM\nkeyLabel=disk-key\noperation=decrypt\nv=1')
     })
 })
 
@@ -329,7 +333,7 @@ describe('deriveOperationKeyBytes', () => {
         const key = await deriveOperationKeyBytes({
             userId: 'user-1',
             keyLabel: 'disk-key',
-            algorithm: 'aes-gcm-256',
+            algorithm: 'A256GCM',
             primaryKey: TEST_PRIMARY_KEY,
         })
         expect(key.length).toBe(32)
@@ -339,7 +343,7 @@ describe('deriveOperationKeyBytes', () => {
         const params = {
             userId: 'user-1',
             keyLabel: 'disk-key',
-            algorithm: 'aes-gcm-256',
+            algorithm: 'A256GCM',
             primaryKey: TEST_PRIMARY_KEY,
         }
         const k1 = await deriveOperationKeyBytes(params)
@@ -351,7 +355,7 @@ describe('deriveOperationKeyBytes', () => {
         const base = {
             userId: 'user-1',
             keyLabel: 'disk-key',
-            algorithm: 'aes-gcm-256',
+            algorithm: 'A256GCM',
             primaryKey: TEST_PRIMARY_KEY,
         }
         const k1 = await deriveOperationKeyBytes(base)
@@ -363,7 +367,7 @@ describe('deriveOperationKeyBytes', () => {
         const base = {
             userId: 'user-1',
             keyLabel: 'disk-key',
-            algorithm: 'aes-gcm-256',
+            algorithm: 'A256GCM',
             primaryKey: TEST_PRIMARY_KEY,
         }
         const k1 = await deriveOperationKeyBytes(base)
@@ -375,7 +379,7 @@ describe('deriveOperationKeyBytes', () => {
         const base = {
             userId: 'user-1',
             keyLabel: 'disk-key',
-            algorithm: 'aes-gcm-256',
+            algorithm: 'A256GCM',
             primaryKey: TEST_PRIMARY_KEY,
         }
         const k1 = await deriveOperationKeyBytes(base)
@@ -636,7 +640,7 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
         const mlkemPubB64 = bytesToBase64Url(mlkemPubRaw)
 
         const plaintext = new TextEncoder().encode('secret response data')
-        const aad = new TextEncoder().encode('algorithm=aes-gcm-256\noperation=encrypt\nstate=test-state\nv=1')
+        const aad = new TextEncoder().encode('algorithm=A256GCM\noperation=encrypt\nstate=test-state\nv=1')
 
         // Browser encrypts the response envelope
         const envelope = await encryptTransportEnvelope(
@@ -690,5 +694,199 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
         await expect(
             decryptTransportEnvelope('state-B', ecdhKP.privateKey, mlkemKP.privateKey, envelope)
         ).rejects.toThrow()
+    })
+})
+
+describe('deriveSigningKeyPair', () => {
+    it('is deterministic for the same inputs', async () => {
+        const a = await deriveSigningKeyPair({
+            userId: 'user-1',
+            keyLabel: 'payments',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const b = await deriveSigningKeyPair({
+            userId: 'user-1',
+            keyLabel: 'payments',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        expect(a.publicJwk).toStrictEqual(b.publicJwk)
+    })
+
+    it('is domain-separated by userId, keyLabel, and primary key', async () => {
+        const base = await deriveSigningKeyPair({
+            userId: 'user-1',
+            keyLabel: 'payments',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const diffUser = await deriveSigningKeyPair({
+            userId: 'user-2',
+            keyLabel: 'payments',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const diffLabel = await deriveSigningKeyPair({
+            userId: 'user-1',
+            keyLabel: 'refunds',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const diffKey = await deriveSigningKeyPair({
+            userId: 'user-1',
+            keyLabel: 'payments',
+            algorithm: 'ES256',
+            primaryKey: new Uint8Array(32).fill(0xcc),
+        })
+        expect(diffUser.publicJwk).not.toStrictEqual(base.publicJwk)
+        expect(diffLabel.publicJwk).not.toStrictEqual(base.publicJwk)
+        expect(diffKey.publicJwk).not.toStrictEqual(base.publicJwk)
+    })
+
+    it('rejects unsupported algorithms', async () => {
+        await expect(
+            deriveSigningKeyPair({
+                userId: 'u',
+                keyLabel: 'k',
+                algorithm: 'ES384',
+                primaryKey: TEST_PRIMARY_KEY,
+            })
+        ).rejects.toThrow(/Unsupported signing algorithm/)
+    })
+
+    it('returns a P-256 public JWK without the private scalar', async () => {
+        const { publicJwk } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        expect(publicJwk.kty).toBe('EC')
+        expect(publicJwk.crv).toBe('P-256')
+        expect(publicJwk.x).toBeTruthy()
+        expect(publicJwk.y).toBeTruthy()
+        expect((publicJwk as Record<string, unknown>).d).toBeUndefined()
+    })
+})
+
+describe('signDigestEs256', () => {
+    it('produces a 64-byte raw r||s signature that verifies against the public key', async () => {
+        const { privateKey, publicJwk } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const digest = new Uint8Array(32)
+        crypto.getRandomValues(digest)
+        const sig = await signDigestEs256(privateKey, digest)
+        expect(sig).toBeInstanceOf(Uint8Array)
+        expect(sig.length).toBe(64)
+
+        const pub = await crypto.subtle.importKey(
+            'jwk',
+            { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y, ext: true } as JsonWebKey,
+            { name: 'ECDSA', namedCurve: 'P-256' },
+            true,
+            ['verify']
+        )
+        const ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pub, sig, digest)
+        expect(ok).toBe(true)
+    })
+
+    it('rejects digests that are not 32 bytes', async () => {
+        const { privateKey } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        await expect(signDigestEs256(privateKey, new Uint8Array(31))).rejects.toThrow(/32-byte digest/)
+        await expect(signDigestEs256(privateKey, new Uint8Array(33))).rejects.toThrow(/32-byte digest/)
+    })
+})
+
+describe('computeEcP256ThumbprintHex', () => {
+    it('matches the RFC 7638 reference example', async () => {
+        // The RFC 7638 test vector is for RSA; for EC we compute SHA-256 of the canonical JSON with lex-ordered required members and compare against an independent digest
+        const jwk = {
+            kty: 'EC' as const,
+            crv: 'P-256' as const,
+            x: 'f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU',
+            y: 'x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0',
+        }
+        const canonical = `{"crv":"P-256","kty":"EC","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}`
+        const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
+        const expected = bytesToHex(new Uint8Array(hash))
+
+        const got = await computeEcP256ThumbprintHex(jwk)
+        expect(got).toBe(expected)
+        expect(got).toHaveLength(64)
+    })
+
+    it('is deterministic across calls', async () => {
+        const { publicJwk } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const a = await computeEcP256ThumbprintHex(publicJwk)
+        const b = await computeEcP256ThumbprintHex(publicJwk)
+        expect(a).toBe(b)
+    })
+
+    it('differs for different keys', async () => {
+        const k1 = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k1',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const k2 = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k2',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const tp1 = await computeEcP256ThumbprintHex(k1.publicJwk)
+        const tp2 = await computeEcP256ThumbprintHex(k2.publicJwk)
+        expect(tp1).not.toBe(tp2)
+    })
+})
+
+describe('ecP256JwkToPem', () => {
+    it('round-trips through SPKI back to the same public JWK', async () => {
+        const { publicJwk } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const pem = await ecP256JwkToPem(publicJwk)
+        expect(pem.startsWith('-----BEGIN PUBLIC KEY-----\n')).toBe(true)
+        expect(pem.endsWith('-----END PUBLIC KEY-----\n')).toBe(true)
+
+        // Lines between the envelope must be pure base64 wrapped at 64 chars
+        const body = pem.replace('-----BEGIN PUBLIC KEY-----\n', '').replace('-----END PUBLIC KEY-----\n', '')
+        const lines = body.split('\n').filter((l) => l.length > 0)
+        for (let i = 0; i < lines.length - 1; i++) {
+            expect(lines[i].length).toBe(64)
+        }
+
+        const der = Uint8Array.from(atob(lines.join('')), (c) => c.charCodeAt(0))
+        const pub = await crypto.subtle.importKey(
+            'spki',
+            der as BufferSource,
+            { name: 'ECDSA', namedCurve: 'P-256' },
+            true,
+            ['verify']
+        )
+        const reJwk = (await crypto.subtle.exportKey('jwk', pub)) as JsonWebKey
+        expect(reJwk.kty).toBe('EC')
+        expect(reJwk.crv).toBe('P-256')
+        expect(reJwk.x).toBe(publicJwk.x)
+        expect(reJwk.y).toBe(publicJwk.y)
     })
 })
