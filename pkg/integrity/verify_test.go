@@ -210,50 +210,11 @@ func TestParseHashedRekord_RejectsNonPEMContent(t *testing.T) {
 	assert.Contains(t, err.Error(), "PEM CERTIFICATE")
 }
 
-func TestParseBundle_FallsBackToLegacyCosignBlobBundle(t *testing.T) {
-	manifestBytes := []byte("version|commit\n2026-04-18T00:00:00Z\n")
-	pemB64 := base64.StdEncoding.EncodeToString([]byte(dummyCertPEM))
-	sigB64 := base64.StdEncoding.EncodeToString([]byte("some-signature"))
-
-	body := map[string]any{
-		"kind":       "hashedrekord",
-		"apiVersion": "0.0.1",
-		"spec": map[string]any{
-			"data": map[string]any{
-				"hash": map[string]any{"algorithm": "sha256", "value": strings.Repeat("0", 64)},
-			},
-			"signature": map[string]any{
-				"content":   sigB64,
-				"publicKey": map[string]any{"content": pemB64},
-			},
-		},
-	}
-	bodyJSON, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	legacyJSON, err := json.Marshal(map[string]any{
-		"base64Signature": sigB64,
-		"cert":            pemB64,
-		"rekorBundle": map[string]any{
-			"SignedEntryTimestamp": base64.StdEncoding.EncodeToString([]byte("set")),
-			"Payload": map[string]any{
-				"body":           base64.StdEncoding.EncodeToString(bodyJSON),
-				"integratedTime": int64(1700000000),
-				"logIndex":       int64(1),
-				"logID":          strings.Repeat("0", 64),
-			},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = parseBundle(manifestBytes, legacyJSON)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid signature")
-	assert.NotContains(t, err.Error(), `unknown field "base64Signature"`)
-}
-
-func TestPolicySanRegex_AllowsCurrentReleaseRefs(t *testing.T) {
-	rx := regexp.MustCompile((Policy{RepoURL: "https://github.com/ItalyPaleAle/revaulter"}).sanRegex())
+func TestPolicySanRegex_UsesConfiguredSigningRefPattern(t *testing.T) {
+	rx := regexp.MustCompile((Policy{
+		RepoURL:           "https://github.com/ItalyPaleAle/revaulter",
+		SigningRefPattern: "tags/v.+|heads/main|heads/v2-devel",
+	}).sanRegex())
 
 	assert.True(t, rx.MatchString("https://github.com/ItalyPaleAle/revaulter/.github/workflows/release.yaml@refs/tags/v2.1.0"))
 	assert.True(t, rx.MatchString("https://github.com/ItalyPaleAle/revaulter/.github/workflows/release.yaml@refs/heads/main"))

@@ -34,7 +34,7 @@ At verification time, `revaulter-cli check`:
 2. Fetches `GET /info/integrity` to retrieve the signed manifest + cosign bundle.
 3. Verifies the cosign signature against **Sigstore infrastructure roots embedded in the CLI binary**:
    - The signing cert chains to Fulcio's root CA;
-   - Its subject matches `https://github.com/ItalyPaleAle/revaulter/.github/workflows/release.yaml@refs/(tags/v*|heads/main|heads/v2-devel)`;
+   - Its subject matches this repo's release workflow on a tag or another ref baked into the CLI build;
    - Its Rekor transparency-log entry is genuine.
 4. Asserts the manifest's version and commit match the server's `/info` response (downgrade protection).
 5. `GET`s every file listed in the manifest from the server, hashes it, compares to the manifest. Any mismatch → non-zero exit with the offending paths.
@@ -58,7 +58,7 @@ These roots rotate rarely (on the order of years) under Sigstore's TUF-managed t
 The CLI's identity policy pins the signature to *this repo's* release workflow:
 
 - Issuer: `https://token.actions.githubusercontent.com`
-- Subject regex: `^https://github\.com/ItalyPaleAle/revaulter/\.github/workflows/release\.yaml@refs/(tags/v.+|heads/main|heads/v2-devel)$`
+- Subject regex: `^https://github\.com/ItalyPaleAle/revaulter/\.github/workflows/release\.yaml@refs/(${SIGNING_REF_PATTERN})$`
 
 A signature from any other workflow, repo, or branch is rejected.
 
@@ -67,9 +67,8 @@ A signature from any other workflow, repo, or branch is rejected.
 | Build trigger | Manifest behavior |
 |---|---|
 | Tag push (`v*`) | **Always** signed. |
-| Main-branch push whose head commit carries a `Sign-Web-Client` trailer in its commit message | Signed. |
-| Temporary `v2-devel` branch push whose head commit carries a `Sign-Web-Client` trailer in its commit message | Signed. |
-| Main-branch push without that trailer | **Not** signed — server reports `hasIntegrity: false`. |
+| Configured release-branch push whose head commit carries a `Sign-Web-Client` trailer in its commit message | Signed. |
+| Configured release-branch push without that trailer | **Not** signed — server reports `hasIntegrity: false`. |
 | Other branches, PR builds, local dev builds | Not signed. |
 
 The trailer convention is the same one used for `Co-Authored-By`: a standalone line at the end of the commit message, parsed by `git interpret-trailers --parse`. Example commit message:
@@ -82,7 +81,9 @@ Description of the fix...
 Sign-Web-Client: yes
 ```
 
-The content after the colon is ignored — any value is accepted. The trailer's presence alone is the gate.
+The content after the colon is ignored — any value is accepted.
+The trailer's presence alone is the gate.
+The exact ref regex is injected into the CLI at build time from the release workflow.
 
 ## What the `check` command does *not* protect against
 

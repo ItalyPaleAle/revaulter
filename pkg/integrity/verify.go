@@ -28,23 +28,19 @@ import (
 
 // Identity policy for Revaulter's release workflow
 // The signer must be an ephemeral cert issued by Fulcio via GitHub Actions OIDC
-// with a SAN matching the release workflow for this repo (on tag, main, or temporary v2-devel pushes)
-// Remove the v2-devel allowance when the release workflow stops signing that branch
+// with a SAN matching the release workflow for this repo on the refs baked into this build
 const expectedIssuer = "https://token.actions.githubusercontent.com"
 
-// legacyBundleMediaType is the bundle media type used when converting old cosign sign-blob bundles
-// Those bundles carry a SET but no inclusion proof, so they must stay on the v0.1 format
-const legacyBundleMediaType = "application/vnd.dev.sigstore.bundle+json;version=0.1"
-
-var errNotLegacyBundle = errors.New("not a legacy cosign blob bundle")
-
 // Policy captures the signer identity the verifier will accept
-// Zero value means "use the built-in default from buildinfo.RepoURL"
-// Callers without ldflags-injected build info (e.g. the Vercel monitor) pass an explicit RepoURL
+// Zero value means "use the built-in defaults from buildinfo"
+// Callers without ldflags-injected build info can pass explicit overrides
 type Policy struct {
 	// RepoURL is the GitHub repo URL the signing workflow must live in
 	// If empty, buildinfo.RepoURL is used
 	RepoURL string
+	// SigningRefPattern is the regex fragment for refs the signing workflow may run from
+	// If empty, buildinfo.SigningRefPattern is used
+	SigningRefPattern string
 }
 
 // sanRegex returns the regex the signer's SAN must match under this policy
@@ -53,7 +49,11 @@ func (p Policy) sanRegex() string {
 	if repoURL == "" {
 		repoURL = buildinfo.RepoURL
 	}
-	return `^` + regexp.QuoteMeta(repoURL) + `/\.github/workflows/release\.yaml@refs/(tags/v.+|heads/main|heads/v2-devel)$`
+	signingRefPattern := p.SigningRefPattern
+	if signingRefPattern == "" {
+		signingRefPattern = buildinfo.SigningRefPattern
+	}
+	return `^` + regexp.QuoteMeta(repoURL) + `/\.github/workflows/release\.yaml@refs/(` + signingRefPattern + `)$`
 }
 
 // Default public-good Rekor base URL used by the live fallback
@@ -85,30 +85,13 @@ func VerifyBundleWithPolicy(manifestBytes, bundleBytes []byte, p Policy) (*verif
 		return nil, fmt.Errorf("load embedded trust root: %w", err)
 	}
 
-	b, err := parseBundle(manifestBytes, bundleBytes)
+	b := &bundle.Bundle{}
+	err = b.UnmarshalJSON(bundleBytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse signing bundle: %w", err)
 	}
 
 	return verifyEntity(trustedRoot, b, manifestBytes, p.sanRegex())
-}
-
-func parseBundle(manifestBytes, bundleBytes []byte) (*bundle.Bundle, error) {
-	b := &bundle.Bundle{}
-	err := b.UnmarshalJSON(bundleBytes)
-	if err == nil {
-		return b, nil
-	}
-
-	legacyBundle, legacyErr := parseLegacyBundle(manifestBytes, bundleBytes)
-	if legacyErr == nil {
-		return legacyBundle, nil
-	}
-	if errors.Is(legacyErr, errNotLegacyBundle) {
-		return nil, err
-	}
-
-	return nil, legacyErr
 }
 
 // VerifyViaRekor is the fallback: if the server returns no bundle (or the inline bundle fails verification)
@@ -318,87 +301,6 @@ func parseHashedRekord(bodyJSON []byte) (sig, certDER []byte, err error) {
 	return sig, block.Bytes, nil
 }
 
-func parseLegacyBundle(manifestBytes, bundleBytes []byte) (*bundle.Bundle, error) {
-	var legacy legacyLocalSignedPayload
-	err := json.Unmarshal(bundleBytes, &legacy)
-	if err != nil {
-		return nil, fmt.Errorf("unmarshal legacy bundle: %w", err)
-	}
-	if legacy.Base64Signature == "" {
-		return nil, errNotLegacyBundle
-	}
-	if legacy.RekorBundle == nil {
-		return nil, errNotLegacyBundle
-	}
-
-	sig, err := base64.StdEncoding.DecodeString(legacy.Base64Signature)
-	if err != nil {
-		return nil, fmt.Errorf("decode base64Signature: %w", err)
-	}
-
-	bodyBytes, err := legacy.RekorBundle.Payload.bodyBytes()
-	if err != nil {
-		return nil, err
-	}
-
-	certDER, err := legacy.certDER(bodyBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	logIDBytes, err := hex.DecodeString(legacy.RekorBundle.Payload.LogID)
-	if err != nil {
-		return nil, fmt.Errorf("decode logID: %w", err)
-	}
-
-	kindVersion, err := parseRekorBody(bodyBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	pbBundle := assembleLegacyBundleProto(
-		manifestBytes,
-		sig,
-		certDER,
-		logIDBytes,
-		legacy.RekorBundle.Payload.LogIndex,
-		legacy.RekorBundle.Payload.IntegratedTime,
-		legacy.RekorBundle.SignedEntryTimestamp,
-		bodyBytes,
-		kindVersion.Kind,
-		kindVersion.APIVersion,
-	)
-
-	return bundle.NewBundle(pbBundle)
-}
-
-func (b legacyLocalSignedPayload) certDER(bodyBytes []byte) ([]byte, error) {
-	if b.Cert == "" {
-		_, certDER, err := parseHashedRekord(bodyBytes)
-		if err != nil {
-			return nil, fmt.Errorf("extract certificate from rekor body: %w", err)
-		}
-		return certDER, nil
-	}
-
-	pemBytes, err := base64.StdEncoding.DecodeString(b.Cert)
-	if err != nil {
-		return nil, fmt.Errorf("decode cert: %w", err)
-	}
-
-	block, _ := pem.Decode(pemBytes)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, errors.New("cert is not a PEM CERTIFICATE")
-	}
-
-	_, err = x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse leaf cert: %w", err)
-	}
-
-	return block.Bytes, nil
-}
-
 func parseRekorBody(bodyJSON []byte) (*rekorBody, error) {
 	var wrap rekorBody
 	err := json.Unmarshal(bodyJSON, &wrap)
@@ -463,57 +365,6 @@ func assembleBundleProto(
 	}, nil
 }
 
-func assembleLegacyBundleProto(
-	manifestBytes []byte,
-	sig, certDER, logIDBytes []byte,
-	logIndex, integratedTime int64,
-	set []byte,
-	canonicalizedBody []byte,
-	kind string,
-	version string,
-) *protobundle.Bundle {
-	digest := sha256.Sum256(manifestBytes)
-
-	return &protobundle.Bundle{
-		MediaType: legacyBundleMediaType,
-		VerificationMaterial: &protobundle.VerificationMaterial{
-			Content: &protobundle.VerificationMaterial_X509CertificateChain{
-				X509CertificateChain: &protocommon.X509CertificateChain{
-					Certificates: []*protocommon.X509Certificate{
-						{RawBytes: certDER},
-					},
-				},
-			},
-			TlogEntries: []*protorekor.TransparencyLogEntry{
-				{
-					LogIndex: logIndex,
-					LogId: &protocommon.LogId{
-						KeyId: logIDBytes,
-					},
-					KindVersion: &protorekor.KindVersion{
-						Kind:    kind,
-						Version: version,
-					},
-					IntegratedTime: integratedTime,
-					InclusionPromise: &protorekor.InclusionPromise{
-						SignedEntryTimestamp: set,
-					},
-					CanonicalizedBody: canonicalizedBody,
-				},
-			},
-		},
-		Content: &protobundle.Bundle_MessageSignature{
-			MessageSignature: &protocommon.MessageSignature{
-				MessageDigest: &protocommon.HashOutput{
-					Algorithm: protocommon.HashAlgorithm_SHA2_256,
-					Digest:    digest[:],
-				},
-				Signature: sig,
-			},
-		},
-	}
-}
-
 // --- Rekor response types ---
 
 type rekorLogEntry struct {
@@ -533,45 +384,6 @@ type rekorBody struct {
 	Kind       string          `json:"kind"`
 	APIVersion string          `json:"apiVersion"`
 	Spec       json.RawMessage `json:"spec"`
-}
-
-type legacyLocalSignedPayload struct {
-	Base64Signature string             `json:"base64Signature"`
-	Cert            string             `json:"cert,omitempty"`
-	RekorBundle     *legacyRekorBundle `json:"rekorBundle,omitempty"`
-}
-
-type legacyRekorBundle struct {
-	SignedEntryTimestamp []byte             `json:"SignedEntryTimestamp"`
-	Payload              legacyRekorPayload `json:"Payload"`
-}
-
-type legacyRekorPayload struct {
-	Body           any    `json:"body"`
-	IntegratedTime int64  `json:"integratedTime"`
-	LogIndex       int64  `json:"logIndex"`
-	LogID          string `json:"logID"`
-}
-
-func (p legacyRekorPayload) bodyBytes() ([]byte, error) {
-	if p.Body == nil {
-		return nil, errors.New("rekor payload body is empty")
-	}
-
-	bodyString, ok := p.Body.(string)
-	if ok {
-		bodyBytes, err := base64.StdEncoding.DecodeString(bodyString)
-		if err != nil {
-			return nil, fmt.Errorf("decode rekor payload body: %w", err)
-		}
-		return bodyBytes, nil
-	}
-
-	bodyBytes, err := json.Marshal(p.Body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal rekor payload body: %w", err)
-	}
-	return bodyBytes, nil
 }
 
 type rekorInclusionProof struct {

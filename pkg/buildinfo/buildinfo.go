@@ -20,6 +20,10 @@ var (
 	// RepoURL is the canonical source repo for this build, set to the GitHub URL at build time
 	// Defaults to a local/dev placeholder
 	RepoURL string = "dev.local"
+	// SigningRefPattern is the regex fragment for refs accepted by integrity verification
+	// Release builds set this at build time to match the refs the release workflow is allowed to sign from
+	// Local/dev builds default to tag refs only
+	SigningRefPattern string = "tags/v.+"
 )
 
 // Set during initialization
