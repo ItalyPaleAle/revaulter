@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect } from '@playwright/test'
 
 import { createVirtualPasskey } from './passkeys.mjs'
@@ -65,6 +67,8 @@ async function fetchSessionState(page) {
 
 const e2eToken = process.env.REVAULTER_E2E_TOKEN || 'playwright-e2e-token-fixed'
 const defaultServerURL = process.env.PLAYWRIGHT_TEST_BASE_URL || 'http://localhost:41741'
+const currentDir = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(currentDir, '..', '..', '..')
 
 async function e2eFetch(request, path, options = {}) {
     const headers = {
@@ -383,7 +387,7 @@ export function startCLIRequest(args) {
     }
 
     const child = spawn('go', cliArgs, {
-        cwd: process.cwd().replace(/\/client$/, ''),
+        cwd: repoRoot,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: process.env,
     })
