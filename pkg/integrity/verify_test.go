@@ -137,11 +137,11 @@ func TestRekorInclusionProof_ToProto(t *testing.T) {
 
 	proto, err := p.toProto()
 	require.NoError(t, err)
-	assert.Equal(t, int64(42), proto.LogIndex)
-	assert.Equal(t, int64(100), proto.TreeSize)
-	assert.Equal(t, "signed-checkpoint", proto.Checkpoint.Envelope)
-	require.Len(t, proto.Hashes, 1)
-	assert.Equal(t, []byte("abcd"), proto.Hashes[0])
+	assert.Equal(t, int64(42), proto.GetLogIndex())
+	assert.Equal(t, int64(100), proto.GetTreeSize())
+	assert.Equal(t, "signed-checkpoint", proto.GetCheckpoint().GetEnvelope())
+	require.Len(t, proto.GetHashes(), 1)
+	assert.Equal(t, []byte("abcd"), proto.GetHashes()[0])
 
 	// Malformed hex is rejected
 	bad := p

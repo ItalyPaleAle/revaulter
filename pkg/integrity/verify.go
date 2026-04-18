@@ -31,13 +31,22 @@ import (
 // with a SAN matching the release workflow for this repo (on tag or main-branch pushes)
 const expectedIssuer = "https://token.actions.githubusercontent.com"
 
-// expectedSANRegex is the regex the signer's Subject Alternative Name must match
-// Built once at package init from buildinfo.RepoURL (set via ldflags at release time)
-// so the CLI accepts signatures only from its own build's source repo
-var expectedSANRegex string
+// Policy captures the signer identity the verifier will accept
+// Zero value means "use the built-in default from buildinfo.RepoURL"
+// Callers without ldflags-injected build info (e.g. the Vercel monitor) pass an explicit RepoURL
+type Policy struct {
+	// RepoURL is the GitHub repo URL the signing workflow must live in
+	// If empty, buildinfo.RepoURL is used
+	RepoURL string
+}
 
-func init() {
-	expectedSANRegex = `^` + regexp.QuoteMeta(buildinfo.RepoURL) + `/\.github/workflows/release\.yaml@refs/(tags/v.+|heads/main)$`
+// sanRegex returns the regex the signer's SAN must match under this policy
+func (p Policy) sanRegex() string {
+	repoURL := p.RepoURL
+	if repoURL == "" {
+		repoURL = buildinfo.RepoURL
+	}
+	return `^` + regexp.QuoteMeta(repoURL) + `/\.github/workflows/release\.yaml@refs/(tags/v.+|heads/main)$`
 }
 
 // Default public-good Rekor base URL used by the live fallback
@@ -51,6 +60,12 @@ const defaultRekorBaseURL = "https://rekor.sigstore.dev"
 //
 // On success the returned VerificationResult includes the verified identity for callers that want to display it
 func VerifyBundle(manifestBytes, bundleBytes []byte) (*verify.VerificationResult, error) {
+	return VerifyBundleWithPolicy(manifestBytes, bundleBytes, Policy{})
+}
+
+// VerifyBundleWithPolicy is VerifyBundle with an explicit identity policy override
+// Used by callers that don't get buildinfo.RepoURL injected via ldflags
+func VerifyBundleWithPolicy(manifestBytes, bundleBytes []byte, p Policy) (*verify.VerificationResult, error) {
 	if len(manifestBytes) == 0 {
 		return nil, errors.New("manifest is empty")
 	}
@@ -69,7 +84,7 @@ func VerifyBundle(manifestBytes, bundleBytes []byte) (*verify.VerificationResult
 		return nil, fmt.Errorf("parse signing bundle: %w", err)
 	}
 
-	return verifyEntity(trustedRoot, b, manifestBytes)
+	return verifyEntity(trustedRoot, b, manifestBytes, p.sanRegex())
 }
 
 // VerifyViaRekor is the fallback: if the server returns no bundle (or the inline bundle fails verification)
@@ -78,6 +93,11 @@ func VerifyBundle(manifestBytes, bundleBytes []byte) (*verify.VerificationResult
 // from that entry and verifying it against the same embedded trust roots and identity policy
 // ctx controls the HTTP timeout; rekorBaseURL can be empty to use the default public-good instance
 func VerifyViaRekor(ctx context.Context, manifestBytes []byte, rekorBaseURL string) (*verify.VerificationResult, error) {
+	return VerifyViaRekorWithPolicy(ctx, manifestBytes, rekorBaseURL, Policy{})
+}
+
+// VerifyViaRekorWithPolicy is VerifyViaRekor with an explicit identity policy override
+func VerifyViaRekorWithPolicy(ctx context.Context, manifestBytes []byte, rekorBaseURL string, p Policy) (*verify.VerificationResult, error) {
 	if len(manifestBytes) == 0 {
 		return nil, errors.New("manifest is empty")
 	}
@@ -101,6 +121,8 @@ func VerifyViaRekor(ctx context.Context, manifestBytes []byte, rekorBaseURL stri
 		return nil, errors.New("no rekor entries found for manifest digest")
 	}
 
+	sanRegex := p.sanRegex()
+
 	// Try each returned UUID until one verifies
 	// Older duplicates can exist; the first to match the identity policy wins
 	var lastErr error
@@ -110,7 +132,7 @@ func VerifyViaRekor(ctx context.Context, manifestBytes []byte, rekorBaseURL stri
 			lastErr = fmt.Errorf("uuid=%s: %w", uuid, err)
 			continue
 		}
-		result, err := verifyEntity(trustedRoot, b, manifestBytes)
+		result, err := verifyEntity(trustedRoot, b, manifestBytes, sanRegex)
 		if err != nil {
 			lastErr = fmt.Errorf("uuid=%s: %w", uuid, err)
 			continue
@@ -124,8 +146,8 @@ func VerifyViaRekor(ctx context.Context, manifestBytes []byte, rekorBaseURL stri
 }
 
 // verifyEntity is the shared post-parse path used by both primary and Rekor fallback
-// It runs sigstore-go's verifier with the embedded identity policy
-func verifyEntity(trustedRoot *root.TrustedRoot, b *bundle.Bundle, manifestBytes []byte) (*verify.VerificationResult, error) {
+// It runs sigstore-go's verifier with the caller-supplied SAN regex
+func verifyEntity(trustedRoot *root.TrustedRoot, b *bundle.Bundle, manifestBytes []byte, sanRegex string) (*verify.VerificationResult, error) {
 	verifier, err := verify.NewVerifier(trustedRoot,
 		verify.WithTransparencyLog(1),
 		verify.WithObserverTimestamps(1),
@@ -134,7 +156,7 @@ func verifyEntity(trustedRoot *root.TrustedRoot, b *bundle.Bundle, manifestBytes
 		return nil, fmt.Errorf("build verifier: %w", err)
 	}
 
-	certID, err := verify.NewShortCertificateIdentity(expectedIssuer, "", "", expectedSANRegex)
+	certID, err := verify.NewShortCertificateIdentity(expectedIssuer, "", "", sanRegex)
 	if err != nil {
 		return nil, fmt.Errorf("build identity policy: %w", err)
 	}

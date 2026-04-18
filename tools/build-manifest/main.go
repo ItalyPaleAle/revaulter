@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -38,10 +39,10 @@ func main() {
 
 func run(distDir, outPath, version, commit, buildDate string) error {
 	if distDir == "" {
-		return fmt.Errorf("--dist is required")
+		return errors.New("--dist is required")
 	}
 	if outPath == "" {
-		return fmt.Errorf("--out is required")
+		return errors.New("--out is required")
 	}
 
 	// BuildFromFS expects the root path to be reachable inside the fs.FS
@@ -53,6 +54,8 @@ func run(distDir, outPath, version, commit, buildDate string) error {
 		return fmt.Errorf("build manifest: %w", err)
 	}
 
+	// Permissions 0644 are appropriate here
+	//nolint:gosec
 	err = os.WriteFile(outPath, manifest.Marshal(), 0o644)
 	if err != nil {
 		return fmt.Errorf("write output: %w", err)
