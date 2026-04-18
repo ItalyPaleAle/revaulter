@@ -184,11 +184,17 @@ async function handleAddPasskey() {
     showAddPasskey = false
 }
 
-function formatTimestamp(unix: number): string {
-    if (!unix) {
+function formatTimestamp(value: number | string): string {
+    if (!value) {
         return 'Never'
     }
-    return formatDistanceToNowStrict(new Date(unix * 1000), { addSuffix: true })
+
+    const date = typeof value === 'string' ? new Date(value) : new Date(value * 1000)
+    if (Number.isNaN(date.getTime())) {
+        return 'Never'
+    }
+
+    return formatDistanceToNowStrict(date, { addSuffix: true })
 }
 
 function shortenId(id: string): string {
@@ -276,7 +282,7 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
     { id: 'ip-restrictions', label: 'IP Restrictions', icon: 'shield' },
     { id: 'password', label: 'Password', icon: 'lock-closed' },
     { id: 'passkeys', label: 'Passkeys', icon: 'fingerprint' },
-    { id: 'signing-keys', label: 'Signing keys', icon: 'pen-line' },
+    { id: 'signing-keys', label: 'Signing keys', icon: 'lock-keyhole' },
 ]
 </script>
 
@@ -682,7 +688,7 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
 
                             <div class="mt-3 flex gap-2">
                                 <Button variant="neutral" onclick={handleDeriveSigningKey} disabled={busy || derivingKey}>
-                                    <Icon icon="pen-line" title="Derive" size="4" />
+                                    <Icon icon="lock-keyhole" title="Derive" size="4" />
                                     Derive key
                                 </Button>
                             </div>

@@ -20,7 +20,7 @@ import {
     unwrapPrimaryKey,
     wrapPrimaryKey,
 } from './crypto'
-import { bytesToBase64Url } from './utils'
+import { asBuf, bytesToBase64Url } from './utils'
 
 function hexToBytes(hex: string): Uint8Array {
     const bytes = new Uint8Array(hex.length / 2)
@@ -791,7 +791,7 @@ describe('signDigestEs256', () => {
             true,
             ['verify']
         )
-        const ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pub, sig, digest)
+        const ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pub, asBuf(sig), asBuf(digest))
         expect(ok).toBe(true)
     })
 

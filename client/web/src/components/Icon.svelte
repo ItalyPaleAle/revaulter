@@ -26,6 +26,12 @@ const { icon, title, size = '12' }: Props = $props()
             <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
         </IconContainer>
+    {:else if icon == 'lock-keyhole'}
+        <IconContainer {title} {size}>
+            <circle cx="12" cy="16" r="1" />
+            <rect width="18" height="12" x="3" y="10" rx="2" />
+            <path d="M7 10V7a5 5 0 0 1 10 0v3" />
+        </IconContainer>
     {:else if icon == 'key'}
         <IconContainer {title} {size}>
             <path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4" />
@@ -141,11 +147,6 @@ const { icon, title, size = '12' }: Props = $props()
         <IconContainer {title} {size}>
             <path d="M5 12h14" />
             <path d="M12 5v14" />
-        </IconContainer>
-    {:else if icon == 'pen-line'}
-        <IconContainer {title} {size}>
-            <path d="M12 20h9" />
-            <path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z" />
         </IconContainer>
     {:else if icon == 'download'}
         <IconContainer {title} {size}>

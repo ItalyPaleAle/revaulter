@@ -209,6 +209,16 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 	require.Nil(t, items[0]["jwk"], "list must not include JWK bytes")
 	require.Nil(t, items[0]["pem"], "list must not include PEM bytes")
 
+	// Timestamps must be RFC3339 strings that new Date() can parse on the client
+	createdStr, createdOK := items[0]["createdAt"].(string)
+	require.True(t, createdOK, "createdAt must be a JSON string, got %T (%v)", items[0]["createdAt"], items[0]["createdAt"])
+	_, err = time.Parse(time.RFC3339, createdStr)
+	require.NoError(t, err, "createdAt must be RFC3339, got %q", createdStr)
+	updatedStr, updatedOK := items[0]["updatedAt"].(string)
+	require.True(t, updatedOK, "updatedAt must be a JSON string, got %T (%v)", items[0]["updatedAt"], items[0]["updatedAt"])
+	_, err = time.Parse(time.RFC3339, updatedStr)
+	require.NoError(t, err, "updatedAt must be RFC3339, got %q", updatedStr)
+
 	// Another user cannot unpublish Alice's key with her id
 	eveCookie, _ := seedV2SessionCookie(t, srv, "user-sign-2", "Eve")
 	status, _, body = doPost(t, "/v2/api/signing-keys/unpublish", map[string]any{"id": km.ID}, eveCookie)

@@ -85,8 +85,8 @@ export type V2PublishedSigningKey = {
     id: string
     algorithm: string
     keyLabel: string
-    createdAt: number
-    updatedAt: number
+    createdAt: string
+    updatedAt: string
 }
 
 export type DerivedSigningKey = {

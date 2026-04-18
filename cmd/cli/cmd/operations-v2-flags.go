@@ -44,7 +44,7 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 	_ = cmd.MarkFlagRequired("request-key")
 	cmd.Flags().StringVar(&f.KeyLabel, "key-label", "", "Logical key label used for v2 key derivation")
 	_ = cmd.MarkFlagRequired("key-label")
-	cmd.Flags().StringVarP(&f.Algorithm, "algorithm", "a", "", "v2 algorithm identifier")
+	cmd.Flags().StringVarP(&f.Algorithm, "algorithm", "a", "", "algorithm identifier")
 	_ = cmd.MarkFlagRequired("algorithm")
 
 	cmd.Flags().VarP(&f.Timeout, "timeout", "t", "Timeout for the operation, as a number of seconds or Go duration")

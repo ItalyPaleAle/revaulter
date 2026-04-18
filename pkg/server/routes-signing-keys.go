@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -20,11 +21,11 @@ type v2SigningKeyPublishRequest struct {
 }
 
 type v2SigningKeyPublishResponse struct {
-	ID        string `json:"id"`
-	Algorithm string `json:"algorithm"`
-	KeyLabel  string `json:"keyLabel"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
+	ID        string    `json:"id"`
+	Algorithm string    `json:"algorithm"`
+	KeyLabel  string    `json:"keyLabel"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type v2SigningKeyUnpublishRequest struct {
@@ -39,7 +40,7 @@ type v2SigningKeyPublicResponse struct {
 	ID        string          `json:"id"`
 	Algorithm string          `json:"algorithm"`
 	KeyLabel  string          `json:"keyLabel"`
-	CreatedAt int64           `json:"createdAt"`
+	CreatedAt time.Time       `json:"createdAt"`
 	JWK       json.RawMessage `json:"jwk"`
 }
 
@@ -158,8 +159,8 @@ func (s *Server) RouteV2APISigningKeyPublish(c *gin.Context) {
 		ID:        rec.ID,
 		Algorithm: rec.Algorithm,
 		KeyLabel:  rec.KeyLabel,
-		CreatedAt: rec.CreatedAt.Unix(),
-		UpdatedAt: rec.UpdatedAt.Unix(),
+		CreatedAt: rec.CreatedAt,
+		UpdatedAt: rec.UpdatedAt,
 	})
 }
 
@@ -241,7 +242,7 @@ func (s *Server) RouteV2SigningKeyPublic(c *gin.Context) {
 		ID:        rec.ID,
 		Algorithm: rec.Algorithm,
 		KeyLabel:  rec.KeyLabel,
-		CreatedAt: rec.CreatedAt.Unix(),
+		CreatedAt: rec.CreatedAt,
 		JWK:       json.RawMessage(rec.JWK),
 	})
 }
