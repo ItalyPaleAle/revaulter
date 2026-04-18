@@ -261,7 +261,7 @@ func rekorEntryAsBundle(ctx context.Context, baseURL, uuid string, artifactDiges
 func parseHashedRekord(bodyJSON []byte) (sig, certDER []byte, err error) {
 	wrap, err := parseRekorBody(bodyJSON)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("parse rekor body: %w", err)
 	}
 	if wrap.Kind != "hashedrekord" {
 		return nil, nil, fmt.Errorf("unsupported rekor entry kind %q (expected hashedrekord)", wrap.Kind)

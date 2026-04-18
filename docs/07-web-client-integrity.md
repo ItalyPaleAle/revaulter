@@ -81,8 +81,7 @@ Description of the fix...
 Sign-Web-Client: yes
 ```
 
-The content after the colon is ignored — any value is accepted.
-The trailer's presence alone is the gate.
+The content after the colon is ignored — any value is accepted, and the trailer's presence alone is the gate.
 The exact ref regex is injected into the CLI at build time from the release workflow.
 
 ## What the `check` command does *not* protect against
