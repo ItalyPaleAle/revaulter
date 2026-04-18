@@ -123,14 +123,14 @@ jobs:
       # Integrity manifest: signs the web client dist/ contents with cosign keyless
       # Always runs on tag releases; on main-branch pushes, only when the head commit
       # carries a `Sign-Web-Client` trailer (parsed via `git interpret-trailers`)
-      # TODO: Remove the v2-devel branch (remove `|| "${GITHUB_REF}" == refs/heads/v2-devel`)
+      # TODO: Remove the v2-devel branch (remove `|| "${GITHUB_REF}" == "refs/heads/v2-devel"`)
       - name: Decide whether to sign web client
         id: sign_gate
         run: |
           should_sign=false
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+          if [[ "${GITHUB_REF}" == "refs/tags/v*" ]]; then
             should_sign=true
-          elif [[ "${GITHUB_REF}" == refs/heads/main || "${GITHUB_REF}" == refs/heads/v2-devel ]]; then
+          elif [[ "${GITHUB_REF}" == "refs/heads/main" || "${GITHUB_REF}" == "refs/heads/v2-devel" ]]; then
             if git log -1 --format=%B \
                | git interpret-trailers --parse \
                | grep -qi '^Sign-Web-Client:'; then
@@ -138,6 +138,7 @@ jobs:
             fi
           fi
           echo "should_sign=$should_sign" >> "$GITHUB_OUTPUT"
+          echo "GITHUB_REF=${GITHUB_REF}"
           echo "Signing web client: $should_sign"
 
       - name: Install cosign
