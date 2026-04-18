@@ -32,6 +32,10 @@ type Options struct {
 	// Leave empty to fall back to buildinfo.RepoURL (the default for CLI callers built with ldflags)
 	RepoURL string
 
+	// SigningRefPattern overrides the identity-policy ref regex fragment
+	// Leave empty to fall back to buildinfo.SigningRefPattern
+	SigningRefPattern string
+
 	// Logger is optional; nil silences per-file debug output
 	Logger *slog.Logger
 }
@@ -133,7 +137,10 @@ func Check(ctx context.Context, opts Options) (*Result, error) {
 	// Primary path: verify the inline bundle offline against embedded trust roots
 	// Fallback (unless NoRekorFallback): if the inline bundle fails, query Rekor by manifest hash
 	// and reconstruct a bundle from the log entry
-	policy := integrity.Policy{RepoURL: opts.RepoURL}
+	policy := integrity.Policy{
+		RepoURL:           opts.RepoURL,
+		SigningRefPattern: opts.SigningRefPattern,
+	}
 	usedRekor := false
 	vr, primaryErr := integrity.VerifyBundleWithPolicy(manifestBytes, artifacts.Bundle, policy)
 	switch {

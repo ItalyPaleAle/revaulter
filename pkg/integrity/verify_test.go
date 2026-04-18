@@ -7,12 +7,25 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const dummyCertPEM = `-----BEGIN CERTIFICATE-----
+MIIBhTCCASugAwIBAgIQIRi6zePL6mKjOipn+dNuaTAKBggqhkjOPQQDAjASMRAw
+DgYDVQQKEwdBY21lIENvMB4XDTE3MTAyMDE5NDMwNloXDTE4MTAyMDE5NDMwNlow
+EjEQMA4GA1UEChMHQWNtZSBDbzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABD0d
+7VNhbWvZLWPuj/RtHFjvtJBEwOkhbN/BnnE8rnZR8+sbwnc/KhCk3FhnpHZnQz7B
+5aETbbIgmuvewdjvSBSjYzBhMA4GA1UdDwEB/wQEAwICpDATBgNVHSUEDDAKBggr
+BgEFBQcDATAPBgNVHRMBAf8EBTADAQH/MCkGA1UdEQQiMCCCDmxvY2FsaG9zdDo1
+NDUzgg4xMjcuMC4wLjE6NTQ1MzAKBggqhkjOPQQDAgNIADBFAiEA2zpJEPQyz6/l
+Wf86aX6PepsntZv2GYlA5UpabfT2EZICICpJ5h/iI+i341gBmLiAFQOyTDT+/wQc
+6MF9+Yw1Yy0t
+-----END CERTIFICATE-----`
 
 func TestVerifyBundle_RejectsEmptyInputs(t *testing.T) {
 	_, err := VerifyBundle(nil, []byte("{}"))
@@ -153,17 +166,6 @@ func TestRekorInclusionProof_ToProto(t *testing.T) {
 func TestParseHashedRekord_HappyPath(t *testing.T) {
 	// Build a minimal hashedrekord body with a valid PEM cert and a signature
 	// The cert doesn't need to chain to anything — this test covers the parser, not signature verification
-	dummyCertPEM := `-----BEGIN CERTIFICATE-----
-MIIBhTCCASugAwIBAgIQIRi6zePL6mKjOipn+dNuaTAKBggqhkjOPQQDAjASMRAw
-DgYDVQQKEwdBY21lIENvMB4XDTE3MTAyMDE5NDMwNloXDTE4MTAyMDE5NDMwNlow
-EjEQMA4GA1UEChMHQWNtZSBDbzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABD0d
-7VNhbWvZLWPuj/RtHFjvtJBEwOkhbN/BnnE8rnZR8+sbwnc/KhCk3FhnpHZnQz7B
-5aETbbIgmuvewdjvSBSjYzBhMA4GA1UdDwEB/wQEAwICpDATBgNVHSUEDDAKBggr
-BgEFBQcDATAPBgNVHRMBAf8EBTADAQH/MCkGA1UdEQQiMCCCDmxvY2FsaG9zdDo1
-NDUzgg4xMjcuMC4wLjE6NTQ1MzAKBggqhkjOPQQDAgNIADBFAiEA2zpJEPQyz6/l
-Wf86aX6PepsntZv2GYlA5UpabfT2EZICICpJ5h/iI+i341gBmLiAFQOyTDT+/wQc
-6MF9+Yw1Yy0t
------END CERTIFICATE-----`
 	pemB64 := base64.StdEncoding.EncodeToString([]byte(dummyCertPEM))
 	sigB64 := base64.StdEncoding.EncodeToString([]byte("some-signature"))
 
@@ -206,4 +208,16 @@ func TestParseHashedRekord_RejectsNonPEMContent(t *testing.T) {
 	_, _, err = parseHashedRekord(bodyJSON)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "PEM CERTIFICATE")
+}
+
+func TestPolicySanRegex_UsesConfiguredSigningRefPattern(t *testing.T) {
+	rx := regexp.MustCompile((Policy{
+		RepoURL:           "https://github.com/ItalyPaleAle/revaulter",
+		SigningRefPattern: "tags/v.+|heads/main|heads/v2-devel",
+	}).sanRegex())
+
+	assert.True(t, rx.MatchString("https://github.com/ItalyPaleAle/revaulter/.github/workflows/release.yaml@refs/tags/v2.1.0"))
+	assert.True(t, rx.MatchString("https://github.com/ItalyPaleAle/revaulter/.github/workflows/release.yaml@refs/heads/main"))
+	assert.True(t, rx.MatchString("https://github.com/ItalyPaleAle/revaulter/.github/workflows/release.yaml@refs/heads/v2-devel"))
+	assert.False(t, rx.MatchString("https://github.com/ItalyPaleAle/revaulter/.github/workflows/release.yaml@refs/heads/feature/test"))
 }
