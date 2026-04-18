@@ -41,6 +41,7 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// #nosec G101 -- Hardcoded credentials are test ones
 	_ = config.SetTestConfig(map[string]any{
 		"logLevel":       "info",
 		"port":           testServerPort,
@@ -58,12 +59,15 @@ func TestMain(m *testing.M) {
 
 func TestServerV2RequestLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-req.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-req.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -182,12 +186,15 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 
 func TestServerV2PublicSignup(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-users.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-users.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -235,12 +242,15 @@ func TestServerV2PublicSignup(t *testing.T) {
 
 func TestServerV2SessionMiddlewareAllowsNonreadyUsersOnListAPI(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-nonready.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-nonready.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -270,12 +280,15 @@ func TestServerV2SessionMiddlewareAllowsNonreadyUsersOnListAPI(t *testing.T) {
 
 func TestServerV2SessionEndpointAllowsNonreadyUsers(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-session-nonready.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-session-nonready.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -306,13 +319,16 @@ func TestServerV2SessionEndpointAllowsNonreadyUsers(t *testing.T) {
 
 func TestServerV2DisableSignup(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-disable-signup.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		"disableSignup":   true,
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-disable-signup.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+			"disableSignup":   true,
+		}),
+	)
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -338,12 +354,15 @@ func TestServerV2DisableSignup(t *testing.T) {
 
 func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-security.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-security.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -481,12 +500,15 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 
 func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-webhook.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-webhook.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
 
 	webhookRequests := make(chan *webhook.WebhookRequest, 1)
 	srv, cleanup := newTestServer(t, &mockWebhook{requests: webhookRequests}, nil, nil)
@@ -535,12 +557,15 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 
 func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-expiry-callback.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-expiry-callback.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -586,12 +611,14 @@ func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T
 
 func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-logout.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-logout.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}))
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -854,12 +881,15 @@ func (w mockWebhook) SetBaseURL(val string) {
 
 func TestServerV2UpdateDisplayName(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-display-name.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-display-name.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -949,12 +979,15 @@ func TestServerV2UpdateDisplayName(t *testing.T) {
 
 func TestServerV2UpdateWrappedKey(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-wrapped-key.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-wrapped-key.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -1025,12 +1058,15 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 
 func TestServerV2CredentialLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Cleanup(config.SetTestConfig(map[string]any{
-		"databaseDSN":     tmpDir + "/v2-cred-lifecycle.db",
-		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-	}))
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-cred-lifecycle.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
 
 	srv, cleanup := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)

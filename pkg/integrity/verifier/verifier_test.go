@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http2"
 )
 
 // newStubServer returns an httptest.Server whose handlers are looked up by path
@@ -20,6 +21,16 @@ func newStubServer(t *testing.T, handlers map[string]http.HandlerFunc) *httptest
 		mux.HandleFunc(p, h)
 	}
 	return httptest.NewServer(mux)
+}
+
+func newStubTLSServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(handler)
+	srv.EnableHTTP2 = true
+	err := http2.ConfigureServer(srv.Config, &http2.Server{})
+	require.NoError(t, err)
+	srv.StartTLS()
+	return srv
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -151,6 +162,34 @@ func TestNewHTTPClient_InsecureSkipsTLSVerify(t *testing.T) {
 	c, err := NewHTTPClient("https://localhost", true, false)
 	require.NoError(t, err)
 	require.NotNil(t, c)
+}
+
+func TestNewHTTPClient_DoesNotFollowRedirects(t *testing.T) {
+	redirected := false
+	target := newStubTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirected = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	srv := newStubTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer srv.Close()
+
+	client, err := NewHTTPClient(srv.URL, true, true)
+	require.NoError(t, err)
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	require.NoError(t, err)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusFound, res.StatusCode)
+	assert.False(t, redirected)
+	assert.Equal(t, target.URL, res.Header.Get("Location"))
 }
 
 // Small sanity test for doJSONRequest's error path (caller sees the server-side "error" field)

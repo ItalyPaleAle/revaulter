@@ -279,6 +279,7 @@ func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client,
 }
 
 func doJSONRequest(client *http.Client, req *http.Request, out any) error {
+	// #nosec G704 -- redirects are disabled on the client and req targets are built from the validated server URL selected by the CLI flags
 	res, err := client.Do(req)
 	if err != nil {
 		return err
@@ -324,5 +325,10 @@ func getV2HTTPClient(log *slog.Logger, flags v2OperationFlags) (*http.Client, er
 			InsecureSkipVerify: true,
 		}
 	}
-	return &http.Client{Transport: transport}, nil
+	return &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: transport,
+	}, nil
 }

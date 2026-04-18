@@ -334,6 +334,7 @@ func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
 	store, err := NewAuthStore(conn, nil)
 	require.NoError(t, err)
 
+	// #nosec G101 -- Hardcoded credentials are test ones
 	oldRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-revoked-old",
 		DisplayName:    "Old Revoked",
@@ -344,6 +345,8 @@ func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
 		SessionTTL:     time.Minute,
 	})
 	require.NoError(t, err)
+
+	// #nosec G101 -- Hardcoded credentials are test ones
 	tooFreshRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-revoked-fresh",
 		DisplayName:    "Fresh Revoked",
@@ -354,6 +357,8 @@ func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
 		SessionTTL:     time.Hour,
 	})
 	require.NoError(t, err)
+
+	// #nosec G101 -- Hardcoded credentials are test ones
 	notRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-not-revoked",
 		DisplayName:    "Not Revoked",
@@ -367,6 +372,7 @@ func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
 
 	_, err = conn.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $2, expires_at = $3 WHERE id = $1`, oldRevokedSession.ID, time.Now().Add(-30*time.Minute).Unix(), time.Now().Add(time.Hour).Unix())
 	require.NoError(t, err)
+
 	_, err = conn.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $2, expires_at = $3 WHERE id = $1`, tooFreshRevokedSession.ID, time.Now().Add(-5*time.Minute).Unix(), time.Now().Add(time.Hour).Unix())
 	require.NoError(t, err)
 
@@ -400,6 +406,7 @@ func TestAuthStoreDeleteRevokedSessionImmediate(t *testing.T) {
 	store, err := NewAuthStore(conn, nil)
 	require.NoError(t, err)
 
+	// #nosec G101 -- Hardcoded credentials are test ones
 	revokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-revoked-now",
 		DisplayName:    "Revoked Now",
@@ -410,6 +417,8 @@ func TestAuthStoreDeleteRevokedSessionImmediate(t *testing.T) {
 		SessionTTL:     time.Hour,
 	})
 	require.NoError(t, err)
+
+	// #nosec G101 -- Hardcoded credentials are test ones
 	notRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-still-active",
 		DisplayName:    "Still Active",
@@ -447,6 +456,7 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 	store, err := NewAuthStore(conn, nil)
 	require.NoError(t, err)
 
+	// #nosec G101 -- Hardcoded credentials are test ones
 	nonreadyOldSession, err := store.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-nonready-old",
 		DisplayName:    "Old Nonready",
@@ -457,6 +467,8 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 		SessionTTL:     time.Hour,
 	})
 	require.NoError(t, err)
+
+	// #nosec G101 -- Hardcoded credentials are test ones
 	nonreadyFreshSession, err := store.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-nonready-fresh",
 		DisplayName:    "Fresh Nonready",
@@ -467,6 +479,8 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 		SessionTTL:     time.Hour,
 	})
 	require.NoError(t, err)
+
+	// #nosec G101 -- Hardcoded credentials are test ones
 	readySession, err := store.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-ready",
 		DisplayName:    "Ready User",
@@ -480,9 +494,11 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 
 	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyOldSession.UserID, time.Now().Add(-25*time.Hour).Unix())
 	require.NoError(t, err)
+
 	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyFreshSession.UserID, time.Now().Add(-23*time.Hour).Unix())
 	require.NoError(t, err)
 	require.NoError(t, store.FinalizeSignup(ctx, readySession.UserID, "canary-ready", `{"kty":"EC"}`, "mlkem-ready"))
+
 	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, readySession.UserID, time.Now().Add(-25*time.Hour).Unix())
 	require.NoError(t, err)
 

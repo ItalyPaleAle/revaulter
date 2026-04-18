@@ -46,12 +46,19 @@ func NewHTTPClient(serverURL string, insecure, noH2C bool) (*http.Client, error)
 		}
 	}
 
-	return &http.Client{Transport: transport}, nil
+	return &http.Client{
+		// Disable following redirects
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: transport,
+	}, nil
 }
 
 // doJSONRequest sends req and decodes a JSON response into out
 // On non-2xx responses it returns an error that tries to surface the server-side error message
 func doJSONRequest(client *http.Client, req *http.Request, out any) error {
+	// #nosec G704 -- redirects are disabled on the client and req targets are built from the already parsed server URL used to create the verifier client
 	res, err := client.Do(req)
 	if err != nil {
 		return err
