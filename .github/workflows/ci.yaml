@@ -4,11 +4,13 @@ on:
   push:
     branches:
       - main
-      - refactor-v2
+      # TODO: Remove this branch
+      - v2-devel
   pull_request:
     branches:
       - main
-      - refactor-v2
+      # TODO: Remove this branch
+      - v2-devel
 
 permissions:
   contents: read
