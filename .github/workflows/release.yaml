@@ -98,6 +98,7 @@ jobs:
 
           BUILDINFO_PKG="github.com/italypaleale/revaulter/pkg/buildinfo"
           REPO_URL="https://github.com/${{ github.repository }}"
+          # This is injected into the CLI as a regex fragment, so keep it regex-safe
           SIGNING_BRANCH_REF_PATTERN='heads/main|heads/v2-devel'
           SIGNING_REF_PATTERN="tags/v.+|${SIGNING_BRANCH_REF_PATTERN}"
           BUILD_LDFLAGS="-X ${BUILDINFO_PKG}.Production=1 -X ${BUILDINFO_PKG}.AppVersion=${BUILD_VERSION} -X ${BUILDINFO_PKG}.BuildId=${BUILD_ID} -X ${BUILDINFO_PKG}.BuildDate=${BUILD_DATE} -X ${BUILDINFO_PKG}.CommitHash=${COMMIT_HASH} -X ${BUILDINFO_PKG}.RepoURL=${REPO_URL} -X ${BUILDINFO_PKG}.SigningRefPattern=${SIGNING_REF_PATTERN} -buildid=${BUILD_ID}"

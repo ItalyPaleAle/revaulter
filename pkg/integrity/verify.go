@@ -308,10 +308,10 @@ func parseRekorBody(bodyJSON []byte) (*rekorBody, error) {
 		return nil, fmt.Errorf("unwrap entry: %w", err)
 	}
 	if wrap.Kind == "" {
-		return nil, errors.New("rekor body is missing kind")
+		return nil, errors.New(`rekor body is missing "kind"`)
 	}
 	if wrap.APIVersion == "" {
-		return nil, errors.New("rekor body is missing apiVersion")
+		return nil, errors.New(`rekor body is missing "apiVersion"`)
 	}
 	return &wrap, nil
 }
