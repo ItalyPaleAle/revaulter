@@ -133,7 +133,7 @@ jobs:
           elif [[ "${GITHUB_REF}" == "refs/heads/main" || "${GITHUB_REF}" == "refs/heads/v2-devel" ]]; then
             if git log -1 --format=%B \
                | git interpret-trailers --parse \
-               | grep -qi '^Sign-Web-Client:'; then
+               | grep -qi '^Sign-Web-Client: true'; then
               should_sign=true
             fi
           fi
