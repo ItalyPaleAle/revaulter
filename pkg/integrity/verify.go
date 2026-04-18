@@ -29,8 +29,11 @@ import (
 // Identity policy for Revaulter's release workflow
 // The signer must be an ephemeral cert issued by Fulcio via GitHub Actions OIDC
 // with a SAN matching the release workflow for this repo (on tag, main, or temporary v2-devel pushes)
+// Remove the v2-devel allowance when the release workflow stops signing that branch
 const expectedIssuer = "https://token.actions.githubusercontent.com"
 
+// legacyBundleMediaType is the bundle media type used when converting old cosign sign-blob bundles
+// Those bundles carry a SET but no inclusion proof, so they must stay on the v0.1 format
 const legacyBundleMediaType = "application/vnd.dev.sigstore.bundle+json;version=0.1"
 
 var errNotLegacyBundle = errors.New("not a legacy cosign blob bundle")
