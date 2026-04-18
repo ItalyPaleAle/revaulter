@@ -156,6 +156,9 @@ jobs:
             --build-date "${BUILD_DATE}" \
             --out pkg/server/integrity/manifest.txt
 
+            echo "Manifest:"
+            cat pkg/server/integrity/manifest.txt
+
       - name: Sign integrity manifest (cosign keyless)
         if: steps.sign_gate.outputs.should_sign == 'true'
         env:
