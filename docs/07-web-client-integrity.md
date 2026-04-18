@@ -34,7 +34,7 @@ At verification time, `revaulter-cli check`:
 2. Fetches `GET /info/integrity` to retrieve the signed manifest + cosign bundle.
 3. Verifies the cosign signature against **Sigstore infrastructure roots embedded in the CLI binary**:
    - The signing cert chains to Fulcio's root CA;
-   - Its subject matches this repo's release workflow on a tag or another ref baked into the CLI build;
+   - Its subject matches this repo's release workflow on a tag or another ref baked into the CLI build (like the `main` branch);
    - Its Rekor transparency-log entry is genuine.
 4. Asserts the manifest's version and commit match the server's `/info` response (downgrade protection).
 5. `GET`s every file listed in the manifest from the server, hashes it, compares to the manifest. Any mismatch → non-zero exit with the offending paths.
@@ -80,9 +80,6 @@ Description of the fix...
 
 Sign-Web-Client: yes
 ```
-
-The content after the colon is ignored — any value is accepted, and the trailer's presence alone is the gate.
-The exact ref regex is injected into the CLI at build time from the release workflow.
 
 ## What the `check` command does *not* protect against
 

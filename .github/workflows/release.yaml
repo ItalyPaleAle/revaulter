@@ -80,6 +80,7 @@ jobs:
             type=raw,value=2-devel
 
       - name: Set variables
+        # TODO: Remove the 2-devel branch
         run: |
           BUILD_ID=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
           BUILD_VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
@@ -138,7 +139,7 @@ jobs:
           elif [[ "${GITHUB_REF#refs/}" =~ ^(${SIGNING_BRANCH_REF_PATTERN})$ ]]; then
             if git log -1 --format=%B \
                | git interpret-trailers --parse \
-               | grep -qi '^Sign-Web-Client: true'; then
+               | grep -qi '^Sign-Web-Client: yes'; then
               should_sign=true
             fi
           fi

@@ -33,7 +33,6 @@ const expectedIssuer = "https://token.actions.githubusercontent.com"
 
 // Policy captures the signer identity the verifier will accept
 // Zero value means "use the built-in defaults from buildinfo"
-// Callers without ldflags-injected build info can pass explicit overrides
 type Policy struct {
 	// RepoURL is the GitHub repo URL the signing workflow must live in
 	// If empty, buildinfo.RepoURL is used
@@ -49,10 +48,12 @@ func (p Policy) sanRegex() string {
 	if repoURL == "" {
 		repoURL = buildinfo.RepoURL
 	}
+
 	signingRefPattern := p.SigningRefPattern
 	if signingRefPattern == "" {
 		signingRefPattern = buildinfo.SigningRefPattern
 	}
+
 	return `^` + regexp.QuoteMeta(repoURL) + `/\.github/workflows/release\.yaml@refs/(` + signingRefPattern + `)$`
 }
 
@@ -263,6 +264,7 @@ func parseHashedRekord(bodyJSON []byte) (sig, certDER []byte, err error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse rekor body: %w", err)
 	}
+
 	if wrap.Kind != "hashedrekord" {
 		return nil, nil, fmt.Errorf("unsupported rekor entry kind %q (expected hashedrekord)", wrap.Kind)
 	}
@@ -275,6 +277,7 @@ func parseHashedRekord(bodyJSON []byte) (sig, certDER []byte, err error) {
 			} `json:"publicKey"`
 		} `json:"signature"`
 	}
+
 	err = json.Unmarshal(wrap.Spec, &spec)
 	if err != nil {
 		return nil, nil, fmt.Errorf("unmarshal spec: %w", err)
@@ -284,20 +287,24 @@ func parseHashedRekord(bodyJSON []byte) (sig, certDER []byte, err error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("decode signature: %w", err)
 	}
+
 	// publicKey.content is base64-encoded PEM of the leaf cert for keyless flows
 	pemBytes, err := base64.StdEncoding.DecodeString(spec.Signature.PublicKey.Content)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decode publicKey.content: %w", err)
 	}
+
 	block, _ := pem.Decode(pemBytes)
 	if block == nil || block.Type != "CERTIFICATE" {
 		return nil, nil, errors.New("publicKey.content is not a PEM CERTIFICATE")
 	}
+
 	// Validate it parses as a cert; we keep the DER bytes for the bundle
 	_, err = x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse leaf cert: %w", err)
 	}
+
 	return sig, block.Bytes, nil
 }
 
@@ -305,14 +312,16 @@ func parseRekorBody(bodyJSON []byte) (*rekorBody, error) {
 	var wrap rekorBody
 	err := json.Unmarshal(bodyJSON, &wrap)
 	if err != nil {
-		return nil, fmt.Errorf("unwrap entry: %w", err)
+		return nil, fmt.Errorf("error decoding JSON body: %w", err)
 	}
+
 	if wrap.Kind == "" {
 		return nil, errors.New(`rekor body is missing "kind"`)
 	}
 	if wrap.APIVersion == "" {
 		return nil, errors.New(`rekor body is missing "apiVersion"`)
 	}
+
 	return &wrap, nil
 }
 
