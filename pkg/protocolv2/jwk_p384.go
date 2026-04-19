@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"math/big"
 )
 
 // ECP384PublicJWK is the public JWK format for the ECDSA leg of the user's hybrid anchor.
@@ -65,14 +64,15 @@ func (j *ECP384PublicJWK) ToECDSAPublicKey() (*ecdsa.PublicKey, error) {
 	x, _ := decodeB64URLFixed(j.X, p384CoordinateSize)
 	y, _ := decodeB64URLFixed(j.Y, p384CoordinateSize)
 
-	curve := elliptic.P384()
-	pk := &ecdsa.PublicKey{
-		Curve: curve,
-		X:     new(big.Int).SetBytes(x),
-		Y:     new(big.Int).SetBytes(y),
-	}
-	if !curve.IsOnCurve(pk.X, pk.Y) {
-		return nil, errors.New("invalid P-384 public point: not on curve")
+	// Build the SEC1 uncompressed encoding (0x04 || X || Y) and let ecdsa.ParseUncompressedPublicKey perform the on-curve check
+	uncompressed := make([]byte, 1+2*p384CoordinateSize)
+	uncompressed[0] = 0x04
+	copy(uncompressed[1:1+p384CoordinateSize], x)
+	copy(uncompressed[1+p384CoordinateSize:], y)
+
+	pk, err := ecdsa.ParseUncompressedPublicKey(elliptic.P384(), uncompressed)
+	if err != nil {
+		return nil, fmt.Errorf("invalid P-384 public point: %w", err)
 	}
 	return pk, nil
 }
@@ -86,10 +86,15 @@ func ECP384PublicJWKFromECDSA(pk *ecdsa.PublicKey) (ECP384PublicJWK, error) {
 		return ECP384PublicJWK{}, errors.New("public key is not on P-384")
 	}
 
-	x := make([]byte, p384CoordinateSize)
-	y := make([]byte, p384CoordinateSize)
-	pk.X.FillBytes(x)
-	pk.Y.FillBytes(y)
+	uncompressed, err := pk.Bytes()
+	if err != nil {
+		return ECP384PublicJWK{}, fmt.Errorf("encode public key: %w", err)
+	}
+	if len(uncompressed) != 1+2*p384CoordinateSize || uncompressed[0] != 0x04 {
+		return ECP384PublicJWK{}, fmt.Errorf("unexpected uncompressed encoding length %d", len(uncompressed))
+	}
+	x := uncompressed[1 : 1+p384CoordinateSize]
+	y := uncompressed[1+p384CoordinateSize:]
 
 	return ECP384PublicJWK{
 		Kty: "EC",

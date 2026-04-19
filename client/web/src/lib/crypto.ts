@@ -1,5 +1,5 @@
+import { argon2idAsync } from '@noble/hashes/argon2.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
-import { argon2id } from 'hash-wasm'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import type {
     EcP256PublicJwk,
@@ -229,21 +229,13 @@ export async function deriveWrappingKey(params: {
     if (params.password) {
         usedArgon2idSalt = params.argon2idSalt ?? crypto.getRandomValues(new Uint8Array(16))
         // These settings roughly exceed the current OWASP Argon2id guidance as of April 2026 (m=128 MiB, t=4, p=1) and aim for well over 500 ms of work on modern laptops while still being tolerable in-browser
-        const stretchedBytes = await argon2id({
-            password: params.password,
-            salt: usedArgon2idSalt,
-            parallelism: 1,
-            iterations: 4,
-            memorySize: 128 << 10, // 128 MiB
-            hashLength: 32,
-            outputType: 'binary',
+        stretched = await argon2idAsync(params.password, usedArgon2idSalt, {
+            t: 4,
+            m: 128 << 10, // 128 MiB
+            p: 1,
+            dkLen: 32,
         })
-        // Copy into a fresh ArrayBuffer-backed Uint8Array to satisfy
-        // BufferSource constraints (hash-wasm returns ArrayBufferLike)
-        const copy = new Uint8Array(stretchedBytes.byteLength)
-        copy.set(stretchedBytes)
-        stretched = copy
-        hkdfSalt = copy
+        hkdfSalt = asBuf(stretched)
     }
 
     const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret), 'HKDF', false, ['deriveBits'])

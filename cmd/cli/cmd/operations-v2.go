@@ -345,7 +345,10 @@ func (o *v2OperationCmd) loadOrInitTrustStore() (*trustStore, string, error) {
 // accept a TOFU pin. If stdin or stderr is not a TTY, it returns nil so the
 // caller fails closed.
 func (o *v2OperationCmd) terminalConfirmer() func(fingerprint string) (bool, error) {
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stderr.Fd())) {
+	// File descriptors on supported platforms always fit in int; the uintptr from Fd is just an OS handle representation
+	stdinFd := int(os.Stdin.Fd())   // #nosec G115
+	stderrFd := int(os.Stderr.Fd()) // #nosec G115
+	if !term.IsTerminal(stdinFd) || !term.IsTerminal(stderrFd) {
 		return nil
 	}
 
