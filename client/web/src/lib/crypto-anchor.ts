@@ -59,11 +59,7 @@ export type PubkeyBundlePayload = {
  * is what we wrap and store, which keeps the wrapped blob small).
  */
 export async function generateAnchorKeyPair(): Promise<AnchorKeyPair> {
-    const kp = await crypto.subtle.generateKey(
-        { name: 'ECDSA', namedCurve: 'P-384' },
-        true,
-        ['sign', 'verify']
-    )
+    const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-384' }, true, ['sign', 'verify'])
     const jwk = (await crypto.subtle.exportKey('jwk', kp.publicKey)) as JsonWebKey
     if (jwk.kty !== 'EC' || jwk.crv !== 'P-384' || !jwk.x || !jwk.y) {
         throw new Error('Failed to export anchor ES384 public key as P-384 JWK')
@@ -268,16 +264,9 @@ export async function signPubkeyBundleHybrid(
     return signHybrid(anchor, msg)
 }
 
-async function signHybrid(
-    anchor: AnchorKeyPair,
-    msg: Uint8Array
-): Promise<{ sigEs384: string; sigMldsa87: string }> {
+async function signHybrid(anchor: AnchorKeyPair, msg: Uint8Array): Promise<{ sigEs384: string; sigMldsa87: string }> {
     const esRaw = new Uint8Array(
-        await crypto.subtle.sign(
-            { name: 'ECDSA', hash: 'SHA-384' },
-            anchor.es384.privateKey,
-            asBuf(msg)
-        )
+        await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-384' }, anchor.es384.privateKey, asBuf(msg))
     )
     if (esRaw.length !== ES384_SIG_SIZE) {
         throw new Error(`ES384 signature has wrong length ${esRaw.length}, expected ${ES384_SIG_SIZE}`)
@@ -339,12 +328,7 @@ function writeUint32BE(buf: Uint8Array, offset: number, value: number): void {
 }
 
 function readUint32BE(buf: Uint8Array, offset: number): number {
-    return (
-        ((buf[offset] << 24) >>> 0) +
-        (buf[offset + 1] << 16) +
-        (buf[offset + 2] << 8) +
-        buf[offset + 3]
-    )
+    return ((buf[offset] << 24) >>> 0) + (buf[offset + 1] << 16) + (buf[offset + 2] << 8) + buf[offset + 3]
 }
 
 function concatBytes(...parts: Uint8Array[]): Uint8Array {

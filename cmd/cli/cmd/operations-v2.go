@@ -348,6 +348,7 @@ func (o *v2OperationCmd) terminalConfirmer() func(fingerprint string) (bool, err
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stderr.Fd())) {
 		return nil
 	}
+
 	reader := bufio.NewReader(os.Stdin)
 	return func(fingerprint string) (bool, error) {
 		fmt.Fprintf(os.Stderr, "First contact with %s.\n", o.flags.GetServer())

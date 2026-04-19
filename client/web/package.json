@@ -24,7 +24,7 @@
   "dependencies": {
     "@fontsource-variable/geist": "5.2.8",
     "@fontsource-variable/geist-mono": "5.2.7",
-    "@noble/post-quantum": "0.5.2",
+    "@noble/post-quantum": "0.6.1",
     "arraybuffer-encoding": "1.1.0",
     "date-fns": "4.1.0",
     "hash-wasm": "4.12.0",

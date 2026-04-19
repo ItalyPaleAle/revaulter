@@ -16,11 +16,10 @@ import (
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
 
-// Domain-separation prefixes for anchor-signed messages. Every signature the anchor
-// produces must carry one of these literal prefixes; a verifier that accepts a
-// signature without the prefix would let an attacker replay a signature from one
-// context into another.
+// Domain-separation prefixes for anchor-signed messages
+// Every signature the anchor produces must carry one of these literal prefixes; a verifier that accepts a signature without the prefix would let an attacker replay a signature from one context into another
 const (
+	// #nosec G101 - False positive
 	CredAttestPrefix    = "revaulter/v2/cred-attest\n"
 	PubkeyBundlePrefix  = "revaulter/v2/pubkey-bundle\n"
 	WrappedAnchorAADFmt = "revaulter/v2/wrapped-anchor\nuserId=%s\nv=1"
@@ -128,17 +127,17 @@ func VerifyHybridBundle(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, paylo
 func verifyHybrid(es384Pub *ecdsa.PublicKey, mldsa87PubBytes, msg, sigEs384, sigMldsa87 []byte) error {
 	var errs []error
 
-	if err := verifyES384(es384Pub, msg, sigEs384); err != nil {
+	err := verifyES384(es384Pub, msg, sigEs384)
+	if err != nil {
 		errs = append(errs, fmt.Errorf("ES384: %w", err))
 	}
-	if err := verifyMLDSA87(mldsa87PubBytes, msg, sigMldsa87); err != nil {
+
+	err = verifyMLDSA87(mldsa87PubBytes, msg, sigMldsa87)
+	if err != nil {
 		errs = append(errs, fmt.Errorf("ML-DSA-87: %w", err))
 	}
 
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // verifyES384 accepts a raw IEEE-P1363 r||s signature (as produced by WebCrypto).
