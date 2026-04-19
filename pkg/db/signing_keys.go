@@ -30,23 +30,22 @@ type PublishedSigningKeyListItem struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-type UpsertPublishedSigningKeyInput struct {
+type InsertSigningKeyInput struct {
 	ID        string
 	UserID    string
 	Algorithm string
 	KeyLabel  string
 	JWK       string
 	PEM       string
+	Published bool
 }
 
-type StoreAutoDerivedSigningKeyInput struct {
-	ID        string
-	UserID    string
-	Algorithm string
-	KeyLabel  string
-	JWK       string
-	PEM       string
-}
+var (
+	// ErrSigningKeyAlreadyExists is returned by Create when a row already exists for the (user_id, algorithm, key_label) tuple
+	ErrSigningKeyAlreadyExists = errors.New("a signing key already exists for this algorithm and keyLabel")
+	// ErrSigningKeyNotFound is returned by SetPublished when no row matches the given (user_id, id)
+	ErrSigningKeyNotFound = errors.New("signing key not found")
+)
 
 type SigningKeyStore struct {
 	db  *DB
@@ -67,43 +66,31 @@ func NewSigningKeyStore(db *DB, logger *slog.Logger) (*SigningKeyStore, error) {
 	}, nil
 }
 
-// Upsert inserts or replaces a published signing key for the given (user_id, algorithm, key_label)
-// Because derivation is deterministic, the id (JWK thumbprint SHA-256) is expected to be the same across re-publications of the same material
-// Re-publishing different material under the same label replaces the previous row and marks it published
-// Calling Upsert on a row that was previously auto-stored (published=false) promotes it to published
-func (s *SigningKeyStore) Upsert(ctx context.Context, in UpsertPublishedSigningKeyInput) error {
+// Create stores a new signing key for the given (user_id, algorithm, key_label) and returns the inserted row
+func (s *SigningKeyStore) Create(ctx context.Context, in InsertSigningKeyInput) (*PublishedSigningKey, error) {
 	now := time.Now().Unix()
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO v2_published_signing_keys
-			(id, user_id, algorithm, key_label, jwk, pem, published, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8)
-			ON CONFLICT (user_id, algorithm, key_label) DO UPDATE SET
-				id = excluded.id,
-				jwk = excluded.jwk,
-				pem = excluded.pem,
-				published = true,
-				updated_at = excluded.updated_at`,
-		in.ID, in.UserID, in.Algorithm, in.KeyLabel, in.JWK, in.PEM, now, now,
-	)
-	return err
-}
-
-// StoreAutoDerivedIfMissing stores a signing key that was derived for a sign operation if no row yet exists for (user_id, algorithm, key_label)
-// The record is created with published=false, so the key is known to the server but is not served from the public endpoint until the user explicitly publishes it
-// Returns true if a new row was inserted; false if a row already existed (published or not)
-func (s *SigningKeyStore) StoreAutoDerivedIfMissing(ctx context.Context, in StoreAutoDerivedSigningKeyInput) (bool, error) {
-	now := time.Now().Unix()
-	affected, err := s.db.Exec(ctx,
-		`INSERT INTO v2_published_signing_keys
-			(id, user_id, algorithm, key_label, jwk, pem, published, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, false, $7, $7)
-			ON CONFLICT (user_id, algorithm, key_label) DO NOTHING`,
-		in.ID, in.UserID, in.Algorithm, in.KeyLabel, in.JWK, in.PEM, now,
-	)
-	if err != nil {
-		return false, err
+	rec := &PublishedSigningKey{}
+	var createdAt, updatedAt int64
+	err := s.db.
+		QueryRow(ctx,
+			`INSERT INTO v2_published_signing_keys
+				(id, user_id, algorithm, key_label, jwk, pem, published, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+				ON CONFLICT (user_id, algorithm, key_label) DO NOTHING
+				RETURNING id, user_id, algorithm, key_label, jwk, pem, published, created_at, updated_at`,
+			in.ID, in.UserID, in.Algorithm, in.KeyLabel, in.JWK, in.PEM, in.Published, now,
+		).
+		Scan(&rec.ID, &rec.UserID, &rec.Algorithm, &rec.KeyLabel, &rec.JWK, &rec.PEM, &rec.Published, &createdAt, &updatedAt)
+	if s.db.IsNoRowsError(err) {
+		return nil, ErrSigningKeyAlreadyExists
+	} else if err != nil {
+		return nil, err
 	}
-	return affected > 0, nil
+
+	rec.CreatedAt = time.Unix(createdAt, 0)
+	rec.UpdatedAt = time.Unix(updatedAt, 0)
+
+	return rec, nil
 }
 
 func (s *SigningKeyStore) GetByID(ctx context.Context, id string) (*PublishedSigningKey, error) {
@@ -141,6 +128,19 @@ func (s *SigningKeyStore) GetPublishedByID(ctx context.Context, id string) (*Pub
 	return rec, nil
 }
 
+// GetForUser returns a signing key owned by the given user regardless of whether it is published
+// Returns nil if no matching row exists (unknown id or belongs to another user) so a guessed id can't probe another user's keys
+func (s *SigningKeyStore) GetForUser(ctx context.Context, userID, id string) (*PublishedSigningKey, error) {
+	rec, err := s.GetByID(ctx, id)
+	if err != nil || rec == nil {
+		return rec, err
+	}
+	if rec.UserID != userID {
+		return nil, nil
+	}
+	return rec, nil
+}
+
 // ListForUser returns the user's known keys (metadata only, no JWK/PEM) so the settings UI can render the list without transferring key material
 // Both published and auto-stored keys are returned; the UI uses the Published flag to distinguish them
 func (s *SigningKeyStore) ListForUser(ctx context.Context, userID string) ([]PublishedSigningKeyListItem, error) {
@@ -172,8 +172,8 @@ func (s *SigningKeyStore) ListForUser(ctx context.Context, userID string) ([]Pub
 	return out, rows.Err()
 }
 
-// Delete removes a published signing key
-// It is scoped to the user so an authenticated caller cannot unpublish another user's key even if they guess the id
+// Delete removes a signing key row belonging to the given user
+// Returns true if a row was removed, false if no matching row exists
 func (s *SigningKeyStore) Delete(ctx context.Context, userID, id string) (bool, error) {
 	affected, err := s.db.Exec(ctx,
 		`DELETE FROM v2_published_signing_keys WHERE user_id = $1 AND id = $2`,
@@ -184,4 +184,30 @@ func (s *SigningKeyStore) Delete(ctx context.Context, userID, id string) (bool, 
 	}
 
 	return affected > 0, nil
+}
+
+// SetPublished toggles the published flag on an existing signing key belonging to the given user and returns the updated row
+func (s *SigningKeyStore) SetPublished(ctx context.Context, userID, id string, published bool) (*PublishedSigningKey, error) {
+	now := time.Now().Unix()
+	rec := &PublishedSigningKey{}
+	var createdAt, updatedAt int64
+	err := s.db.
+		QueryRow(ctx,
+			`UPDATE v2_published_signing_keys
+				SET published = $1, updated_at = $2
+				WHERE user_id = $3 AND id = $4
+				RETURNING id, user_id, algorithm, key_label, jwk, pem, published, created_at, updated_at`,
+			published, now, userID, id,
+		).
+		Scan(&rec.ID, &rec.UserID, &rec.Algorithm, &rec.KeyLabel, &rec.JWK, &rec.PEM, &rec.Published, &createdAt, &updatedAt)
+	if s.db.IsNoRowsError(err) {
+		return nil, ErrSigningKeyNotFound
+	} else if err != nil {
+		return nil, err
+	}
+
+	rec.CreatedAt = time.Unix(createdAt, 0)
+	rec.UpdatedAt = time.Unix(updatedAt, 0)
+
+	return rec, nil
 }

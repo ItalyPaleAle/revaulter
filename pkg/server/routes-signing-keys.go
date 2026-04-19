@@ -51,14 +51,15 @@ func validateSigningJWKAndPEM(jwkBytes json.RawMessage, pemStr string) (string, 
 	return id, nil
 }
 
-type v2SigningKeyPublishRequest struct {
+type v2SigningKeyCreateRequest struct {
 	Algorithm string          `json:"algorithm"`
 	KeyLabel  string          `json:"keyLabel"`
 	JWK       json.RawMessage `json:"jwk"`
 	PEM       string          `json:"pem"`
+	Published bool            `json:"published"`
 }
 
-type v2SigningKeyPublishResponse struct {
+type v2SigningKeyItemResponse struct {
 	ID        string    `json:"id"`
 	Algorithm string    `json:"algorithm"`
 	KeyLabel  string    `json:"keyLabel"`
@@ -67,12 +68,23 @@ type v2SigningKeyPublishResponse struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-type v2SigningKeyUnpublishRequest struct {
-	ID string `json:"id"`
+type v2SigningKeySetPublishedRequest struct {
+	Published bool `json:"published"`
 }
 
-type v2SigningKeyUnpublishResponse struct {
+type v2SigningKeyDeleteResponse struct {
 	Deleted bool `json:"deleted"`
+}
+
+type v2SigningKeyDetailResponse struct {
+	ID        string          `json:"id"`
+	Algorithm string          `json:"algorithm"`
+	KeyLabel  string          `json:"keyLabel"`
+	Published bool            `json:"published"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+	JWK       json.RawMessage `json:"jwk"`
+	PEM       string          `json:"pem"`
 }
 
 type v2SigningKeyPublicResponse struct {
@@ -83,7 +95,7 @@ type v2SigningKeyPublicResponse struct {
 	JWK       json.RawMessage `json:"jwk"`
 }
 
-// RouteV2APISigningKeyList lists the current user's published signing keys
+// RouteV2APISigningKeyList lists the current user's signing keys
 // Only metadata is returned; JWK and PEM are omitted to keep the list lean
 func (s *Server) RouteV2APISigningKeyList(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
@@ -97,22 +109,25 @@ func (s *Server) RouteV2APISigningKeyList(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
 	if items == nil {
 		items = []db.PublishedSigningKeyListItem{}
 	}
+
 	c.JSON(http.StatusOK, items)
 }
 
-// RouteV2APISigningKeyPublish publishes (or replaces) a signing key for the authenticated user
-// The client submits both JWK and PEM — they are stored verbatim, but the server validates them and checks that the JWK thumbprint matches the PEM public point
-func (s *Server) RouteV2APISigningKeyPublish(c *gin.Context) {
+// RouteV2APISigningKeyCreate stores a new signing key for the authenticated user
+// The client submits JWK and PEM — they are stored verbatim, but the server validates them and checks that the JWK thumbprint matches the PEM public point
+// If a row already exists for `(user, algorithm, keyLabel)` the request is rejected with 409
+func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
 		return
 	}
 
-	var req v2SigningKeyPublishRequest
+	var req v2SigningKeyCreateRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
@@ -142,30 +157,25 @@ func (s *Server) RouteV2APISigningKeyPublish(c *gin.Context) {
 		return
 	}
 
-	err = s.signingKeyStore.Upsert(c.Request.Context(), db.UpsertPublishedSigningKeyInput{
+	rec, err := s.signingKeyStore.Create(c.Request.Context(), db.InsertSigningKeyInput{
 		ID:        id,
 		UserID:    userID,
 		Algorithm: req.Algorithm,
 		KeyLabel:  req.KeyLabel,
 		JWK:       string(req.JWK),
 		PEM:       req.PEM,
+		Published: req.Published,
 	})
+	if errors.Is(err, db.ErrSigningKeyAlreadyExists) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, err.Error()))
+		return
+	}
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	rec, err := s.signingKeyStore.GetByID(c.Request.Context(), id)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	if rec == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "failed to read back published key"))
-		return
-	}
-
-	c.JSON(http.StatusOK, v2SigningKeyPublishResponse{
+	c.JSON(http.StatusCreated, v2SigningKeyItemResponse{
 		ID:        rec.ID,
 		Algorithm: rec.Algorithm,
 		KeyLabel:  rec.KeyLabel,
@@ -175,33 +185,112 @@ func (s *Server) RouteV2APISigningKeyPublish(c *gin.Context) {
 	})
 }
 
-// RouteV2APISigningKeyUnpublish hard-deletes a signing key publication belonging to the session user
-func (s *Server) RouteV2APISigningKeyUnpublish(c *gin.Context) {
+// RouteV2APISigningKeyUpdate flips the published flag on an existing signing key owned by the session user
+// Returns a 404 when the id doesn't match a row belonging to the authenticated user
+func (s *Server) RouteV2APISigningKeyUpdate(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
 		return
 	}
 
-	var req v2SigningKeyUnpublishRequest
+	id := c.Param("id")
+	if id == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing id"))
+		return
+	}
+
+	var req v2SigningKeySetPublishedRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
-	if req.ID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing id"))
+
+	rec, err := s.signingKeyStore.SetPublished(c.Request.Context(), userID, id, req.Published)
+	if errors.Is(err, db.ErrSigningKeyNotFound) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "not found"))
 		return
 	}
-
-	ok, err := s.signingKeyStore.Delete(c.Request.Context(), userID, req.ID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, v2SigningKeyUnpublishResponse{
-		Deleted: ok,
+	c.JSON(http.StatusOK, v2SigningKeyItemResponse{
+		ID:        rec.ID,
+		Algorithm: rec.Algorithm,
+		KeyLabel:  rec.KeyLabel,
+		Published: rec.Published,
+		CreatedAt: rec.CreatedAt,
+		UpdatedAt: rec.UpdatedAt,
+	})
+}
+
+// RouteV2APISigningKeyGet returns a signing key owned by the session user, including the stored JWK and PEM
+// Returns 404 when the id doesn't match a row belonging to the authenticated user, so a guessed id can't probe another user's keys
+func (s *Server) RouteV2APISigningKeyGet(c *gin.Context) {
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	id := c.Param("id")
+	if id == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing id"))
+		return
+	}
+
+	rec, err := s.signingKeyStore.GetForUser(c.Request.Context(), userID, id)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if rec == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "not found"))
+		return
+	}
+
+	c.JSON(http.StatusOK, v2SigningKeyDetailResponse{
+		ID:        rec.ID,
+		Algorithm: rec.Algorithm,
+		KeyLabel:  rec.KeyLabel,
+		Published: rec.Published,
+		CreatedAt: rec.CreatedAt,
+		UpdatedAt: rec.UpdatedAt,
+		JWK:       json.RawMessage(rec.JWK),
+		PEM:       rec.PEM,
+	})
+}
+
+// RouteV2APISigningKeyDelete deletes a signing key row owned by the session user
+// Returns a 404 when the id doesn't match a row belonging to the authenticated user
+func (s *Server) RouteV2APISigningKeyDelete(c *gin.Context) {
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	id := c.Param("id")
+	if id == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing id"))
+		return
+	}
+
+	ok, err := s.signingKeyStore.Delete(c.Request.Context(), userID, id)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if !ok {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "not found"))
+		return
+	}
+
+	c.JSON(http.StatusOK, v2SigningKeyDeleteResponse{
+		Deleted: true,
 	})
 }
 

@@ -22,7 +22,9 @@ import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import {
     v2AddCredentialBegin,
     v2AddCredentialFinish,
+    v2CreateSigningKey,
     v2DeleteCredential,
+    v2DeleteSigningKey,
     v2FinalizeSignup,
     v2ListCredentials,
     v2ListSigningKeys,
@@ -30,14 +32,13 @@ import {
     v2LoginBegin,
     v2LoginFinish,
     v2Logout,
-    v2UpsertSigningKey,
     v2RegenerateRequestKey,
     v2RegisterBegin,
     v2RegisterFinish,
     v2RenameCredential,
     v2Session,
     v2SetAllowedIPs,
-    v2UnpublishSigningKey,
+    v2SetSigningKeyPublished,
     v2UpdateDisplayName,
     v2UpdateWrappedKey,
 } from '$lib/v2-api'
@@ -533,13 +534,20 @@ async function doDeriveSigningKey(keyLabel: string, algorithm: string): Promise<
     })
     const [id, pem] = await Promise.all([computeEcP256Thumbprint(publicJwk), ecP256JwkToPem(publicJwk)])
 
-    await v2UpsertSigningKey({
-        algorithm,
-        keyLabel,
-        jwk: publicJwk,
-        pem,
-        publish: false,
-    })
+    // Attempt to register the derived key as unpublished; if a row already exists for this (algorithm, keyLabel) the server returns 409 and we treat that as a no-op since the caller just needs the derived material returned
+    try {
+        await v2CreateSigningKey({
+            algorithm,
+            keyLabel,
+            jwk: publicJwk,
+            pem,
+            published: false,
+        })
+    } catch (err) {
+        if (!(err instanceof ResponseNotOkError) || err.statusCode !== 409) {
+            throw err
+        }
+    }
     await doLoadSigningKeys()
 
     return { keyLabel, algorithm, jwk: publicJwk, pem, id }
@@ -550,13 +558,19 @@ async function doPublishSigningKey(derived: DerivedSigningKey) {
     settingsError = null
     settingsSuccess = null
     try {
-        await v2UpsertSigningKey({
-            algorithm: derived.algorithm,
-            keyLabel: derived.keyLabel,
-            jwk: derived.jwk,
-            pem: derived.pem,
-            publish: true,
-        })
+        // If the row already exists (auto-stored on derive or from a prior sign), flip the flag without resubmitting the key material
+        const known = signingKeys.find((k) => k.id === derived.id)
+        if (known) {
+            await v2SetSigningKeyPublished(derived.id, true)
+        } else {
+            await v2CreateSigningKey({
+                algorithm: derived.algorithm,
+                keyLabel: derived.keyLabel,
+                jwk: derived.jwk,
+                pem: derived.pem,
+                published: true,
+            })
+        }
         await doLoadSigningKeys()
         settingsSuccess = `Signing key "${derived.keyLabel}" published.`
     } catch (err) {
@@ -571,9 +585,24 @@ async function doUnpublishSigningKey(id: string) {
     settingsError = null
     settingsSuccess = null
     try {
-        await v2UnpublishSigningKey(id)
+        await v2SetSigningKeyPublished(id, false)
         await doLoadSigningKeys()
         settingsSuccess = 'Signing key unpublished.'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doDeleteSigningKey(id: string) {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        await v2DeleteSigningKey(id)
+        await doLoadSigningKeys()
+        settingsSuccess = 'Signing key deleted.'
     } catch (err) {
         settingsError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -828,6 +857,7 @@ function sortedItems() {
             }}
             onChangePassword={doChangePassword}
             onDeletePasskey={doDeletePasskey}
+            onDeleteSigningKey={doDeleteSigningKey}
             onDeriveSigningKey={doDeriveSigningKey}
             onLogout={doLogout}
             onPublishSigningKey={doPublishSigningKey}

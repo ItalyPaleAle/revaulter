@@ -30,6 +30,7 @@ let {
 }: Props = $props()
 </script>
 
+<!-- svelte-ignore a11y_autofocus -->
 <input
     {autocomplete}
     {autofocus}

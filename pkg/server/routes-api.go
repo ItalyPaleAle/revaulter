@@ -253,15 +253,19 @@ func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V
 		return
 	}
 
-	inserted, err := s.signingKeyStore.StoreAutoDerivedIfMissing(c.Request.Context(), db.StoreAutoDerivedSigningKeyInput{
+	// Auto-stored keys always land as Published=false so they appear in the settings UI but aren't served from the public fetch endpoint until the user publishes them
+	inserted, err := s.signingKeyStore.Create(c.Request.Context(), db.InsertSigningKeyInput{
 		ID:        id,
 		UserID:    rec.UserID,
 		Algorithm: rec.Algorithm,
 		KeyLabel:  rec.KeyLabel,
 		JWK:       string(pub.JWK),
 		PEM:       pub.PEM,
+		Published: false,
 	})
-	if err != nil {
+	if errors.Is(err, db.ErrSigningKeyAlreadyExists) {
+		return
+	} else if err != nil {
 		log.WarnContext(c.Request.Context(), "Failed to auto-store signing public key",
 			slog.String("state", rec.State),
 			slog.Any("err", err),
@@ -269,14 +273,12 @@ func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V
 		return
 	}
 
-	if inserted {
-		log.InfoContext(c.Request.Context(), "Auto-stored signing public key",
-			slog.String("state", rec.State),
-			slog.String("key_id", id),
-			slog.String("key_label", rec.KeyLabel),
-			slog.String("algorithm", rec.Algorithm),
-		)
-	}
+	log.InfoContext(c.Request.Context(), "Auto-stored signing public key",
+		slog.String("state", rec.State),
+		slog.String("key_id", inserted.ID),
+		slog.String("key_label", rec.KeyLabel),
+		slog.String("algorithm", rec.Algorithm),
+	)
 }
 
 func (s *Server) routeV2APIListStream(c *gin.Context) {

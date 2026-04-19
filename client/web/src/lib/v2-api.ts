@@ -193,16 +193,26 @@ export async function v2ListSigningKeys() {
     return res.data
 }
 
-/** Stores a signing key for the current user, optionally publishing it
- * When `publish=true`, the key is upserted and marked as published (replacing any existing row)
- * When `publish=false`, the key is stored only if missing — existing published keys are not demoted
+/** Fetches a single signing key owned by the current user, including JWK and PEM
+ * The row is returned regardless of its published flag so the UI can re-export an auto-stored key without publishing it
  */
-export async function v2UpsertSigningKey(args: {
+export async function v2GetSigningKey(id: string) {
+    const res = await Request<V2PublishedSigningKey & { jwk: V2SigningJwk; pem: string }>(
+        `/v2/api/signing-keys/${encodeURIComponent(id)}`
+    )
+    return res.data
+}
+
+/** Creates a new signing key for the current user
+ * The server rejects the request with 409 Conflict if a key already exists for the same `(algorithm, keyLabel)`
+ * `published=true` exposes the key via the public endpoint; `published=false` stores it but keeps the public endpoint hidden
+ */
+export async function v2CreateSigningKey(args: {
     algorithm: string
     keyLabel: string
     jwk: V2SigningJwk
     pem: string
-    publish: boolean
+    published: boolean
 }) {
     const res = await Request<V2PublishedSigningKey>('/v2/api/signing-keys', {
         postData: args,
@@ -210,10 +220,18 @@ export async function v2UpsertSigningKey(args: {
     return res.data
 }
 
-/** Unpublishes (hard-deletes) a signing key by its stable ID */
-export async function v2UnpublishSigningKey(id: string) {
-    const res = await Request<{ deleted: boolean }>('/v2/api/signing-keys/unpublish', {
-        postData: { id },
+/** Flips the published flag on an existing signing key without resubmitting the key material */
+export async function v2SetSigningKeyPublished(id: string, published: boolean) {
+    const res = await Request<V2PublishedSigningKey>(`/v2/api/signing-keys/${encodeURIComponent(id)}`, {
+        postData: { published },
+    })
+    return res.data
+}
+
+/** Hard-deletes a signing key owned by the current user */
+export async function v2DeleteSigningKey(id: string) {
+    const res = await Request<{ deleted: boolean }>(`/v2/api/signing-keys/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
     })
     return res.data
 }

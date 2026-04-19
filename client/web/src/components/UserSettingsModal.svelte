@@ -33,6 +33,7 @@ interface Props {
     onDeriveSigningKey: (keyLabel: string, algorithm: string) => Promise<DerivedSigningKey>
     onPublishSigningKey: (derived: DerivedSigningKey) => Promise<void>
     onUnpublishSigningKey: (id: string) => Promise<void>
+    onDeleteSigningKey: (id: string) => Promise<void>
 }
 
 let {
@@ -59,6 +60,7 @@ let {
     onDeriveSigningKey,
     onPublishSigningKey,
     onUnpublishSigningKey,
+    onDeleteSigningKey,
 }: Props = $props()
 
 let activeTab = $state<SettingsTab>('user')
@@ -86,7 +88,7 @@ let deriveAlgorithm = $state<string>(SIGNING_ALGORITHMS[0])
 let derivedKey = $state<DerivedSigningKey | null>(null)
 let deriveError = $state<string | null>(null)
 let copiedFetchId = $state<string | null>(null)
-let confirmingUnpublishId = $state<string | null>(null)
+let confirmingDeleteId = $state<string | null>(null)
 let publishingStoredId = $state<string | null>(null)
 
 $effect(() => {
@@ -275,8 +277,12 @@ async function handlePublishDerived() {
 }
 
 async function handleUnpublish(id: string) {
-    confirmingUnpublishId = null
     await onUnpublishSigningKey(id)
+}
+
+async function handleDelete(id: string) {
+    confirmingDeleteId = null
+    await onDeleteSigningKey(id)
 }
 
 async function handlePublishStored(sk: V2PublishedSigningKey) {
@@ -818,35 +824,53 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                                         <Icon icon="upload-cloud" title="Publish" size="3.5" />
                                                         Publish
                                                     </Button>
+                                                {:else}
+                                                    <Button
+                                                        variant="secondary"
+                                                        size="sm"
+                                                        ariaLabel="Unpublish key"
+                                                        onclick={() => handleUnpublish(sk.id)}
+                                                        disabled={busy}
+                                                    >
+                                                        Unpublish
+                                                    </Button>
                                                 {/if}
-                                                {#if confirmingUnpublishId === sk.id}
-                                                    <Button variant="danger" size="sm" onclick={() => handleUnpublish(sk.id)} disabled={busy}>
-                                                        Confirm {sk.published ? 'unpublish' : 'delete'}
+                                                <Button
+                                                    variant="icon"
+                                                    size="icon"
+                                                    ariaLabel="Delete key"
+                                                    onclick={() => {
+                                                        confirmingDeleteId = sk.id
+                                                    }}
+                                                    disabled={busy}
+                                                >
+                                                    <Icon icon="trash" title="Delete" size="3.5" />
+                                                </Button>
+                                            </div>
+                                        </div>
+
+                                        {#if confirmingDeleteId === sk.id}
+                                            <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 dark:border-amber-900/70 dark:bg-amber-950/40">
+                                                <p class="text-sm font-medium text-amber-800 dark:text-amber-200">Delete this signing key?</p>
+                                                <p class="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                                                    The row will be removed from the server. The same key can be re-derived from your primary key, but any existing published URL will stop resolving until it is re-derived and published again.
+                                                </p>
+                                                <div class="mt-3 flex gap-2">
+                                                    <Button variant="danger" size="sm" onclick={() => handleDelete(sk.id)} disabled={busy}>
+                                                        Yes, delete
                                                     </Button>
                                                     <Button
                                                         variant="secondary"
                                                         size="sm"
                                                         onclick={() => {
-                                                            confirmingUnpublishId = null
+                                                            confirmingDeleteId = null
                                                         }}
                                                     >
                                                         Cancel
                                                     </Button>
-                                                {:else}
-                                                    <Button
-                                                        variant="icon"
-                                                        size="icon"
-                                                        ariaLabel={sk.published ? 'Unpublish key' : 'Delete stored key'}
-                                                        onclick={() => {
-                                                            confirmingUnpublishId = sk.id
-                                                        }}
-                                                        disabled={busy}
-                                                    >
-                                                        <Icon icon="trash" title={sk.published ? 'Unpublish' : 'Delete'} size="3.5" />
-                                                    </Button>
-                                                {/if}
+                                                </div>
                                             </div>
-                                        </div>
+                                        {/if}
 
                                         {#if sk.published}
                                             <div class="mt-3 space-y-2">

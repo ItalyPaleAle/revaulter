@@ -120,37 +120,35 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 		"keyLabel":  "main",
 		"jwk":       km.JWKJSON,
 		"pem":       km.PEM,
-		"publish":   true,
+		"published": true,
 	})
 	require.Equal(t, http.StatusUnauthorized, status)
 
-	// Successful publish
+	// Successful create — returns 201 Created
 	status, _, body := doPost(t, "/v2/api/signing-keys", map[string]any{
 		"algorithm": protocolv2.SigningAlgES256,
 		"keyLabel":  "main",
 		"jwk":       km.JWKJSON,
 		"pem":       km.PEM,
-		"publish":   true,
+		"published": true,
 	}, aliceCookie)
-	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
+	require.Equal(t, http.StatusCreated, status, "unexpected body: %s", body)
 	var pubResp map[string]any
 	require.NoError(t, json.Unmarshal(body, &pubResp))
 	require.Equal(t, km.ID, pubResp["id"])
 	require.Equal(t, protocolv2.SigningAlgES256, pubResp["algorithm"])
 	require.Equal(t, "main", pubResp["keyLabel"])
+	require.Equal(t, true, pubResp["published"])
 
-	// Republishing the same material is idempotent — same id, UPSERT semantics
-	// created_at is preserved; we assert the id matches which is enough to prove the row was reused
+	// A second create for the same (algorithm, keyLabel) is rejected with 409 — insert-only semantics
 	status, _, body = doPost(t, "/v2/api/signing-keys", map[string]any{
 		"algorithm": protocolv2.SigningAlgES256,
 		"keyLabel":  "main",
 		"jwk":       km.JWKJSON,
 		"pem":       km.PEM,
-		"publish":   true,
+		"published": true,
 	}, aliceCookie)
-	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
-	require.NoError(t, json.Unmarshal(body, &pubResp))
-	require.Equal(t, km.ID, pubResp["id"])
+	require.Equal(t, http.StatusConflict, status, "unexpected body: %s", body)
 
 	// Unauthenticated JWK fetch works and includes required metadata
 	status, header, body := doGet(t, "/v2/signing-keys/"+km.ID+".jwk")
@@ -222,28 +220,82 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 	_, err = time.Parse(time.RFC3339, updatedStr)
 	require.NoError(t, err, "updatedAt must be RFC3339, got %q", updatedStr)
 
-	// Another user cannot unpublish Alice's key with her id
+	// Another user cannot unpublish Alice's key with her id — returns 404 since the row doesn't belong to Eve
 	eveCookie, _ := seedV2SessionCookie(t, srv, "user-sign-2", "Eve")
-	status, _, body = doPost(t, "/v2/api/signing-keys/unpublish", map[string]any{"id": km.ID}, eveCookie)
-	require.Equal(t, http.StatusOK, status)
-	var unpub map[string]any
-	require.NoError(t, json.Unmarshal(body, &unpub))
-	require.Equal(t, false, unpub["deleted"], "Eve must not be able to delete Alice's key")
+	status, _, _ = doPost(t, "/v2/api/signing-keys/"+km.ID, map[string]any{"published": false}, eveCookie)
+	require.Equal(t, http.StatusNotFound, status, "Eve must not be able to flip Alice's key")
 
 	// Key is still publicly fetchable
 	status, _, _ = doGet(t, "/v2/signing-keys/"+km.ID+".jwk")
 	require.Equal(t, http.StatusOK, status)
 
-	// Alice unpublishes — hard delete removes public fetch availability
-	status, _, body = doPost(t, "/v2/api/signing-keys/unpublish", map[string]any{"id": km.ID}, aliceCookie)
-	require.Equal(t, http.StatusOK, status)
-	require.NoError(t, json.Unmarshal(body, &unpub))
-	require.Equal(t, true, unpub["deleted"])
+	// Alice unpublishes by setting published=false — the row stays but the public endpoint stops serving it
+	status, _, body = doPost(t, "/v2/api/signing-keys/"+km.ID, map[string]any{"published": false}, aliceCookie)
+	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
+	var item map[string]any
+	require.NoError(t, json.Unmarshal(body, &item))
+	require.Equal(t, km.ID, item["id"])
+	require.Equal(t, false, item["published"])
 
 	status, _, _ = doGet(t, "/v2/signing-keys/"+km.ID+".jwk")
 	require.Equal(t, http.StatusNotFound, status)
 	status, _, _ = doGet(t, "/v2/signing-keys/"+km.ID+".pem")
 	require.Equal(t, http.StatusNotFound, status)
+
+	// Re-publishing the same row via SetPublished brings it back without resubmitting key material
+	status, _, body = doPost(t, "/v2/api/signing-keys/"+km.ID, map[string]any{"published": true}, aliceCookie)
+	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
+	require.NoError(t, json.Unmarshal(body, &item))
+	require.Equal(t, true, item["published"])
+
+	status, _, _ = doGet(t, "/v2/signing-keys/"+km.ID+".jwk")
+	require.Equal(t, http.StatusOK, status)
+
+	// DELETE /v2/api/signing-keys/:id hard-deletes the row
+	// Cross-user delete returns 404 so a guessed id can't probe another user's keys
+	doDelete := func(t *testing.T, path string, cookies ...*http.Cookie) (int, []byte) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), nil)
+		require.NoError(t, err)
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer res.Body.Close()
+		raw, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		return res.StatusCode, raw
+	}
+
+	status, _ = doDelete(t, "/v2/api/signing-keys/"+km.ID, eveCookie)
+	require.Equal(t, http.StatusNotFound, status, "Eve must not be able to delete Alice's key")
+
+	status, body = doDelete(t, "/v2/api/signing-keys/"+km.ID, aliceCookie)
+	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
+	var delResp map[string]any
+	require.NoError(t, json.Unmarshal(body, &delResp))
+	require.Equal(t, true, delResp["deleted"])
+
+	// Row is gone — a second DELETE is a 404, and the public endpoint stops serving it
+	status, _ = doDelete(t, "/v2/api/signing-keys/"+km.ID, aliceCookie)
+	require.Equal(t, http.StatusNotFound, status)
+	status, _, _ = doGet(t, "/v2/signing-keys/"+km.ID+".jwk")
+	require.Equal(t, http.StatusNotFound, status)
+	status, _, _ = doGet(t, "/v2/signing-keys/"+km.ID+".pem")
+	require.Equal(t, http.StatusNotFound, status)
+
+	// After delete, Alice can re-create under the same (algorithm, keyLabel)
+	status, _, body = doPost(t, "/v2/api/signing-keys", map[string]any{
+		"algorithm": protocolv2.SigningAlgES256,
+		"keyLabel":  "main",
+		"jwk":       km.JWKJSON,
+		"pem":       km.PEM,
+		"published": true,
+	}, aliceCookie)
+	require.Equal(t, http.StatusCreated, status, "unexpected body: %s", body)
 }
 
 func TestServerV2SigningKeyPublishValidatesInputs(t *testing.T) {
@@ -443,18 +495,22 @@ func TestServerV2SigningKeyAutoStoreOnSign(t *testing.T) {
 	status, _ = doGet(t, "/v2/signing-keys/"+km.ID+".pem")
 	require.Equal(t, http.StatusNotFound, status)
 
-	// Publishing the same material promotes the row to published=true
+	// Posting the same material via create is rejected with 409 under insert-only semantics — promotion is done via SetPublished on the :id route
 	status, body = doPost(t, "/v2/api/signing-keys", map[string]any{
 		"algorithm": protocolv2.SigningAlgES256,
 		"keyLabel":  keyLabel,
 		"jwk":       km.JWKJSON,
 		"pem":       km.PEM,
-		"publish":   true,
+		"published": true,
 	}, aliceCookie)
+	require.Equal(t, http.StatusConflict, status, "unexpected body: %s", body)
+
+	// Promote the auto-stored row via POST /v2/api/signing-keys/:id with {published:true}
+	status, body = doPost(t, "/v2/api/signing-keys/"+km.ID, map[string]any{"published": true}, aliceCookie)
 	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
 	var pubResp map[string]any
 	require.NoError(t, json.Unmarshal(body, &pubResp))
-	require.Equal(t, km.ID, pubResp["id"], "publish must preserve the thumbprint id")
+	require.Equal(t, km.ID, pubResp["id"], "promotion must preserve the thumbprint id")
 	require.Equal(t, true, pubResp["published"])
 
 	// List now reports it as published
@@ -563,12 +619,15 @@ func TestServerV2SigningKeyAutoStoreSkippedOnNonSign(t *testing.T) {
 	require.Empty(t, items, "encrypt op must not trigger auto-store")
 }
 
-func TestServerV2SigningKeyUniqueLabelReplacesPreviousKey(t *testing.T) {
+// TestServerV2SigningKeyUniqueLabelRejectsDuplicate verifies the insert-only semantics of POST /v2/api/signing-keys:
+// creating a second key under the same (user, algorithm, keyLabel) returns 409 Conflict and does NOT replace the existing key
+// The caller must DELETE the existing row first if they want to store different material under the same label
+func TestServerV2SigningKeyUniqueLabelRejectsDuplicate(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(
 		// #nosec G101 -- Hardcoded credentials are test ones
 		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-signing-keys-replace.db",
+			"databaseDSN":     tmpDir + "/v2-signing-keys-duplicate.db",
 			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
 			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
 			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
@@ -581,24 +640,34 @@ func TestServerV2SigningKeyUniqueLabelReplacesPreviousKey(t *testing.T) {
 	defer stopServerFn(t)
 	client := clientForListener(srv.appListener)
 
-	aliceCookie, _ := seedV2SessionCookie(t, srv, "replace-user", "Alice")
+	aliceCookie, _ := seedV2SessionCookie(t, srv, "duplicate-user", "Alice")
 
 	km1 := newSigningKeyMaterial(t)
 	km2 := newSigningKeyMaterial(t)
 	require.NotEqual(t, km1.ID, km2.ID)
 
-	publish := func(km testSigningKeyMaterial) int {
+	create := func(km testSigningKeyMaterial) int {
 		body, err := json.Marshal(map[string]any{
 			"algorithm": protocolv2.SigningAlgES256,
 			"keyLabel":  "shared",
 			"jwk":       km.JWKJSON,
 			"pem":       km.PEM,
-			"publish":   true,
+			"published": true,
 		})
 		require.NoError(t, err)
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/api/signing-keys", testServerPort), bytes.NewReader(body))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(aliceCookie)
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer res.Body.Close()
+		_, _ = io.Copy(io.Discard, res.Body)
+		return res.StatusCode
+	}
+	del := func(id string) int {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, fmt.Sprintf("https://localhost:%d/v2/api/signing-keys/%s", testServerPort, id), nil)
+		require.NoError(t, err)
 		req.AddCookie(aliceCookie)
 		res, err := client.Do(req)
 		require.NoError(t, err)
@@ -616,12 +685,165 @@ func TestServerV2SigningKeyUniqueLabelReplacesPreviousKey(t *testing.T) {
 		return res.StatusCode
 	}
 
-	// Publish two different keys under the same label — the uniqueness index on (user, algorithm, keyLabel) means only the newest id is reachable
-	require.Equal(t, http.StatusOK, publish(km1))
-	// Give the underlying unix-seconds clock a chance to tick so updated_at advances
-	time.Sleep(1_100 * time.Millisecond)
-	require.Equal(t, http.StatusOK, publish(km2))
+	// First create succeeds
+	require.Equal(t, http.StatusCreated, create(km1))
 
-	require.Equal(t, http.StatusNotFound, getJWK(km1.ID))
+	// Second create under the same label is rejected — the existing row is not replaced
+	require.Equal(t, http.StatusConflict, create(km2))
+
+	// The original key remains reachable; the second key's id was never stored
+	require.Equal(t, http.StatusOK, getJWK(km1.ID))
+	require.Equal(t, http.StatusNotFound, getJWK(km2.ID))
+
+	// After deleting the existing row, a new create under the same label succeeds with the new material
+	require.Equal(t, http.StatusOK, del(km1.ID))
+	require.Equal(t, http.StatusCreated, create(km2))
 	require.Equal(t, http.StatusOK, getJWK(km2.ID))
+	require.Equal(t, http.StatusNotFound, getJWK(km1.ID))
+}
+
+// TestServerV2SigningKeyGetForUser exercises GET /v2/api/signing-keys/:id:
+// - requires authentication
+// - returns 404 for unknown ids and for ids owned by a different user
+// - returns the row (including jwk and pem) regardless of the published flag
+func TestServerV2SigningKeyGetForUser(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-signing-keys-get.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
+
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	defer cleanup()
+
+	stopServerFn := startTestServer(t, srv)
+	defer stopServerFn(t)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-get-sign", "Alice")
+	eveCookie, _ := seedV2SessionCookie(t, srv, "user-get-sign-eve", "Eve")
+
+	doGet := func(t *testing.T, path string, cookies ...*http.Cookie) (int, []byte) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), nil)
+		require.NoError(t, err)
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer res.Body.Close()
+		raw, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		return res.StatusCode, raw
+	}
+	doPost := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (int, []byte) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer res.Body.Close()
+		raw, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		return res.StatusCode, raw
+	}
+
+	// A fresh created key must be fetchable via the authenticated GET endpoint
+	published := newSigningKeyMaterial(t)
+	status, body := doPost(t, "/v2/api/signing-keys", map[string]any{
+		"algorithm": protocolv2.SigningAlgES256,
+		"keyLabel":  "get-published",
+		"jwk":       published.JWKJSON,
+		"pem":       published.PEM,
+		"published": true,
+	}, aliceCookie)
+	require.Equal(t, http.StatusCreated, status, "unexpected body: %s", body)
+
+	// Unauthenticated GET is rejected (this route requires a session — it exposes PEM/JWK for an auto-stored, unpublished row)
+	status, _ = doGet(t, "/v2/api/signing-keys/"+published.ID)
+	require.Equal(t, http.StatusUnauthorized, status)
+
+	// Authenticated GET returns the full record including jwk and pem
+	status, body = doGet(t, "/v2/api/signing-keys/"+published.ID, aliceCookie)
+	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
+	var detail map[string]any
+	require.NoError(t, json.Unmarshal(body, &detail))
+	require.Equal(t, published.ID, detail["id"])
+	require.Equal(t, protocolv2.SigningAlgES256, detail["algorithm"])
+	require.Equal(t, "get-published", detail["keyLabel"])
+	require.Equal(t, true, detail["published"])
+	require.Equal(t, published.PEM, detail["pem"])
+	// JWK must match what was submitted
+	jwkOut, err := json.Marshal(detail["jwk"])
+	require.NoError(t, err)
+	var origJWK, returnedJWK map[string]any
+	require.NoError(t, json.Unmarshal(published.JWKJSON, &origJWK))
+	require.NoError(t, json.Unmarshal(jwkOut, &returnedJWK))
+	require.Equal(t, origJWK, returnedJWK)
+
+	// Cross-user fetch returns 404 so a guessed id can't probe another user's keys
+	status, _ = doGet(t, "/v2/api/signing-keys/"+published.ID, eveCookie)
+	require.Equal(t, http.StatusNotFound, status)
+
+	// Unknown id returns 404 for the authenticated owner too
+	status, _ = doGet(t, "/v2/api/signing-keys/"+"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", aliceCookie)
+	require.Equal(t, http.StatusNotFound, status)
+
+	// Auto-stored rows (published=false) must also be returned by the authenticated GET — the UI uses this to re-export an auto-stored key without publishing it
+	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
+	require.NoError(t, err)
+	createBody := newV2CreateRequestBody("get-auto", protocolv2.SigningAlgES256, clientJWK)
+	status, body = doPost(t, "/v2/request/"+aliceUser.RequestKey+"/sign", createBody)
+	require.Equal(t, http.StatusAccepted, status, "unexpected body: %s", body)
+	var createResp map[string]any
+	require.NoError(t, json.Unmarshal(body, &createResp))
+	state, _ := createResp["state"].(string)
+	require.NotEmpty(t, state)
+
+	auto := newSigningKeyMaterial(t)
+	browserPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
+	require.NoError(t, err)
+	status, body = doPost(t, "/v2/api/confirm", map[string]any{
+		"state":            state,
+		"confirm":          true,
+		"responseEnvelope": newV2ResponseEnvelope(browserJWK),
+		"publicKey": map[string]any{
+			"jwk": auto.JWKJSON,
+			"pem": auto.PEM,
+		},
+	}, aliceCookie)
+	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
+
+	status, body = doGet(t, "/v2/api/signing-keys/"+auto.ID, aliceCookie)
+	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
+	require.NoError(t, json.Unmarshal(body, &detail))
+	require.Equal(t, auto.ID, detail["id"])
+	require.Equal(t, "get-auto", detail["keyLabel"])
+	require.Equal(t, false, detail["published"], "auto-stored row must still be fetchable and report published=false")
+	require.Equal(t, auto.PEM, detail["pem"])
+
+	// Eve cannot reach the auto-stored row either
+	status, _ = doGet(t, "/v2/api/signing-keys/"+auto.ID, eveCookie)
+	require.Equal(t, http.StatusNotFound, status)
 }

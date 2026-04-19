@@ -17,6 +17,7 @@ interface Props {
     onAllowedIpsTextInput: (value: string) => void
     onChangePassword: (password: string) => Promise<void>
     onDeletePasskey: (id: string) => Promise<void>
+    onDeleteSigningKey: (id: string) => Promise<void>
     onDeriveSigningKey: (keyLabel: string, algorithm: string) => Promise<DerivedSigningKey>
     onLogout: () => Promise<void>
     onPublishSigningKey: (derived: DerivedSigningKey) => Promise<void>
@@ -49,6 +50,7 @@ let {
     onAllowedIpsTextInput,
     onChangePassword,
     onDeletePasskey,
+    onDeleteSigningKey,
     onDeriveSigningKey,
     onLogout,
     onPublishSigningKey,
@@ -140,7 +142,7 @@ function closeSettingsModal() {
         <div class="inline-flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
             {#if listConnected}
                 <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 live-dot"></span>
-                Live
+                Connected
             {:else}
                 <span class="h-1.5 w-1.5 rounded-full bg-neutral-400 dark:bg-neutral-600"></span>
                 Connecting…
@@ -204,6 +206,7 @@ function closeSettingsModal() {
             {onDeriveSigningKey}
             {onPublishSigningKey}
             {onUnpublishSigningKey}
+            {onDeleteSigningKey}
         />
     {/if}
 </div>

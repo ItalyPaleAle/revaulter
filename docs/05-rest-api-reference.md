@@ -89,7 +89,7 @@ The request payload is encrypted end-to-end by the CLI before submission. The se
 
 **Sign-specific behavior:**
 
-- Callers must pre-hashe the message with SHA-256 and places only the 32-byte digest in the inner payload (base64url under the `value` field). The server and the browser never see the raw message
+- Callers must pre-hash the message with SHA-256 and place only the 32-byte digest in the inner payload (base64url under the `value` field). The server and the browser never see the raw message
 - The inner payload's `nonce`, `tag`, and `additionalData` fields must be empty after the browser decrypts; the browser rejects the request otherwise
 - The `algorithm` field must be `ES256` (ECDSA P-256 + SHA-256 per RFC 7518)
 - ECDSA is non-deterministic by design: signing the same digest twice produces different but equally valid signatures.
@@ -667,15 +667,19 @@ Delete a credential. The user must have at least one remaining credential.
 
 ## Signing key publication
 
-Published signing public keys can be fetched by third-party verifiers using a stable key ID. The ID is the RFC 7638 JWK thumbprint of the EC public key, base64url-encoded: `base64url(SHA-256(canonical-JWK))` where the canonical JWK is the lex-ordered JSON `{"crv":"P-256","kty":"EC","x":"…","y":"…"}`.
+Signing public keys can be fetched by third-party verifiers using a stable key ID. The ID is the RFC 7638 JWK thumbprint of the EC public key, base64url-encoded: `base64url(SHA-256(canonical-JWK))` where the canonical JWK is the lex-ordered JSON `{"crv":"P-256","kty":"EC","x":"…","y":"…"}`.
 
-Publication stores both the JWK and the PEM (PKIX) forms. Re-publishing the same `(algorithm, keyLabel)` replaces the previous record: the old ID becomes unresolvable. Unpublishing is a hard delett: there is no revocation list — consumers should treat a 404 response on a known key ID as revocation.
+A stored row carries both the JWK and the PEM (PKIX) forms along with a `published` flag. Only published rows are served from the unauthenticated fetch endpoints below; unpublished rows still exist (they may have been auto-stored as part of a sign operation) but are hidden from public lookups.
+
+A row is uniquely identified by `(user, algorithm, keyLabel)`: creating a new key under a label that already has a row is rejected with `409 Conflict`; the caller must first `DELETE` the existing row to free the slot.
+
+Revocation is expressed either by setting `published=false` (reversible) or by `DELETE`ing the row (permanent); consumers should treat a 404 on a known key ID as revocation.
 
 ### Authenticated endpoints
 
 #### `GET /v2/api/signing-keys`
 
-List the authenticated user's published signing keys (metadata only; JWK and PEM are omitted from the list to keep it lean — fetch them by ID via the public endpoints below).
+List the authenticated user's signing keys. JWK and PEM are omitted from the list to keep it lean; fetch them by ID via the endpoints below.
 
 **Response:** `200 OK`
 
@@ -685,15 +689,37 @@ List the authenticated user's published signing keys (metadata only; JWK and PEM
     "id": "<key-id>",
     "algorithm": "ES256",
     "keyLabel": "release-signing",
+    "published": true,
     "createdAt": "2026-04-17T12:00:00Z",
     "updatedAt": "2026-04-17T12:00:00Z"
   }
 ]
 ```
 
-#### `POST /v2/api/signing-keys/publish`
+#### `GET /v2/api/signing-keys/:id`
 
-Publish (or replace) a signing public key. The server validates that:
+Return a single signing key owned by the current user, including the stored JWK and PEM.
+
+**Response:** `200 OK`
+
+```json
+{
+  "id": "<key-id>",
+  "algorithm": "ES256",
+  "keyLabel": "release-signing",
+  "published": false,
+  "createdAt": "2026-04-17T12:00:00Z",
+  "updatedAt": "2026-04-17T12:00:00Z",
+  "jwk": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
+  "pem": "-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----\n"
+}
+```
+
+Returns `404 Not Found` when the ID doesn't match a row belonging to the authenticated user, so a guessed ID can't probe another user's keys.
+
+#### `POST /v2/api/signing-keys`
+
+Create a new signing key for the current user. The `published` flag in the request body controls whether the key is served by the public fetch endpoints below. The server validates that:
 
 - `algorithm` is supported (currently only `ES256`)
 - `keyLabel` is non-empty and at most 128 chars
@@ -708,8 +734,34 @@ Publish (or replace) a signing public key. The server validates that:
   "algorithm": "ES256",
   "keyLabel": "release-signing",
   "jwk": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
-  "pem": "-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----\n"
+  "pem": "-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----\n",
+  "published": true
 }
+```
+
+**Response:** `201 Created`
+
+```json
+{
+  "id": "<key-id>",
+  "algorithm": "ES256",
+  "keyLabel": "release-signing",
+  "published": true,
+  "createdAt": "2026-04-17T12:00:00Z",
+  "updatedAt": "2026-04-17T12:00:00Z"
+}
+```
+
+The endpoint is insert-only: if a row already exists for the same `(user, algorithm, keyLabel)` (either previously created or auto-stored during a sign operation) the request is rejected with `409 Conflict` and no existing data is overwritten. To store different key material under the same label, `DELETE` the existing row first. To merely flip the `published` flag on an existing row, use `POST /v2/api/signing-keys/:id`.
+
+#### `POST /v2/api/signing-keys/:id`
+
+Updates an existing signing key owned by the current user, flipping the `published` flag. Use this to unpublish (`published: false`) a previously published key, or to publish an auto-stored key that was created during a sign operation.
+
+**Request body:**
+
+```json
+{ "published": false }
 ```
 
 **Response:** `200 OK`
@@ -719,22 +771,17 @@ Publish (or replace) a signing public key. The server validates that:
   "id": "<key-id>",
   "algorithm": "ES256",
   "keyLabel": "release-signing",
-  "createdAt": 1713200000,
-  "updatedAt": 1713200000
+  "published": false,
+  "createdAt": "2026-04-17T12:00:00Z",
+  "updatedAt": "2026-04-17T12:00:00Z"
 }
 ```
 
-Republishing the same key material under the same `(algorithm, keyLabel)` is idempotent: the returned `id` is stable. Publishing different key material under the same `(algorithm, keyLabel)` deletes the previous record before inserting the new one.
+Returns `404 Not Found` when the ID doesn't match a row belonging to the authenticated user, so a guessed ID can't probe another user's keys.
 
-#### `POST /v2/api/signing-keys/unpublish`
+#### `DELETE /v2/api/signing-keys/:id`
 
-Hard-delete a signing key publication belonging to the current user.
-
-**Request body:**
-
-```json
-{ "id": "<key-id>" }
-```
+Hard-delete a signing key row owned by the current user. The row is removed from the database; the ID becomes unresolvable and the `(algorithm, keyLabel)` slot is freed for a subsequent `POST /v2/api/signing-keys`.
 
 **Response:** `200 OK`
 
@@ -742,7 +789,7 @@ Hard-delete a signing key publication belonging to the current user.
 { "deleted": true }
 ```
 
-`deleted: false` means no record matched: either the key was already unpublished, or the ID belongs to another user (the server does not distinguish these cases).
+Returns `404 Not Found` when the ID doesn't match a row belonging to the authenticated user, so a guessed ID can't probe another user's keys. A second `DELETE` on the same ID also returns `404`.
 
 ### Public (unauthenticated) endpoints
 
@@ -763,7 +810,7 @@ Returns the stored JWK verbatim inside a metadata envelope.
   "id": "<key-id>",
   "algorithm": "ES256",
   "keyLabel": "release-signing",
-  "createdAt": 1713200000,
+  "createdAt": "2026-04-17T12:00:00Z",
   "jwk": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" }
 }
 ```
