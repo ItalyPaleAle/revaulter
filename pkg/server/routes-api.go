@@ -80,23 +80,28 @@ func (s *Server) RouteV2APIList(c *gin.Context) {
 
 func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 	state := c.Param("state")
+
 	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
 	if rec == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 		return
 	}
+
 	if !s.authorizeUser(c, rec.UserID) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 		return
 	}
+
 	var encReq json.RawMessage
 	if rec.EncryptedRequest != "" {
 		encReq = json.RawMessage(rec.EncryptedRequest)
 	}
+
 	c.JSON(http.StatusOK, v2APIRequestDetailResponse{
 		State:            rec.State,
 		Status:           string(rec.Status),
@@ -114,7 +119,12 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 
 func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	log := logging.LogFromContext(c.Request.Context())
+
 	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
 
 	var req confirmRequest
 	err := c.ShouldBindJSON(&req)
@@ -132,28 +142,13 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
-	rec, err := s.requestStore.GetRequest(c.Request.Context(), req.State)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	if rec == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
-		return
-	}
-
-	if !s.authorizeUser(c, rec.UserID) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
-		return
-	}
-
 	if req.Cancel {
-		ok, err := s.requestStore.CancelRequest(c.Request.Context(), req.State)
-		if err != nil {
-			AbortWithErrorJSON(c, err)
-			return
-		} else if !ok {
+		rec, err := s.requestStore.CancelRequest(c.Request.Context(), req.State, userID)
+		if errors.Is(err, db.ErrRequestNotModifiable) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be canceled"))
+			return
+		} else if err != nil {
+			AbortWithErrorJSON(c, err)
 			return
 		}
 
@@ -195,12 +190,12 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
-	ok, err := s.requestStore.CompleteRequest(c.Request.Context(), req.State, *req.ResponseEnvelope)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	} else if !ok {
+	rec, err := s.requestStore.CompleteRequest(c.Request.Context(), req.State, userID, *req.ResponseEnvelope)
+	if errors.Is(err, db.ErrRequestNotModifiable) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be confirmed"))
+		return
+	} else if err != nil {
+		AbortWithErrorJSON(c, err)
 		return
 	}
 

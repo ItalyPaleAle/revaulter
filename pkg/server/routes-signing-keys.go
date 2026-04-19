@@ -211,8 +211,7 @@ func (s *Server) RouteV2APISigningKeyUpdate(c *gin.Context) {
 	if errors.Is(err, db.ErrSigningKeyNotFound) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "not found"))
 		return
-	}
-	if err != nil {
+	} else if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
