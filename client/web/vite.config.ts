@@ -11,8 +11,8 @@ export default defineConfig(({ mode }) => {
 
     // Additional plugins, which may not always be used
     const additionalPlugins = []
-    const libPackages = ['svelte', 'date-fns']
-    const cryptoPackages = ['hash-wasm', 'mlkem-wasm', 'arraybuffer-encoding']
+    const libChunkPattern = /[\\/]node_modules[\\/](svelte|date-fns)[\\/]/
+    const cryptoChunkPattern = /[\\/]node_modules[\\/](hash-wasm|mlkem-wasm|arraybuffer-encoding)[\\/]/
 
     const isProduction = mode === 'production'
 
@@ -76,21 +76,22 @@ export default defineConfig(({ mode }) => {
             outDir: 'dist',
             emptyOutDir: true,
             sourcemap: !isProduction,
-            rollupOptions: {
+            rolldownOptions: {
                 output: {
                     entryFileNames: '[name].[hash].js',
                     chunkFileNames: '[name].[hash].js',
                     assetFileNames: '[name].[hash].[ext]',
-                    manualChunks: (moduleId) => {
-                        if (libPackages.some((pkg) => moduleId.includes(`/node_modules/${pkg}/`))) {
-                            return 'lib'
-                        }
-
-                        if (cryptoPackages.some((pkg) => moduleId.includes(`/node_modules/${pkg}/`))) {
-                            return 'crypto'
-                        }
-
-                        return undefined
+                    codeSplitting: {
+                        groups: [
+                            {
+                                name: 'lib',
+                                test: libChunkPattern,
+                            },
+                            {
+                                name: 'crypto',
+                                test: cryptoChunkPattern,
+                            },
+                        ],
                     },
                 },
             },
