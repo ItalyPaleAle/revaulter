@@ -103,10 +103,21 @@ export async function v2GetRequest(state: string) {
     return res.data
 }
 
-/** Confirms a pending request and sends the encrypted response envelope to the server */
-export async function v2Confirm(state: string, responseEnvelope: V2ResponseEnvelope) {
+/** Confirms a pending request and sends the encrypted response envelope to the server
+ * For sign operations, the derived public key (jwk + pem) is sent alongside the envelope so the server can auto-store it (published=false) if it isn't already known
+ */
+export async function v2Confirm(
+    state: string,
+    responseEnvelope: V2ResponseEnvelope,
+    publicKey?: { jwk: V2SigningJwk; pem: string }
+) {
+    const body: Record<string, unknown> = { state, confirm: true, responseEnvelope }
+    if (publicKey) {
+        body.publicKey = publicKey
+    }
+
     const res = await Request<{ confirmed: boolean }>('/v2/api/confirm', {
-        postData: { state, confirm: true, responseEnvelope },
+        postData: body,
     })
     return res.data
 }

@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +14,42 @@ import (
 	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
+
+// validateSigningJWKAndPEM parses the JWK and PEM representations of a signing public key, checks that they refer to the same point, and returns the JWK thumbprint used as the canonical id
+func validateSigningJWKAndPEM(jwkBytes json.RawMessage, pemStr string) (string, error) {
+	if len(jwkBytes) == 0 {
+		return "", errors.New("missing jwk")
+	}
+	if pemStr == "" {
+		return "", errors.New("missing pem")
+	}
+
+	jwk, err := protocolv2.ParseECP256SigningJWK(jwkBytes)
+	if err != nil {
+		return "", fmt.Errorf("invalid jwk: %w", err)
+	}
+
+	pemRaw, err := protocolv2.ParseECP256SigningPEM([]byte(pemStr))
+	if err != nil {
+		return "", fmt.Errorf("invalid pem: %w", err)
+	}
+
+	jwkPub, err := jwk.ToECDHPublicKey()
+	if err != nil {
+		return "", fmt.Errorf("invalid jwk: %w", err)
+	}
+
+	if !bytes.Equal(jwkPub.Bytes(), pemRaw) {
+		return "", errors.New("jwk and pem do not match")
+	}
+
+	id, err := jwk.ThumbprintHex()
+	if err != nil {
+		return "", fmt.Errorf("failed to compute thumbprint: %w", err)
+	}
+
+	return id, nil
+}
 
 type v2SigningKeyPublishRequest struct {
 	Algorithm string          `json:"algorithm"`
@@ -24,6 +62,7 @@ type v2SigningKeyPublishResponse struct {
 	ID        string    `json:"id"`
 	Algorithm string    `json:"algorithm"`
 	KeyLabel  string    `json:"keyLabel"`
+	Published bool      `json:"published"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
@@ -96,39 +135,10 @@ func (s *Server) RouteV2APISigningKeyPublish(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "keyLabel too long"))
 		return
 	}
-	if len(req.JWK) == 0 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing jwk"))
-		return
-	}
-	if req.PEM == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing pem"))
-		return
-	}
 
-	jwk, err := protocolv2.ParseECP256SigningJWK(req.JWK)
+	id, err := validateSigningJWKAndPEM(req.JWK, req.PEM)
 	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid jwk: %v", err))
-		return
-	}
-	pemRaw, err := protocolv2.ParseECP256SigningPEM([]byte(req.PEM))
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid pem: %v", err))
-		return
-	}
-
-	jwkPub, err := jwk.ToECDHPublicKey()
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid jwk: %v", err))
-		return
-	}
-	if !bytes.Equal(jwkPub.Bytes(), pemRaw) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "jwk and pem do not match"))
-		return
-	}
-
-	id, err := jwk.ThumbprintHex()
-	if err != nil {
-		AbortWithErrorJSON(c, err)
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "%v", err))
 		return
 	}
 
@@ -159,6 +169,7 @@ func (s *Server) RouteV2APISigningKeyPublish(c *gin.Context) {
 		ID:        rec.ID,
 		Algorithm: rec.Algorithm,
 		KeyLabel:  rec.KeyLabel,
+		Published: rec.Published,
 		CreatedAt: rec.CreatedAt,
 		UpdatedAt: rec.UpdatedAt,
 	})
@@ -219,7 +230,7 @@ func (s *Server) RouteV2SigningKeyPublic(c *gin.Context) {
 		return
 	}
 
-	rec, err := s.signingKeyStore.GetByID(c.Request.Context(), id)
+	rec, err := s.signingKeyStore.GetPublishedByID(c.Request.Context(), id)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return

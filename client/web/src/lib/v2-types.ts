@@ -85,6 +85,7 @@ export type V2PublishedSigningKey = {
     id: string
     algorithm: string
     keyLabel: string
+    published: boolean
     createdAt: string
     updatedAt: string
 }

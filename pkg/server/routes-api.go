@@ -38,11 +38,17 @@ type v2APIConfirmedResponse struct {
 	Confirmed bool `json:"confirmed"`
 }
 
+type confirmPublicKey struct {
+	JWK json.RawMessage `json:"jwk"`
+	PEM string          `json:"pem"`
+}
+
 type confirmRequest struct {
 	State            string                       `json:"state"`
 	Confirm          bool                         `json:"confirm,omitempty"`
 	Cancel           bool                         `json:"cancel,omitempty"`
 	ResponseEnvelope *protocolv2.ResponseEnvelope `json:"responseEnvelope,omitempty"`
+	PublicKey        *confirmPublicKey            `json:"publicKey,omitempty"`
 }
 
 func (s *Server) RouteV2APIList(c *gin.Context) {
@@ -198,6 +204,13 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
+	// For sign operations the browser sends the derived public key alongside the encrypted response envelope
+	// If the user has not published a key for this (algorithm, keyLabel) yet, store it server-side with published=false so it can be shown in the settings UI
+	// The signature was already accepted, so failures here are logged and don't fail the request
+	if rec.Operation == "sign" && req.PublicKey != nil {
+		s.autoStoreSigningKey(c, log, rec, req.PublicKey)
+	}
+
 	log.InfoContext(c.Request.Context(), "Request confirmed",
 		slog.String("state", req.State),
 		slog.Any("user_id", userID),
@@ -228,6 +241,42 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 func (s *Server) authorizeUser(c *gin.Context, userID string) bool {
 	sessionUserID := c.GetString(contextKeyUserID)
 	return sessionUserID != "" && sessionUserID == userID
+}
+
+func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V2RequestRecord, pub *confirmPublicKey) {
+	id, err := validateSigningJWKAndPEM(pub.JWK, pub.PEM)
+	if err != nil {
+		log.WarnContext(c.Request.Context(), "Skipping auto-store of signing public key: invalid payload",
+			slog.String("state", rec.State),
+			slog.Any("err", err),
+		)
+		return
+	}
+
+	inserted, err := s.signingKeyStore.StoreAutoDerivedIfMissing(c.Request.Context(), db.StoreAutoDerivedSigningKeyInput{
+		ID:        id,
+		UserID:    rec.UserID,
+		Algorithm: rec.Algorithm,
+		KeyLabel:  rec.KeyLabel,
+		JWK:       string(pub.JWK),
+		PEM:       pub.PEM,
+	})
+	if err != nil {
+		log.WarnContext(c.Request.Context(), "Failed to auto-store signing public key",
+			slog.String("state", rec.State),
+			slog.Any("err", err),
+		)
+		return
+	}
+
+	if inserted {
+		log.InfoContext(c.Request.Context(), "Auto-stored signing public key",
+			slog.String("state", rec.State),
+			slog.String("key_id", id),
+			slog.String("key_label", rec.KeyLabel),
+			slog.String("algorithm", rec.Algorithm),
+		)
+	}
 }
 
 func (s *Server) routeV2APIListStream(c *gin.Context) {

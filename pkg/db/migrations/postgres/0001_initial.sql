@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS v2_published_signing_keys (
 	key_label text NOT NULL,
 	jwk text NOT NULL,
 	pem text NOT NULL,
+	published boolean NOT NULL DEFAULT false,
 	created_at bigint NOT NULL,
 	updated_at bigint NOT NULL
 );

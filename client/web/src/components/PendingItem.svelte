@@ -10,6 +10,7 @@ import {
     decryptRequestPayload,
     deriveOperationKeyBytes,
     deriveSigningKeyPair,
+    ecP256JwkToPem,
     encryptTransportEnvelope,
     performAesGcmOperation,
     signDigestEs256,
@@ -17,7 +18,7 @@ import {
 } from '$lib/crypto'
 import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import { v2Cancel, v2Confirm, v2GetRequest } from '$lib/v2-api'
-import type { V2PendingRequestItem, V2RequestDetail } from '$lib/v2-types'
+import type { V2PendingRequestItem, V2RequestDetail, V2ResponseEnvelope, V2SigningJwk } from '$lib/v2-types'
 
 interface Props {
     item: V2PendingRequestItem
@@ -77,8 +78,8 @@ async function doConfirm() {
     localStatus = '_processing'
     try {
         const req = await ensureDetail()
-        const env = await buildResponseEnvelope(req)
-        const res = await v2Confirm(item.state, env)
+        const { envelope, publicKey } = await buildResponseEnvelope(req)
+        const res = await v2Confirm(item.state, envelope, publicKey)
         if (!res?.confirmed) {
             throw new Error('Confirm failed')
         }
@@ -92,7 +93,9 @@ async function doConfirm() {
     }
 }
 
-async function buildResponseEnvelope(req: V2RequestDetail) {
+async function buildResponseEnvelope(
+    req: V2RequestDetail
+): Promise<{ envelope: V2ResponseEnvelope; publicKey?: { jwk: V2SigningJwk; pem: string } }> {
     // Validate the algorithm against what the operation supports
     switch (req.operation) {
         case 'sign':
@@ -128,6 +131,7 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
     const aad = input.additionalData ? base64UrlToBytes(input.additionalData) : new Uint8Array()
 
     let resultPlain: Uint8Array
+    let publicKey: { jwk: V2SigningJwk; pem: string } | undefined
     switch (req.operation) {
         case 'sign': {
             // Sign operations carry only a 32-byte SHA-256 digest in `value`
@@ -145,13 +149,15 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
                 throw new Error('sign: additionalData must be empty')
             }
 
-            const { privateKey } = await deriveSigningKeyPair({
+            const { privateKey, publicJwk } = await deriveSigningKeyPair({
                 userId: req.userId,
                 keyLabel: req.keyLabel,
                 algorithm: req.algorithm,
                 primaryKey,
             })
             const signature = await signDigestEs256(privateKey, value)
+            const pem = await ecP256JwkToPem(publicJwk)
+            publicKey = { jwk: publicJwk, pem }
             resultPlain = new TextEncoder().encode(
                 JSON.stringify({
                     state: req.state,
@@ -240,13 +246,15 @@ async function buildResponseEnvelope(req: V2RequestDetail) {
     }
 
     const transportAAD = buildTransportAAD(req.state, req.operation, req.algorithm)
-    return encryptTransportEnvelope(
+    const envelope = await encryptTransportEnvelope(
         req.state,
         input.clientTransportEcdhKey,
         input.clientTransportMlkemKey,
         resultPlain,
         transportAAD
     )
+
+    return { envelope, publicKey }
 }
 
 function operationTitle(op: V2PendingRequestItem['operation']) {

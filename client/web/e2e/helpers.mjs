@@ -377,6 +377,14 @@ export function startCLIRequest(args) {
         if (args.aad) {
             cliArgs.push('--aad', Buffer.from(args.aad, 'utf8').toString('base64url'))
         }
+    } else if (args.operation === 'sign') {
+        // The sign op takes either --input (file) or --digest (pre-computed 32-byte SHA-256)
+        // Tests pass --input so verifiers can re-hash the original message, matching Web Crypto / node's verify()
+        if (args.input) {
+            cliArgs.push('--input', args.input)
+        } else {
+            cliArgs.push('--digest', args.digest)
+        }
     } else {
         cliArgs.push('--value', args.value)
         cliArgs.push('--nonce', args.nonce)

@@ -1,3 +1,8 @@
+import { createHash, createPublicKey, verify } from 'node:crypto'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { expect, test } from '@playwright/test'
 
 import {
@@ -157,6 +162,72 @@ test('regenerating the request key invalidates the old public key endpoint', asy
         const newKeyResponse = await fetchRequestPubkey(request, newKey)
         expect(newKeyResponse.status).toBe(200)
     } finally {
+        await auth.passkey.dispose()
+    }
+})
+
+test('cli sign round-trips and the signature verifies against the browser-derived public key', async ({ page }) => {
+    const auth = await registerAndReachReady(page, 'CLI Sign User')
+
+    // Create a temp file with known content; CLI will SHA-256 it internally and request the browser to sign the digest
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'revaulter-e2e-sign-'))
+    const inputPath = join(tmpRoot, 'sign-input.bin')
+    const message = Buffer.from('revaulter sign e2e — the quick brown fox jumps over the lazy dog', 'utf8')
+    writeFileSync(inputPath, message)
+
+    try {
+        await waitForListStream(page)
+
+        // Capture the public key the browser sends alongside the response envelope
+        // This is the ground truth for verification: server auto-stores exactly this JWK as published=false
+        const confirmRequestPromise = page.waitForRequest(
+            (req) => req.url().endsWith('/v2/api/confirm') && req.method() === 'POST'
+        )
+
+        const signRun = startCLIRequest({
+            operation: 'sign',
+            requestKey: auth.session.requestKey,
+            keyLabel: 'sign-e2e-label',
+            algorithm: 'ES256',
+            note: 'cli sign e2e',
+            input: inputPath,
+        })
+
+        await expect(page.getByText('cli sign e2e')).toBeVisible()
+        await page.getByRole('button', { name: 'Confirm' }).click()
+
+        const confirmRequest = await confirmRequestPromise
+        const confirmBody = JSON.parse(confirmRequest.postData() || '{}')
+        expect(confirmBody.confirm).toBe(true)
+        expect(confirmBody.publicKey).toBeDefined()
+        expect(confirmBody.publicKey.jwk).toBeDefined()
+        expect(confirmBody.publicKey.pem).toMatch(/-----BEGIN PUBLIC KEY-----/)
+
+        const signResult = await signRun.done
+        expect(signResult.json.operation).toBe('sign')
+        expect(signResult.json.algorithm).toBe('ES256')
+        expect(signResult.json.keyLabel).toBe('sign-e2e-label')
+        expect(typeof signResult.json.signature).toBe('string')
+
+        // Signature is base64url-encoded raw r||s (64 bytes for ES256)
+        const sigBytes = Buffer.from(signResult.json.signature, 'base64url')
+        expect(sigBytes.length).toBe(64)
+
+        // The browser's signDigestEs256 uses WebCrypto subtle.sign with hash:'SHA-256', which hashes the input again
+        // So the signed data is SHA-256(digest) where digest = SHA-256(message). We pass the digest to Node's verify and let it apply SHA-256 once
+        const digest = createHash('sha256').update(message).digest()
+        const publicKey = createPublicKey({ key: confirmBody.publicKey.jwk, format: 'jwk' })
+        const ok = verify('sha256', digest, { key: publicKey, dsaEncoding: 'ieee-p1363' }, sigBytes)
+        expect(ok, 'CLI signature must verify against the browser-derived public key').toBe(true)
+
+        // And the same signature must not verify against a tampered digest — sanity check
+        const tamperedDigest = createHash('sha256')
+            .update(Buffer.concat([message, Buffer.from('!')]))
+            .digest()
+        const bad = verify('sha256', tamperedDigest, { key: publicKey, dsaEncoding: 'ieee-p1363' }, sigBytes)
+        expect(bad, 'signature must not verify against a tampered message').toBe(false)
+    } finally {
+        rmSync(tmpRoot, { recursive: true, force: true })
         await auth.passkey.dispose()
     }
 })

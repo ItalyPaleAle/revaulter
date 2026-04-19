@@ -262,6 +262,17 @@ async function handleUnpublish(id: string) {
     await onUnpublishSigningKey(id)
 }
 
+let publishingStoredId = $state<string | null>(null)
+async function handlePublishStored(sk: V2PublishedSigningKey) {
+    publishingStoredId = sk.id
+    try {
+        const derived = await onDeriveSigningKey(sk.keyLabel, sk.algorithm)
+        await onPublishSigningKey(derived)
+    } finally {
+        publishingStoredId = null
+    }
+}
+
 async function copyFetchUrl(id: string, kind: 'jwk' | 'pem') {
     await navigator.clipboard.writeText(publicFetchUrl(id, kind))
     copiedFetchId = `${id}/${kind}`
@@ -274,7 +285,7 @@ async function copyFetchUrl(id: string, kind: 'jwk' | 'pem') {
 
 function isDerivedPublished(): boolean {
     if (!derivedKey) return false
-    return signingKeys.some((k) => k.id === derivedKey?.id)
+    return signingKeys.some((k) => k.id === derivedKey?.id && k.published)
 }
 
 const tabs: { id: SettingsTab; label: string; icon: string }[] = [
@@ -732,16 +743,16 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                             {/if}
                         </div>
 
-                        <!-- Published list -->
+                        <!-- Known keys list -->
                         <div>
-                            <div class="text-sm font-medium text-slate-900 dark:text-white">Published signing keys</div>
+                            <div class="text-sm font-medium text-slate-900 dark:text-white">Signing keys</div>
                             <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                                Published public keys are retrievable without authentication at the URLs shown. Unpublishing removes the key from the server.
+                                Public keys used to fulfill a sign request are automatically stored here. Publishing a key makes its public part retrievable without authentication at the URLs shown.
                             </p>
 
                             {#if signingKeys.length === 0}
                                 <div class="mt-3 rounded-2xl border border-dashed border-slate-300/90 bg-white/25 px-6 py-8 text-center text-sm text-slate-500 dark:border-white/12 dark:bg-white/4 dark:text-slate-400">
-                                    No published signing keys yet.
+                                    No signing keys yet.
                                 </div>
                             {:else}
                                 <div class="mt-3 space-y-3">
@@ -749,12 +760,21 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                         <div class="rounded-2xl border border-slate-200/80 p-4 dark:border-white/10">
                                             <div class="flex flex-wrap items-start justify-between gap-3">
                                                 <div class="min-w-0">
-                                                    <div class="text-sm font-medium text-slate-900 dark:text-white">
-                                                        {sk.keyLabel}
-                                                        <span class="ml-2 text-xs font-normal text-slate-500 dark:text-slate-400">{sk.algorithm}</span>
+                                                    <div class="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-white">
+                                                        <span>{sk.keyLabel}</span>
+                                                        <span class="text-xs font-normal text-slate-500 dark:text-slate-400">{sk.algorithm}</span>
+                                                        {#if sk.published}
+                                                            <span class="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200">
+                                                                Published
+                                                            </span>
+                                                        {:else}
+                                                            <span class="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-white/10 dark:text-slate-300">
+                                                                Stored
+                                                            </span>
+                                                        {/if}
                                                     </div>
                                                     <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                                                        Published {formatTimestamp(sk.createdAt)}
+                                                        {sk.published ? 'Published' : 'Stored'} {formatTimestamp(sk.createdAt)}
                                                         {#if sk.updatedAt && sk.updatedAt !== sk.createdAt}
                                                             · Updated {formatTimestamp(sk.updatedAt)}
                                                         {/if}
@@ -764,43 +784,51 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                                     </div>
                                                 </div>
                                                 <div class="flex shrink-0 items-center gap-1">
+                                                    {#if !sk.published}
+                                                        <Button variant="neutral" size="sm" onclick={() => handlePublishStored(sk)} disabled={busy || publishingStoredId === sk.id}>
+                                                            <Icon icon="upload-cloud" title="Publish" size="3.5" />
+                                                            Publish
+                                                        </Button>
+                                                    {/if}
                                                     {#if confirmingUnpublishId === sk.id}
                                                         <Button variant="danger" size="sm" onclick={() => handleUnpublish(sk.id)} disabled={busy}>
-                                                            Confirm unpublish
+                                                            Confirm {sk.published ? 'unpublish' : 'delete'}
                                                         </Button>
                                                         <Button variant="outline" size="sm" onclick={() => { confirmingUnpublishId = null }}>
                                                             Cancel
                                                         </Button>
                                                     {:else}
-                                                        <Button variant="icon" size="icon" ariaLabel="Unpublish key" onclick={() => { confirmingUnpublishId = sk.id }} disabled={busy}>
-                                                            <Icon icon="trash" title="Unpublish" size="3.5" />
+                                                        <Button variant="icon" size="icon" ariaLabel={sk.published ? 'Unpublish key' : 'Delete stored key'} onclick={() => { confirmingUnpublishId = sk.id }} disabled={busy}>
+                                                            <Icon icon="trash" title={sk.published ? 'Unpublish' : 'Delete'} size="3.5" />
                                                         </Button>
                                                     {/if}
                                                 </div>
                                             </div>
 
-                                            <div class="mt-3 space-y-2">
-                                                {#each ['jwk', 'pem'] as const as kind}
-                                                    <div class="flex items-center gap-2">
-                                                        <div class="w-10 shrink-0 text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{kind}</div>
-                                                        <div class="flex min-w-0 flex-1 items-center rounded-[1.2rem] bg-slate-50/90 ring-1 ring-slate-200/80 dark:bg-white/6 dark:ring-white/10">
-                                                            <div class="min-w-0 flex-1 overflow-x-auto whitespace-nowrap px-3 py-2 font-mono text-xs text-slate-900 dark:text-slate-100">{publicFetchUrl(sk.id, kind)}</div>
-                                                            <button
-                                                                type="button"
-                                                                class="flex shrink-0 cursor-pointer items-center justify-center rounded-r-[1.2rem] border-l border-slate-200/80 px-2 py-2 text-slate-500 transition hover:bg-slate-100/80 hover:text-slate-700 dark:border-white/10 dark:text-slate-400 dark:hover:bg-white/8 dark:hover:text-slate-200"
-                                                                aria-label="Copy to clipboard"
-                                                                onclick={() => copyFetchUrl(sk.id, kind)}
-                                                            >
-                                                                {#if copiedFetchId === `${sk.id}/${kind}`}
-                                                                    <Icon icon="check" title="Copied" size="3.5" />
-                                                                {:else}
-                                                                    <Icon icon="clipboard-copy" title="Copy to clipboard" size="3.5" />
-                                                                {/if}
-                                                            </button>
+                                            {#if sk.published}
+                                                <div class="mt-3 space-y-2">
+                                                    {#each ['jwk', 'pem'] as const as kind}
+                                                        <div class="flex items-center gap-2">
+                                                            <div class="w-10 shrink-0 text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{kind}</div>
+                                                            <div class="flex min-w-0 flex-1 items-center rounded-[1.2rem] bg-slate-50/90 ring-1 ring-slate-200/80 dark:bg-white/6 dark:ring-white/10">
+                                                                <div class="min-w-0 flex-1 overflow-x-auto whitespace-nowrap px-3 py-2 font-mono text-xs text-slate-900 dark:text-slate-100">{publicFetchUrl(sk.id, kind)}</div>
+                                                                <button
+                                                                    type="button"
+                                                                    class="flex shrink-0 cursor-pointer items-center justify-center rounded-r-[1.2rem] border-l border-slate-200/80 px-2 py-2 text-slate-500 transition hover:bg-slate-100/80 hover:text-slate-700 dark:border-white/10 dark:text-slate-400 dark:hover:bg-white/8 dark:hover:text-slate-200"
+                                                                    aria-label="Copy to clipboard"
+                                                                    onclick={() => copyFetchUrl(sk.id, kind)}
+                                                                >
+                                                                    {#if copiedFetchId === `${sk.id}/${kind}`}
+                                                                        <Icon icon="check" title="Copied" size="3.5" />
+                                                                    {:else}
+                                                                        <Icon icon="clipboard-copy" title="Copy to clipboard" size="3.5" />
+                                                                    {/if}
+                                                                </button>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                {/each}
-                                            </div>
+                                                    {/each}
+                                                </div>
+                                            {/if}
                                         </div>
                                     {/each}
                                 </div>
