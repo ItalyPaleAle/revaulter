@@ -16,11 +16,11 @@ import (
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
 
-// Domain-separation prefixes for anchor-signed messages
-// Every signature the anchor produces must carry one of these literal prefixes; a verifier that accepts a signature without the prefix would let an attacker replay a signature from one context into another
+// CredAttestPrefix and PubkeyBundlePrefix are domain-separation prefixes for anchor-signed messages.
+// Every signature the anchor produces must carry one of these literal prefixes.
+// A verifier that accepts a signature without the prefix would let an attacker replay a signature from one context into another.
 const (
-	// #nosec G101 - False positive
-	CredAttestPrefix    = "revaulter/v2/cred-attest\n"
+	CredAttestPrefix    = "revaulter/v2/cred-attest\n" // #nosec G101 -- domain-separation tag, not a credential
 	PubkeyBundlePrefix  = "revaulter/v2/pubkey-bundle\n"
 	WrappedAnchorAADFmt = "revaulter/v2/wrapped-anchor\nuserId=%s\nv=1"
 )
@@ -210,12 +210,13 @@ func AnchorFingerprint(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte) (strin
 		return "", err
 	}
 
+	// Both lengths are bounded by the ML-DSA-87 / ES384 fixed sizes (a few KiB); uint32 conversion cannot overflow.
 	h := sha256.New()
 	var lenBuf [4]byte
-	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(jwkBytes)))
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(jwkBytes))) // #nosec G115 -- length bounded above
 	h.Write(lenBuf[:])
 	h.Write(jwkBytes)
-	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(mldsa87PubBytes)))
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(mldsa87PubBytes))) // #nosec G115 -- length bounded above
 	h.Write(lenBuf[:])
 	h.Write(mldsa87PubBytes)
 
