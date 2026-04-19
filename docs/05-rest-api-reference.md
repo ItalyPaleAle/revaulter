@@ -667,7 +667,7 @@ Delete a credential. The user must have at least one remaining credential.
 
 ## Signing key publication
 
-Published signing public keys can be fetched by third-party verifiers using a stable key ID. The ID is the RFC 7638 JWK thumbprint of the EC public key, hex-encoded: `lowercase-hex(SHA-256(canonical-JWK))` where the canonical JWK is the lex-ordered JSON `{"crv":"P-256","kty":"EC","x":"…","y":"…"}`.
+Published signing public keys can be fetched by third-party verifiers using a stable key ID. The ID is the RFC 7638 JWK thumbprint of the EC public key, base64url-encoded: `base64url(SHA-256(canonical-JWK))` where the canonical JWK is the lex-ordered JSON `{"crv":"P-256","kty":"EC","x":"…","y":"…"}`.
 
 Publication stores both the JWK and the PEM (PKIX) forms. Re-publishing the same `(algorithm, keyLabel)` replaces the previous record: the old ID becomes unresolvable. Unpublishing is a hard delett: there is no revocation list — consumers should treat a 404 response on a known key ID as revocation.
 
@@ -682,7 +682,7 @@ List the authenticated user's published signing keys (metadata only; JWK and PEM
 ```json
 [
   {
-    "id": "<hex-thumbprint>",
+    "id": "<key-id>",
     "algorithm": "ES256",
     "keyLabel": "release-signing",
     "createdAt": "2026-04-17T12:00:00Z",
@@ -716,7 +716,7 @@ Publish (or replace) a signing public key. The server validates that:
 
 ```json
 {
-  "id": "<hex-thumbprint>",
+  "id": "<key-id>",
   "algorithm": "ES256",
   "keyLabel": "release-signing",
   "createdAt": 1713200000,
@@ -733,7 +733,7 @@ Hard-delete a signing key publication belonging to the current user.
 **Request body:**
 
 ```json
-{ "id": "<hex-thumbprint>" }
+{ "id": "<key-id>" }
 ```
 
 **Response:** `200 OK`
@@ -760,7 +760,7 @@ Returns the stored JWK verbatim inside a metadata envelope.
 
 ```json
 {
-  "id": "<hex-thumbprint>",
+  "id": "<key-id>",
   "algorithm": "ES256",
   "keyLabel": "release-signing",
   "createdAt": 1713200000,

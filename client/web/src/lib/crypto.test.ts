@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
     buildRequestEncAAD,
     buildTransportAAD,
-    computeEcP256ThumbprintHex,
+    computeEcP256Thumbprint,
     decryptTransportEnvelope,
     deriveOperationKeyBytes,
     deriveRequestEncKeyPair,
@@ -807,9 +807,8 @@ describe('signDigestEs256', () => {
     })
 })
 
-describe('computeEcP256ThumbprintHex', () => {
-    it('matches the RFC 7638 reference example', async () => {
-        // The RFC 7638 test vector is for RSA; for EC we compute SHA-256 of the canonical JSON with lex-ordered required members and compare against an independent digest
+describe('computeEcP256Thumbprint', () => {
+    it('matches the expected base64url-encoded SHA-256 over the canonical JWK', async () => {
         const jwk = {
             kty: 'EC' as const,
             crv: 'P-256' as const,
@@ -818,11 +817,13 @@ describe('computeEcP256ThumbprintHex', () => {
         }
         const canonical = `{"crv":"P-256","kty":"EC","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}`
         const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
-        const expected = bytesToHex(new Uint8Array(hash))
+        const expected = bytesToBase64Url(new Uint8Array(hash))
 
-        const got = await computeEcP256ThumbprintHex(jwk)
+        const got = await computeEcP256Thumbprint(jwk)
         expect(got).toBe(expected)
-        expect(got).toHaveLength(64)
+
+        // base64url-unpadded length for 32 bytes is 43 chars
+        expect(got).toHaveLength(43)
     })
 
     it('is deterministic across calls', async () => {
@@ -832,8 +833,8 @@ describe('computeEcP256ThumbprintHex', () => {
             algorithm: 'ES256',
             primaryKey: TEST_PRIMARY_KEY,
         })
-        const a = await computeEcP256ThumbprintHex(publicJwk)
-        const b = await computeEcP256ThumbprintHex(publicJwk)
+        const a = await computeEcP256Thumbprint(publicJwk)
+        const b = await computeEcP256Thumbprint(publicJwk)
         expect(a).toBe(b)
     })
 
@@ -850,8 +851,8 @@ describe('computeEcP256ThumbprintHex', () => {
             algorithm: 'ES256',
             primaryKey: TEST_PRIMARY_KEY,
         })
-        const tp1 = await computeEcP256ThumbprintHex(k1.publicJwk)
-        const tp2 = await computeEcP256ThumbprintHex(k2.publicJwk)
+        const tp1 = await computeEcP256Thumbprint(k1.publicJwk)
+        const tp2 = await computeEcP256Thumbprint(k2.publicJwk)
         expect(tp1).not.toBe(tp2)
     })
 })

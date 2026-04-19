@@ -44,7 +44,7 @@ func newSigningKeyMaterial(t *testing.T) testSigningKeyMaterial {
 	require.NoError(t, err)
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki})
 
-	id, err := jwk.ThumbprintHex()
+	id, err := jwk.Thumbprint()
 	require.NoError(t, err)
 
 	return testSigningKeyMaterial{

@@ -223,7 +223,7 @@ Publish `dist/manifest.jws` alongside the artifacts. It's self-contained: the pa
 Any JOSE library works. First, fetch the published JWK:
 
 ```bash
-KEY_ID="<hex-thumbprint-from-publisher>"
+KEY_ID="<key-id-from-publisher>"
 curl -fsSL "https://revaulter.example.com/v2/signing-keys/$KEY_ID.jwk" \
   | jq '.jwk' > release-signing.jwk
 ```

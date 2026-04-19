@@ -43,7 +43,7 @@ func validateSigningJWKAndPEM(jwkBytes json.RawMessage, pemStr string) (string, 
 		return "", errors.New("jwk and pem do not match")
 	}
 
-	id, err := jwk.ThumbprintHex()
+	id, err := jwk.Thumbprint()
 	if err != nil {
 		return "", fmt.Errorf("failed to compute thumbprint: %w", err)
 	}

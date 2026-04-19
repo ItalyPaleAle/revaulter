@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -83,16 +82,17 @@ func (j *ECP256SigningJWK) ToECDHPublicKey() (*ecdh.PublicKey, error) {
 	return pk, nil
 }
 
-// ThumbprintHex returns the RFC 7638 JWK thumbprint of the signing key as a lowercase hex-encoded SHA-256 digest
+// Thumbprint returns the RFC 7638 JWK thumbprint of the signing key as a base64url-encoded SHA-256 digest
 // The thumbprint is computed only over the required members (crv, kty, x, y) in lexicographic order
-func (j *ECP256SigningJWK) ThumbprintHex() (string, error) {
+func (j *ECP256SigningJWK) Thumbprint() (string, error) {
 	err := j.ValidateSigningKey()
 	if err != nil {
 		return "", err
 	}
+
 	canonical := fmt.Sprintf(`{"crv":%q,"kty":%q,"x":%q,"y":%q}`, j.Crv, j.Kty, j.X, j.Y)
 	h := sha256.Sum256([]byte(canonical))
-	return hex.EncodeToString(h[:]), nil
+	return base64.RawURLEncoding.EncodeToString(h[:]), nil
 }
 
 // ECP256SigningJWKFromECDH converts a *ecdh.PublicKey on P-256 to a JWK

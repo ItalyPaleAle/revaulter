@@ -702,17 +702,15 @@ export async function signDigestEs256(privateKey: CryptoKey, digest: Uint8Array)
 }
 
 /**
- * Computes the RFC 7638 JWK thumbprint for an EC P-256 public key and returns it as a lowercase hex-encoded SHA-256 digest. The thumbprint is computed only over the required members (crv, kty, x, y) in lexicographic order.
+ * Computes the RFC 7638 JWK thumbprint for an EC P-256 public key and returns it as a base64url-encoded SHA-256 digest.
+ * The thumbprint is computed only over the required members (crv, kty, x, y) in lexicographic order.
  */
-export async function computeEcP256ThumbprintHex(jwk: V2SigningJwk): Promise<string> {
+export async function computeEcP256Thumbprint(jwk: V2SigningJwk): Promise<string> {
     const canonical = `{"crv":${JSON.stringify(jwk.crv)},"kty":${JSON.stringify(jwk.kty)},"x":${JSON.stringify(jwk.x)},"y":${JSON.stringify(jwk.y)}}`
+
     const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
-    const bytes = new Uint8Array(hash)
-    let out = ''
-    for (const b of bytes) {
-        out += b.toString(16).padStart(2, '0')
-    }
-    return out
+
+    return bytesToBase64Url(new Uint8Array(hash))
 }
 
 /**

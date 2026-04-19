@@ -259,7 +259,7 @@ flowchart TD
 
 Signing public keys can optionally be published on the server so external verifiers can fetch them by a stable key ID.
 
-- The key ID is the RFC 7638 JWK thumbprint of the EC public key: hex-encoded SHA-256 over the canonical JSON `{"crv":"P-256","kty":"EC","x":"…","y":"…"}`
+- The key ID is the RFC 7638 JWK thumbprint of the EC public key: base64url-encoded SHA-256 over the canonical JSON `{"crv":"P-256","kty":"EC","x":"…","y":"…"}`
 - There is no soft-delete or revocation list. Consumers should treat a "not found" (i.e. 404 status code) on a known key ID as revocation
 - Public endpoints are unauthenticated and take only the opaque key ID; there is no listing or enumeration endpoint
 
@@ -482,7 +482,7 @@ This hybrid transport gives the response envelope both conventional ECDH confide
 | Wrapped primary key encryption | AES-256-GCM |
 | Application encrypt/decrypt operation | AES-GCM via WebCrypto |
 | Application sign operation | ECDSA P-256 + SHA-256 (`ES256`) via WebCrypto |
-| Published signing key ID | RFC 7638 JWK thumbprint (SHA-256, hex) |
+| Published signing key ID | RFC 7638 JWK thumbprint (SHA-256, base64url) |
 | Static request key agreement | ECDH P-256 |
 | Response transport KEM | ML-KEM-768 |
 | Response transport AEAD | AES-256-GCM |

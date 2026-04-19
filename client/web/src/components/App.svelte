@@ -6,7 +6,7 @@ import AuthSetupView from '$components/AuthSetupView.svelte'
 import ReadyView from '$components/ReadyView.svelte'
 
 import {
-    computeEcP256ThumbprintHex,
+    computeEcP256Thumbprint,
     deriveRequestEncKeyPair,
     deriveRequestEncMlkemKeyPair,
     deriveSigningKeyPair,
@@ -531,7 +531,7 @@ async function doDeriveSigningKey(keyLabel: string, algorithm: string): Promise<
         algorithm,
         primaryKey,
     })
-    const [id, pem] = await Promise.all([computeEcP256ThumbprintHex(publicJwk), ecP256JwkToPem(publicJwk)])
+    const [id, pem] = await Promise.all([computeEcP256Thumbprint(publicJwk), ecP256JwkToPem(publicJwk)])
 
     return { keyLabel, algorithm, jwk: publicJwk, pem, id }
 }

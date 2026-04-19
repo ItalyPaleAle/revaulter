@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"testing"
@@ -28,7 +28,7 @@ func TestECP256SigningJWKFromECDHRoundTrip(t *testing.T) {
 	require.Equal(t, priv.PublicKey().Bytes(), pub.Bytes())
 }
 
-// TestECP256SigningJWKThumbprintKnownAnswer asserts the thumbprint follows RFC 7638 exactly: SHA-256 over the canonical JSON of the required members (crv, kty, x, y) in lexicographic order
+// TestECP256SigningJWKThumbprintKnownAnswer asserts the thumbprint follows RFC 7638: base64url(SHA-256(canonical-JWK)) over the required members (crv, kty, x, y) in lexicographic order
 // The hash is computed independently here so any drift in the implementation is caught
 func TestECP256SigningJWKThumbprintKnownAnswer(t *testing.T) {
 	jwk := ECP256SigningJWK{
@@ -39,12 +39,14 @@ func TestECP256SigningJWKThumbprintKnownAnswer(t *testing.T) {
 	}
 	canonical := `{"crv":"P-256","kty":"EC","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}`
 	h := sha256.Sum256([]byte(canonical))
-	expected := hex.EncodeToString(h[:])
+	expected := base64.RawURLEncoding.EncodeToString(h[:])
 
-	got, err := jwk.ThumbprintHex()
+	got, err := jwk.Thumbprint()
 	require.NoError(t, err)
 	require.Equal(t, expected, got)
-	require.Len(t, got, 64)
+
+	// base64url (unpadded) length for 32 bytes is 43 chars
+	require.Len(t, got, 43)
 }
 
 func TestECP256SigningJWKThumbprintDeterministic(t *testing.T) {
@@ -54,9 +56,9 @@ func TestECP256SigningJWKThumbprintDeterministic(t *testing.T) {
 		X:   "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
 		Y:   "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
 	}
-	tp1, err := jwk.ThumbprintHex()
+	tp1, err := jwk.Thumbprint()
 	require.NoError(t, err)
-	tp2, err := jwk.ThumbprintHex()
+	tp2, err := jwk.Thumbprint()
 	require.NoError(t, err)
 	require.Equal(t, tp1, tp2)
 
@@ -65,7 +67,7 @@ func TestECP256SigningJWKThumbprintDeterministic(t *testing.T) {
 	jwk2.Alg = "ES256"
 	jwk2.Use = "sig"
 	jwk2.Kid = "whatever"
-	tp3, err := jwk2.ThumbprintHex()
+	tp3, err := jwk2.Thumbprint()
 	require.NoError(t, err)
 	require.Equal(t, tp1, tp3)
 }
