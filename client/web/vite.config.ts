@@ -11,6 +11,8 @@ export default defineConfig(({ mode }) => {
 
     // Additional plugins, which may not always be used
     const additionalPlugins = []
+    const libChunkPattern = /[\\/]node_modules[\\/](svelte|date-fns)[\\/]/
+    const cryptoChunkPattern = /[\\/]node_modules[\\/](hash-wasm|mlkem-wasm|arraybuffer-encoding)[\\/]/
 
     const isProduction = mode === 'production'
 
@@ -74,14 +76,22 @@ export default defineConfig(({ mode }) => {
             outDir: 'dist',
             emptyOutDir: true,
             sourcemap: !isProduction,
-            rollupOptions: {
+            rolldownOptions: {
                 output: {
                     entryFileNames: '[name].[hash].js',
                     chunkFileNames: '[name].[hash].js',
                     assetFileNames: '[name].[hash].[ext]',
-                    manualChunks: {
-                        lib: ['svelte', 'date-fns'],
-                        crypto: ['hash-wasm', 'mlkem-wasm', 'arraybuffer-encoding'],
+                    codeSplitting: {
+                        groups: [
+                            {
+                                name: 'lib',
+                                test: libChunkPattern,
+                            },
+                            {
+                                name: 'crypto',
+                                test: cryptoChunkPattern,
+                            },
+                        ],
                     },
                 },
             },
