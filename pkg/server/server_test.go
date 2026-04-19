@@ -726,10 +726,12 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 	require.NoError(t, err)
 	err = srv.authStore.FinalizeSignup(
 		t.Context(),
-		userID,
-		"test-wrapped-primary-key",
-		string(requestEncJWKJSON),
-		base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey")),
+		db.FinalizeSignupInput{
+			UserID:                userID,
+			WrappedPrimaryKey:     "test-wrapped-primary-key",
+			RequestEncEcdhPubkey:  string(requestEncJWKJSON),
+			RequestEncMlkemPubkey: base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey")),
+		},
 	)
 	require.NoError(t, err)
 

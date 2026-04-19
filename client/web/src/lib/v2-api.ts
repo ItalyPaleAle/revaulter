@@ -47,15 +47,38 @@ export async function v2LoginFinish(args: { challengeId: string; credential: unk
     return res.data
 }
 
-/** Finalizes the signup by storing the request encryption public keys (ECDH + ML-KEM) and the wrapped primary key */
-export async function v2FinalizeSignup(
-    requestEncEcdhPubkey: EcP256PublicJwk,
-    requestEncMlkemPubkey: string,
+/**
+ * Finalizes the signup by storing the transport pubkeys, the wrapped primary key,
+ * the user's long-lived hybrid anchor pubkeys + self-signatures over the pubkey
+ * bundle, and the first credential's wrapped anchor + hybrid attestation.
+ */
+export async function v2FinalizeSignup(args: {
+    requestEncEcdhPubkey: EcP256PublicJwk
+    requestEncMlkemPubkey: string
     wrappedPrimaryKey?: string
-) {
-    const body: Record<string, unknown> = { requestEncEcdhPubkey, requestEncMlkemPubkey }
-    if (wrappedPrimaryKey) {
-        body.wrappedPrimaryKey = wrappedPrimaryKey
+    anchorEs384PublicKey: unknown
+    anchorMldsa87PublicKey: string
+    pubkeyBundleSignatureEs384: string
+    pubkeyBundleSignatureMldsa87: string
+    wrappedAnchorKey: string
+    attestationPayload: unknown
+    attestationSignatureEs384: string
+    attestationSignatureMldsa87: string
+}) {
+    const body: Record<string, unknown> = {
+        requestEncEcdhPubkey: args.requestEncEcdhPubkey,
+        requestEncMlkemPubkey: args.requestEncMlkemPubkey,
+        anchorEs384PublicKey: args.anchorEs384PublicKey,
+        anchorMldsa87PublicKey: args.anchorMldsa87PublicKey,
+        pubkeyBundleSignatureEs384: args.pubkeyBundleSignatureEs384,
+        pubkeyBundleSignatureMldsa87: args.pubkeyBundleSignatureMldsa87,
+        wrappedAnchorKey: args.wrappedAnchorKey,
+        attestationPayload: args.attestationPayload,
+        attestationSignatureEs384: args.attestationSignatureEs384,
+        attestationSignatureMldsa87: args.attestationSignatureMldsa87,
+    }
+    if (args.wrappedPrimaryKey) {
+        body.wrappedPrimaryKey = args.wrappedPrimaryKey
     }
     const res = await Request<{ ok: boolean }>('/v2/auth/finalize-signup', { postData: body })
     return res.data
@@ -145,12 +168,21 @@ export async function v2AddCredentialBegin(credentialName?: string) {
     return res.data
 }
 
-/** Completes WebAuthn registration ceremony for adding a new credential */
+/**
+ * Completes WebAuthn registration ceremony for adding a new credential.
+ * The browser must also supply a wrapped anchor blob and a hybrid attestation
+ * (both signatures) so the server can bind the new credential to the user's
+ * existing anchor identity root before inserting it.
+ */
 export async function v2AddCredentialFinish(args: {
     challengeId: string
     credential: unknown
     credentialName?: string
     wrappedPrimaryKey?: string
+    wrappedAnchorKey: string
+    attestationPayload: unknown
+    attestationSignatureEs384: string
+    attestationSignatureMldsa87: string
 }) {
     const res = await Request<{ ok: boolean }>('/v2/auth/credentials/add/finish', {
         postData: args,

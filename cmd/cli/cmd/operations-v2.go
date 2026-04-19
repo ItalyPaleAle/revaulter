@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdh"
+	"crypto/ecdsa"
 	"crypto/mlkem"
 	"crypto/tls"
 	"encoding/base64"
@@ -15,10 +17,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/net/http2"
+	"golang.org/x/term"
 
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
@@ -137,8 +141,10 @@ func writeOutputFile(path string, payload []byte) error {
 }
 
 func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Client, kp *v2TransportKeyPair) (string, error) {
-	// Fetch the user's static public keys (ECDH + ML-KEM)
-	ecdhPub, mlkemPub, err := o.fetchUserPubkeys(ctx, httpClient)
+	// Fetch the user's static public keys (ECDH + ML-KEM) alongside the hybrid
+	// anchor bundle so the CLI can pin the anchor on first contact and refuse
+	// any subsequent pubkey substitution.
+	ecdhPub, mlkemPub, err := o.fetchAndVerifyUserPubkeys(ctx, httpClient)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch user public keys: %w", err)
 	}
@@ -190,22 +196,39 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 	return res.State, nil
 }
 
-func (o *v2OperationCmd) fetchUserPubkeys(ctx context.Context, httpClient *http.Client) (*ecdh.PublicKey, *mlkem.EncapsulationKey768, error) {
+// v2PubkeyResponse mirrors the server's /v2/request/{requestKey}/pubkey shape.
+type v2PubkeyResponse struct {
+	UserID   string          `json:"userId"`
+	EcdhP256 json.RawMessage `json:"ecdhP256"`
+	Mlkem768 string          `json:"mlkem768"`
+
+	AnchorEs384PublicKey         json.RawMessage `json:"anchorEs384PublicKey"`
+	AnchorMldsa87PublicKey       string          `json:"anchorMldsa87PublicKey"`
+	WrappedKeyEpoch              int64           `json:"wrappedKeyEpoch"`
+	PubkeyBundleSignatureEs384   string          `json:"pubkeyBundleSignatureEs384"`
+	PubkeyBundleSignatureMldsa87 string          `json:"pubkeyBundleSignatureMldsa87"`
+}
+
+func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClient *http.Client) (*ecdh.PublicKey, *mlkem.EncapsulationKey768, error) {
+	log := logging.LogFromContext(ctx)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.flags.GetServer()+"/v2/request/"+o.flags.GetRequestKey()+"/pubkey", nil)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	var resp struct {
-		EcdhP256 protocolv2.ECP256PublicJWK `json:"ecdhP256"`
-		Mlkem768 string                     `json:"mlkem768"`
-	}
+	var resp v2PubkeyResponse
 	err = doJSONRequest(httpClient, req, &resp)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	ecdhPub, err := resp.EcdhP256.ToECDHPublicKey()
+	var ecdhJWK protocolv2.ECP256PublicJWK
+	err = json.Unmarshal(resp.EcdhP256, &ecdhJWK)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid ECDH public key: %w", err)
+	}
+	ecdhPub, err := ecdhJWK.ToECDHPublicKey()
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid ECDH public key: %w", err)
 	}
@@ -219,7 +242,142 @@ func (o *v2OperationCmd) fetchUserPubkeys(ctx context.Context, httpClient *http.
 		return nil, nil, fmt.Errorf("invalid ML-KEM public key: %w", err)
 	}
 
+	if o.flags.GetNoTrustStore() {
+		log.Warn("Skipping anchor pinning and hybrid bundle verification because --no-trust-store is set")
+		return ecdhPub, mlkemPub, nil
+	}
+
+	// Validate that the server supplied the full hybrid anchor bundle.
+	if len(resp.AnchorEs384PublicKey) == 0 || resp.AnchorMldsa87PublicKey == "" ||
+		resp.PubkeyBundleSignatureEs384 == "" || resp.PubkeyBundleSignatureMldsa87 == "" {
+		return nil, nil, errors.New("server did not return a hybrid anchor bundle; refusing to proceed (use --no-trust-store to override)")
+	}
+
+	es384Pub, mldsa87PubBytes, err := parseAnchorPubkeysFromWire(resp.AnchorEs384PublicKey, resp.AnchorMldsa87PublicKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid anchor public key: %w", err)
+	}
+
+	if resp.UserID == "" {
+		return nil, nil, errors.New("server did not return userId; refusing to proceed (use --no-trust-store to override)")
+	}
+	// Verify both halves of the hybrid bundle signature against the SERVER-PROVIDED
+	// anchor pubkeys. The subsequent pin check catches anchor rotation; this catches
+	// a server that serves a corrupt or mismatched bundle.
+	bundlePayload := protocolv2.PubkeyBundlePayload{
+		UserID:                 resp.UserID,
+		RequestEncEcdhPubkey:   string(resp.EcdhP256),
+		RequestEncMlkemPubkey:  resp.Mlkem768,
+		AnchorEs384PublicKey:   string(resp.AnchorEs384PublicKey),
+		AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
+		WrappedKeyEpoch:        resp.WrappedKeyEpoch,
+	}
+	sigEs, sigMl, err := decodeHybridSignatures(resp.PubkeyBundleSignatureEs384, resp.PubkeyBundleSignatureMldsa87)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid pubkey bundle signature: %w", err)
+	}
+	err = protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl)
+	if err != nil {
+		return nil, nil, fmt.Errorf("pubkey bundle signature verification failed: %w", err)
+	}
+
+	ts, path, err := o.loadOrInitTrustStore()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	confirm := o.terminalConfirmer()
+	pinned, err := ts.checkOrPinAnchor(
+		o.flags.GetServer(), o.flags.GetRequestKey(),
+		es384Pub, resp.AnchorEs384PublicKey,
+		resp.AnchorMldsa87PublicKey, mldsa87PubBytes,
+		confirm,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("anchor trust check failed: %w", err)
+	}
+	if pinned {
+		err = saveTrustStore(path, ts)
+		if err != nil {
+			return nil, nil, fmt.Errorf("save trust store: %w", err)
+		}
+		log.Info("Pinned anchor on first contact", slog.String("trust_store", path))
+	}
+
 	return ecdhPub, mlkemPub, nil
+}
+
+// loadOrInitTrustStore resolves the trust store path and loads its contents.
+func (o *v2OperationCmd) loadOrInitTrustStore() (*trustStore, string, error) {
+	path := o.flags.GetTrustStorePath()
+	if path == "" {
+		p, err := defaultTrustStorePath()
+		if err != nil {
+			return nil, "", err
+		}
+		path = p
+	}
+	ts, err := loadTrustStore(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return ts, path, nil
+}
+
+// terminalConfirmer returns a prompt function that asks the user on stderr to
+// accept a TOFU pin. If stdin or stderr is not a TTY, it returns nil so the
+// caller fails closed.
+func (o *v2OperationCmd) terminalConfirmer() func(fingerprint string) (bool, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stderr.Fd())) {
+		return nil
+	}
+	reader := bufio.NewReader(os.Stdin)
+	return func(fingerprint string) (bool, error) {
+		fmt.Fprintf(os.Stderr, "First contact with %s.\n", o.flags.GetServer())
+		fmt.Fprintf(os.Stderr, "Anchor fingerprint (SHA-256 of ES384||ML-DSA-87 pubkeys):\n  %s\n", fingerprint)
+		fmt.Fprint(os.Stderr, "Pin this anchor? [y/N]: ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return false, fmt.Errorf("read answer: %w", err)
+		}
+		line = strings.ToLower(strings.TrimSpace(line))
+		return line == "y" || line == "yes", nil
+	}
+}
+
+// parseAnchorPubkeysFromWire decodes the CLI-facing wire form of the hybrid anchor.
+func parseAnchorPubkeysFromWire(es384JWKBytes json.RawMessage, mldsa87PubB64 string) (*ecdsa.PublicKey, []byte, error) {
+	var jwk protocolv2.ECP384PublicJWK
+	err := json.Unmarshal(es384JWKBytes, &jwk)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ES384 JWK: %w", err)
+	}
+	ecdsaPub, err := jwk.ToECDSAPublicKey()
+	if err != nil {
+		return nil, nil, fmt.Errorf("ES384 pubkey: %w", err)
+	}
+	mldsa87PubBytes, err := base64.RawURLEncoding.DecodeString(mldsa87PubB64)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ML-DSA-87 pubkey base64: %w", err)
+	}
+	if len(mldsa87PubBytes) != protocolv2.MLDSA87PublicKeySize {
+		return nil, nil, fmt.Errorf("ML-DSA-87 pubkey: expected %d bytes, got %d", protocolv2.MLDSA87PublicKeySize, len(mldsa87PubBytes))
+	}
+	return ecdsaPub, mldsa87PubBytes, nil
+}
+
+// decodeHybridSignatures decodes base64url-encoded ES384 + ML-DSA-87 signatures
+// and validates their sizes.
+func decodeHybridSignatures(es384B64, mldsa87B64 string) (sigEs, sigMl []byte, err error) {
+	sigEs, err = protocolv2.DecodeBase64Signature(es384B64, protocolv2.ES384SignatureSize)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ES384 sig: %w", err)
+	}
+	sigMl, err = protocolv2.DecodeBase64Signature(mldsa87B64, protocolv2.MLDSA87SignatureSize)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ML-DSA-87 sig: %w", err)
+	}
+	return sigEs, sigMl, nil
 }
 
 // getResult polls the server until the operation completes and returns the decrypted plaintext bytes

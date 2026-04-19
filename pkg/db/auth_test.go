@@ -104,8 +104,18 @@ func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "canary-1", `{"kty":"EC","crv":"P-256","x":"test","y":"test"}`, "dGVzdC1tbGtlbS1wdWJrZXk"))
-	require.ErrorIs(t, store.FinalizeSignup(ctx, "user-1", "canary-2", `{"kty":"EC"}`, "dGVzdA"), ErrAlreadyFinalized)
+	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		WrappedPrimaryKey:     "canary-1",
+		RequestEncEcdhPubkey:  `{"kty":"EC","crv":"P-256","x":"test","y":"test"}`,
+		RequestEncMlkemPubkey: "dGVzdC1tbGtlbS1wdWJrZXk",
+	}))
+	require.ErrorIs(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		WrappedPrimaryKey:     "canary-2",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "dGVzdA",
+	}), ErrAlreadyFinalized)
 
 	allowed, err := store.UpdateAllowedIPs(ctx, "user-1", []string{"127.0.0.1", " 10.0.0.0/8 ", "::1", "127.0.0.1"})
 	require.NoError(t, err)
@@ -142,7 +152,11 @@ func TestAuthStoreRegenerateRequestKey(t *testing.T) {
 
 	// RegenerateRequestKey requires the account to be active and ready;
 	// finalize the signup first.
-	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "", `{"kty":"EC"}`, "mlkem-pub"))
+	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "mlkem-pub",
+	}))
 
 	newKey, err := store.RegenerateRequestKey(ctx, "user-1")
 	require.NoError(t, err)
@@ -497,7 +511,12 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 
 	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyFreshSession.UserID, time.Now().Add(-23*time.Hour).Unix())
 	require.NoError(t, err)
-	require.NoError(t, store.FinalizeSignup(ctx, readySession.UserID, "canary-ready", `{"kty":"EC"}`, "mlkem-ready"))
+	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                readySession.UserID,
+		WrappedPrimaryKey:     "canary-ready",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "mlkem-ready",
+	}))
 
 	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, readySession.UserID, time.Now().Add(-25*time.Hour).Unix())
 	require.NoError(t, err)
@@ -543,7 +562,11 @@ func TestAuthStoreUpdateDisplayName(t *testing.T) {
 		SessionTTL:     time.Minute,
 	})
 	require.NoError(t, err)
-	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "", `{"kty":"EC"}`, "mlkem-pub"))
+	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "mlkem-pub",
+	}))
 
 	// Successful update
 	err = store.UpdateDisplayName(ctx, "user-1", "Bob")
@@ -587,7 +610,12 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 		SessionTTL:     time.Minute,
 	})
 	require.NoError(t, err)
-	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "initial-key", `{"kty":"EC"}`, "mlkem-pub"))
+	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		WrappedPrimaryKey:     "initial-key",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "mlkem-pub",
+	}))
 
 	// The initial wrapped primary key was set on the single credential via FinalizeSignup
 	rec, err := store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")

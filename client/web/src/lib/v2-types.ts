@@ -100,6 +100,7 @@ export type V2LoginFinishResponse = {
     authenticated: boolean
     session?: V2AuthSessionInfo
     wrappedPrimaryKey?: string
+    wrappedAnchorKey?: string
     credentialWrappedKeyEpoch?: number
     wrappedKeyStale: boolean
 }

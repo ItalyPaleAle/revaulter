@@ -3,10 +3,12 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"net/http"
@@ -91,6 +93,7 @@ type v2AuthLoginFinishResponse struct {
 	Session                   *v2AuthSessionInfo `json:"session,omitempty"`
 	SessionToken              string             `json:"sessionToken,omitempty"`
 	WrappedPrimaryKey         string             `json:"wrappedPrimaryKey,omitempty"`
+	WrappedAnchorKey          string             `json:"wrappedAnchorKey,omitempty"`
 	CredentialWrappedKeyEpoch int64              `json:"credentialWrappedKeyEpoch,omitempty"`
 	WrappedKeyStale           bool               `json:"wrappedKeyStale"`
 }
@@ -99,6 +102,19 @@ type v2AuthFinalizeSignupRequest struct {
 	RequestEncEcdhPubkey  json.RawMessage `json:"requestEncEcdhPubkey"`
 	RequestEncMlkemPubkey string          `json:"requestEncMlkemPubkey"`
 	WrappedPrimaryKey     string          `json:"wrappedPrimaryKey,omitempty"`
+
+	// Hybrid anchor (long-lived identity root).
+	AnchorEs384PublicKey   json.RawMessage `json:"anchorEs384PublicKey"`
+	AnchorMldsa87PublicKey string          `json:"anchorMldsa87PublicKey"`
+	// Self-signatures by the anchor over the canonical pubkey bundle.
+	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`
+	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
+
+	// First-credential attestation signed by the anchor.
+	WrappedAnchorKey            string          `json:"wrappedAnchorKey"`
+	AttestationPayload          json.RawMessage `json:"attestationPayload"`
+	AttestationSignatureEs384   string          `json:"attestationSignatureEs384"`
+	AttestationSignatureMldsa87 string          `json:"attestationSignatureMldsa87"`
 }
 
 type v2AuthAllowedIPsRequest struct {
@@ -176,6 +192,12 @@ type v2AuthAddCredentialFinishRequest struct {
 	Credential        json.RawMessage `json:"credential"`
 	CredentialName    string          `json:"credentialName"`
 	WrappedPrimaryKey string          `json:"wrappedPrimaryKey,omitempty"`
+
+	// New credentials must carry a hybrid attestation signed by the user's anchor.
+	WrappedAnchorKey            string          `json:"wrappedAnchorKey"`
+	AttestationPayload          json.RawMessage `json:"attestationPayload"`
+	AttestationSignatureEs384   string          `json:"attestationSignatureEs384"`
+	AttestationSignatureMldsa87 string          `json:"attestationSignatureMldsa87"`
 }
 
 type v2AuthRenameCredentialRequest struct {
@@ -402,6 +424,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		}
 
 		resp.WrappedPrimaryKey = credRec.WrappedPrimaryKey
+		resp.WrappedAnchorKey = credRec.WrappedAnchorKey
 		logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(),
 			"Delivered wrapped primary key to authenticated client",
 			slog.String("user_id", sess.UserID),
@@ -459,7 +482,74 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
-	err = s.authStore.FinalizeSignup(c.Request.Context(), userID, req.WrappedPrimaryKey, string(req.RequestEncEcdhPubkey), req.RequestEncMlkemPubkey)
+	// Validate and verify the anchor material. We require both halves of the hybrid
+	// (ES384 + ML-DSA-87) to verify over both the pubkey bundle (so the CLI can pin
+	// the anchor at first contact) and the first credential's attestation (so the
+	// credential is provably bound to the user's identity root, not just to the server's DB).
+	anchorEs384Pub, mldsa87PubBytes, err := parseAnchorPubkeys(req.AnchorEs384PublicKey, req.AnchorMldsa87PublicKey)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid anchor public key: %v", err))
+		return
+	}
+
+	bundleSigEs, bundleSigMl, err := parseHybridSignatures(req.PubkeyBundleSignatureEs384, req.PubkeyBundleSignatureMldsa87)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid pubkeyBundleSignature: %v", err))
+		return
+	}
+	attestSigEs, attestSigMl, err := parseHybridSignatures(req.AttestationSignatureEs384, req.AttestationSignatureMldsa87)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationSignature: %v", err))
+		return
+	}
+
+	var attestPayload protocolv2.AttestationPayload
+	err = json.Unmarshal(req.AttestationPayload, &attestPayload)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationPayload: %v", err))
+		return
+	}
+	if attestPayload.UserID != userID {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload userId does not match session"))
+		return
+	}
+
+	// Bundle self-signature: the anchor signs its own wire-format representation.
+	// This is what the CLI verifies on every request.
+	bundlePayload := protocolv2.PubkeyBundlePayload{
+		UserID:                 userID,
+		RequestEncEcdhPubkey:   string(req.RequestEncEcdhPubkey),
+		RequestEncMlkemPubkey:  req.RequestEncMlkemPubkey,
+		AnchorEs384PublicKey:   string(req.AnchorEs384PublicKey),
+		AnchorMldsa87PublicKey: req.AnchorMldsa87PublicKey,
+		WrappedKeyEpoch:        1,
+	}
+	err = protocolv2.VerifyHybridBundle(anchorEs384Pub, mldsa87PubBytes, bundlePayload, bundleSigEs, bundleSigMl)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "pubkey bundle signature verification failed: %v", err))
+		return
+	}
+
+	err = protocolv2.VerifyHybridAttestation(anchorEs384Pub, mldsa87PubBytes, attestPayload, attestSigEs, attestSigMl)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err))
+		return
+	}
+
+	err = s.authStore.FinalizeSignup(c.Request.Context(), db.FinalizeSignupInput{
+		UserID:                       userID,
+		WrappedPrimaryKey:            req.WrappedPrimaryKey,
+		WrappedAnchorKey:             req.WrappedAnchorKey,
+		RequestEncEcdhPubkey:         string(req.RequestEncEcdhPubkey),
+		RequestEncMlkemPubkey:        req.RequestEncMlkemPubkey,
+		AnchorEs384PublicKey:         string(req.AnchorEs384PublicKey),
+		AnchorMldsa87PublicKey:       req.AnchorMldsa87PublicKey,
+		PubkeyBundleSignatureEs384:   req.PubkeyBundleSignatureEs384,
+		PubkeyBundleSignatureMldsa87: req.PubkeyBundleSignatureMldsa87,
+		AttestationPayload:           string(req.AttestationPayload),
+		AttestationSignatureEs384:    req.AttestationSignatureEs384,
+		AttestationSignatureMldsa87:  req.AttestationSignatureMldsa87,
+	})
 	switch {
 	case errors.Is(err, db.ErrAlreadyFinalized):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Account is already finalized"))
@@ -871,13 +961,58 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		return
 	}
 
+	// Fetch the user's stored anchor pubkeys and verify the attestation against them.
+	// This is what binds the new credential to the user's identity root.
+	storedUser, err := s.authStore.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if storedUser == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+		return
+	}
+	anchorEs384Pub, mldsa87PubBytes, err := parseAnchorPubkeys(json.RawMessage(storedUser.AnchorEs384PublicKey), storedUser.AnchorMldsa87PublicKey)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusInternalServerError, "stored anchor public key is invalid: %v", err))
+		return
+	}
+	attestSigEs, attestSigMl, err := parseHybridSignatures(req.AttestationSignatureEs384, req.AttestationSignatureMldsa87)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationSignature: %v", err))
+		return
+	}
+	var attestPayload protocolv2.AttestationPayload
+	err = json.Unmarshal(req.AttestationPayload, &attestPayload)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationPayload: %v", err))
+		return
+	}
+	if attestPayload.UserID != userID {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload userId does not match session"))
+		return
+	}
+	if attestPayload.CredentialID != base64.RawURLEncoding.EncodeToString(cred.ID) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload credentialId does not match registered credential"))
+		return
+	}
+	err = protocolv2.VerifyHybridAttestation(anchorEs384Pub, mldsa87PubBytes, attestPayload, attestSigEs, attestSigMl)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err))
+		return
+	}
+
 	err = s.authStore.AddCredential(c.Request.Context(), db.AddCredentialInput{
-		UserID:            userID,
-		CredentialID:      base64.RawURLEncoding.EncodeToString(cred.ID),
-		DisplayName:       credName,
-		PublicKey:         string(credJSON),
-		SignCount:         int64(cred.Authenticator.SignCount),
-		WrappedPrimaryKey: req.WrappedPrimaryKey,
+		UserID:                      userID,
+		CredentialID:                base64.RawURLEncoding.EncodeToString(cred.ID),
+		DisplayName:                 credName,
+		PublicKey:                   string(credJSON),
+		SignCount:                   int64(cred.Authenticator.SignCount),
+		WrappedPrimaryKey:           req.WrappedPrimaryKey,
+		WrappedAnchorKey:            req.WrappedAnchorKey,
+		AttestationPayload:          string(req.AttestationPayload),
+		AttestationSignatureEs384:   req.AttestationSignatureEs384,
+		AttestationSignatureMldsa87: req.AttestationSignatureMldsa87,
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -1348,4 +1483,49 @@ func sessionInfoFromSession(sess *db.AuthSession) *v2AuthSessionInfo {
 		AllowedIPs:      allowedIPs,
 		TTL:             int(time.Until(sess.ExpiresAt).Seconds()),
 	}
+}
+
+// parseAnchorPubkeys decodes the wire-format hybrid anchor public keys: a JWK for
+// the ES384 leg and raw base64url bytes for the ML-DSA-87 leg.
+func parseAnchorPubkeys(es384JWKBytes json.RawMessage, mldsa87PubBase64 string) (*ecdsa.PublicKey, []byte, error) {
+	if len(es384JWKBytes) == 0 {
+		return nil, nil, errors.New("anchorEs384PublicKey is required")
+	}
+	if mldsa87PubBase64 == "" {
+		return nil, nil, errors.New("anchorMldsa87PublicKey is required")
+	}
+
+	var jwk protocolv2.ECP384PublicJWK
+	err := json.Unmarshal(es384JWKBytes, &jwk)
+	if err != nil {
+		return nil, nil, fmt.Errorf("anchorEs384PublicKey: %w", err)
+	}
+	es384Pub, err := jwk.ToECDSAPublicKey()
+	if err != nil {
+		return nil, nil, fmt.Errorf("anchorEs384PublicKey: %w", err)
+	}
+
+	mldsa87PubBytes, err := base64.RawURLEncoding.DecodeString(mldsa87PubBase64)
+	if err != nil {
+		return nil, nil, fmt.Errorf("anchorMldsa87PublicKey: %w", err)
+	}
+	if len(mldsa87PubBytes) != protocolv2.MLDSA87PublicKeySize {
+		return nil, nil, fmt.Errorf("anchorMldsa87PublicKey: expected %d bytes, got %d", protocolv2.MLDSA87PublicKeySize, len(mldsa87PubBytes))
+	}
+
+	return es384Pub, mldsa87PubBytes, nil
+}
+
+// parseHybridSignatures decodes a pair of base64url-encoded anchor signatures
+// (ES384 + ML-DSA-87) and validates their lengths.
+func parseHybridSignatures(es384B64, mldsa87B64 string) (sigEs, sigMl []byte, err error) {
+	sigEs, err = protocolv2.DecodeBase64Signature(es384B64, protocolv2.ES384SignatureSize)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ES384: %w", err)
+	}
+	sigMl, err = protocolv2.DecodeBase64Signature(mldsa87B64, protocolv2.MLDSA87SignatureSize)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ML-DSA-87: %w", err)
+	}
+	return sigEs, sigMl, nil
 }

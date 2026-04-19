@@ -24,16 +24,20 @@ type AuthStore struct {
 }
 
 type User struct {
-	ID                    string
-	DisplayName           string
-	Status                string
-	WebAuthnUserID        string
-	RequestKey            string
-	RequestEncEcdhPubkey  string
-	RequestEncMlkemPubkey string
-	WrappedKeyEpoch       int64
-	AllowedIPs            []string
-	Ready                 bool
+	ID                           string
+	DisplayName                  string
+	Status                       string
+	WebAuthnUserID               string
+	RequestKey                   string
+	RequestEncEcdhPubkey         string
+	RequestEncMlkemPubkey        string
+	AnchorEs384PublicKey         string
+	AnchorMldsa87PublicKey       string
+	PubkeyBundleSignatureEs384   string
+	PubkeyBundleSignatureMldsa87 string
+	WrappedKeyEpoch              int64
+	AllowedIPs                   []string
+	Ready                        bool
 }
 
 type AuthSession struct {
@@ -57,15 +61,19 @@ type AuthChallenge struct {
 }
 
 type AuthCredentialRecord struct {
-	ID                string
-	CredentialID      string
-	DisplayName       string
-	PublicKey         string
-	SignCount         int64
-	WrappedPrimaryKey string
-	WrappedKeyEpoch   int64
-	CreatedAt         int64
-	LastUsedAt        int64
+	ID                          string
+	CredentialID                string
+	DisplayName                 string
+	PublicKey                   string
+	SignCount                   int64
+	WrappedPrimaryKey           string
+	WrappedAnchorKey            string
+	AttestationPayload          string
+	AttestationSignatureEs384   string
+	AttestationSignatureMldsa87 string
+	WrappedKeyEpoch             int64
+	CreatedAt                   int64
+	LastUsedAt                  int64
 }
 
 type RegisterUserInput struct {
@@ -80,12 +88,16 @@ type RegisterUserInput struct {
 }
 
 type AddCredentialInput struct {
-	UserID            string
-	CredentialID      string
-	DisplayName       string
-	PublicKey         string
-	SignCount         int64
-	WrappedPrimaryKey string
+	UserID                      string
+	CredentialID                string
+	DisplayName                 string
+	PublicKey                   string
+	SignCount                   int64
+	WrappedPrimaryKey           string
+	WrappedAnchorKey            string
+	AttestationPayload          string
+	AttestationSignatureEs384   string
+	AttestationSignatureMldsa87 string
 }
 
 type LoginInput struct {
@@ -137,12 +149,12 @@ func (s *AuthStore) getUser(ctx context.Context, column string, value string) (*
 		user          User
 		allowedIPsCSV string
 	)
-	query := `SELECT id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, wrapped_key_epoch, allowed_ips, ready
+	query := `SELECT id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, wrapped_key_epoch, allowed_ips, ready
 		FROM v2_users
 		WHERE ` + column + ` = $1`
 	err := s.db.
 		QueryRow(ctx, query, value).
-		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &user.WrappedKeyEpoch, &allowedIPsCSV, &user.Ready)
+		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &user.AnchorEs384PublicKey, &user.AnchorMldsa87PublicKey, &user.PubkeyBundleSignatureEs384, &user.PubkeyBundleSignatureMldsa87, &user.WrappedKeyEpoch, &allowedIPsCSV, &user.Ready)
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
@@ -155,7 +167,7 @@ func (s *AuthStore) getUser(ctx context.Context, column string, value string) (*
 
 func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthCredentialRecord, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_key_epoch, created_at, last_used_at
+		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_anchor_key, attestation_payload, attestation_signature_es384, attestation_signature_mldsa87, wrapped_key_epoch, created_at, last_used_at
 			FROM v2_user_credentials
 			WHERE user_id = $1
 			ORDER BY created_at ASC`,
@@ -169,7 +181,7 @@ func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthC
 	var out []AuthCredentialRecord
 	for rows.Next() {
 		var rec AuthCredentialRecord
-		err = rows.Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt)
+		err = rows.Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.WrappedAnchorKey, &rec.AttestationPayload, &rec.AttestationSignatureEs384, &rec.AttestationSignatureMldsa87, &rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -437,12 +449,39 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 
 var ErrAlreadyFinalized = errors.New("account already finalized")
 
-// FinalizeSignup marks the account as ready, stores the request encryption public keys (ECDH and ML-KEM), and the wrapped primary key
-// It can only update records with ready = false
-// The wrapped primary key is stored on the user's single existing credential
-func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, wrappedPrimaryKey, requestEncEcdhPubkey, requestEncMlkemPubkey string) error {
-	if len(wrappedPrimaryKey) > 512 {
+// FinalizeSignupInput carries the post-WebAuthn-registration material that the
+// browser generates once it has derived the wrapping key from the PRF extension:
+// long-lived transport pubkeys, the hybrid anchor pubkeys + their self-signatures
+// over the pubkey bundle, and the first credential's wrapped secrets + attestation.
+type FinalizeSignupInput struct {
+	UserID                       string
+	WrappedPrimaryKey            string
+	WrappedAnchorKey             string
+	RequestEncEcdhPubkey         string
+	RequestEncMlkemPubkey        string
+	AnchorEs384PublicKey         string
+	AnchorMldsa87PublicKey       string
+	PubkeyBundleSignatureEs384   string
+	PubkeyBundleSignatureMldsa87 string
+	AttestationPayload           string
+	AttestationSignatureEs384    string
+	AttestationSignatureMldsa87  string
+}
+
+// FinalizeSignup marks the account as ready and persists all long-lived
+// cryptographic material generated at signup time: the user's transport pubkeys,
+// anchor pubkeys and bundle self-signatures, plus the first credential's
+// wrapped primary key, wrapped anchor key, and hybrid attestation.
+// It can only update records with ready = false.
+func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) error {
+	if len(in.WrappedPrimaryKey) > 512 {
 		return errors.New("wrappedPrimaryKey is too large")
+	}
+	if len(in.WrappedAnchorKey) > 32768 {
+		return errors.New("wrappedAnchorKey is too large")
+	}
+	if len(in.AttestationPayload) > 4096 {
+		return errors.New("attestationPayload is too large")
 	}
 
 	tx, err := s.db.Begin(ctx)
@@ -458,8 +497,20 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, wrappedPrimaryKe
 
 	now := time.Now().UTC().Unix()
 	affected, err := tx.Exec(ctx,
-		`UPDATE v2_users SET request_enc_ecdh_pubkey = $1, request_enc_mlkem_pubkey = $2, ready = true, updated_at = $3 WHERE id = $4 AND ready = false`,
-		requestEncEcdhPubkey, requestEncMlkemPubkey, now, userID,
+		`UPDATE v2_users
+			SET request_enc_ecdh_pubkey = $1,
+				request_enc_mlkem_pubkey = $2,
+				anchor_es384_public_key = $3,
+				anchor_mldsa87_public_key = $4,
+				pubkey_bundle_signature_es384 = $5,
+				pubkey_bundle_signature_mldsa87 = $6,
+				ready = true,
+				updated_at = $7
+			WHERE id = $8 AND ready = false`,
+		in.RequestEncEcdhPubkey, in.RequestEncMlkemPubkey,
+		in.AnchorEs384PublicKey, in.AnchorMldsa87PublicKey,
+		in.PubkeyBundleSignatureEs384, in.PubkeyBundleSignatureMldsa87,
+		now, in.UserID,
 	)
 	if err != nil {
 		return err
@@ -468,7 +519,7 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, wrappedPrimaryKe
 		// Determine whether the user was already finalized or simply does not exist
 		var exists bool
 		err = tx.
-			QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, userID).
+			QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, in.UserID).
 			Scan(&exists)
 		if err != nil {
 			return err
@@ -479,10 +530,20 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, userID, wrappedPrimaryKe
 		return ErrAlreadyFinalized
 	}
 
-	// Store the wrapped primary key on the user's single credential (the one created during registration)
+	// Store the wrapped primary key, wrapped anchor, and first credential attestation on the user's
+	// single credential (the one created during registration).
 	_, err = tx.Exec(ctx,
-		`UPDATE v2_user_credentials SET wrapped_primary_key = $1, wrapped_key_epoch = 1 WHERE user_id = $2`,
-		wrappedPrimaryKey, userID,
+		`UPDATE v2_user_credentials
+			SET wrapped_primary_key = $1,
+				wrapped_anchor_key = $2,
+				attestation_payload = $3,
+				attestation_signature_es384 = $4,
+				attestation_signature_mldsa87 = $5,
+				wrapped_key_epoch = 1
+			WHERE user_id = $6`,
+		in.WrappedPrimaryKey, in.WrappedAnchorKey,
+		in.AttestationPayload, in.AttestationSignatureEs384, in.AttestationSignatureMldsa87,
+		in.UserID,
 	)
 	if err != nil {
 		return err
@@ -601,11 +662,11 @@ func (s *AuthStore) HasPendingChallenge(ctx context.Context, userID, kind string
 func (s *AuthStore) GetCredentialByCredentialID(ctx context.Context, credentialID, userID string) (*AuthCredentialRecord, error) {
 	var rec AuthCredentialRecord
 	err := s.db.QueryRow(ctx,
-		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_key_epoch, created_at, last_used_at
+		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_anchor_key, attestation_payload, attestation_signature_es384, attestation_signature_mldsa87, wrapped_key_epoch, created_at, last_used_at
 			FROM v2_user_credentials
 			WHERE credential_id = $1 AND user_id = $2`,
 		credentialID, userID,
-	).Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt)
+	).Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.WrappedAnchorKey, &rec.AttestationPayload, &rec.AttestationSignatureEs384, &rec.AttestationSignatureMldsa87, &rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt)
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
@@ -618,14 +679,27 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 	if len(in.WrappedPrimaryKey) > 512 {
 		return errors.New("wrappedPrimaryKey is too large")
 	}
+	if len(in.WrappedAnchorKey) > 32768 {
+		return errors.New("wrappedAnchorKey is too large")
+	}
+	if len(in.AttestationPayload) > 4096 {
+		return errors.New("attestationPayload is too large")
+	}
 
 	now := time.Now().UTC().Unix()
 	_, err := s.db.Exec(ctx,
-		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_key_epoch, created_at, last_used_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, (
-			SELECT wrapped_key_epoch FROM v2_users WHERE id = $2
-		 ), $8, $8)`,
-		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount, in.WrappedPrimaryKey, now,
+		`INSERT INTO v2_user_credentials (
+				id, user_id, credential_id, display_name, public_key, sign_count,
+				wrapped_primary_key, wrapped_anchor_key,
+				attestation_payload, attestation_signature_es384, attestation_signature_mldsa87,
+				wrapped_key_epoch, created_at, last_used_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, (
+				SELECT wrapped_key_epoch FROM v2_users WHERE id = $2
+			), $12, $12)`,
+		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount,
+		in.WrappedPrimaryKey, in.WrappedAnchorKey,
+		in.AttestationPayload, in.AttestationSignatureEs384, in.AttestationSignatureMldsa87,
+		now,
 	)
 	return err
 }
