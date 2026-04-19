@@ -370,6 +370,8 @@ export function startCLIRequest(args) {
         args.algorithm,
         '--note',
         args.note,
+        // The CLI spawned by Playwright has no TTY; skip anchor pinning so the tests do not fail on first contact.
+        '--no-trust-store',
     ]
 
     if (args.operation === 'encrypt') {
