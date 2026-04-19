@@ -633,11 +633,10 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
         }
 
         // ML-KEM key pair for transport
-        const mlkem = await import('mlkem-wasm')
-        const mlkemKP = await mlkem.default.generateKey('ML-KEM-768', true, ['decapsulateBits', 'encapsulateBits'])
-        const mlkemPubRaw = await mlkem.default.exportKey('raw-public', mlkemKP.publicKey)
+        const { ml_kem768 } = await import('@noble/post-quantum/ml-kem.js')
+        const mlkemKP = ml_kem768.keygen(crypto.getRandomValues(new Uint8Array(64)))
         const { bytesToBase64Url } = await import('./utils')
-        const mlkemPubB64 = bytesToBase64Url(mlkemPubRaw)
+        const mlkemPubB64 = bytesToBase64Url(mlkemKP.publicKey)
 
         const plaintext = new TextEncoder().encode('secret response data')
         const aad = new TextEncoder().encode('algorithm=A256GCM\noperation=encrypt\nstate=test-state\nv=1')
@@ -660,7 +659,7 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
         const decrypted = await decryptTransportEnvelope(
             'test-state',
             ecdhKP.privateKey,
-            mlkemKP.privateKey,
+            mlkemKP.secretKey,
             envelope,
             aad
         )
@@ -675,11 +674,10 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
             throw new Error('Invalid ECDH key imported: missing x or y parameters')
         }
 
-        const mlkem = await import('mlkem-wasm')
-        const mlkemKP = await mlkem.default.generateKey('ML-KEM-768', true, ['decapsulateBits', 'encapsulateBits'])
-        const mlkemPubRaw = await mlkem.default.exportKey('raw-public', mlkemKP.publicKey)
+        const { ml_kem768 } = await import('@noble/post-quantum/ml-kem.js')
+        const mlkemKP = ml_kem768.keygen(crypto.getRandomValues(new Uint8Array(64)))
         const { bytesToBase64Url } = await import('./utils')
-        const mlkemPubB64 = bytesToBase64Url(mlkemPubRaw)
+        const mlkemPubB64 = bytesToBase64Url(mlkemKP.publicKey)
 
         const plaintext = new TextEncoder().encode('data')
 
@@ -692,7 +690,7 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
 
         // Decrypt with a different state — HKDF produces a different key, so decryption fails
         await expect(
-            decryptTransportEnvelope('state-B', ecdhKP.privateKey, mlkemKP.privateKey, envelope)
+            decryptTransportEnvelope('state-B', ecdhKP.privateKey, mlkemKP.secretKey, envelope)
         ).rejects.toThrow()
     })
 })

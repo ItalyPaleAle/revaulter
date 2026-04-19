@@ -12,7 +12,7 @@ export default defineConfig(({ mode }) => {
     // Additional plugins, which may not always be used
     const additionalPlugins = []
     const libChunkPattern = /[\\/]node_modules[\\/](svelte|date-fns)[\\/]/
-    const cryptoChunkPattern = /[\\/]node_modules[\\/](hash-wasm|mlkem-wasm|arraybuffer-encoding)[\\/]/
+    const cryptoChunkPattern = /[\\/]node_modules[\\/](hash-wasm|@noble\/post-quantum|arraybuffer-encoding)[\\/]/
 
     const isProduction = mode === 'production'
 

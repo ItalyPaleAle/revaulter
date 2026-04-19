@@ -1,5 +1,5 @@
+import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 import { argon2id } from 'hash-wasm'
-import mlkem from 'mlkem-wasm'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import type {
     EcP256PublicJwk,
@@ -54,37 +54,26 @@ async function deriveTransportAesKeyForEncrypt(
 
     // ML-KEM encapsulation
     const mlkemPubBytes = base64UrlToBytes(peerMlkemKeyB64)
-    const mlkemPubKey = await mlkem.importKey('raw-public', asBuf(mlkemPubBytes) as BufferSource, 'ML-KEM-768', false, [
-        'encapsulateBits',
-    ])
-    const { sharedKey: mlkemSharedBuf, ciphertext: mlkemCTBuf } = await mlkem.encapsulateBits('ML-KEM-768', mlkemPubKey)
+    const { cipherText: mlkemCT, sharedSecret: mlkemShared } = ml_kem768.encapsulate(mlkemPubBytes)
 
-    const aesKey = await deriveHybridAesKey(
-        ecdhShared,
-        new Uint8Array(mlkemSharedBuf),
-        `revaulter/v2/transport/${state}`
-    )
-    return { aesKey, mlkemCiphertext: new Uint8Array(mlkemCTBuf) }
+    const aesKey = await deriveHybridAesKey(ecdhShared, mlkemShared, `revaulter/v2/transport/${state}`)
+    return { aesKey, mlkemCiphertext: mlkemCT }
 }
 
 async function deriveTransportAesKeyForDecrypt(
     state: string,
     ecdhPrivateKey: CryptoKey,
     peerEcdhPublicJwk: EcP256PublicJwk,
-    mlkemDecapsulationKey: CryptoKey,
+    mlkemSecretKey: Uint8Array,
     mlkemCiphertext: Uint8Array
 ): Promise<CryptoKey> {
     // ECDH shared secret
     const ecdhShared = await deriveEcdhSharedSecret(ecdhPrivateKey, peerEcdhPublicJwk)
 
     // ML-KEM decapsulation
-    const mlkemSharedBuf = await mlkem.decapsulateBits(
-        'ML-KEM-768',
-        mlkemDecapsulationKey,
-        asBuf(mlkemCiphertext) as BufferSource
-    )
+    const mlkemShared = ml_kem768.decapsulate(mlkemCiphertext, mlkemSecretKey)
 
-    return deriveHybridAesKey(ecdhShared, new Uint8Array(mlkemSharedBuf), `revaulter/v2/transport/${state}`)
+    return deriveHybridAesKey(ecdhShared, mlkemShared, `revaulter/v2/transport/${state}`)
 }
 
 /** Performs ECDH key agreement and returns the raw 32-byte shared secret */
@@ -171,7 +160,7 @@ export async function encryptTransportEnvelope(
 export async function decryptTransportEnvelope(
     state: string,
     ecdhPrivateKey: CryptoKey,
-    mlkemDecapsulationKey: CryptoKey,
+    mlkemSecretKey: Uint8Array,
     env: V2ResponseEnvelope,
     aad?: Uint8Array
 ): Promise<Uint8Array> {
@@ -180,7 +169,7 @@ export async function decryptTransportEnvelope(
         state,
         ecdhPrivateKey,
         env.browserEphemeralPublicKey,
-        mlkemDecapsulationKey,
+        mlkemSecretKey,
         mlkemCT
     )
 
@@ -571,7 +560,7 @@ export async function deriveRequestEncKeyPair(params: {
 export async function deriveRequestEncMlkemKeyPair(params: {
     userId: string
     primaryKey: Uint8Array
-}): Promise<{ decapsulationKey: CryptoKey; encapsulationKeyB64: string }> {
+}): Promise<{ secretKey: Uint8Array; encapsulationKeyB64: string }> {
     const ikm = await crypto.subtle.importKey('raw', asBuf(params.primaryKey), 'HKDF', false, ['deriveBits'])
 
     const info = new TextEncoder().encode(`revaulter/v2/requestEncMlkemSeed\nuserId=${params.userId}\nv=1`)
@@ -583,16 +572,11 @@ export async function deriveRequestEncMlkemKeyPair(params: {
         512
     )
 
-    // Import as ML-KEM-768 decapsulation key from seed
-    const dk = await mlkem.importKey('raw-seed', seedBits, 'ML-KEM-768', true, ['decapsulateBits'])
-
-    // Extract the encapsulation (public) key
-    const pk = await mlkem.getPublicKey(dk, ['encapsulateBits'])
-    const pkRaw = await mlkem.exportKey('raw-public', pk)
+    const { secretKey, publicKey } = ml_kem768.keygen(new Uint8Array(seedBits))
 
     return {
-        decapsulationKey: dk,
-        encapsulationKeyB64: bytesToBase64Url(pkRaw),
+        secretKey,
+        encapsulationKeyB64: bytesToBase64Url(publicKey),
     }
 }
 
@@ -624,7 +608,7 @@ export async function decryptRequestPayload(params: {
     })
 
     // Derive the static ML-KEM decapsulation key
-    const { decapsulationKey: mlkemDK } = await deriveRequestEncMlkemKeyPair({
+    const { secretKey: mlkemSK } = await deriveRequestEncMlkemKeyPair({
         userId: params.userId,
         primaryKey: params.primaryKey,
     })
@@ -634,10 +618,10 @@ export async function decryptRequestPayload(params: {
 
     // ML-KEM decapsulation
     const mlkemCT = base64UrlToBytes(params.mlkemCiphertext)
-    const mlkemSharedBuf = await mlkem.decapsulateBits('ML-KEM-768', mlkemDK, asBuf(mlkemCT) as BufferSource)
+    const mlkemShared = ml_kem768.decapsulate(mlkemCT, mlkemSK)
 
     // Derive AES key from combined ECDH + ML-KEM shared secrets
-    const aesKey = await deriveHybridAesKey(ecdhShared, new Uint8Array(mlkemSharedBuf), 'revaulter/v2/request-enc')
+    const aesKey = await deriveHybridAesKey(ecdhShared, mlkemShared, 'revaulter/v2/request-enc')
 
     // Decrypt
     const nonce = base64UrlToBytes(params.nonce)
