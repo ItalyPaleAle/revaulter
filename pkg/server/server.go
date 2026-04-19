@@ -137,8 +137,8 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 
 		httpClient: httpClient,
 
-		// Throttle wrapped primary key delivery to 5 successful logins per hour per user
-		wrappedKeyLimiter: httprate.NewRateLimiter(5, time.Hour),
+		// Throttle wrapped primary key delivery to 4 successful logins per 10-minute window, per user
+		wrappedKeyLimiter: httprate.NewRateLimiter(4, 10*time.Minute),
 	}
 
 	// Create the eventqueue processors for performing garbage collection

@@ -88,12 +88,9 @@ function closeSettingsModal() {
     <!-- Header -->
     <div class="mb-10 flex items-start justify-between gap-4">
         <div>
-            <div class="mb-4 inline-flex items-center gap-2.5">
-                <Logo size={28} radius={7} />
-                <span class="text-sm font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">Revaulter</span>
-            </div>
-            <h1 class="mb-1.5 text-[30px] font-semibold leading-tight tracking-tight text-neutral-950 dark:text-neutral-50">
-                Pending approvals
+            <h1 class="mb-4 inline-flex items-center gap-2.5">
+                <Logo size={38} />
+                <span class="text-[30px] font-semibold leading-tigh tracking-tight text-neutral-950 dark:text-neutral-50">Pending approvals</span>
             </h1>
             <p class="text-sm text-neutral-500 dark:text-neutral-400">
                 Review inbound encrypt, decrypt, and signing requests for
@@ -101,45 +98,37 @@ function closeSettingsModal() {
             </p>
         </div>
 
-        <div class="flex items-center gap-2">
-            <span class="group relative">
-                <Button
-                    variant="icon"
-                    size="icon"
-                    ariaLabel="Open settings"
-                    onclick={toggleSettingsModal}
-                >
-                    <Icon icon="settings" title="Settings" size="4" />
-                </Button>
-                <span class="pointer-events-none absolute top-full left-1/2 z-10 mt-2 -translate-x-1/2 scale-95 whitespace-nowrap rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white opacity-0 shadow-md transition duration-150 group-hover:scale-100 group-hover:opacity-100 dark:bg-neutral-100 dark:text-neutral-900">
-                    Settings
+        <div class="flex flex-col gap-4">
+            <div class="flex items-center gap-2">
+                <span class="group relative">
+                    <Button
+                        variant="icon"
+                        size="icon"
+                        ariaLabel="Open settings"
+                        onclick={toggleSettingsModal}
+                    >
+                        <Icon icon="settings" title="Settings" size="4" />
+                    </Button>
+                    <span class="pointer-events-none absolute top-full left-1/2 z-10 mt-2 -translate-x-1/2 scale-95 whitespace-nowrap rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white opacity-0 shadow-md transition duration-150 group-hover:scale-100 group-hover:opacity-100 dark:bg-neutral-100 dark:text-neutral-900">
+                        Settings
+                    </span>
                 </span>
-            </span>
-            <span class="group relative">
-                <Button
-                    variant="icon"
-                    size="icon"
-                    ariaLabel="Sign out"
-                    onclick={() => void onLogout()}
-                >
-                    <Icon icon="log-out" title="Sign out" size="4" />
-                </Button>
-                <span class="pointer-events-none absolute top-full right-0 z-10 mt-2 scale-95 whitespace-nowrap rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white opacity-0 shadow-md transition duration-150 group-hover:scale-100 group-hover:opacity-100 dark:bg-neutral-100 dark:text-neutral-900">
-                    Sign out
+                <span class="group relative">
+                    <Button
+                        variant="icon"
+                        size="icon"
+                        ariaLabel="Sign out"
+                        onclick={() => void onLogout()}
+                    >
+                        <Icon icon="log-out" title="Sign out" size="4" />
+                    </Button>
+                    <span class="pointer-events-none absolute top-full right-0 z-10 mt-2 scale-95 whitespace-nowrap rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white opacity-0 shadow-md transition duration-150 group-hover:scale-100 group-hover:opacity-100 dark:bg-neutral-100 dark:text-neutral-900">
+                        Sign out
+                    </span>
                 </span>
-            </span>
-        </div>
-    </div>
-
-    {#if pageError}
-        <div class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
-            {pageError}
-        </div>
-    {/if}
-
-    <!-- Live status -->
-    <div class="mb-3 flex items-center justify-end">
-        <div class="inline-flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+            </div>
+            <!-- Live status -->
+      <div class="inline-flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
             {#if listConnected}
                 <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 live-dot"></span>
                 Connected
@@ -148,7 +137,14 @@ function closeSettingsModal() {
                 Connecting…
             {/if}
         </div>
+        </div>
     </div>
+
+    {#if pageError}
+        <div class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+            {pageError}
+        </div>
+    {/if}
 
     <!-- Message list -->
     {#if pendingItems.length === 0}
@@ -176,10 +172,6 @@ function closeSettingsModal() {
             {/each}
         </div>
     {/if}
-
-    <p class="mt-6 text-center text-xs text-neutral-400 dark:text-neutral-500">
-        Requests stream in real time. Confirm only if the input, key label, and requester look correct.
-    </p>
 
     {#if settingsModalOpen}
         <UserSettingsModal

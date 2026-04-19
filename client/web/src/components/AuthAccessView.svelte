@@ -75,7 +75,7 @@ $effect(() => {
     <div class="flex min-h-screen items-center justify-center px-6 py-12">
         <div class="w-full max-w-90">
             <div class="mb-8">
-                <Logo size={48} radius={12} />
+                <Logo size={48} />
             </div>
 
             <h1 class="mb-2 text-[30px] font-semibold leading-tight tracking-tight text-neutral-950 dark:text-neutral-50">

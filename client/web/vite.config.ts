@@ -48,8 +48,13 @@ export default defineConfig(({ mode }) => {
                     display: 'standalone',
                     icons: [
                         {
-                            src: 'favicon.svg',
+                            src: 'favicon-dark.svg',
                             sizes: 'any',
+                            type: 'image/svg+xml',
+                        },
+                        {
+                            src: 'apple-touch-icon.svg',
+                            sizes: '180x180',
                             type: 'image/svg+xml',
                         },
                     ],
