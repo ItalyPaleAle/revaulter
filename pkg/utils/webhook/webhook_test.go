@@ -42,7 +42,7 @@ func TestWebhook(t *testing.T) {
 			OperationName: "encrypt",
 			AssignedUser:  "Alice",
 			KeyLabel:      "mykey",
-			Algorithm:     "aes-gcm-256",
+			Algorithm:     "A256GCM",
 			StateId:       "mystate",
 			Requestor:     "127.0.0.1",
 		}
@@ -72,28 +72,28 @@ func TestWebhook(t *testing.T) {
 		"webhookFormat": "plain",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://198.51.100.10/endpoint", r.URL.String())
-		requireBodyEqual(t, r.Body, "Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n\nOpen Revaulter: http://198.51.100.10/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
+		requireBodyEqual(t, r.Body, "Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **A256GCM**).\n\nOpen Revaulter: http://198.51.100.10/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
 	}))
 
 	t.Run("empty format, fallback to plain", basicTestFn(map[string]any{
 		"webhookFormat": "",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://198.51.100.10/endpoint", r.URL.String())
-		requireBodyEqual(t, r.Body, "Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n\nOpen Revaulter: http://198.51.100.10/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
+		requireBodyEqual(t, r.Body, "Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **A256GCM**).\n\nOpen Revaulter: http://198.51.100.10/app\n\n(Request ID: mystate - Client IP: 127.0.0.1)")
 	}))
 
 	t.Run("format slack", basicTestFn(map[string]any{
 		"webhookFormat": "slack",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://198.51.100.10/endpoint", r.URL.String())
-		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
+		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **A256GCM**).\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("format discord appends /slack", basicTestFn(map[string]any{
 		"webhookFormat": "discord",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://198.51.100.10/endpoint/slack", r.URL.String())
-		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
+		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **A256GCM**).\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("format discord with /slack already appended", basicTestFn(map[string]any{
@@ -101,7 +101,7 @@ func TestWebhook(t *testing.T) {
 		"webhookFormat": "discord",
 	}, func(t *testing.T, r *http.Request) {
 		require.Equal(t, "http://203.0.113.10/endpoint/slack", r.URL.String())
-		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **aes-gcm-256**).\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
+		requireBodyEqual(t, r.Body, `{"text":"Received a request to encrypt using key label **mykey** for user **Alice** (algorithm **A256GCM**).\n[Open Revaulter](http://198.51.100.10/app)\n`+"`(Request ID: mystate - Client IP: 127.0.0.1)`"+`"}`+"\n")
 	}))
 
 	t.Run("format slack escapes user-controlled markdown", func(t *testing.T) {
@@ -116,7 +116,7 @@ func TestWebhook(t *testing.T) {
 			OperationName: "encrypt",
 			AssignedUser:  "Alice & Bob",
 			KeyLabel:      "my*key_`demo~<tag>",
-			Algorithm:     "aes-gcm-256",
+			Algorithm:     "A256GCM",
 			StateId:       "state:1",
 			Requestor:     "127.0.0.1",
 			Note:          "pay_load *bold* `code`",

@@ -31,7 +31,7 @@ revaulter-cli encrypt \
   --server https://revaulter.example.com \
   --request-key $REQUEST_KEY \
   --key-label my-secret \
-  --algorithm aes-gcm-256 \
+  --algorithm A256GCM \
   --value "$MESSAGE"
 
 # Decrypt
@@ -39,7 +39,7 @@ revaulter-cli decrypt \
   --server https://revaulter.example.com \
   --request-key $REQUEST_KEY \
   --key-label my-secret \
-  --algorithm aes-gcm-256 \
+  --algorithm A256GCM \
   --value <ciphertext> --nonce <nonce> --tag <tag>
 ```
 

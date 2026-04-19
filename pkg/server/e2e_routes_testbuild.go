@@ -351,9 +351,9 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 	case string(db.V2RequestStatusPending):
 		// nothing else to do
 	case string(db.V2RequestStatusCanceled):
-		_, err = s.requestStore.CancelRequest(c.Request.Context(), req.State)
+		_, err = s.requestStore.CancelRequest(c.Request.Context(), req.State, req.UserID)
 	case string(db.V2RequestStatusCompleted):
-		_, err = s.requestStore.CompleteRequest(c.Request.Context(), req.State, protocolv2.ResponseEnvelope{
+		_, err = s.requestStore.CompleteRequest(c.Request.Context(), req.State, req.UserID, protocolv2.ResponseEnvelope{
 			TransportAlg: protocolv2.TransportAlg,
 			BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 				Kty: "EC",
@@ -369,7 +369,7 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 	case string(db.V2RequestStatusExpired):
 		execErr := s.requestStore.ForceExpireRequestForTests(c.Request.Context(), req.State, now.Add(-time.Second))
 		if execErr == nil {
-			err = s.requestStore.MarkExpired(c.Request.Context(), req.State)
+			_, err = s.requestStore.MarkExpired(c.Request.Context(), req.State)
 		} else {
 			err = execErr
 		}

@@ -38,11 +38,17 @@ type v2APIConfirmedResponse struct {
 	Confirmed bool `json:"confirmed"`
 }
 
+type confirmPublicKey struct {
+	JWK json.RawMessage `json:"jwk"`
+	PEM string          `json:"pem"`
+}
+
 type confirmRequest struct {
 	State            string                       `json:"state"`
 	Confirm          bool                         `json:"confirm,omitempty"`
 	Cancel           bool                         `json:"cancel,omitempty"`
 	ResponseEnvelope *protocolv2.ResponseEnvelope `json:"responseEnvelope,omitempty"`
+	PublicKey        *confirmPublicKey            `json:"publicKey,omitempty"`
 }
 
 func (s *Server) RouteV2APIList(c *gin.Context) {
@@ -74,23 +80,28 @@ func (s *Server) RouteV2APIList(c *gin.Context) {
 
 func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 	state := c.Param("state")
+
 	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
 	if rec == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 		return
 	}
+
 	if !s.authorizeUser(c, rec.UserID) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 		return
 	}
+
 	var encReq json.RawMessage
 	if rec.EncryptedRequest != "" {
 		encReq = json.RawMessage(rec.EncryptedRequest)
 	}
+
 	c.JSON(http.StatusOK, v2APIRequestDetailResponse{
 		State:            rec.State,
 		Status:           string(rec.Status),
@@ -108,7 +119,12 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 
 func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	log := logging.LogFromContext(c.Request.Context())
+
 	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
 
 	var req confirmRequest
 	err := c.ShouldBindJSON(&req)
@@ -126,28 +142,13 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
-	rec, err := s.requestStore.GetRequest(c.Request.Context(), req.State)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	if rec == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
-		return
-	}
-
-	if !s.authorizeUser(c, rec.UserID) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
-		return
-	}
-
 	if req.Cancel {
-		ok, err := s.requestStore.CancelRequest(c.Request.Context(), req.State)
-		if err != nil {
-			AbortWithErrorJSON(c, err)
-			return
-		} else if !ok {
+		rec, err := s.requestStore.CancelRequest(c.Request.Context(), req.State, userID)
+		if errors.Is(err, db.ErrRequestNotModifiable) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be canceled"))
+			return
+		} else if err != nil {
+			AbortWithErrorJSON(c, err)
 			return
 		}
 
@@ -189,13 +190,20 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
-	ok, err := s.requestStore.CompleteRequest(c.Request.Context(), req.State, *req.ResponseEnvelope)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	} else if !ok {
+	rec, err := s.requestStore.CompleteRequest(c.Request.Context(), req.State, userID, *req.ResponseEnvelope)
+	if errors.Is(err, db.ErrRequestNotModifiable) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be confirmed"))
 		return
+	} else if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	// For sign operations the browser sends the derived public key alongside the encrypted response envelope
+	// If the user has not published a key for this (algorithm, keyLabel) yet, store it server-side with published=false so it can be shown in the settings UI
+	// The signature was already accepted, so failures here are logged and don't fail the request
+	if rec.Operation == "sign" && req.PublicKey != nil {
+		s.autoStoreSigningKey(c, log, rec, req.PublicKey)
 	}
 
 	log.InfoContext(c.Request.Context(), "Request confirmed",
@@ -228,6 +236,44 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 func (s *Server) authorizeUser(c *gin.Context, userID string) bool {
 	sessionUserID := c.GetString(contextKeyUserID)
 	return sessionUserID != "" && sessionUserID == userID
+}
+
+func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V2RequestRecord, pub *confirmPublicKey) {
+	id, err := validateSigningJWKAndPEM(pub.JWK, pub.PEM)
+	if err != nil {
+		log.WarnContext(c.Request.Context(), "Skipping auto-store of signing public key: invalid payload",
+			slog.String("state", rec.State),
+			slog.Any("err", err),
+		)
+		return
+	}
+
+	// Auto-stored keys always land as Published=false so they appear in the settings UI but aren't served from the public fetch endpoint until the user publishes them
+	inserted, err := s.signingKeyStore.Create(c.Request.Context(), db.InsertSigningKeyInput{
+		ID:        id,
+		UserID:    rec.UserID,
+		Algorithm: rec.Algorithm,
+		KeyLabel:  rec.KeyLabel,
+		JWK:       string(pub.JWK),
+		PEM:       pub.PEM,
+		Published: false,
+	})
+	if errors.Is(err, db.ErrSigningKeyAlreadyExists) {
+		return
+	} else if err != nil {
+		log.WarnContext(c.Request.Context(), "Failed to auto-store signing public key",
+			slog.String("state", rec.State),
+			slog.Any("err", err),
+		)
+		return
+	}
+
+	log.InfoContext(c.Request.Context(), "Auto-stored signing public key",
+		slog.String("state", rec.State),
+		slog.String("key_id", inserted.ID),
+		slog.String("key_label", rec.KeyLabel),
+		slog.String("algorithm", rec.Algorithm),
+	)
 }
 
 func (s *Server) routeV2APIListStream(c *gin.Context) {

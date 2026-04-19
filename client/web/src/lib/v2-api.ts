@@ -8,10 +8,12 @@ import type {
     V2LoginBeginResponse,
     V2LoginFinishResponse,
     V2PendingRequestItem,
+    V2PublishedSigningKey,
     V2RegisterBeginResponse,
     V2RequestDetail,
     V2ResponseEnvelope,
     V2SessionResponse,
+    V2SigningJwk,
 } from '$lib/v2-types'
 
 /** Starts the public registration flow and returns the WebAuthn challenge/options payload */
@@ -124,10 +126,21 @@ export async function v2GetRequest(state: string) {
     return res.data
 }
 
-/** Confirms a pending request and sends the encrypted response envelope to the server */
-export async function v2Confirm(state: string, responseEnvelope: V2ResponseEnvelope) {
+/** Confirms a pending request and sends the encrypted response envelope to the server
+ * For sign operations, the derived public key (jwk + pem) is sent alongside the envelope so the server can auto-store it (published=false) if it isn't already known
+ */
+export async function v2Confirm(
+    state: string,
+    responseEnvelope: V2ResponseEnvelope,
+    publicKey?: { jwk: V2SigningJwk; pem: string }
+) {
+    const body: Record<string, unknown> = { state, confirm: true, responseEnvelope }
+    if (publicKey) {
+        body.publicKey = publicKey
+    }
+
     const res = await Request<{ confirmed: boolean }>('/v2/api/confirm', {
-        postData: { state, confirm: true, responseEnvelope },
+        postData: body,
     })
     return res.data
 }
@@ -202,6 +215,55 @@ export async function v2RenameCredential(id: string, displayName: string) {
 export async function v2DeleteCredential(id: string) {
     const res = await Request<{ ok: boolean }>('/v2/auth/credentials/delete', {
         postData: { id },
+    })
+    return res.data
+}
+
+/** Lists the current user's published signing keys (metadata only) */
+export async function v2ListSigningKeys() {
+    const res = await Request<V2PublishedSigningKey[]>('/v2/api/signing-keys')
+    return res.data
+}
+
+/** Fetches a single signing key owned by the current user, including JWK and PEM
+ * The row is returned regardless of its published flag so the UI can re-export an auto-stored key without publishing it
+ */
+export async function v2GetSigningKey(id: string) {
+    const res = await Request<V2PublishedSigningKey & { jwk: V2SigningJwk; pem: string }>(
+        `/v2/api/signing-keys/${encodeURIComponent(id)}`
+    )
+    return res.data
+}
+
+/** Creates a new signing key for the current user
+ * The server rejects the request with 409 Conflict if a key already exists for the same `(algorithm, keyLabel)`
+ * `published=true` exposes the key via the public endpoint; `published=false` stores it but keeps the public endpoint hidden
+ */
+export async function v2CreateSigningKey(args: {
+    algorithm: string
+    keyLabel: string
+    jwk: V2SigningJwk
+    pem: string
+    published: boolean
+}) {
+    const res = await Request<V2PublishedSigningKey>('/v2/api/signing-keys', {
+        postData: args,
+    })
+    return res.data
+}
+
+/** Flips the published flag on an existing signing key without resubmitting the key material */
+export async function v2SetSigningKeyPublished(id: string, published: boolean) {
+    const res = await Request<V2PublishedSigningKey>(`/v2/api/signing-keys/${encodeURIComponent(id)}`, {
+        postData: { published },
+    })
+    return res.data
+}
+
+/** Hard-deletes a signing key owned by the current user */
+export async function v2DeleteSigningKey(id: string) {
+    const res = await Request<{ deleted: boolean }>(`/v2/api/signing-keys/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
     })
     return res.data
 }

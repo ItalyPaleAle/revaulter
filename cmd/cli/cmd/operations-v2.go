@@ -80,6 +80,12 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 	return o.writeResult(state, plain)
 }
 
+// v2OperationResultFormatter lets an operation override how the decrypted plaintext is shaped before being written
+// Used by the sign op to emit a compact JWS or the raw signature bytes extracted from the JSON envelope
+type v2OperationResultFormatter interface {
+	FormatResult(state string, plain []byte, raw bool) ([]byte, error)
+}
+
 // writeResult emits the decrypted plaintext to either stdout or the file requested by --output
 // In raw mode the plaintext bytes are written verbatim; otherwise they are wrapped in the default JSON envelope produced by formatV2DecryptedPayload
 func (o *v2OperationCmd) writeResult(state string, plain []byte) error {
@@ -87,9 +93,17 @@ func (o *v2OperationCmd) writeResult(state string, plain []byte) error {
 	output := o.flags.GetOutput()
 
 	var payload []byte
-	if raw {
+	formatter, ok := o.flags.(v2OperationResultFormatter)
+	switch {
+	case ok:
+		var err error
+		payload, err = formatter.FormatResult(state, plain, raw)
+		if err != nil {
+			return fmt.Errorf("failed to format response: %w", err)
+		}
+	case raw:
 		payload = plain
-	} else {
+	default:
 		formatted, err := formatV2DecryptedPayload(state, plain)
 		if err != nil {
 			return fmt.Errorf("failed to format response: %w", err)
@@ -132,11 +146,14 @@ func writeOutputFile(path string, payload []byte) error {
 	if err != nil {
 		return err
 	}
+
 	_, werr := f.Write(payload)
+
 	cerr := f.Close()
 	if werr != nil {
 		return werr
 	}
+
 	return cerr
 }
 

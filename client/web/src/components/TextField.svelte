@@ -3,6 +3,7 @@ import type { HTMLInputAttributes } from 'svelte/elements'
 
 interface Props {
     autocomplete?: HTMLInputAttributes['autocomplete']
+    autofocus?: boolean
     class?: string
     disabled?: boolean
     id?: string
@@ -16,6 +17,7 @@ interface Props {
 
 let {
     autocomplete,
+    autofocus,
     class: className = '',
     disabled = false,
     id,
@@ -28,8 +30,10 @@ let {
 }: Props = $props()
 </script>
 
+<!-- svelte-ignore a11y_autofocus -->
 <input
     {autocomplete}
+    {autofocus}
     {disabled}
     {id}
     {name}
@@ -37,6 +41,6 @@ let {
     {required}
     {type}
     bind:value
-    class={`w-full rounded-[1.35rem] border border-slate-300/90 bg-white/92 px-4 py-3 text-slate-950 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-600/80 dark:bg-slate-950/72 dark:text-white dark:focus:border-sky-400 dark:focus:ring-sky-950 ${className}`}
+    class={`h-10.5 w-full rounded-lg border border-neutral-300 bg-white px-3 text-sm text-neutral-900 outline-none transition-colors focus:border-neutral-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-50 dark:focus:border-neutral-300 ${className}`}
     oninput={oninput}
 />

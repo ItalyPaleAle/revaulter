@@ -44,6 +44,7 @@ func init() {
 	rootCmd.AddCommand(
 		newV2OperationCmd("encrypt", "Encrypt data", func() v2OperationFlags { return &v2OperationFlagsEncrypt{} }),
 		newV2OperationCmd("decrypt", "Decrypt data", func() v2OperationFlags { return &v2OperationFlagsDecrypt{} }),
+		newV2OperationCmd("sign", "Sign data", func() v2OperationFlags { return &v2OperationFlagsSign{} }),
 	)
 }
 

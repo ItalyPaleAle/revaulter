@@ -10,6 +10,21 @@ import (
 
 const TransportAlg = "ecdh-p256+mlkem768+a256gcm"
 
+// Operation identifiers used in RequestCreateBody
+const (
+	OperationEncrypt = "encrypt"
+	OperationDecrypt = "decrypt"
+	OperationSign    = "sign"
+)
+
+// SigningAlgES256 is the JWA identifier for ECDSA using P-256 with SHA-256
+const SigningAlgES256 = "ES256"
+
+// IsSupportedSigningAlgorithm reports whether alg is a signing algorithm supported by the server for the "sign" operation
+func IsSupportedSigningAlgorithm(alg string) bool {
+	return alg == SigningAlgES256
+}
+
 type RequestCreateBody struct {
 	KeyLabel  string `json:"keyLabel,omitempty"`
 	Algorithm string `json:"algorithm,omitempty"`

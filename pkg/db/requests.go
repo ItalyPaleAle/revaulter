@@ -19,6 +19,10 @@ const (
 	V2RequestStatusExpired   V2RequestStatus = "expired"
 )
 
+// ErrRequestNotModifiable is returned when the atomic mutation on v2_requests matched no row
+// It collapses three cases — unknown state, state belonging to another user, or a row that is no longer pending (already completed/canceled/expired) — so callers cannot probe for another user's requests
+var ErrRequestNotModifiable = errors.New("request cannot be modified")
+
 type V2RequestRecord struct {
 	State       string
 	Status      V2RequestStatus
@@ -103,58 +107,33 @@ func (s *RequestStore) GetRequest(ctx context.Context, state string) (*V2Request
 	if err != nil || rec == nil {
 		return rec, err
 	}
+
 	if rec.Status == V2RequestStatusPending && rec.ExpiresAt.Before(time.Now()) {
-		_ = s.MarkExpired(ctx, state)
+		expired, err := s.MarkExpired(ctx, state)
+		if err != nil {
+			return nil, err
+		}
+		if expired != nil {
+			return expired, nil
+		}
+		// A concurrent writer changed the row between our read and the UPDATE; re-read to reflect the authoritative state
 		return s.getRequestRaw(ctx, state)
 	}
+
 	return rec, nil
 }
 
 func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2RequestRecord, error) {
-	type rowT struct {
-		State, Status, Operation, UserID, KeyLabel, Algorithm, RequestorIP, Note string
-		CreatedAt, ExpiresAt, UpdatedAt                                          int64
-		EncryptedRequest                                                         string
-		EncryptedResult                                                          string
-	}
-	var row rowT
-
-	err := s.db.
-		QueryRow(ctx,
-			`SELECT state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, encrypted_request, encrypted_result FROM v2_requests WHERE state = $1`,
+	rec, err := scanRequestRecord(
+		s.db.QueryRow(ctx,
+			`SELECT `+requestColumns+` FROM v2_requests WHERE state = $1`,
 			state,
-		).
-		Scan(
-			&row.State, &row.Status, &row.Operation, &row.UserID, &row.KeyLabel, &row.Algorithm, &row.RequestorIP, &row.Note, &row.CreatedAt, &row.ExpiresAt, &row.UpdatedAt, &row.EncryptedRequest, &row.EncryptedResult,
-		)
+		),
+	)
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
-	}
-
-	rec := &V2RequestRecord{
-		State:            row.State,
-		Status:           V2RequestStatus(row.Status),
-		Operation:        row.Operation,
-		UserID:           row.UserID,
-		KeyLabel:         row.KeyLabel,
-		Algorithm:        row.Algorithm,
-		RequestorIP:      row.RequestorIP,
-		Note:             row.Note,
-		CreatedAt:        time.Unix(row.CreatedAt, 0),
-		ExpiresAt:        time.Unix(row.ExpiresAt, 0),
-		UpdatedAt:        time.Unix(row.UpdatedAt, 0),
-		EncryptedRequest: row.EncryptedRequest,
-	}
-
-	if row.EncryptedResult != "" {
-		var env protocolv2.ResponseEnvelope
-		err = json.Unmarshal([]byte(row.EncryptedResult), &env)
-		if err != nil {
-			return nil, err
-		}
-		rec.ResponseEnvelope = &env
 	}
 	return rec, nil
 }
@@ -183,66 +162,70 @@ func (s *RequestStore) ListPending(ctx context.Context) ([]V2RequestListItem, er
 	return out, rows.Err()
 }
 
-func (s *RequestStore) CompleteRequest(ctx context.Context, state string, env protocolv2.ResponseEnvelope) (bool, error) {
+// CompleteRequest atomically transitions a pending, non-expired request owned by userID to completed and stores the response envelope
+// Returns the updated record on success
+// Returns ErrRequestNotModifiable if no row matched: unknown state, different owner, or already in a terminal/expired state
+func (s *RequestStore) CompleteRequest(ctx context.Context, state, userID string, env protocolv2.ResponseEnvelope) (*V2RequestRecord, error) {
 	envJSON, err := json.Marshal(env)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	now := time.Now().Unix()
-	affected, err := s.db.Exec(ctx,
-		`UPDATE v2_requests SET status = $1, updated_at = $2, encrypted_result = $3 WHERE state = $4 AND status = $5 AND expires_at >= $6`,
-		string(V2RequestStatusCompleted), now, string(envJSON), state, string(V2RequestStatusPending), now,
+	rec, err := scanRequestRecord(
+		s.db.QueryRow(ctx,
+			`UPDATE v2_requests SET status = $1, updated_at = $2, encrypted_result = $3
+				WHERE state = $4 AND user_id = $5 AND status = $6 AND expires_at >= $7
+				RETURNING `+requestColumns,
+			string(V2RequestStatusCompleted), now, string(envJSON), state, userID, string(V2RequestStatusPending), now,
+		),
 	)
-	if err != nil {
-		return false, err
+	if s.db.IsNoRowsError(err) {
+		return nil, ErrRequestNotModifiable
+	} else if err != nil {
+		return nil, err
 	}
-	return affected > 0, nil
+	return rec, nil
 }
 
-func (s *RequestStore) CancelRequest(ctx context.Context, state string) (bool, error) {
+// CancelRequest atomically transitions a pending request owned by userID to canceled
+// Returns the updated record on success, or ErrRequestNotModifiable if no row matched (same collapsed-cases rationale as CompleteRequest)
+func (s *RequestStore) CancelRequest(ctx context.Context, state, userID string) (*V2RequestRecord, error) {
 	now := time.Now().Unix()
-	affected, err := s.db.Exec(ctx,
-		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4`,
-		string(V2RequestStatusCanceled), now, state, string(V2RequestStatusPending),
+	rec, err := scanRequestRecord(
+		s.db.QueryRow(ctx,
+			`UPDATE v2_requests SET status = $1, updated_at = $2
+				WHERE state = $3 AND user_id = $4 AND status = $5
+				RETURNING `+requestColumns,
+			string(V2RequestStatusCanceled), now, state, userID, string(V2RequestStatusPending),
+		),
 	)
-	if err != nil {
-		return false, err
+	if s.db.IsNoRowsError(err) {
+		return nil, ErrRequestNotModifiable
+	} else if err != nil {
+		return nil, err
 	}
-	return affected > 0, nil
+	return rec, nil
 }
 
-func (s *RequestStore) MarkExpired(ctx context.Context, state string) error {
+// MarkExpired atomically transitions a pending, past-deadline request to the expired state
+// Returns the updated record on a successful transition, or (nil, nil) if no row matched (unknown state, not pending, or not yet past deadline)
+func (s *RequestStore) MarkExpired(ctx context.Context, state string) (*V2RequestRecord, error) {
 	now := time.Now().Unix()
-	_, err := s.db.Exec(ctx,
-		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4 AND expires_at < $5`,
-		string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now,
-	)
-	return err
-}
-
-// ExpiredRequestRef identifies a request row that was just transitioned from pending to expired
-type ExpiredRequestRef struct {
-	State  string
-	UserID string
-}
-
-func (s *RequestStore) ExpirePendingAndReturnState(ctx context.Context, state string) (*ExpiredRequestRef, error) {
-	now := time.Now().Unix()
-	var ref ExpiredRequestRef
-
-	err := s.db.
-		QueryRow(ctx,
-			`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE state = $3 AND status = $4 AND expires_at < $5 RETURNING state, user_id`,
+	rec, err := scanRequestRecord(
+		s.db.QueryRow(ctx,
+			`UPDATE v2_requests SET status = $1, updated_at = $2
+				WHERE state = $3 AND status = $4 AND expires_at < $5
+				RETURNING `+requestColumns,
 			string(V2RequestStatusExpired), now, state, string(V2RequestStatusPending), now,
-		).
-		Scan(&ref.State, &ref.UserID)
+		),
+	)
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
 	}
-	return &ref, nil
+	return rec, nil
 }
 
 func (s *RequestStore) ExpirePending(ctx context.Context, now time.Time) error {
@@ -273,4 +256,49 @@ func (s *RequestStore) DeleteExpiredTerminalRequest(ctx context.Context, state s
 		state, string(V2RequestStatusPending), cutoff,
 	)
 	return err
+}
+
+// requestRowScanner is implemented by *sql.Row — used by scanRequestRecord so the same column list is used from SELECT and UPDATE ... RETURNING calls
+type requestRowScanner interface {
+	Scan(dest ...any) error
+}
+
+const requestColumns = `state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, encrypted_request, encrypted_result`
+
+func scanRequestRecord(scanner requestRowScanner) (*V2RequestRecord, error) {
+	var (
+		state, status, operation, userID, keyLabel, algorithm, requestorIP, note string
+		createdAt, expiresAt, updatedAt                                          int64
+		encryptedRequest, encryptedResult                                        string
+	)
+	err := scanner.Scan(
+		&state, &status, &operation, &userID, &keyLabel, &algorithm, &requestorIP, &note, &createdAt, &expiresAt, &updatedAt, &encryptedRequest, &encryptedResult,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	rec := &V2RequestRecord{
+		State:            state,
+		Status:           V2RequestStatus(status),
+		Operation:        operation,
+		UserID:           userID,
+		KeyLabel:         keyLabel,
+		Algorithm:        algorithm,
+		RequestorIP:      requestorIP,
+		Note:             note,
+		CreatedAt:        time.Unix(createdAt, 0),
+		ExpiresAt:        time.Unix(expiresAt, 0),
+		UpdatedAt:        time.Unix(updatedAt, 0),
+		EncryptedRequest: encryptedRequest,
+	}
+	if encryptedResult != "" {
+		var env protocolv2.ResponseEnvelope
+		err = json.Unmarshal([]byte(encryptedResult), &env)
+		if err != nil {
+			return nil, err
+		}
+		rec.ResponseEnvelope = &env
+	}
+	return rec, nil
 }

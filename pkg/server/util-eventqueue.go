@@ -45,12 +45,12 @@ func (s *Server) executeRequestExpiryEvent(ev requestExpiryEvent) {
 	defer cancel()
 	log := logging.LogFromContext(ctx)
 
-	ref, err := s.requestStore.ExpirePendingAndReturnState(ctx, ev.State)
+	rec, err := s.requestStore.MarkExpired(ctx, ev.State)
 	if err != nil {
 		log.WarnContext(ctx, "error expiring request", slog.Any("error", err), slog.String("state", ev.State))
 		return
 	}
-	if ref == nil {
+	if rec == nil {
 		return
 	}
 
@@ -61,7 +61,7 @@ func (s *Server) executeRequestExpiryEvent(ev requestExpiryEvent) {
 	s.publishListItem(&db.V2RequestListItem{
 		State:  ev.State,
 		Status: "removed",
-		UserID: ref.UserID,
+		UserID: rec.UserID,
 	})
 	err = s.deleteQueue.Enqueue(deleteEvent{
 		KeyName: "request-delete:" + ev.State,

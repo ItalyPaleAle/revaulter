@@ -6,9 +6,12 @@ import AuthSetupView from '$components/AuthSetupView.svelte'
 import ReadyView from '$components/ReadyView.svelte'
 
 import {
+    computeEcP256Thumbprint,
     deriveRequestEncKeyPair,
     deriveRequestEncMlkemKeyPair,
+    deriveSigningKeyPair,
     deriveWrappingKey,
+    ecP256JwkToPem,
     generatePrimaryKey,
     parseWrappedPrimaryKeyEnvelope,
     unwrapPrimaryKey,
@@ -30,9 +33,12 @@ import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import {
     v2AddCredentialBegin,
     v2AddCredentialFinish,
+    v2CreateSigningKey,
     v2DeleteCredential,
+    v2DeleteSigningKey,
     v2FinalizeSignup,
     v2ListCredentials,
+    v2ListSigningKeys,
     v2ListStream,
     v2LoginBegin,
     v2LoginFinish,
@@ -43,10 +49,18 @@ import {
     v2RenameCredential,
     v2Session,
     v2SetAllowedIPs,
+    v2SetSigningKeyPublished,
     v2UpdateDisplayName,
     v2UpdateWrappedKey,
 } from '$lib/v2-api'
-import type { V2AuthSessionInfo, V2CredentialItem, V2PendingRequestItem, V2SessionResponse } from '$lib/v2-types'
+import type {
+    DerivedSigningKey,
+    V2AuthSessionInfo,
+    V2CredentialItem,
+    V2PendingRequestItem,
+    V2PublishedSigningKey,
+    V2SessionResponse,
+} from '$lib/v2-types'
 import { webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
 
 type UIState = 'boot' | 'signin' | 'signup' | 'password-login' | 'password-setup' | 'ready'
@@ -71,6 +85,7 @@ let settingsBusy = $state(false)
 let settingsError = $state<string | null>(null)
 let settingsSuccess = $state<string | null>(null)
 let credentials = $state<V2CredentialItem[]>([])
+let signingKeys = $state<V2PublishedSigningKey[]>([])
 let hasPassword = $state(false)
 
 let session = $state<V2SessionResponse | null>(null)
@@ -156,6 +171,7 @@ function clearLocalAuthState() {
     allowedIpsText = ''
     settingsError = null
     settingsSuccess = null
+    signingKeys = []
 }
 
 function enterReadyView() {
@@ -167,6 +183,7 @@ function enterReadyView() {
     allowedIpsText = session?.allowedIps.join('\n') ?? ''
     startListStream()
     void doLoadCredentials()
+    void doLoadSigningKeys()
 }
 
 function openSignIn() {
@@ -593,6 +610,103 @@ async function doLoadCredentials() {
     }
 }
 
+async function doLoadSigningKeys() {
+    try {
+        signingKeys = (await v2ListSigningKeys()) ?? []
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    }
+}
+
+async function doDeriveSigningKey(keyLabel: string, algorithm: string): Promise<DerivedSigningKey> {
+    if (!session || !primaryKey) {
+        throw new Error('Missing local key material')
+    }
+
+    const { publicJwk } = await deriveSigningKeyPair({
+        userId: session.userId,
+        keyLabel,
+        algorithm,
+        primaryKey,
+    })
+    const [id, pem] = await Promise.all([computeEcP256Thumbprint(publicJwk), ecP256JwkToPem(publicJwk)])
+
+    // Attempt to register the derived key as unpublished; if a row already exists for this (algorithm, keyLabel) the server returns 409 and we treat that as a no-op since the caller just needs the derived material returned
+    try {
+        await v2CreateSigningKey({
+            algorithm,
+            keyLabel,
+            jwk: publicJwk,
+            pem,
+            published: false,
+        })
+    } catch (err) {
+        if (!(err instanceof ResponseNotOkError) || err.statusCode !== 409) {
+            throw err
+        }
+    }
+    await doLoadSigningKeys()
+
+    return { keyLabel, algorithm, jwk: publicJwk, pem, id }
+}
+
+async function doPublishSigningKey(derived: DerivedSigningKey) {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        // If the row already exists (auto-stored on derive or from a prior sign), flip the flag without resubmitting the key material
+        const known = signingKeys.find((k) => k.id === derived.id)
+        if (known) {
+            await v2SetSigningKeyPublished(derived.id, true)
+        } else {
+            await v2CreateSigningKey({
+                algorithm: derived.algorithm,
+                keyLabel: derived.keyLabel,
+                jwk: derived.jwk,
+                pem: derived.pem,
+                published: true,
+            })
+        }
+        await doLoadSigningKeys()
+        settingsSuccess = `Signing key "${derived.keyLabel}" published.`
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doUnpublishSigningKey(id: string) {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        await v2SetSigningKeyPublished(id, false)
+        await doLoadSigningKeys()
+        settingsSuccess = 'Signing key unpublished.'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doDeleteSigningKey(id: string) {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        await v2DeleteSigningKey(id)
+        await doLoadSigningKeys()
+        settingsSuccess = 'Signing key deleted.'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
 async function doUpdateDisplayName(name: string) {
     settingsBusy = true
     settingsError = null
@@ -866,11 +980,15 @@ function sortedItems() {
             }}
             onChangePassword={doChangePassword}
             onDeletePasskey={doDeletePasskey}
+            onDeleteSigningKey={doDeleteSigningKey}
+            onDeriveSigningKey={doDeriveSigningKey}
             onLogout={doLogout}
+            onPublishSigningKey={doPublishSigningKey}
             onRegenerateRequestKey={doRegenerateRequestKey}
             onRemoveItem={removeItem}
             onRemovePassword={doRemovePassword}
             onRenamePasskey={doRenamePasskey}
+            onUnpublishSigningKey={doUnpublishSigningKey}
             onUpdateAllowedIps={doUpdateAllowedIps}
             onUpdateDisplayName={doUpdateDisplayName}
             pageError={pageError}
@@ -881,6 +999,7 @@ function sortedItems() {
             settingsBusy={settingsBusy}
             settingsError={settingsError}
             settingsSuccess={settingsSuccess}
+            {signingKeys}
             userId={session?.userId ?? ''}
         />
     {:else if uiState === 'signup' || uiState === 'password-setup'}

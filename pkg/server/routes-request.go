@@ -251,7 +251,10 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 	// Validate the operation
 	switch op {
-	case "encrypt", "decrypt":
+	case protocolv2.OperationEncrypt,
+		protocolv2.OperationDecrypt,
+		protocolv2.OperationSign:
+		// All good
 	default:
 		return NewResponseError(http.StatusBadRequest, "Invalid operation")
 	}
@@ -268,6 +271,11 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 	}
 	if len(body.Algorithm) > 64 {
 		return NewResponseError(http.StatusBadRequest, "parameter 'algorithm' cannot be longer than 64 characters")
+	}
+
+	// For sign operations, restrict algorithm to supported signing algorithms
+	if op == protocolv2.OperationSign && !protocolv2.IsSupportedSigningAlgorithm(body.Algorithm) {
+		return NewResponseErrorf(http.StatusBadRequest, "unsupported signing algorithm %q", body.Algorithm)
 	}
 
 	// Validate optional note

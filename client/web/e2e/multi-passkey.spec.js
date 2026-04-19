@@ -29,7 +29,7 @@ async function runEncryptThroughUI(page, requestKey, plaintext, noteSuffix) {
         operation: 'encrypt',
         requestKey,
         keyLabel: 'multi-passkey',
-        algorithm: 'aes-gcm-256',
+        algorithm: 'A256GCM',
         note: `multi-passkey encrypt ${noteSuffix}`,
         value: plaintext,
     })
@@ -48,7 +48,7 @@ async function runDecryptThroughUI(page, requestKey, encryptOutput, noteSuffix) 
         operation: 'decrypt',
         requestKey,
         keyLabel: 'multi-passkey',
-        algorithm: 'aes-gcm-256',
+        algorithm: 'A256GCM',
         note: `multi-passkey decrypt ${noteSuffix}`,
         value: encryptOutput.value,
         nonce: encryptOutput.nonce,

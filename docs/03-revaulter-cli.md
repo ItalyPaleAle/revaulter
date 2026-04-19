@@ -1,6 +1,6 @@
 # Using the Revaulter CLI
 
-The Revaulter CLI (`revaulter-cli`) is the primary way to submit encrypt and decrypt requests.
+The Revaulter CLI (`revaulter-cli`) is the primary way to submit encrypt, decrypt, and sign requests.
 
 **Using the CLI is strongly recommended** over calling the REST API directly: it handles transport key generation, end-to-end encryption, long-polling, and result decryption automatically.
 
@@ -23,7 +23,7 @@ docker run --rm ghcr.io/italypaleale/revaulter-cli:2 encrypt \
   --server https://revaulter.example.com \
   --request-key AbCdEf0123456789GhIj \
   --key-label my-key \
-  --algorithm aes-gcm-256 \
+  --algorithm A256GCM \
   --value SGVsbG8
 ```
 
@@ -42,7 +42,7 @@ revaulter-cli encrypt [flags]
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
 | `--request-key` | | Yes | Per-user request key (shown in the web UI after registration) |
 | `--key-label` | | Yes | Logical key label used for key derivation |
-| `--algorithm` | `-a` | Yes | Algorithm identifier (currently `aes-gcm-256`) |
+| `--algorithm` | `-a` | Yes | Algorithm identifier (currently `A256GCM`) |
 | `--value` | | Yes | The message to encrypt (base64-encoded) |
 | `--nonce` | | No | Nonce/IV for the operation (base64-encoded) |
 | `--aad` | | No | Additional authenticated data (base64-encoded) |
@@ -61,7 +61,7 @@ revaulter-cli encrypt \
   --server https://revaulter.example.com \
   --request-key AbCdEf0123456789GhIj \
   --key-label boot-disk \
-  --algorithm aes-gcm-256 \
+  --algorithm A256GCM \
   --value SGVsbG8 \
   --note "boot unlock"
 ```
@@ -81,7 +81,7 @@ revaulter-cli decrypt [flags]
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
 | `--request-key` | | Yes | Per-user request key (shown in the web UI after registration) |
 | `--key-label` | | Yes | Logical key label used for key derivation |
-| `--algorithm` | `-a` | Yes | Algorithm identifier (currently `aes-gcm-256`) |
+| `--algorithm` | `-a` | Yes | Algorithm identifier (currently `A256GCM`) |
 | `--value` | | Yes | The ciphertext to decrypt (base64-encoded) |
 | `--tag` | | No | Authentication tag (base64-encoded) |
 | `--nonce` | | No | Nonce/IV (base64-encoded) |
@@ -101,7 +101,7 @@ revaulter-cli decrypt \
   --server https://revaulter.example.com \
   --request-key AbCdEf0123456789GhIj \
   --key-label boot-disk \
-  --algorithm aes-gcm-256 \
+  --algorithm A256GCM \
   --value <base64-ciphertext> \
   --nonce <base64-nonce> \
   --tag <base64-tag>
@@ -114,13 +114,104 @@ revaulter-cli decrypt \
   --server https://revaulter.example.com \
   --request-key AbCdEf0123456789GhIj \
   --key-label boot-disk \
-  --algorithm aes-gcm-256 \
+  --algorithm A256GCM \
   --value <base64-ciphertext> \
   --nonce <base64-nonce> \
   --tag <base64-tag> \
   --output /tmp/decrypted.bin \
   --raw
 ```
+
+---
+
+### `sign`
+
+Submit a signing request for approval. The CLI always pre-hashes the message with SHA-256 client-side, so only the 32-byte digest is sent to the server — the raw message is never transmitted.
+
+```bash
+revaulter-cli sign [flags]
+```
+
+| Flag | Short | Required | Description |
+|------|-------|----------|-------------|
+| `--server` | `-s` | Yes | Address of the Revaulter server |
+| `--request-key` | | Yes | Per-user request key |
+| `--key-label` | | Yes | Logical key label used for signing-key derivation |
+| `--algorithm` | `-a` | Yes | Signing algorithm identifier (currently `ES256`) |
+| `--input` / `--file` | | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. The CLI hashes the file contents with SHA-256 |
+| `--digest` | | One of `--input` or `--digest` is required | A pre-computed 32-byte SHA-256 digest, encoded as hex or base64url. Mutually exclusive with `--format jws` |
+| `--format` | | No | Output format: `raw` (default — JSON envelope with base64url `r || s` signature) or `jws` (emit a compact JWS string). `jws` is not supported with `--digest` and with `--raw` |
+| `--jws-header` | | No | JSON fragment merged into the default protected header when building a JWS from `--input`. The `alg` field is always forced to `ES256`; other fields like `kid` or `typ` can be supplied |
+| `--timeout` | `-t` | No | Timeout for the operation |
+| `--note` | `-n` | No | Message displayed alongside the request |
+| `--output` | `-o` | No | Write the result to a file instead of stdout |
+| `--raw` | | No | Emit the raw 64-byte signature instead of the JSON envelope. Incompatible with `--format jws` |
+| `--insecure` | | No | Skip TLS certificate validation |
+| `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
+| `--verbose` | `-V` | No | Show debug-level logs |
+
+**Examples:**
+
+Sign a file (default output is a JSON envelope containing the base64url `r || s` signature):
+
+```bash
+revaulter-cli sign \
+  --server https://revaulter.example.com \
+  --request-key AbCdEf0123456789GhIj \
+  --key-label release-signing \
+  --algorithm ES256 \
+  --input manifest.json
+```
+
+Sign data piped from stdin:
+
+```bash
+echo "hello" | revaulter-cli sign \
+  --server https://revaulter.example.com \
+  --request-key AbCdEf0123456789GhIj \
+  --key-label release-signing \
+  --algorithm ES256 \
+  --input -
+```
+
+Sign a pre-computed SHA-256 digest (useful when integrating with other tooling that already hashes):
+
+```bash
+revaulter-cli sign \
+  --server https://revaulter.example.com \
+  --request-key AbCdEf0123456789GhIj \
+  --key-label release-signing \
+  --algorithm ES256 \
+  --digest d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592
+```
+
+Emit a compact JWS over a file, merging a custom `kid` into the protected header:
+
+```bash
+revaulter-cli sign \
+  --server https://revaulter.example.com \
+  --request-key AbCdEf0123456789GhIj \
+  --key-label release-signing \
+  --algorithm ES256 \
+  --input manifest.json \
+  --format jws \
+  --jws-header '{"kid":"release-signing-2026"}'
+```
+
+Write just the raw 64-byte `r || s` signature to a file (useful for pipelines that verify with a separate tool):
+
+```bash
+revaulter-cli sign \
+  --server https://revaulter.example.com \
+  --request-key AbCdEf0123456789GhIj \
+  --key-label release-signing \
+  --algorithm ES256 \
+  --input manifest.json \
+  --raw \
+  --output manifest.sig
+```
+
+> Note: ECDSA signatures are non-deterministic by design (a fresh random `k` per signature, per FIPS 186-5). Signing the same input twice produces two different but equally valid signatures — this is expected.
 
 ---
 
@@ -152,7 +243,7 @@ revaulter-cli version
 
 ## How it works
 
-When you run `revaulter-cli encrypt` or `decrypt`, the CLI:
+When you run `revaulter-cli encrypt`, `decrypt`, or `sign`, the CLI:
 
 1. Fetches the user's public encryption keys from the server
 2. Generates an ephemeral ECDH P-256 keypair and an ML-KEM-768 encapsulation
@@ -160,6 +251,8 @@ When you run `revaulter-cli encrypt` or `decrypt`, the CLI:
 4. Submits the encrypted request to the server
 5. Long-polls for the result
 6. Decrypts the response envelope locally using its ephemeral private key
+
+For `sign` specifically, the CLI pre-hashes the input with SHA-256 before encrypting, so only the 32-byte digest is ever transmitted end-to-end. The server and the browser never see the raw message.
 
 The server never has access to the plaintext request or response data.
 

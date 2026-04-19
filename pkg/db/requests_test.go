@@ -39,7 +39,7 @@ func TestRequestStoreLifecycle(t *testing.T) {
 		Operation:        "encrypt",
 		RequestorIP:      "127.0.0.1",
 		KeyLabel:         "boot-disk",
-		Algorithm:        "aes-gcm-256",
+		Algorithm:        "A256GCM",
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(5 * time.Minute),
 		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
@@ -59,7 +59,7 @@ func TestRequestStoreLifecycle(t *testing.T) {
 	require.Contains(t, rec.EncryptedRequest, "cliEphemeralPublicKey")
 	require.Nil(t, rec.ResponseEnvelope)
 
-	ok, err := store.CompleteRequest(ctx, "state-1", protocolv2.ResponseEnvelope{
+	completed, err := store.CompleteRequest(ctx, "state-1", "user-1", protocolv2.ResponseEnvelope{
 		TransportAlg: protocolv2.TransportAlg,
 		BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 			Kty: "EC", Crv: "P-256",
@@ -70,7 +70,9 @@ func TestRequestStoreLifecycle(t *testing.T) {
 		Ciphertext: "Y2lwaGVy",
 	})
 	require.NoError(t, err)
-	require.True(t, ok)
+	require.NotNil(t, completed)
+	require.Equal(t, V2RequestStatusCompleted, completed.Status)
+	require.NotNil(t, completed.ResponseEnvelope)
 
 	rec, err = store.GetRequest(ctx, "state-1")
 	require.NoError(t, err)
@@ -108,23 +110,24 @@ func TestRequestStoreCancel(t *testing.T) {
 		Operation:        "decrypt",
 		RequestorIP:      "127.0.0.1",
 		KeyLabel:         "x",
-		Algorithm:        "aes-gcm-256",
+		Algorithm:        "A256GCM",
 		CreatedAt:        time.Now(),
 		ExpiresAt:        time.Now().Add(time.Minute),
 		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"t","y":"t"},"nonce":"n","ciphertext":"c"}`,
 	})
 	require.NoError(t, err)
 
-	ok, err := store.CancelRequest(ctx, "state-2")
+	canceled, err := store.CancelRequest(ctx, "state-2", "user-2")
 	require.NoError(t, err)
-	require.True(t, ok)
+	require.NotNil(t, canceled)
+	require.Equal(t, V2RequestStatusCanceled, canceled.Status)
 
 	rec, err := store.GetRequest(ctx, "state-2")
 	require.NoError(t, err)
 	require.Equal(t, V2RequestStatusCanceled, rec.Status)
 }
 
-func TestRequestStoreExpirePendingAndReturnState(t *testing.T) {
+func TestRequestStoreMarkExpired(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
 
@@ -153,7 +156,7 @@ func TestRequestStoreExpirePendingAndReturnState(t *testing.T) {
 		Operation:        "encrypt",
 		RequestorIP:      "127.0.0.1",
 		KeyLabel:         "expired-key",
-		Algorithm:        "aes-gcm-256",
+		Algorithm:        "A256GCM",
 		CreatedAt:        now.Add(-2 * time.Minute),
 		ExpiresAt:        now.Add(-1 * time.Minute),
 		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
@@ -166,7 +169,7 @@ func TestRequestStoreExpirePendingAndReturnState(t *testing.T) {
 		Operation:        "encrypt",
 		RequestorIP:      "127.0.0.1",
 		KeyLabel:         "fresh-key",
-		Algorithm:        "aes-gcm-256",
+		Algorithm:        "A256GCM",
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(5 * time.Minute),
 		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
@@ -179,14 +182,14 @@ func TestRequestStoreExpirePendingAndReturnState(t *testing.T) {
 		Operation:        "encrypt",
 		RequestorIP:      "127.0.0.1",
 		KeyLabel:         "completed-key",
-		Algorithm:        "aes-gcm-256",
+		Algorithm:        "A256GCM",
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(5 * time.Minute),
 		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
 	})
 	require.NoError(t, err)
 
-	ok, err := store.CompleteRequest(ctx, "state-completed", protocolv2.ResponseEnvelope{
+	completed, err := store.CompleteRequest(ctx, "state-completed", "user-expire", protocolv2.ResponseEnvelope{
 		TransportAlg: protocolv2.TransportAlg,
 		BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 			Kty: "EC", Crv: "P-256",
@@ -197,26 +200,27 @@ func TestRequestStoreExpirePendingAndReturnState(t *testing.T) {
 		Ciphertext: "Y2lwaGVy",
 	})
 	require.NoError(t, err)
-	require.True(t, ok)
+	require.NotNil(t, completed)
 
-	ref, err := store.ExpirePendingAndReturnState(ctx, "state-expired")
+	expired, err := store.MarkExpired(ctx, "state-expired")
 	require.NoError(t, err)
-	require.NotNil(t, ref)
-	require.Equal(t, "state-expired", ref.State)
-	require.Equal(t, "user-expire", ref.UserID)
+	require.NotNil(t, expired)
+	require.Equal(t, "state-expired", expired.State)
+	require.Equal(t, "user-expire", expired.UserID)
+	require.Equal(t, V2RequestStatusExpired, expired.Status)
 
 	rec, err := store.GetRequest(ctx, "state-expired")
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 	require.Equal(t, V2RequestStatusExpired, rec.Status)
 
-	ref, err = store.ExpirePendingAndReturnState(ctx, "state-fresh")
+	expired, err = store.MarkExpired(ctx, "state-fresh")
 	require.NoError(t, err)
-	require.Nil(t, ref)
+	require.Nil(t, expired)
 
-	ref, err = store.ExpirePendingAndReturnState(ctx, "state-completed")
+	expired, err = store.MarkExpired(ctx, "state-completed")
 	require.NoError(t, err)
-	require.Nil(t, ref)
+	require.Nil(t, expired)
 }
 
 func TestRequestStoreDeleteExpiredTerminalRequest(t *testing.T) {
@@ -248,16 +252,16 @@ func TestRequestStoreDeleteExpiredTerminalRequest(t *testing.T) {
 		Operation:        "encrypt",
 		RequestorIP:      "127.0.0.1",
 		KeyLabel:         "old-terminal",
-		Algorithm:        "aes-gcm-256",
+		Algorithm:        "A256GCM",
 		CreatedAt:        now.Add(-25 * time.Minute),
 		ExpiresAt:        now.Add(-20 * time.Minute),
 		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
 	})
 	require.NoError(t, err)
 
-	ok, err := store.CancelRequest(ctx, "state-old-terminal")
+	canceled, err := store.CancelRequest(ctx, "state-old-terminal", "user-delete")
 	require.NoError(t, err)
-	require.True(t, ok)
+	require.NotNil(t, canceled)
 
 	err = store.CreateRequest(ctx, CreateRequestInput{
 		State:            "state-pending",
@@ -265,7 +269,7 @@ func TestRequestStoreDeleteExpiredTerminalRequest(t *testing.T) {
 		Operation:        "encrypt",
 		RequestorIP:      "127.0.0.1",
 		KeyLabel:         "pending",
-		Algorithm:        "aes-gcm-256",
+		Algorithm:        "A256GCM",
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(30 * time.Minute),
 		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
@@ -278,16 +282,16 @@ func TestRequestStoreDeleteExpiredTerminalRequest(t *testing.T) {
 		Operation:        "encrypt",
 		RequestorIP:      "127.0.0.1",
 		KeyLabel:         "recent-terminal",
-		Algorithm:        "aes-gcm-256",
+		Algorithm:        "A256GCM",
 		CreatedAt:        now.Add(-5 * time.Minute),
 		ExpiresAt:        now.Add(-2 * time.Minute),
 		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
 	})
 	require.NoError(t, err)
 
-	ok, err = store.CancelRequest(ctx, "state-recent-terminal")
+	canceled, err = store.CancelRequest(ctx, "state-recent-terminal", "user-delete")
 	require.NoError(t, err)
-	require.True(t, ok)
+	require.NotNil(t, canceled)
 
 	err = store.DeleteExpiredTerminalRequest(ctx, "state-old-terminal", now)
 	require.NoError(t, err)

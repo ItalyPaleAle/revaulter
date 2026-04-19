@@ -1,7 +1,11 @@
 <script lang="ts">
 import Button from '$components/Button.svelte'
+import Icon from '$components/Icon.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
+import Logo from '$components/Logo.svelte'
 import TextField from '$components/TextField.svelte'
+
+import heroImage from '$assets/hero.avif'
 
 interface Props {
     authBusy: boolean
@@ -60,27 +64,29 @@ function authBodyCopy() {
 }
 </script>
 
-<div class="mx-auto flex min-h-screen w-full max-w-5xl items-center justify-center px-4 py-10 md:px-6">
-    <section class="mx-auto flex w-full max-w-md flex-col items-stretch justify-center">
-        <div class="rounded-4xl border border-white/85 bg-white/92 p-6 shadow-[0_8px_24px_-20px_rgba(15,23,42,0.22)] dark:border-white/10 dark:bg-slate-950/88 md:p-8">
-            <div class="relative mb-6 space-y-3">
-                <div class="inline-flex items-center rounded-full bg-white/60 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 ring-1 ring-slate-200/70 dark:bg-white/6 dark:text-slate-300 dark:ring-white/10 lg:hidden">
-                    Revaulter v2
-                </div>
-                <div class="space-y-2">
-                    <h2 class="text-3xl text-slate-950 dark:text-white" data-display="serif">{authHeadline()}</h2>
-                    <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">{authBodyCopy()}</p>
-                </div>
+<div class="grid min-h-screen grid-cols-1 lg:grid-cols-2">
+    <!-- Left pane: form -->
+    <div class="flex min-h-screen items-center justify-center px-6 py-12">
+        <div class="w-full max-w-90">
+            <div class="mb-8">
+                <Logo size={48} radius={12} />
             </div>
 
+            <h1 class="mb-2 text-[30px] font-semibold leading-tight tracking-tight text-neutral-950 dark:text-neutral-50">
+                {authHeadline()}
+            </h1>
+            <p class="mb-8 text-[15px] leading-6 text-neutral-500 dark:text-neutral-400">
+                {authBodyCopy()}
+            </p>
+
             {#if pageError}
-                <div class="mb-4 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+                <div class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
                     {pageError}
                 </div>
             {/if}
 
             {#if authError}
-                <div class="mb-4 rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+                <div class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
                     {authError}
                 </div>
             {/if}
@@ -96,7 +102,7 @@ function authBodyCopy() {
                     }}
                 >
                     <div class="space-y-2">
-                        <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-displayname">Display name (optional)</label>
+                        <label class="block text-sm font-medium text-neutral-900 dark:text-neutral-100" for="v2-displayname">Display name (optional)</label>
                         <TextField
                             id="v2-displayname"
                             value={displayName}
@@ -108,12 +114,13 @@ function authBodyCopy() {
 
                     <Button
                         type="submit"
-                        variant="neutral"
+                        variant="primary"
                         size="lg"
                         width="full"
                         disabled={authBusy}
                     >
                         {#if authBusy}<LoadingSpinner size="1rem" />{/if}
+                        <Icon icon="key" title="Passkey" size="4" />
                         Create account with passkey
                     </Button>
                 </form>
@@ -128,7 +135,7 @@ function authBodyCopy() {
                     }}
                 >
                     <div class="space-y-2">
-                        <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-password-setup">Password</label>
+                        <label class="block text-sm font-medium text-neutral-900 dark:text-neutral-100" for="v2-password-setup">Password</label>
                         <TextField
                             id="v2-password-setup"
                             type="password"
@@ -141,7 +148,7 @@ function authBodyCopy() {
                     </div>
 
                     <div class="space-y-2">
-                        <label class="block text-sm font-medium text-slate-800 dark:text-slate-100" for="v2-password-confirm">Confirm password</label>
+                        <label class="block text-sm font-medium text-neutral-900 dark:text-neutral-100" for="v2-password-confirm">Confirm password</label>
                         <TextField
                             id="v2-password-confirm"
                             type="password"
@@ -153,7 +160,7 @@ function authBodyCopy() {
                     </div>
 
                     {#if confirmError}
-                        <div class="rounded-2xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+                        <div class="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
                             {confirmError}
                         </div>
                     {/if}
@@ -172,7 +179,7 @@ function authBodyCopy() {
                         <Button
                             type="button"
                             class="flex-1"
-                            variant="outline"
+                            variant="secondary"
                             size="lg"
                             onclick={onSkipPassword}
                             disabled={authBusy}
@@ -182,18 +189,28 @@ function authBodyCopy() {
                     </div>
                 </form>
             {/if}
-        </div>
 
-        <Button
-            type="button"
-            class="mt-4"
-            variant="surface"
-            size="lg"
-            onclick={() => {
-                void onReturnToSignIn()
-            }}
+            <div class="mt-8 border-t border-neutral-200 pt-6 dark:border-neutral-800">
+                <button
+                    type="button"
+                    class="cursor-pointer text-sm text-neutral-500 underline decoration-neutral-300 underline-offset-4 transition-colors hover:text-neutral-900 dark:text-neutral-400 dark:decoration-neutral-700 dark:hover:text-neutral-50"
+                    onclick={() => {
+                        void onReturnToSignIn()
+                    }}
+                >
+                    Back to sign in
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right pane: hero image -->
+    <div class="hidden p-4 lg:block">
+        <div
+            class="relative h-[calc(100vh-2rem)] w-full overflow-hidden rounded-[20px] border border-neutral-200 bg-cover bg-center dark:border-neutral-800"
+            style={`background-image: url(${heroImage});`}
         >
-            Back to sign in
-        </Button>
-    </section>
+            <div class="pointer-events-none absolute inset-0 rounded-[20px] ring-1 ring-inset ring-black/5"></div>
+        </div>
+    </div>
 </div>

@@ -48,7 +48,7 @@ func TestDecryptV2ResponseEnvelope(t *testing.T) {
 	nonce := make([]byte, aead.NonceSize())
 	_, err = rand.Read(nonce)
 	require.NoError(t, err)
-	aad := buildTransportAAD("state-1", "encrypt", "aes-gcm-256")
+	aad := buildTransportAAD("state-1", "encrypt", "A256GCM")
 	plain := []byte(`{"ok":true}`)
 	ct := aead.Seal(nil, nonce, plain, aad)
 
@@ -79,7 +79,7 @@ func TestDeriveV2TransportKeyDeterministic(t *testing.T) {
 func TestBuildTransportAADMatchesBrowserOrdering(t *testing.T) {
 	require.Equal(
 		t,
-		[]byte("algorithm=aes-gcm-256\noperation=encrypt\nstate=state-1\nv=1"),
-		buildTransportAAD("state-1", "encrypt", "aes-gcm-256"),
+		[]byte("algorithm=A256GCM\noperation=encrypt\nstate=state-1\nv=1"),
+		buildTransportAAD("state-1", "encrypt", "A256GCM"),
 	)
 }
