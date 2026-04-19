@@ -193,14 +193,18 @@ export async function v2ListSigningKeys() {
     return res.data
 }
 
-/** Publishes (or replaces) a signing key for the current user */
-export async function v2PublishSigningKey(args: {
+/** Stores a signing key for the current user, optionally publishing it
+ * When `publish=true`, the key is upserted and marked as published (replacing any existing row)
+ * When `publish=false`, the key is stored only if missing — existing published keys are not demoted
+ */
+export async function v2UpsertSigningKey(args: {
     algorithm: string
     keyLabel: string
     jwk: V2SigningJwk
     pem: string
+    publish: boolean
 }) {
-    const res = await Request<V2PublishedSigningKey>('/v2/api/signing-keys/publish', {
+    const res = await Request<V2PublishedSigningKey>('/v2/api/signing-keys', {
         postData: args,
     })
     return res.data

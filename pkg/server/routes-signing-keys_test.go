@@ -115,20 +115,22 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 	km := newSigningKeyMaterial(t)
 
 	// Unauthenticated publish is rejected
-	status, _, _ := doPost(t, "/v2/api/signing-keys/publish", map[string]any{
+	status, _, _ := doPost(t, "/v2/api/signing-keys", map[string]any{
 		"algorithm": protocolv2.SigningAlgES256,
 		"keyLabel":  "main",
 		"jwk":       km.JWKJSON,
 		"pem":       km.PEM,
+		"publish":   true,
 	})
 	require.Equal(t, http.StatusUnauthorized, status)
 
 	// Successful publish
-	status, _, body := doPost(t, "/v2/api/signing-keys/publish", map[string]any{
+	status, _, body := doPost(t, "/v2/api/signing-keys", map[string]any{
 		"algorithm": protocolv2.SigningAlgES256,
 		"keyLabel":  "main",
 		"jwk":       km.JWKJSON,
 		"pem":       km.PEM,
+		"publish":   true,
 	}, aliceCookie)
 	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
 	var pubResp map[string]any
@@ -139,11 +141,12 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 
 	// Republishing the same material is idempotent — same id, UPSERT semantics
 	// created_at is preserved; we assert the id matches which is enough to prove the row was reused
-	status, _, body = doPost(t, "/v2/api/signing-keys/publish", map[string]any{
+	status, _, body = doPost(t, "/v2/api/signing-keys", map[string]any{
 		"algorithm": protocolv2.SigningAlgES256,
 		"keyLabel":  "main",
 		"jwk":       km.JWKJSON,
 		"pem":       km.PEM,
+		"publish":   true,
 	}, aliceCookie)
 	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
 	require.NoError(t, json.Unmarshal(body, &pubResp))
@@ -266,7 +269,7 @@ func TestServerV2SigningKeyPublishValidatesInputs(t *testing.T) {
 		t.Helper()
 		b, err := json.Marshal(body)
 		require.NoError(t, err)
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/api/signing-keys/publish", testServerPort), bytes.NewReader(b))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/api/signing-keys", testServerPort), bytes.NewReader(b))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 		req.AddCookie(aliceCookie)
@@ -441,11 +444,12 @@ func TestServerV2SigningKeyAutoStoreOnSign(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, status)
 
 	// Publishing the same material promotes the row to published=true
-	status, body = doPost(t, "/v2/api/signing-keys/publish", map[string]any{
+	status, body = doPost(t, "/v2/api/signing-keys", map[string]any{
 		"algorithm": protocolv2.SigningAlgES256,
 		"keyLabel":  keyLabel,
 		"jwk":       km.JWKJSON,
 		"pem":       km.PEM,
+		"publish":   true,
 	}, aliceCookie)
 	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
 	var pubResp map[string]any
@@ -589,9 +593,10 @@ func TestServerV2SigningKeyUniqueLabelReplacesPreviousKey(t *testing.T) {
 			"keyLabel":  "shared",
 			"jwk":       km.JWKJSON,
 			"pem":       km.PEM,
+			"publish":   true,
 		})
 		require.NoError(t, err)
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/api/signing-keys/publish", testServerPort), bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/api/signing-keys", testServerPort), bytes.NewReader(body))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 		req.AddCookie(aliceCookie)

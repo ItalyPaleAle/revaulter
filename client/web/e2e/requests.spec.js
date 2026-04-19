@@ -146,7 +146,7 @@ test('regenerating the request key invalidates the old public key endpoint', asy
         const before = await fetchRequestPubkey(request, oldKey)
         expect(before.status).toBe(200)
 
-        await page.getByRole('button', { name: 'Open user settings' }).click()
+        await page.getByRole('button', { name: 'Open settings' }).click()
         await page.locator('button', { hasText: 'Regenerate' }).click()
         await expect(page.getByText('Request key regenerated.')).toBeVisible()
 

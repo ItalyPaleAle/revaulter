@@ -2,6 +2,7 @@
 import { formatDistanceToNowStrict } from 'date-fns'
 
 import Button from '$components/Button.svelte'
+import Icon from '$components/Icon.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
 
 import {
@@ -257,18 +258,29 @@ async function buildResponseEnvelope(
     return { envelope, publicKey }
 }
 
-function operationTitle(op: V2PendingRequestItem['operation']) {
-    switch (op) {
-        case 'encrypt':
-            return 'Encrypt'
-        case 'decrypt':
-            return 'Decrypt'
-        case 'sign':
-            return 'Sign'
-    }
-}
+/** Visual metadata per operation — icon, label, and accent color classes */
+const OP_META = {
+    encrypt: {
+        label: 'Encrypt',
+        icon: 'lock-closed',
+        colorClass: 'text-sky-600 dark:text-sky-400',
+        bgClass: 'bg-sky-50 dark:bg-sky-950/40',
+    },
+    decrypt: {
+        label: 'Decrypt',
+        icon: 'lock-open',
+        colorClass: 'text-emerald-600 dark:text-emerald-400',
+        bgClass: 'bg-emerald-50 dark:bg-emerald-950/40',
+    },
+    sign: {
+        label: 'Sign',
+        icon: 'signature',
+        colorClass: 'text-amber-700 dark:text-amber-400',
+        bgClass: 'bg-amber-50 dark:bg-amber-950/40',
+    },
+} as const
 
-/** Renders a SHA-256 digest (32 bytes, base64url) as an uppercase hex string with spaces for display */
+/** Renders a SHA-256 digest (32 bytes, base64url) as uppercase hex with spaces */
 function formatDigest(digestB64Url: string): string {
     try {
         const bytes = base64UrlToBytes(digestB64Url)
@@ -289,9 +301,8 @@ function formatDigest(digestB64Url: string): string {
 }
 
 /**
- * For sign requests, decrypts the E2EE inner payload so the user can review the
- * SHA-256 digest before approving. Triggered lazily when the item is a sign
- * request — other operations don't need to expose inner payload contents.
+ * For sign requests, decrypts the E2EE inner payload so the user can review
+ * the SHA-256 digest before approving.
  */
 let digestHex = $state<string | null>(null)
 let digestLoading = $state(false)
@@ -326,77 +337,164 @@ $effect(() => {
     })()
 })
 
+/** Ticking clock so age/expiry labels stay live */
+let now = $state(Date.now())
+$effect(() => {
+    const id = setInterval(() => {
+        now = Date.now()
+    }, 1000)
+    return () => clearInterval(id)
+})
+
 function expiresIn(item: V2PendingRequestItem) {
+    // Touch `now` so this re-computes every tick
+    void now
     return formatDistanceToNowStrict(new Date(item.expiry * 1000), { addSuffix: true })
 }
+
+function ttlPercent(item: V2PendingRequestItem) {
+    void now
+    const total = (item.expiry - item.date) * 1000
+    if (total <= 0) {
+        return 0
+    }
+    const remaining = item.expiry * 1000 - now
+    return Math.max(0, Math.min(100, (remaining / total) * 100))
+}
+
+function ttlIsLow(item: V2PendingRequestItem) {
+    void now
+    return item.expiry * 1000 - now < 120_000
+}
+
+function ageLabel(item: V2PendingRequestItem) {
+    void now
+    return formatDistanceToNowStrict(new Date(item.date * 1000), { addSuffix: true })
+}
+
+let meta = $derived(OP_META[item.operation])
+let confirmed = $derived(localStatus === 'confirmed')
+let canceled = $derived(localStatus === 'canceled')
+let terminal = $derived(confirmed || canceled)
 </script>
 
-<div class="rounded-[1.6rem] border border-white/80 bg-white/86 p-4 shadow-[0_4px_16px_-14px_rgba(15,23,42,0.18)] backdrop-blur-sm dark:border-white/10 dark:bg-slate-950/82">
-    <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div class="space-y-1">
-            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{operationTitle(item.operation)} request</div>
-            <div class="text-base font-semibold text-slate-900 dark:text-white">
-                {item.keyLabel}
-                <span class="font-normal text-slate-500 dark:text-slate-400"> · {item.algorithm}</span>
-            </div>
-            {#if item.requestor}
-                <div class="text-sm text-slate-700 dark:text-slate-300">
-                    Requestor: <span class="font-mono">{item.requestor}</span>
-                </div>
-            {/if}
-            {#if item.note}
-                <div class="text-sm italic text-slate-700 dark:text-slate-300">“{item.note}”</div>
-            {/if}
-            {#if item.operation === 'sign'}
-                <div class="mt-2 text-xs text-slate-500 dark:text-slate-400">SHA-256 digest to sign:</div>
-                {#if digestLoading}
-                    <div class="text-xs text-slate-500 dark:text-slate-400">Loading…</div>
-                {:else if digestError}
-                    <div class="text-xs text-rose-700 dark:text-rose-300">Could not decrypt digest: {digestError}</div>
-                {:else if digestHex}
-                    <div class="break-all rounded bg-slate-100 px-2 py-1 font-mono text-xs text-slate-800 dark:bg-slate-900 dark:text-slate-200">
-                        {digestHex}
-                    </div>
-                {/if}
-            {/if}
-            <div class="text-xs text-slate-500 dark:text-slate-400">
-                Expires {expiresIn(item)} · <span class="font-mono">{item.state}</span>
-            </div>
+<div
+    class={`px-6 py-5 transition-colors ${confirmed ? 'bg-emerald-50/60 dark:bg-emerald-950/20' : canceled ? 'bg-rose-50/60 dark:bg-rose-950/20' : ''} ${terminal ? 'opacity-70' : ''}`}
+>
+    <div class="flex items-start gap-4">
+        <!-- Icon puck -->
+        <div
+            class={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${meta.bgClass} ${meta.colorClass}`}
+            title={item.algorithm}
+        >
+            <Icon icon={meta.icon} title={meta.label} size="4" />
         </div>
 
-        <div class="min-w-52 border-t border-slate-200/80 pt-3 dark:border-white/10 md:border-l md:border-t-0 md:pl-4 md:pt-0">
+        <!-- Main -->
+        <div class="min-w-0 flex-1">
+            <!-- Label row -->
+            <div class="flex flex-wrap items-baseline gap-2">
+                <span class={`text-[11px] font-semibold uppercase tracking-wider ${meta.colorClass}`}>{meta.label}</span>
+                <span class="text-neutral-300 dark:text-neutral-600">·</span>
+                <span class="mono text-[13px] font-medium text-neutral-900 dark:text-neutral-50">{item.keyLabel}</span>
+            </div>
+
+            <!-- Requestor + note -->
+            <div class="mt-1 text-[13px] leading-5 text-neutral-500 dark:text-neutral-400">
+                {#if item.requestor}
+                    from <span class="mono text-neutral-900 dark:text-neutral-100">{item.requestor}</span>
+                {/if}
+                {#if item.note}
+                    {#if item.requestor}
+                        <span class="mx-1.5 text-neutral-300 dark:text-neutral-600">·</span>
+                    {/if}
+                    <span>{item.note}</span>
+                {/if}
+            </div>
+
+            <!-- Meta row -->
+            <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-neutral-400 dark:text-neutral-500">
+                <span>{ageLabel(item)}</span>
+                <span>·</span>
+                <span
+                    class={`tabular-nums ${ttlIsLow(item) ? 'text-rose-600 dark:text-rose-400' : ''}`}
+                >
+                    Expires {expiresIn(item)}
+                </span>
+                <span>·</span>
+                <span class="mono truncate underline decoration-neutral-300 underline-offset-2 dark:decoration-neutral-700" title={item.state}>
+                    {item.state}
+                </span>
+            </div>
+
+            <!-- TTL progress bar -->
+            <div class="mt-2.5 h-0.5 w-full overflow-hidden rounded-sm bg-neutral-200 dark:bg-neutral-800">
+                <div
+                    class={`h-full transition-[width] duration-1000 ease-linear ${ttlIsLow(item) ? 'bg-rose-500 dark:bg-rose-400' : 'bg-neutral-500 dark:bg-neutral-400'}`}
+                    style={`width: ${ttlPercent(item)}%;`}
+                ></div>
+            </div>
+
+            <!-- Sign digest expanded by default -->
+            {#if item.operation === 'sign'}
+                <div class="mt-3.5 rounded-lg border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-800/60">
+                    <div class="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                        SHA-256 digest to sign
+                    </div>
+                    {#if digestLoading}
+                        <div class="mono text-[11px] text-neutral-500 dark:text-neutral-400">Loading…</div>
+                    {:else if digestError}
+                        <div class="text-[11px] text-rose-700 dark:text-rose-300">Could not decrypt digest: {digestError}</div>
+                    {:else if digestHex}
+                        <div class="mono break-all text-[11px] leading-relaxed text-neutral-900 dark:text-neutral-100">
+                            {digestHex}
+                        </div>
+                    {/if}
+                </div>
+            {/if}
+
             {#if error}
-                <div class="rounded border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
+                <div class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
                     {error}
                 </div>
             {/if}
-            <div class="flex gap-2">
+        </div>
+
+        <!-- Actions column -->
+        <div class="flex min-w-24 shrink-0 flex-col gap-1.5">
+            {#if confirmed}
+                <div class="inline-flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium text-emerald-600 dark:text-emerald-400">
+                    <Icon icon="check" title="" size="3.5" />
+                    Confirmed
+                </div>
+            {:else if canceled}
+                <div class="inline-flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium text-rose-600 dark:text-rose-400">
+                    <Icon icon="x" title="" size="3.5" />
+                    Canceled
+                </div>
+            {:else}
                 <Button
-                    class="flex-1"
+                    variant="primary"
                     size="sm"
-                    variant="success"
                     disabled={working || localStatus !== 'pending'}
                     onclick={doConfirm}
                 >
-                    {#if working && localStatus === '_processing'}<LoadingSpinner size="1rem" />{/if}
-                    Confirm
+                    {#if working && localStatus === '_processing'}
+                        <LoadingSpinner size="0.85rem" />
+                    {:else}
+                        <Icon icon="check" title="" size="3.5" />
+                        Confirm
+                    {/if}
                 </Button>
                 <Button
-                    class="flex-1"
+                    variant="ghost"
                     size="sm"
-                    variant="danger"
                     disabled={working || localStatus !== 'pending'}
                     onclick={doCancel}
                 >
-                    Cancel
+                    <Icon icon="x" title="" size="3.5" />
+                    Decline
                 </Button>
-            </div>
-            {#if localStatus === 'confirmed'}
-                <div class="mt-2 text-sm text-emerald-700 dark:text-emerald-300">Confirmed</div>
-            {:else if localStatus === 'canceled'}
-                <div class="mt-2 text-sm text-rose-700 dark:text-rose-300">Canceled</div>
-            {:else if localStatus === '_failed'}
-                <div class="mt-2 text-sm text-rose-700 dark:text-rose-300">Failed</div>
             {/if}
         </div>
     </div>

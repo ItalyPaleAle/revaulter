@@ -8,8 +8,9 @@ interface Props {
     disabled?: boolean
     onclick?: (event: MouseEvent) => void
     size?: 'sm' | 'md' | 'lg' | 'icon' | 'none'
+    title?: string
     type?: 'button' | 'submit' | 'reset'
-    variant?: 'primary' | 'neutral' | 'outline' | 'surface' | 'danger' | 'success' | 'icon' | 'unstyled'
+    variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'icon' | 'unstyled'
     width?: 'auto' | 'full'
 }
 
@@ -20,44 +21,41 @@ let {
     disabled = false,
     onclick,
     size = 'md',
+    title,
     type = 'button',
-    variant = 'outline',
+    variant = 'secondary',
     width = 'auto',
 }: Props = $props()
 
 function variantClass(value: typeof variant) {
     switch (value) {
         case 'primary':
-            return 'bg-slate-950 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-100'
-        case 'neutral':
-            return 'bg-[rgba(255,255,255,0.22)] text-slate-900 ring-1 ring-white/70 hover:bg-[rgba(255,255,255,0.32)] dark:bg-white/10 dark:text-white dark:ring-white/12 dark:hover:bg-white/16'
-        case 'surface':
-            return 'bg-transparent text-slate-700 hover:bg-white/45 dark:text-slate-100 dark:hover:bg-white/6'
+            return 'bg-neutral-950 text-neutral-50 border border-neutral-950 hover:opacity-90 dark:bg-neutral-50 dark:text-neutral-950 dark:border-neutral-50'
+        case 'secondary':
+            return 'bg-white text-neutral-900 border border-neutral-300 hover:border-neutral-900 dark:bg-neutral-900 dark:text-neutral-50 dark:border-neutral-700 dark:hover:border-neutral-300'
+        case 'ghost':
+            return 'bg-transparent text-neutral-500 border border-transparent hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-50'
         case 'danger':
-            return 'bg-rose-600 text-white hover:bg-rose-500'
-        case 'success':
-            return 'bg-emerald-600 text-white hover:bg-emerald-500'
+            return 'bg-transparent text-rose-600 border border-neutral-200 hover:border-rose-400 dark:text-rose-400 dark:border-neutral-800 dark:hover:border-rose-500'
         case 'icon':
-            return 'bg-white/60 text-slate-600 ring-1 ring-slate-200/80 hover:bg-white dark:bg-white/8 dark:text-slate-200 dark:ring-white/10 dark:hover:bg-white/14'
+            return 'bg-white text-neutral-500 border border-neutral-200 hover:text-neutral-900 hover:border-neutral-300 dark:bg-neutral-900 dark:text-neutral-400 dark:border-neutral-800 dark:hover:text-neutral-50 dark:hover:border-neutral-700'
         case 'unstyled':
             return ''
-        case 'outline':
-            return 'text-slate-700 ring-1 ring-slate-300/80 hover:bg-white/45 dark:text-slate-100 dark:ring-white/12 dark:hover:bg-white/6'
     }
 }
 
 function sizeClass(value: typeof size) {
     switch (value) {
         case 'sm':
-            return 'px-3 py-2 text-sm'
+            return 'h-[30px] px-3 text-[13px]'
+        case 'md':
+            return 'h-9 px-3.5 text-[13px]'
         case 'lg':
-            return 'px-4 py-3 text-sm font-semibold'
+            return 'h-11 px-4.5 text-sm'
         case 'icon':
-            return 'h-10 w-10 p-0 text-lg'
+            return 'h-9 w-9 p-0 text-sm'
         case 'none':
             return ''
-        case 'md':
-            return 'px-4 py-2 text-sm'
     }
 }
 
@@ -72,8 +70,9 @@ function widthClass(value: typeof width) {
 <button
     {type}
     {disabled}
+    {title}
     aria-label={ariaLabel}
-    class={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-full font-medium transition duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200 dark:focus-visible:ring-sky-950 disabled:cursor-not-allowed disabled:opacity-60 ${variantClass(variant)} ${sizeClass(size)} ${widthClass(width)} ${className}`}
+    class={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg font-medium transition duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400/70 dark:focus-visible:ring-neutral-500/70 disabled:cursor-not-allowed disabled:opacity-50 ${variantClass(variant)} ${sizeClass(size)} ${widthClass(width)} ${className}`}
     onclick={onclick}
 >
     {@render children?.()}

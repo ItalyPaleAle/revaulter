@@ -219,8 +219,8 @@ export async function waitForListStream(page) {
 }
 
 export async function openSettings(page) {
-    await page.getByRole('button', { name: 'Open user settings' }).click()
-    await expect(page.getByRole('button', { name: 'Close user settings' })).toBeVisible()
+    await page.getByRole('button', { name: 'Open settings' }).click()
+    await expect(page.getByRole('button', { name: 'Close settings' })).toBeVisible()
 }
 
 export async function openSettingsTab(page, tabName) {
@@ -329,7 +329,7 @@ export async function addPasskeyThroughSettings(page, manager, name) {
     await page.getByRole('button', { name: 'Register passkey' }).click()
     await expect(page.getByText('Passkey added.')).toBeVisible()
     // Close the settings modal so the ready view is interactable again
-    await page.getByRole('button', { name: 'Close user settings' }).click()
+    await page.getByRole('button', { name: 'Close settings' }).click()
     // Touch the manager reference so the linter is aware the caller must have set the active authenticator beforehand
     void manager
 }
@@ -351,8 +351,8 @@ export async function setPasswordThroughSettings(page, password) {
         await page.getByRole('button', { name: 'Change password' }).click()
     }
 
-    await expect(page.getByRole('button', { name: 'Close user settings' })).toBeVisible()
-    await page.getByRole('button', { name: 'Close user settings' }).click()
+    await expect(page.getByRole('button', { name: 'Close settings' })).toBeVisible()
+    await page.getByRole('button', { name: 'Close settings' }).click()
 }
 
 export function startCLIRequest(args) {

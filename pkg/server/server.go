@@ -305,7 +305,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2APIGroup.GET("/request/:state", s.RouteV2APIRequestGet)
 	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
 	v2APIGroup.GET("/signing-keys", s.RouteV2APISigningKeyList)
-	v2APIGroup.POST("/signing-keys/publish", s.RouteV2APISigningKeyPublish)
+	v2APIGroup.POST("/signing-keys", s.RouteV2APISigningKeyUpsert)
 	v2APIGroup.POST("/signing-keys/unpublish", s.RouteV2APISigningKeyUnpublish)
 
 	v2AuthGroup := v2RouteGroup.Group("/auth")

@@ -30,7 +30,7 @@ import {
     v2LoginBegin,
     v2LoginFinish,
     v2Logout,
-    v2PublishSigningKey,
+    v2UpsertSigningKey,
     v2RegenerateRequestKey,
     v2RegisterBegin,
     v2RegisterFinish,
@@ -533,6 +533,15 @@ async function doDeriveSigningKey(keyLabel: string, algorithm: string): Promise<
     })
     const [id, pem] = await Promise.all([computeEcP256Thumbprint(publicJwk), ecP256JwkToPem(publicJwk)])
 
+    await v2UpsertSigningKey({
+        algorithm,
+        keyLabel,
+        jwk: publicJwk,
+        pem,
+        publish: false,
+    })
+    await doLoadSigningKeys()
+
     return { keyLabel, algorithm, jwk: publicJwk, pem, id }
 }
 
@@ -541,11 +550,12 @@ async function doPublishSigningKey(derived: DerivedSigningKey) {
     settingsError = null
     settingsSuccess = null
     try {
-        await v2PublishSigningKey({
+        await v2UpsertSigningKey({
             algorithm: derived.algorithm,
             keyLabel: derived.keyLabel,
             jwk: derived.jwk,
             pem: derived.pem,
+            publish: true,
         })
         await doLoadSigningKeys()
         settingsSuccess = `Signing key "${derived.keyLabel}" published.`

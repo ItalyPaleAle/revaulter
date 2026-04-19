@@ -1,7 +1,7 @@
 <script lang="ts">
 import Button from '$components/Button.svelte'
 import Icon from '$components/Icon.svelte'
-import LoadingSpinner from '$components/LoadingSpinner.svelte'
+import Logo from '$components/Logo.svelte'
 import PendingItem from '$components/PendingItem.svelte'
 import UserSettingsModal from '$components/UserSettingsModal.svelte'
 
@@ -80,83 +80,104 @@ function toggleSettingsModal() {
 function closeSettingsModal() {
     settingsModalOpen = false
 }
-
-function logoutFromSettings() {
-    closeSettingsModal()
-    void onLogout()
-}
 </script>
 
-<div class="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-4 py-6 md:px-6 md:py-8">
-    <header class="rounded-4xl border border-white/85 bg-white/92 p-5 shadow-[0_8px_26px_-20px_rgba(15,23,42,0.22)] dark:border-white/10 dark:bg-slate-950/88">
-        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div class="space-y-3">
-                <div class="space-y-2">
-                    <h1 class="text-3xl text-slate-950 dark:text-white md:text-4xl" data-display="serif">Pending approvals</h1>
-                    <p class="max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-                        Review inbound encrypt and decrypt operations for <span class="font-mono text-slate-900 dark:text-slate-100">{sessionLabel}</span>.
-                    </p>
-                </div>
+<div class="mx-auto w-full max-w-230 px-6 pt-12 pb-32">
+    <!-- Header -->
+    <div class="mb-10 flex items-start justify-between gap-4">
+        <div>
+            <div class="mb-4 inline-flex items-center gap-2.5">
+                <Logo size={28} radius={7} />
+                <span class="text-sm font-semibold tracking-tight text-neutral-900 dark:text-neutral-50">Revaulter</span>
             </div>
+            <h1 class="mb-1.5 text-[30px] font-semibold leading-tight tracking-tight text-neutral-950 dark:text-neutral-50">
+                Pending approvals
+            </h1>
+            <p class="text-sm text-neutral-500 dark:text-neutral-400">
+                Review inbound encrypt, decrypt, and signing requests for
+                <span class="mono text-neutral-900 dark:text-neutral-100">{sessionLabel}</span>.
+            </p>
+        </div>
 
-            <div class="relative flex justify-end lg:justify-start">
+        <div class="flex items-center gap-2">
+            <span class="group relative">
                 <Button
                     variant="icon"
                     size="icon"
-                    ariaLabel="Open user settings"
+                    ariaLabel="Open settings"
                     onclick={toggleSettingsModal}
                 >
-                    <Icon icon="settings" title="User settings" size="5" />
+                    <Icon icon="settings" title="Settings" size="4" />
                 </Button>
-            </div>
+                <span class="pointer-events-none absolute top-full left-1/2 z-10 mt-2 -translate-x-1/2 scale-95 whitespace-nowrap rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white opacity-0 shadow-md transition duration-150 group-hover:scale-100 group-hover:opacity-100 dark:bg-neutral-100 dark:text-neutral-900">
+                    Settings
+                </span>
+            </span>
+            <span class="group relative">
+                <Button
+                    variant="icon"
+                    size="icon"
+                    ariaLabel="Sign out"
+                    onclick={() => void onLogout()}
+                >
+                    <Icon icon="log-out" title="Sign out" size="4" />
+                </Button>
+                <span class="pointer-events-none absolute top-full right-0 z-10 mt-2 scale-95 whitespace-nowrap rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white opacity-0 shadow-md transition duration-150 group-hover:scale-100 group-hover:opacity-100 dark:bg-neutral-100 dark:text-neutral-900">
+                    Sign out
+                </span>
+            </span>
         </div>
-    </header>
+    </div>
 
     {#if pageError}
-        <div class="rounded-3xl border border-rose-200 bg-rose-50/90 px-4 py-3 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
+        <div class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
             {pageError}
         </div>
     {/if}
 
-    <section class="rounded-4xl border border-white/85 bg-white/92 p-5 shadow-[0_8px_26px_-20px_rgba(15,23,42,0.22)] dark:border-white/10 dark:bg-slate-950/88">
-        <div class="mb-5 flex flex-col gap-3 border-b border-slate-200/80 pb-4 dark:border-white/10 md:flex-row md:items-center md:justify-between">
-            <div>
-                <div class="text-sm font-medium uppercase tracking-[0.18em] text-slate-700 dark:text-slate-200">Assigned requests</div>
-                <div class="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                    Requests stream to this page in real time. Confirm only if the input, key label, and requester look correct.
-                </div>
+    <!-- Live status -->
+    <div class="mb-3 flex items-center justify-end">
+        <div class="inline-flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+            {#if listConnected}
+                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 live-dot"></span>
+                Live
+            {:else}
+                <span class="h-1.5 w-1.5 rounded-full bg-neutral-400 dark:bg-neutral-600"></span>
+                Connecting…
+            {/if}
+        </div>
+    </div>
+
+    <!-- Message list -->
+    {#if pendingItems.length === 0}
+        <div class="rounded-xl border border-dashed border-neutral-300 bg-white px-6 py-20 text-center dark:border-neutral-700 dark:bg-neutral-900">
+            <div class="mx-auto mb-4 inline-flex h-11 w-11 items-center justify-center rounded-[11px] bg-neutral-100 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                <Icon icon="check" title="" size="5" />
             </div>
-            <div class="rounded-full bg-white/68 px-3 py-1 text-xs font-medium text-slate-500 ring-1 ring-slate-200/80 dark:bg-white/6 dark:text-slate-300 dark:ring-white/10">
-                {#if listConnected}Live stream connected{:else}Connecting…{/if}
+            <div class="mb-1 text-[15px] font-medium text-neutral-900 dark:text-neutral-50">All clear</div>
+            <div class="mx-auto max-w-xs text-sm text-neutral-500 dark:text-neutral-400">
+                New approvals will appear here as soon as they are assigned to you.
             </div>
         </div>
-
-        {#if pendingItems.length === 0}
-            <div class="border border-dashed border-slate-300/90 bg-white/25 px-6 py-12 text-center dark:border-white/12 dark:bg-white/4">
-                {#if listConnected}
-                    <div class="text-base font-medium text-slate-900 dark:text-white">No pending requests</div>
-                    <div class="mt-2 text-sm text-slate-500 dark:text-slate-400">New approvals will appear here as soon as they are assigned to you.</div>
-                {:else}
-                    <div class="flex items-center justify-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                        <LoadingSpinner size="1rem" />
-                        Waiting for updates…
-                    </div>
-                {/if}
-            </div>
-        {:else}
-            <div class="space-y-3">
-                {#each pendingItems as item (item.state)}
-                    {#if primaryKey}
+    {:else}
+        <div class="overflow-hidden rounded-xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+            {#each pendingItems as item, idx (item.state)}
+                {#if primaryKey}
+                    <div class={idx === 0 ? '' : 'border-t border-neutral-200 dark:border-neutral-800'}>
                         <PendingItem
                             {item}
                             {primaryKey}
                             onRemoved={onRemoveItem}
                         />
-                    {/if}
-                {/each}
-            </div>
-        {/if}
-    </section>
+                    </div>
+                {/if}
+            {/each}
+        </div>
+    {/if}
+
+    <p class="mt-6 text-center text-xs text-neutral-400 dark:text-neutral-500">
+        Requests stream in real time. Confirm only if the input, key label, and requester look correct.
+    </p>
 
     {#if settingsModalOpen}
         <UserSettingsModal
@@ -183,7 +204,12 @@ function logoutFromSettings() {
             {onDeriveSigningKey}
             {onPublishSigningKey}
             {onUnpublishSigningKey}
-            onLogout={logoutFromSettings}
         />
     {/if}
 </div>
+
+<style>
+    .live-dot {
+        animation: pulse-ring 2s ease-in-out infinite;
+    }
+</style>

@@ -14,7 +14,7 @@ test.beforeEach(async ({ page, request }) => {
     await resetBrowserState(page)
 })
 
-test('user settings modal opens with all tabs', async ({ page }) => {
+test('settings modal opens with all tabs', async ({ page }) => {
     const auth = await registerAndReachReady(page, 'Settings User')
 
     try {
