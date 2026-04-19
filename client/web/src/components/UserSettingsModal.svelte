@@ -90,10 +90,16 @@ let deriveError = $state<string | null>(null)
 let copiedFetchId = $state<string | null>(null)
 let confirmingDeleteId = $state<string | null>(null)
 let publishingStoredId = $state<string | null>(null)
+let downloadMenuOpenId = $state<string | null>(null)
+let downloadingStoredId = $state<string | null>(null)
 
 $effect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
         if (event.key === 'Escape') {
+            if (downloadMenuOpenId !== null) {
+                downloadMenuOpenId = null
+                return
+            }
             onClose()
         }
     }
@@ -102,6 +108,28 @@ $effect(() => {
 
     return () => {
         document.removeEventListener('keydown', handleKeyDown)
+    }
+})
+
+$effect(() => {
+    if (downloadMenuOpenId === null) {
+        return
+    }
+
+    const handleDocClick = (event: MouseEvent) => {
+        const target = event.target as HTMLElement | null
+        if (!target?.closest('[data-download-menu]')) {
+            downloadMenuOpenId = null
+        }
+    }
+
+    const timer = setTimeout(() => {
+        document.addEventListener('click', handleDocClick)
+    }, 0)
+
+    return () => {
+        clearTimeout(timer)
+        document.removeEventListener('click', handleDocClick)
     }
 })
 
@@ -250,23 +278,30 @@ async function handleDeriveSigningKey() {
     }
 }
 
-function downloadDerivedJwk() {
+function downloadDerived(kind: 'jwk' | 'pem') {
+    downloadMenuOpenId = null
     if (!derivedKey) {
         return
     }
 
-    triggerDownload(
-        `${derivedKey.keyLabel}-${derivedKey.algorithm}.jwk.json`,
-        JSON.stringify(derivedKey.jwk, null, 2),
-        'application/json'
-    )
-}
-
-function downloadDerivedPem() {
-    if (!derivedKey) {
-        return
+    switch (kind) {
+        case 'jwk':
+            triggerDownload(
+                `${derivedKey.keyLabel}-${derivedKey.algorithm}.jwk.json`,
+                JSON.stringify(derivedKey.jwk, null, 2),
+                'application/json'
+            )
+            break
+        case 'pem':
+            triggerDownload(
+                `${derivedKey.keyLabel}-${derivedKey.algorithm}.pem`,
+                derivedKey.pem,
+                'application/x-pem-file'
+            )
+            break
+        default:
+            throw new Error(`Unsupported kind: ${kind}`)
     }
-    triggerDownload(`${derivedKey.keyLabel}-${derivedKey.algorithm}.pem`, derivedKey.pem, 'application/x-pem-file')
 }
 
 async function handlePublishDerived() {
@@ -292,6 +327,25 @@ async function handlePublishStored(sk: V2PublishedSigningKey) {
         await onPublishSigningKey(derived)
     } finally {
         publishingStoredId = null
+    }
+}
+
+async function handleDownloadStored(sk: V2PublishedSigningKey, kind: 'jwk' | 'pem') {
+    downloadMenuOpenId = null
+    downloadingStoredId = sk.id
+    try {
+        const derived = await onDeriveSigningKey(sk.keyLabel, sk.algorithm)
+        if (kind === 'jwk') {
+            triggerDownload(
+                `${derived.keyLabel}-${derived.algorithm}.jwk.json`,
+                JSON.stringify(derived.jwk, null, 2),
+                'application/json'
+            )
+        } else {
+            triggerDownload(`${derived.keyLabel}-${derived.algorithm}.pem`, derived.pem, 'application/x-pem-file')
+        }
+    } finally {
+        downloadingStoredId = null
     }
 }
 
@@ -323,7 +377,7 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
 
 <div class="fixed inset-0 z-40 bg-neutral-950/50 backdrop-blur-sm"></div>
 <section class="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
-    <div class="flex max-h-[88vh] w-full max-w-180 flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
+    <div class="flex h-[95vh] md:h-[88vh] w-[95vw] md:w-[88vw] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
         <!-- Header -->
         <div class="flex items-center justify-between gap-4 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
             <div class="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
@@ -753,24 +807,47 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                     <div class="mono mt-1 break-all text-xs text-neutral-700 dark:text-neutral-300">{derivedKey.id}</div>
                                 </div>
 
-                                <div class="flex flex-wrap gap-2">
-                                    <Button variant="secondary" size="sm" onclick={downloadDerivedJwk} disabled={busy}>
-                                        <Icon icon="download" title="Download JWK" size="3.5" />
-                                        Download JWK
-                                    </Button>
-                                    <Button variant="secondary" size="sm" onclick={downloadDerivedPem} disabled={busy}>
-                                        <Icon icon="download" title="Download PEM" size="3.5" />
-                                        Download PEM
-                                    </Button>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <div class="relative" data-download-menu>
+                                        <Button
+                                            variant="secondary"
+                                            size="sm"
+                                            onclick={() => {
+                                                downloadMenuOpenId = downloadMenuOpenId === 'derived' ? null : 'derived'
+                                            }}
+                                            disabled={busy}
+                                        >
+                                            <Icon icon="download" title="Download" size="3.5" />
+                                            Download
+                                        </Button>
+                                        {#if downloadMenuOpenId === 'derived'}
+                                            <div class="absolute left-0 top-full z-20 mt-1 min-w-28 overflow-hidden rounded-lg border border-neutral-200 bg-white py-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900">
+                                                <button
+                                                    type="button"
+                                                    class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
+                                                    onclick={() => downloadDerived('jwk')}
+                                                >
+                                                    JWK
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
+                                                    onclick={() => downloadDerived('pem')}
+                                                >
+                                                    PEM
+                                                </button>
+                                            </div>
+                                        {/if}
+                                    </div>
                                     {#if !isDerivedPublished()}
-                                        <Button variant="primary" size="sm" onclick={handlePublishDerived} disabled={busy}>
+                                        <Button variant="secondary" size="sm" onclick={handlePublishDerived} disabled={busy}>
                                             <Icon icon="upload-cloud" title="Publish" size="3.5" />
                                             Publish
                                         </Button>
                                     {:else}
                                         <span class="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
                                             <Icon icon="check" title="Published" size="3" />
-                                            Already published
+                                            Published
                                         </span>
                                     {/if}
                                 </div>
@@ -802,10 +879,6 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                                         <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
                                                             Published
                                                         </span>
-                                                    {:else}
-                                                        <span class="inline-flex items-center rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300">
-                                                            Stored
-                                                        </span>
                                                     {/if}
                                                 </div>
                                                 <div class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
@@ -819,24 +892,60 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                                 </div>
                                             </div>
                                             <div class="flex shrink-0 items-center gap-1">
+                                                <div class="relative" data-download-menu>
+                                                    <Button
+                                                        variant="secondary"
+                                                        size="icon"
+                                                        ariaLabel="Download key"
+                                                        onclick={() => {
+                                                            downloadMenuOpenId = downloadMenuOpenId === sk.id ? null : sk.id
+                                                        }}
+                                                        disabled={busy || downloadingStoredId === sk.id}
+                                                    >
+                                                        <Icon icon="download" title="Download" size="4" />
+                                                    </Button>
+                                                    {#if downloadMenuOpenId === sk.id}
+                                                        <div class="absolute right-0 top-full z-20 mt-1 min-w-28 overflow-hidden rounded-lg border border-neutral-200 bg-white py-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900">
+                                                            <button
+                                                                type="button"
+                                                                class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
+                                                                onclick={() => handleDownloadStored(sk, 'jwk')}
+                                                            >
+                                                                JWK
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
+                                                                onclick={() => handleDownloadStored(sk, 'pem')}
+                                                            >
+                                                                PEM
+                                                            </button>
+                                                        </div>
+                                                    {/if}
+                                                </div>
                                                 {#if !sk.published}
-                                                    <Button variant="primary" size="sm" onclick={() => handlePublishStored(sk)} disabled={busy || publishingStoredId === sk.id}>
-                                                        <Icon icon="upload-cloud" title="Publish" size="3.5" />
-                                                        Publish
+                                                    <Button
+                                                        variant="secondary"
+                                                        size="icon"
+                                                        ariaLabel="Publish key"
+                                                        onclick={() => handlePublishStored(sk)}
+                                                        disabled={busy || publishingStoredId === sk.id}
+                                                    >
+                                                        <Icon icon="upload-cloud" title="Publish" size="4" />
                                                     </Button>
                                                 {:else}
                                                     <Button
                                                         variant="secondary"
-                                                        size="sm"
+                                                        size="icon"
                                                         ariaLabel="Unpublish key"
                                                         onclick={() => handleUnpublish(sk.id)}
                                                         disabled={busy}
                                                     >
-                                                        Unpublish
+                                                        <Icon icon="cloud-off" title="Unpublish" size="4" />
                                                     </Button>
                                                 {/if}
                                                 <Button
-                                                    variant="icon"
+                                                    variant="danger"
                                                     size="icon"
                                                     ariaLabel="Delete key"
                                                     onclick={() => {
@@ -844,7 +953,7 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                                     }}
                                                     disabled={busy}
                                                 >
-                                                    <Icon icon="trash" title="Delete" size="3.5" />
+                                                    <Icon icon="trash" title="Delete" size="4" />
                                                 </Button>
                                             </div>
                                         </div>
