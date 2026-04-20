@@ -449,10 +449,7 @@ func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, er
 
 var ErrAlreadyFinalized = errors.New("account already finalized")
 
-// FinalizeSignupInput carries the post-WebAuthn-registration material that the
-// browser generates once it has derived the wrapping key from the PRF extension:
-// long-lived transport pubkeys, the hybrid anchor pubkeys + their self-signatures
-// over the pubkey bundle, and the first credential's wrapped secrets + attestation.
+// FinalizeSignupInput carries the post-WebAuthn-registration material that the browser generates once it has derived the wrapping key from the PRF extension: long-lived transport pubkeys, the hybrid anchor pubkeys + their self-signatures over the pubkey bundle, and the first credential's wrapped secrets + attestation.
 type FinalizeSignupInput struct {
 	UserID                       string
 	WrappedPrimaryKey            string
@@ -468,11 +465,8 @@ type FinalizeSignupInput struct {
 	AttestationSignatureMldsa87  string
 }
 
-// FinalizeSignup marks the account as ready and persists all long-lived
-// cryptographic material generated at signup time: the user's transport pubkeys,
-// anchor pubkeys and bundle self-signatures, plus the first credential's
-// wrapped primary key, wrapped anchor key, and hybrid attestation.
-// It can only update records with ready = false.
+// FinalizeSignup marks the account as ready and persists all long-lived cryptographic material generated at signup time: the user's transport pubkeys, anchor pubkeys and bundle self-signatures, plus the first credential's wrapped primary key, wrapped anchor key, and hybrid attestation
+// It can only update records with ready = false
 func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) error {
 	if len(in.WrappedPrimaryKey) > 512 {
 		return errors.New("wrappedPrimaryKey is too large")
