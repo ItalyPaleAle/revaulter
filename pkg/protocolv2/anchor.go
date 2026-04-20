@@ -93,7 +93,8 @@ func canonicalJSON(v any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return b.Bytes(), nil
+	// json.Encoder.Encode appends a trailing newline; strip it so the output matches JSON.stringify on the browser side
+	return bytes.TrimSuffix(b.Bytes(), []byte{'\n'}), nil
 }
 
 // VerifyHybridAttestation verifies that both legs of the hybrid signature cover the canonical attestation message.

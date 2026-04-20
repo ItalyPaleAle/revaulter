@@ -651,6 +651,76 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 	require.ErrorIs(t, err, ErrCredentialNotFound)
 }
 
+func TestAuthStoreCredentialWrappedKeyEpochRotation(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	_, err = store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-1",
+		DisplayName:    "Alice",
+		WebAuthnUserID: "webauthn-user-1",
+		CredentialID:   "cred-1",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Minute,
+	})
+	require.NoError(t, err)
+
+	err = store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		WrappedPrimaryKey:     "wrapped-1-v1",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "mlkem-pub",
+	})
+	require.NoError(t, err)
+
+	err = store.AddCredential(ctx, AddCredentialInput{
+		UserID:            "user-1",
+		CredentialID:      "cred-2",
+		DisplayName:       "Second",
+		PublicKey:         `{"kty":"EC"}`,
+		SignCount:         1,
+		WrappedPrimaryKey: "wrapped-2-v1",
+	})
+	require.NoError(t, err)
+
+	rec1, err := store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
+	require.NoError(t, err)
+	rec2, err := store.GetCredentialByCredentialID(ctx, "cred-2", "user-1")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rec1.WrappedKeyEpoch)
+	require.EqualValues(t, 1, rec2.WrappedKeyEpoch)
+
+	newEpoch, err := store.AdvanceWrappedKeyEpoch(ctx, "user-1")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, newEpoch)
+
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "wrapped-1-v2")
+	require.NoError(t, err)
+
+	rec1, err = store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
+	require.NoError(t, err)
+	rec2, err = store.GetCredentialByCredentialID(ctx, "cred-2", "user-1")
+	require.NoError(t, err)
+	require.Equal(t, "wrapped-1-v2", rec1.WrappedPrimaryKey)
+	require.Equal(t, "wrapped-2-v1", rec2.WrappedPrimaryKey)
+	require.EqualValues(t, 2, rec1.WrappedKeyEpoch)
+	require.EqualValues(t, 1, rec2.WrappedKeyEpoch)
+
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-2", "user-1", "wrapped-2-v2")
+	require.NoError(t, err)
+
+	rec2, err = store.GetCredentialByCredentialID(ctx, "cred-2", "user-1")
+	require.NoError(t, err)
+	require.Equal(t, "wrapped-2-v2", rec2.WrappedPrimaryKey)
+	require.EqualValues(t, 2, rec2.WrappedKeyEpoch)
+}
+
 func TestAuthStoreCredentialCRUD(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
