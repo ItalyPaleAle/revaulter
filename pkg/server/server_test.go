@@ -1031,28 +1031,34 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 	const credentialID = "cred-user-alice"
 
 	// Successful update
-	res, body := doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "new-key-blob"}, sessionCookie)
+	res, body := doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "new-key-blob", "wrappedAnchorKey": "new-anchor-blob", "advanceEpoch": true}, sessionCookie)
 	defer func() {
 		_, _ = io.Copy(io.Discard, res.Body)
 		res.Body.Close()
 	}()
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, true, body["ok"])
+	user, err := srv.authStore.GetUserByID(t.Context(), "user-alice")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, user.WrappedKeyEpoch)
 
 	// Empty string is valid
-	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": ""}, sessionCookie)
+	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "", "wrappedAnchorKey": ""}, sessionCookie)
 	defer func() {
 		_, _ = io.Copy(io.Discard, res.Body)
 		res.Body.Close()
 	}()
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, true, body["ok"])
+	user, err = srv.authStore.GetUserByID(t.Context(), "user-alice")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, user.WrappedKeyEpoch)
 
 	// Starting an add-credential WebAuthn ceremony must block concurrent password changes
-	_, err := srv.authStore.BeginChallengeWithPayload(t.Context(), "add-credential", "user-alice", "pending-add", time.Now().UTC().Add(5*time.Minute), nil)
+	_, err = srv.authStore.BeginChallengeWithPayload(t.Context(), "add-credential", "user-alice", "pending-add", time.Now().UTC().Add(5*time.Minute), nil)
 	require.NoError(t, err)
 
-	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "blocked-while-pending"}, sessionCookie)
+	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "blocked-while-pending", "wrappedAnchorKey": "blocked-anchor", "advanceEpoch": true}, sessionCookie)
 	defer func() {
 		_, _ = io.Copy(io.Discard, res.Body)
 		res.Body.Close()

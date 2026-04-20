@@ -165,6 +165,8 @@ type v2AuthUpdateDisplayNameRequest struct {
 type v2AuthUpdateWrappedKeyRequest struct {
 	CredentialID      string `json:"credentialId"`
 	WrappedPrimaryKey string `json:"wrappedPrimaryKey"`
+	WrappedAnchorKey  string `json:"wrappedAnchorKey"`
+	AdvanceEpoch      bool   `json:"advanceEpoch"`
 }
 
 type v2AuthCredentialItem struct {
@@ -745,16 +747,18 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 		return
 	}
 
-	_, err = s.authStore.AdvanceWrappedKeyEpoch(c.Request.Context(), userID)
-	if errors.Is(err, db.ErrUserNotFound) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
-		return
-	} else if err != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Failed to update password state"))
-		return
+	if req.AdvanceEpoch {
+		_, err = s.authStore.AdvanceWrappedKeyEpoch(c.Request.Context(), userID)
+		if errors.Is(err, db.ErrUserNotFound) {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+			return
+		} else if err != nil {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Failed to update password state"))
+			return
+		}
 	}
 
-	err = s.authStore.UpdateCredentialWrappedKey(c.Request.Context(), req.CredentialID, userID, req.WrappedPrimaryKey)
+	err = s.authStore.UpdateCredentialWrappedKey(c.Request.Context(), req.CredentialID, userID, req.WrappedPrimaryKey, req.WrappedAnchorKey)
 	if errors.Is(err, db.ErrCredentialNotFound) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Credential not found"))
 		return

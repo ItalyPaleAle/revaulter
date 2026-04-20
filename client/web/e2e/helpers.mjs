@@ -343,11 +343,27 @@ export async function setPasswordThroughSettings(page, password) {
     if (await setPasswordInput.count()) {
         await setPasswordInput.fill(password)
         await page.locator('input[placeholder="Confirm password"]').fill(password)
-        await page.getByRole('button', { name: 'Set password' }).click()
+        const [response] = await Promise.all([
+            page.waitForResponse((response) => {
+                return response.url().includes('/v2/auth/update-wrapped-key') && response.request().method() === 'POST'
+            }),
+            page.getByRole('button', { name: 'Set password' }).click(),
+        ])
+        if (!response.ok()) {
+            throw new Error(`Password update failed: ${response.status()} ${await response.text()}`)
+        }
     } else {
         await changePasswordInput.fill(password)
         await page.locator('input[placeholder="Confirm new password"]').fill(password)
-        await page.getByRole('button', { name: 'Change password' }).click()
+        const [response] = await Promise.all([
+            page.waitForResponse((response) => {
+                return response.url().includes('/v2/auth/update-wrapped-key') && response.request().method() === 'POST'
+            }),
+            page.getByRole('button', { name: 'Change password' }).click(),
+        ])
+        if (!response.ok()) {
+            throw new Error(`Password update failed: ${response.status()} ${await response.text()}`)
+        }
     }
 
     await expect(page.getByRole('button', { name: 'Close settings' })).toBeVisible()

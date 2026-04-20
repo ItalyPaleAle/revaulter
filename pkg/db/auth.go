@@ -611,19 +611,22 @@ func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID, displayName s
 	return nil
 }
 
-// UpdateCredentialWrappedKey updates the wrapped primary key associated with a single credential
+// UpdateCredentialWrappedKey updates the wrapped primary key and wrapped anchor key associated with a single credential
 // The credential must belong to the given user
-func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID, userID, wrappedPrimaryKey string) error {
+func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID, userID, wrappedPrimaryKey, wrappedAnchorKey string) error {
 	if len(wrappedPrimaryKey) > 512 {
 		return errors.New("wrappedPrimaryKey is too large")
 	}
+	if len(wrappedAnchorKey) > 32768 {
+		return errors.New("wrappedAnchorKey is too large")
+	}
 
 	affected, err := s.db.Exec(ctx,
-		`UPDATE v2_user_credentials SET wrapped_primary_key = $1, wrapped_key_epoch = (
-			SELECT wrapped_key_epoch FROM v2_users WHERE id = $3
+		`UPDATE v2_user_credentials SET wrapped_primary_key = $1, wrapped_anchor_key = $2, wrapped_key_epoch = (
+			SELECT wrapped_key_epoch FROM v2_users WHERE id = $4
 		)
-			WHERE credential_id = $2 AND user_id = $3`,
-		wrappedPrimaryKey, credentialID, userID,
+			WHERE credential_id = $3 AND user_id = $4`,
+		wrappedPrimaryKey, wrappedAnchorKey, credentialID, userID,
 	)
 	if err != nil {
 		return err

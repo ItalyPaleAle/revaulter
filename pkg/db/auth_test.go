@@ -624,30 +624,31 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 	require.Equal(t, "initial-key", rec.WrappedPrimaryKey)
 
 	// Successful update
-	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "new-wrapped-key")
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "new-wrapped-key", "new-anchor-key")
 	require.NoError(t, err)
 	rec, err = store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
 	require.NoError(t, err)
 	require.Equal(t, "new-wrapped-key", rec.WrappedPrimaryKey)
+	require.Equal(t, "new-anchor-key", rec.WrappedAnchorKey)
 
 	// Empty string is valid (removes password)
-	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "")
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "", "")
 	require.NoError(t, err)
 	rec, err = store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
 	require.NoError(t, err)
 	require.Empty(t, rec.WrappedPrimaryKey)
 
 	// Oversized value
-	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", strings.Repeat("x", 513))
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", strings.Repeat("x", 513), "anchor")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "too large")
 
 	// Non-existent credential
-	err = store.UpdateCredentialWrappedKey(ctx, "no-such-cred", "user-1", "key")
+	err = store.UpdateCredentialWrappedKey(ctx, "no-such-cred", "user-1", "key", "anchor")
 	require.ErrorIs(t, err, ErrCredentialNotFound)
 
 	// Credential belonging to a different user
-	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "other-user", "key")
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "other-user", "key", "anchor")
 	require.ErrorIs(t, err, ErrCredentialNotFound)
 }
 
@@ -700,7 +701,7 @@ func TestAuthStoreCredentialWrappedKeyEpochRotation(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 2, newEpoch)
 
-	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "wrapped-1-v2")
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "wrapped-1-v2", "anchor-1-v2")
 	require.NoError(t, err)
 
 	rec1, err = store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
@@ -712,7 +713,7 @@ func TestAuthStoreCredentialWrappedKeyEpochRotation(t *testing.T) {
 	require.EqualValues(t, 2, rec1.WrappedKeyEpoch)
 	require.EqualValues(t, 1, rec2.WrappedKeyEpoch)
 
-	err = store.UpdateCredentialWrappedKey(ctx, "cred-2", "user-1", "wrapped-2-v2")
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-2", "user-1", "wrapped-2-v2", "anchor-2-v2")
 	require.NoError(t, err)
 
 	rec2, err = store.GetCredentialByCredentialID(ctx, "cred-2", "user-1")

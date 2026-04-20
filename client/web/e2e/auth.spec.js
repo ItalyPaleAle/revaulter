@@ -98,7 +98,9 @@ test('password-protected user sees an error for a wrong password and can recover
 
         await loginToPasswordPrompt(page)
         await unlockWithPassword(page, 'wrong-password')
-        await expect(page.getByText('Incorrect password')).toBeVisible()
+        await expect(
+            page.getByText('Failed to unwrap primary key. The password or passkey may be incorrect.')
+        ).toBeVisible()
         await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
 
         await unlockWithPassword(page, 'hunter2')
