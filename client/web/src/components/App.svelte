@@ -5,6 +5,7 @@ import AuthAccessView from '$components/AuthAccessView.svelte'
 import AuthSetupView from '$components/AuthSetupView.svelte'
 import ReadyView from '$components/ReadyView.svelte'
 
+import { argon2idCost } from '$lib/argon2id-cost'
 import {
     computeEcP256Thumbprint,
     deriveRequestEncKeyPair,
@@ -54,6 +55,7 @@ import {
     v2UpdateWrappedKey,
 } from '$lib/v2-api'
 import type {
+    Argon2idCost,
     DerivedSigningKey,
     V2AuthSessionInfo,
     V2CredentialItem,
@@ -299,6 +301,11 @@ async function unlockWithPassword(password: string) {
     }
 
     const argon2idSalt = base64UrlToBytes(envelope.argon2id.salt)
+    const envelopeArgon2idCost: Argon2idCost = {
+        m: envelope.argon2id.m,
+        t: envelope.argon2id.t,
+        p: envelope.argon2id.p,
+    }
 
     // Derive the wrapping key using Argon2id-stretched password as HKDF salt
     const { wrappingKeyBytes } = await deriveWrappingKey({
@@ -306,6 +313,7 @@ async function unlockWithPassword(password: string) {
         userId: session.userId,
         password,
         argon2idSalt,
+        argon2idCost: envelopeArgon2idCost,
     })
 
     // Unwrap — success proves the password is correct (replaces canary)
@@ -325,10 +333,15 @@ async function unlockWithPassword(password: string) {
     }
 
     if (loginWrappedKeyStale) {
-        const { wrappingKeyBytes: updatedWrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+        const {
+            wrappingKeyBytes: updatedWrappingKeyBytes,
+            argon2idSalt,
+            argon2idCost: updatedCost,
+        } = await deriveWrappingKey({
             prfSecret,
             userId: session.userId,
             password,
+            argon2idCost,
         })
 
         const updatedWrapped = await wrapPrimaryKey({
@@ -337,6 +350,7 @@ async function unlockWithPassword(password: string) {
             userId: session.userId,
             passwordRequired: true,
             argon2idSalt,
+            argon2idCost: updatedCost,
         })
 
         if (!sessionCredentialId) {
@@ -459,10 +473,15 @@ async function doSetPassword() {
         const anchor = await generateAnchorKeyPair()
 
         // Derive wrapping key (with optional Argon2id if password is set)
-        const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+        const {
+            wrappingKeyBytes,
+            argon2idSalt,
+            argon2idCost: usedCost,
+        } = await deriveWrappingKey({
             prfSecret,
             userId: session.userId,
             password: passwordInput || undefined,
+            argon2idCost: passwordInput ? argon2idCost : undefined,
         })
 
         // Wrap the primary key
@@ -472,6 +491,7 @@ async function doSetPassword() {
             userId: session.userId,
             passwordRequired: !!passwordInput,
             argon2idSalt,
+            argon2idCost: usedCost,
         })
 
         // Wrap the anchor secret blob using the same wrapping key
@@ -764,10 +784,15 @@ async function doAddPasskey(name: string) {
 
         // Derive the wrapping key for the new credential, re-using the current session password (if any) so all passkeys added while signed in share the same password gate
         const password = sessionPassword ?? undefined
-        const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+        const {
+            wrappingKeyBytes,
+            argon2idSalt,
+            argon2idCost: usedCost,
+        } = await deriveWrappingKey({
             prfSecret: prfAssertion.prfSecret,
             userId: session.userId,
             password,
+            argon2idCost: password ? argon2idCost : undefined,
         })
 
         const wrapped = await wrapPrimaryKey({
@@ -776,6 +801,7 @@ async function doAddPasskey(name: string) {
             userId: session.userId,
             passwordRequired: !!password,
             argon2idSalt,
+            argon2idCost: usedCost,
         })
 
         // Wrap a copy of the anchor secret with the new credential's wrapping key so the user can sign in with it later.
@@ -858,10 +884,15 @@ async function doChangePassword(password: string) {
         const currentEpoch = session.wrappedKeyEpoch
         session = { ...session, wrappedKeyEpoch: currentEpoch + 1 }
 
-        const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+        const {
+            wrappingKeyBytes,
+            argon2idSalt,
+            argon2idCost: usedCost,
+        } = await deriveWrappingKey({
             prfSecret,
             userId: session.userId,
             password: password || undefined,
+            argon2idCost: password ? argon2idCost : undefined,
         })
 
         const wrapped = await wrapPrimaryKey({
@@ -870,6 +901,7 @@ async function doChangePassword(password: string) {
             userId: session.userId,
             passwordRequired: !!password,
             argon2idSalt,
+            argon2idCost: usedCost,
         })
 
         // The wrapped primary key lives on the specific credential that signed us in, not on the user record

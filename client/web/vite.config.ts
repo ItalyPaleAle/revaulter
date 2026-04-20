@@ -15,11 +15,21 @@ export default defineConfig(({ mode }) => {
     const cryptoChunkPattern = /[\\/]node_modules[\\/](@noble\/(hashes|post-quantum)|arraybuffer-encoding)[\\/]/
 
     const isProduction = mode === 'production'
+    const isE2E = mode === 'e2e'
 
     // In "analyze" mode, add the analyzer plugin
     if (mode == 'analyze') {
         additionalPlugins.push(analyzer())
     }
+
+    // Argon2id cost baked into the bundle at build time
+    const argon2idCost = isE2E
+        ? // E2E mode uses a trivially small cost to optimize test runs
+          // This value MUST NOT leak into a production build
+          { m: 8, t: 1, p: 1 }
+        : // Production and development mode
+          // These settings roughly exceed the current OWASP Argon2id guidance as of April 2026 (m=128 MiB, t=4, p=1) and aim for well over 500 ms of work on modern laptops while still being tolerable in-browser
+          { m: 128 << 10, t: 4, p: 1 }
 
     return {
         plugins: [
@@ -68,7 +78,9 @@ export default defineConfig(({ mode }) => {
                 '$assets': path.resolve(__dirname, './src/assets'),
             },
         },
-        define: {},
+        define: {
+            __ARGON2ID_COST__: JSON.stringify(argon2idCost),
+        },
         test: {
             exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
         },

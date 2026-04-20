@@ -42,6 +42,9 @@ const TEST_PRIMARY_KEY = new Uint8Array(32).fill(0xaa)
 // Shared test PRF secret: 32 bytes of 0xBB (used for wrapping key derivation tests)
 const TEST_PRF_SECRET = new Uint8Array(32).fill(0xbb)
 
+// Low-cost Argon2id parameters used only for tests to keep derivation fast
+const TEST_ARGON2ID_COST = { m: 8, t: 1, p: 1 }
+
 describe('buildTransportAAD', () => {
     it('matches the Go CLI format', () => {
         const aad = buildTransportAAD('state-42', 'encrypt', 'A256GCM')
@@ -120,6 +123,7 @@ describe('deriveWrappingKey', () => {
             prfSecret: TEST_PRF_SECRET,
             userId: 'user-1',
             password: 'hunter2',
+            argon2idCost: TEST_ARGON2ID_COST,
         })
         expect(wrappingKeyBytes.length).toBe(32)
         expect(stretched).toBeDefined()
@@ -128,6 +132,16 @@ describe('deriveWrappingKey', () => {
         expect(argon2idSalt?.length).toBe(16)
     }, 30_000)
 
+    it('throws when password is provided without argon2idCost', async () => {
+        await expect(
+            deriveWrappingKey({
+                prfSecret: TEST_PRF_SECRET,
+                userId: 'user-1',
+                password: 'hunter2',
+            })
+        ).rejects.toThrow(/argon2idCost is required/)
+    })
+
     it('is deterministic with password and fixed salt', async () => {
         const fixedSalt = new Uint8Array(16).fill(0x42)
         const r1 = await deriveWrappingKey({
@@ -135,12 +149,14 @@ describe('deriveWrappingKey', () => {
             userId: 'user-1',
             password: 'hunter2',
             argon2idSalt: fixedSalt,
+            argon2idCost: TEST_ARGON2ID_COST,
         })
         const r2 = await deriveWrappingKey({
             prfSecret: TEST_PRF_SECRET,
             userId: 'user-1',
             password: 'hunter2',
             argon2idSalt: fixedSalt,
+            argon2idCost: TEST_ARGON2ID_COST,
         })
         expect(bytesToHex(r1.wrappingKeyBytes)).toBe(bytesToHex(r2.wrappingKeyBytes))
     }, 30_000)
@@ -152,12 +168,14 @@ describe('deriveWrappingKey', () => {
             userId: 'user-1',
             password: 'password-a',
             argon2idSalt: fixedSalt,
+            argon2idCost: TEST_ARGON2ID_COST,
         })
         const r2 = await deriveWrappingKey({
             prfSecret: TEST_PRF_SECRET,
             userId: 'user-1',
             password: 'password-b',
             argon2idSalt: fixedSalt,
+            argon2idCost: TEST_ARGON2ID_COST,
         })
         expect(bytesToHex(r1.wrappingKeyBytes)).not.toBe(bytesToHex(r2.wrappingKeyBytes))
     }, 30_000)
@@ -192,6 +210,7 @@ describe('wrapPrimaryKey / unwrapPrimaryKey', () => {
             prfSecret: TEST_PRF_SECRET,
             userId: 'user-1',
             password: 'test-password',
+            argon2idCost: TEST_ARGON2ID_COST,
         })
 
         const wrapped = await wrapPrimaryKey({
@@ -200,6 +219,7 @@ describe('wrapPrimaryKey / unwrapPrimaryKey', () => {
             userId: 'user-1',
             passwordRequired: true,
             argon2idSalt,
+            argon2idCost: TEST_ARGON2ID_COST,
         })
 
         const unwrapped = await unwrapPrimaryKey({
@@ -240,6 +260,7 @@ describe('wrapPrimaryKey / unwrapPrimaryKey', () => {
             userId: 'user-1',
             password: 'pw',
             argon2idSalt: salt,
+            argon2idCost: TEST_ARGON2ID_COST,
         })
 
         const wrapped = await wrapPrimaryKey({
@@ -248,15 +269,16 @@ describe('wrapPrimaryKey / unwrapPrimaryKey', () => {
             userId: 'user-1',
             passwordRequired: true,
             argon2idSalt: salt,
+            argon2idCost: TEST_ARGON2ID_COST,
         })
 
         const envelope = parseWrappedPrimaryKeyEnvelope(wrapped)
         expect(envelope.v).toBe(1)
         expect(envelope.passwordRequired).toBe(true)
         expect(envelope.argon2id).toBeDefined()
-        expect(envelope.argon2id?.m).toBe(131072)
-        expect(envelope.argon2id?.t).toBe(4)
-        expect(envelope.argon2id?.p).toBe(1)
+        expect(envelope.argon2id?.m).toBe(TEST_ARGON2ID_COST.m)
+        expect(envelope.argon2id?.t).toBe(TEST_ARGON2ID_COST.t)
+        expect(envelope.argon2id?.p).toBe(TEST_ARGON2ID_COST.p)
         expect(envelope.argon2id?.salt).toBeTruthy()
     }, 30_000)
 

@@ -2,6 +2,7 @@ import { argon2idAsync } from '@noble/hashes/argon2.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import type {
+    Argon2idCost,
     EcP256PublicJwk,
     V2Operation,
     V2RequestPayloadInner,
@@ -215,24 +216,36 @@ export type WrappedPrimaryKeyEnvelope = {
 /**
  * Derives the wrapping key used to wrap/unwrap the primary key
  * When a password is set, it is stretched via Argon2id before being used as HKDF salt
+ * The Argon2id cost MUST be supplied by the caller: use the build-time `argon2idCost` constant for fresh wraps, or the cost stored inside the envelope being unwrapped
  */
 export async function deriveWrappingKey(params: {
     prfSecret: Uint8Array
     userId: string
     password?: string
     argon2idSalt?: Uint8Array
-}): Promise<{ wrappingKeyBytes: Uint8Array; stretched?: Uint8Array; argon2idSalt?: Uint8Array }> {
+    argon2idCost?: Argon2idCost
+}): Promise<{
+    wrappingKeyBytes: Uint8Array
+    stretched?: Uint8Array
+    argon2idSalt?: Uint8Array
+    argon2idCost?: Argon2idCost
+}> {
     let hkdfSalt: BufferSource = new Uint8Array()
     let stretched: Uint8Array | undefined
     let usedArgon2idSalt: Uint8Array | undefined
+    let usedArgon2idCost: Argon2idCost | undefined
 
     if (params.password) {
+        if (!params.argon2idCost) {
+            throw new Error('argon2idCost is required when a password is provided')
+        }
+
         usedArgon2idSalt = params.argon2idSalt ?? crypto.getRandomValues(new Uint8Array(16))
-        // These settings roughly exceed the current OWASP Argon2id guidance as of April 2026 (m=128 MiB, t=4, p=1) and aim for well over 500 ms of work on modern laptops while still being tolerable in-browser
+        usedArgon2idCost = params.argon2idCost
         stretched = await argon2idAsync(params.password, usedArgon2idSalt, {
-            t: 4,
-            m: 128 << 10, // 128 MiB
-            p: 1,
+            t: usedArgon2idCost.t,
+            m: usedArgon2idCost.m,
+            p: usedArgon2idCost.p,
             dkLen: 32,
         })
         hkdfSalt = asBuf(stretched)
@@ -252,7 +265,12 @@ export async function deriveWrappingKey(params: {
         256
     )
 
-    return { wrappingKeyBytes: new Uint8Array(bits), stretched, argon2idSalt: usedArgon2idSalt }
+    return {
+        wrappingKeyBytes: new Uint8Array(bits),
+        stretched,
+        argon2idSalt: usedArgon2idSalt,
+        argon2idCost: usedArgon2idCost,
+    }
 }
 
 /**
@@ -264,6 +282,7 @@ export async function wrapPrimaryKey(params: {
     userId: string
     passwordRequired: boolean
     argon2idSalt?: Uint8Array
+    argon2idCost?: Argon2idCost
 }): Promise<string> {
     const wrappingKey = await crypto.subtle.importKey(
         'raw',
@@ -288,11 +307,15 @@ export async function wrapPrimaryKey(params: {
         ciphertext: bytesToBase64Url(ciphertext),
     }
 
-    if (params.passwordRequired && params.argon2idSalt) {
+    if (params.passwordRequired) {
+        if (!params.argon2idSalt || !params.argon2idCost) {
+            throw new Error('argon2idSalt and argon2idCost are required when passwordRequired is true')
+        }
+
         envelope.argon2id = {
-            m: 128 << 10, // 128 MB
-            t: 4,
-            p: 1,
+            m: params.argon2idCost.m,
+            t: params.argon2idCost.t,
+            p: params.argon2idCost.p,
             salt: bytesToBase64Url(params.argon2idSalt),
         }
     }

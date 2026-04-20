@@ -98,6 +98,12 @@ export type DerivedSigningKey = {
     id: string
 }
 
+export type Argon2idCost = {
+    m: number
+    t: number
+    p: number
+}
+
 export type V2RegisterBeginResponse = {
     challengeId: string
     challenge: string
