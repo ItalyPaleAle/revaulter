@@ -84,28 +84,20 @@ func CanonicalPubkeyBundleMessage(payload PubkeyBundlePayload) ([]byte, error) {
 	return out, nil
 }
 
-// canonicalJSON produces a deterministic JSON encoding of v by going through
-// Go's default marshaller with HTML escaping disabled, matching the browser's
-// canonical encoding (TextEncoder over JSON.stringify of a fixed-field object).
+// canonicalJSON produces a deterministic JSON encoding of v by going through Go's default marshaller with HTML escaping disabled, matching the browser's canonical encoding (TextEncoder over JSON.stringify of a fixed-field object).
 func canonicalJSON(v any) ([]byte, error) {
-	b, err := json.Marshal(v)
+	b := &bytes.Buffer{}
+	enc := json.NewEncoder(b)
+	enc.SetEscapeHTML(false)
+	err := enc.Encode(v)
 	if err != nil {
 		return nil, err
 	}
-	return unescapeHTMLJSON(b), nil
+	return b.Bytes(), nil
 }
 
-func unescapeHTMLJSON(b []byte) []byte {
-	out := b
-	out = bytes.ReplaceAll(out, []byte(`\u003c`), []byte{'<'})
-	out = bytes.ReplaceAll(out, []byte(`\u003e`), []byte{'>'})
-	out = bytes.ReplaceAll(out, []byte(`\u0026`), []byte{'&'})
-	return out
-}
-
-// VerifyHybridAttestation verifies that both legs of the hybrid signature
-// cover the canonical attestation message. Both must validate; if either
-// fails the call returns an error describing which legs rejected the signature.
+// VerifyHybridAttestation verifies that both legs of the hybrid signature cover the canonical attestation message.
+// Both must validate; if either fails the call returns an error describing which legs rejected the signature.
 func VerifyHybridAttestation(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload AttestationPayload, sigEs384, sigMldsa87 []byte) error {
 	msg, err := CanonicalAttestationMessage(payload)
 	if err != nil {
@@ -114,8 +106,7 @@ func VerifyHybridAttestation(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, 
 	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
 }
 
-// VerifyHybridBundle verifies both legs of the hybrid signature covering the
-// canonical pubkey-bundle message.
+// VerifyHybridBundle verifies both legs of the hybrid signature covering the canonical pubkey-bundle message
 func VerifyHybridBundle(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload PubkeyBundlePayload, sigEs384, sigMldsa87 []byte) error {
 	msg, err := CanonicalPubkeyBundleMessage(payload)
 	if err != nil {
