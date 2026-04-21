@@ -98,6 +98,12 @@ export type DerivedSigningKey = {
     id: string
 }
 
+export type Argon2idCost = {
+    m: number
+    t: number
+    p: number
+}
+
 export type V2RegisterBeginResponse = {
     challengeId: string
     challenge: string
@@ -129,6 +135,7 @@ export type V2LoginFinishResponse = {
     authenticated: boolean
     session?: V2AuthSessionInfo
     wrappedPrimaryKey?: string
+    wrappedAnchorKey?: string
     credentialWrappedKeyEpoch?: number
     wrappedKeyStale: boolean
 }

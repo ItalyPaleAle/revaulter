@@ -19,7 +19,7 @@ test.beforeEach(async ({ page, request }) => {
 
 test('sign-in page renders on a clean instance', async ({ page }) => {
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Create a new account' })).toBeVisible()
 })
 
@@ -28,7 +28,7 @@ test('user can register and skip password setup', async ({ page }) => {
 
     try {
         await skipPasswordSetup(page)
-        await expect(page.getByText('No pending requests')).toBeVisible()
+        await expect(page.getByText('All clear')).toBeVisible()
     } finally {
         await passkey.dispose()
     }
@@ -98,7 +98,9 @@ test('password-protected user sees an error for a wrong password and can recover
 
         await loginToPasswordPrompt(page)
         await unlockWithPassword(page, 'wrong-password')
-        await expect(page.getByText('Incorrect password')).toBeVisible()
+        await expect(
+            page.getByText('Failed to unwrap primary key. The password or passkey may be incorrect.')
+        ).toBeVisible()
         await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
 
         await unlockWithPassword(page, 'hunter2')
@@ -116,7 +118,7 @@ test('expired ready session forces the UI back to sign-in', async ({ page, reque
         await resetState(request)
 
         await page.goto('/')
-        await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
+        await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
     } finally {
         await passkey.dispose()
     }
@@ -131,12 +133,12 @@ test('reload during non-ready setup resumes via session endpoint', async ({ page
     await installSessionCookie(context, request, 'user-nonready')
 
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
     await page.reload()
-    await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
 })
 
 async function openSignInState(page) {
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
 }

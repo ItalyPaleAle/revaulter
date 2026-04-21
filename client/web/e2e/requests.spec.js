@@ -27,7 +27,7 @@ test('empty ready state is shown when there are no requests', async ({ page }) =
 
     try {
         await waitForListStream(page)
-        await expect(page.getByText('No pending requests')).toBeVisible()
+        await expect(page.getByText('All clear')).toBeVisible()
     } finally {
         await auth.passkey.dispose()
     }
@@ -45,9 +45,9 @@ test('seeded encrypt request appears in the list', async ({ page, request }) => 
     })
 
     try {
-        await expect(page.getByText('Encrypt request')).toBeVisible()
+        await expect(page.getByText('Encrypt', { exact: true }).last()).toBeVisible()
         await expect(page.getByText('disk-key')).toBeVisible()
-        await expect(page.getByText('Requestor:')).toContainText('203.0.113.20')
+        await expect(page.getByText(/from\s+203\.0\.113\.20/)).toBeVisible()
         await expect(page.getByText('boot unlock')).toBeVisible()
     } finally {
         await auth.passkey.dispose()
@@ -65,7 +65,7 @@ test('seeded decrypt request appears in the list', async ({ page, request }) => 
     })
 
     try {
-        await expect(page.getByText('Decrypt request')).toBeVisible()
+        await expect(page.getByText('Decrypt', { exact: true }).last()).toBeVisible()
         await expect(page.getByText('db-key')).toBeVisible()
     } finally {
         await auth.passkey.dispose()
@@ -83,8 +83,8 @@ test('canceling a pending request removes it from the UI and updates state', asy
     })
 
     try {
-        await page.getByRole('button', { name: 'Cancel' }).click()
-        await expect(page.getByText('No pending requests')).toBeVisible()
+        await page.getByRole('button', { name: 'Decline' }).click()
+        await expect(page.getByText('All clear')).toBeVisible()
 
         const rec = await getSeededRequest(request, seeded.state)
         expect(rec.status).toBe('canceled')
@@ -111,7 +111,7 @@ test('requests for another user are not shown', async ({ page, request }) => {
     try {
         await waitForListStream(page)
         await expect(page.getByText('other-key')).toHaveCount(0)
-        await expect(page.getByText('No pending requests')).toBeVisible()
+        await expect(page.getByText('All clear')).toBeVisible()
     } finally {
         await auth.passkey.dispose()
     }
@@ -122,7 +122,7 @@ test('new seeded request appears without reload after stream is connected', asyn
 
     try {
         await waitForListStream(page)
-        await expect(page.getByText('No pending requests')).toBeVisible()
+        await expect(page.getByText('All clear')).toBeVisible()
 
         await seedPendingRequest(request, {
             userId: auth.session.userId,
@@ -147,7 +147,8 @@ test('regenerating the request key invalidates the old public key endpoint', asy
         expect(before.status).toBe(200)
 
         await page.getByRole('button', { name: 'Open settings' }).click()
-        await page.locator('button', { hasText: 'Regenerate' }).click()
+        await page.getByRole('button', { name: 'Regenerate Regenerate' }).click()
+        await page.getByRole('button', { name: 'Yes, regenerate' }).click()
         await expect(page.getByText('Request key regenerated.')).toBeVisible()
 
         const current = await page.request.get('/v2/auth/session')

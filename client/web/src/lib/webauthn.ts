@@ -124,6 +124,7 @@ export async function webauthnLoginWithPrf(args: {
     options?: unknown
 }): Promise<{ id: string; signCount: number; prfSecret?: Uint8Array; raw?: unknown }> {
     const salt = args.prfSalt ?? generatePrfSalt()
+    const saltBuffer = salt.slice().buffer as ArrayBuffer
     if (!('credentials' in navigator) || typeof PublicKeyCredential === 'undefined') {
         throw new Error('WebAuthn is not available in this browser')
     }
@@ -141,7 +142,7 @@ export async function webauthnLoginWithPrf(args: {
                   ...(reqOptions.extensions || {}),
                   prf: {
                       eval: {
-                          first: salt.buffer as ArrayBuffer,
+                          first: saltBuffer,
                       },
                   },
               } as AuthenticationExtensionsClientInputs,
@@ -153,7 +154,7 @@ export async function webauthnLoginWithPrf(args: {
               extensions: {
                   prf: {
                       eval: {
-                          first: salt.buffer as ArrayBuffer,
+                          first: saltBuffer,
                       },
                   },
               } as AuthenticationExtensionsClientInputs,

@@ -32,6 +32,12 @@ type v2OperationFlagsBase struct {
 
 	Output string
 	Raw    bool
+
+	// Trust store: the CLI pins the server's hybrid anchor (ES384 + ML-DSA-87)
+	// on first contact and refuses to proceed on mismatch. --trust-store picks
+	// the file; --no-trust-store disables both pinning and verification.
+	TrustStorePath string
+	NoTrustStore   bool
 }
 
 func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
@@ -52,6 +58,9 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 
 	cmd.Flags().StringVarP(&f.Output, "output", "o", "", "Write the result to this file path instead of stdout (mode 0600, refuses symlinks)")
 	cmd.Flags().BoolVar(&f.Raw, "raw", false, "Write the decrypted plaintext as raw bytes instead of the default JSON envelope")
+
+	cmd.Flags().StringVar(&f.TrustStorePath, "trust-store", "", "Path to the anchor trust store (defaults to $XDG_CONFIG_HOME/revaulter-cli/trust.json)")
+	cmd.Flags().BoolVar(&f.NoTrustStore, "no-trust-store", false, "Skip anchor pinning and hybrid bundle verification (equivalent to SSH StrictHostKeyChecking=no)")
 }
 
 func (f *v2OperationFlagsBase) Validate() error {
@@ -68,6 +77,8 @@ func (f *v2OperationFlagsBase) GetNote() string                    { return f.No
 func (f *v2OperationFlagsBase) GetConnectionOptions() (bool, bool) { return f.Insecure, f.NoH2C }
 func (f *v2OperationFlagsBase) GetOutput() string                  { return f.Output }
 func (f *v2OperationFlagsBase) GetRaw() bool                       { return f.Raw }
+func (f *v2OperationFlagsBase) GetTrustStorePath() string          { return f.TrustStorePath }
+func (f *v2OperationFlagsBase) GetNoTrustStore() bool              { return f.NoTrustStore }
 
 type v2OperationFlags interface {
 	BindToCommand(cmd *cobra.Command)
@@ -82,6 +93,8 @@ type v2OperationFlags interface {
 	GetConnectionOptions() (insecure bool, noh2c bool)
 	GetOutput() string
 	GetRaw() bool
+	GetTrustStorePath() string
+	GetNoTrustStore() bool
 }
 
 type v2OperationFlagsEncrypt struct {

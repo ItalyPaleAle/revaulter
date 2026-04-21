@@ -1,7 +1,8 @@
-import { argon2id } from 'hash-wasm'
-import mlkem from 'mlkem-wasm'
+import { argon2idAsync } from '@noble/hashes/argon2.js'
+import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import type {
+    Argon2idCost,
     EcP256PublicJwk,
     V2Operation,
     V2RequestPayloadInner,
@@ -54,37 +55,26 @@ async function deriveTransportAesKeyForEncrypt(
 
     // ML-KEM encapsulation
     const mlkemPubBytes = base64UrlToBytes(peerMlkemKeyB64)
-    const mlkemPubKey = await mlkem.importKey('raw-public', asBuf(mlkemPubBytes) as BufferSource, 'ML-KEM-768', false, [
-        'encapsulateBits',
-    ])
-    const { sharedKey: mlkemSharedBuf, ciphertext: mlkemCTBuf } = await mlkem.encapsulateBits('ML-KEM-768', mlkemPubKey)
+    const { cipherText: mlkemCT, sharedSecret: mlkemShared } = ml_kem768.encapsulate(mlkemPubBytes)
 
-    const aesKey = await deriveHybridAesKey(
-        ecdhShared,
-        new Uint8Array(mlkemSharedBuf),
-        `revaulter/v2/transport/${state}`
-    )
-    return { aesKey, mlkemCiphertext: new Uint8Array(mlkemCTBuf) }
+    const aesKey = await deriveHybridAesKey(ecdhShared, mlkemShared, `revaulter/v2/transport/${state}`)
+    return { aesKey, mlkemCiphertext: mlkemCT }
 }
 
 async function deriveTransportAesKeyForDecrypt(
     state: string,
     ecdhPrivateKey: CryptoKey,
     peerEcdhPublicJwk: EcP256PublicJwk,
-    mlkemDecapsulationKey: CryptoKey,
+    mlkemSecretKey: Uint8Array,
     mlkemCiphertext: Uint8Array
 ): Promise<CryptoKey> {
     // ECDH shared secret
     const ecdhShared = await deriveEcdhSharedSecret(ecdhPrivateKey, peerEcdhPublicJwk)
 
     // ML-KEM decapsulation
-    const mlkemSharedBuf = await mlkem.decapsulateBits(
-        'ML-KEM-768',
-        mlkemDecapsulationKey,
-        asBuf(mlkemCiphertext) as BufferSource
-    )
+    const mlkemShared = ml_kem768.decapsulate(mlkemCiphertext, mlkemSecretKey)
 
-    return deriveHybridAesKey(ecdhShared, new Uint8Array(mlkemSharedBuf), `revaulter/v2/transport/${state}`)
+    return deriveHybridAesKey(ecdhShared, mlkemShared, `revaulter/v2/transport/${state}`)
 }
 
 /** Performs ECDH key agreement and returns the raw 32-byte shared secret */
@@ -171,7 +161,7 @@ export async function encryptTransportEnvelope(
 export async function decryptTransportEnvelope(
     state: string,
     ecdhPrivateKey: CryptoKey,
-    mlkemDecapsulationKey: CryptoKey,
+    mlkemSecretKey: Uint8Array,
     env: V2ResponseEnvelope,
     aad?: Uint8Array
 ): Promise<Uint8Array> {
@@ -180,7 +170,7 @@ export async function decryptTransportEnvelope(
         state,
         ecdhPrivateKey,
         env.browserEphemeralPublicKey,
-        mlkemDecapsulationKey,
+        mlkemSecretKey,
         mlkemCT
     )
 
@@ -226,35 +216,39 @@ export type WrappedPrimaryKeyEnvelope = {
 /**
  * Derives the wrapping key used to wrap/unwrap the primary key
  * When a password is set, it is stretched via Argon2id before being used as HKDF salt
+ * The Argon2id cost MUST be supplied by the caller: use the build-time `argon2idCost` constant for fresh wraps, or the cost stored inside the envelope being unwrapped
  */
 export async function deriveWrappingKey(params: {
     prfSecret: Uint8Array
     userId: string
     password?: string
     argon2idSalt?: Uint8Array
-}): Promise<{ wrappingKeyBytes: Uint8Array; stretched?: Uint8Array; argon2idSalt?: Uint8Array }> {
+    argon2idCost?: Argon2idCost
+}): Promise<{
+    wrappingKeyBytes: Uint8Array
+    stretched?: Uint8Array
+    argon2idSalt?: Uint8Array
+    argon2idCost?: Argon2idCost
+}> {
     let hkdfSalt: BufferSource = new Uint8Array()
     let stretched: Uint8Array | undefined
     let usedArgon2idSalt: Uint8Array | undefined
+    let usedArgon2idCost: Argon2idCost | undefined
 
     if (params.password) {
+        if (!params.argon2idCost) {
+            throw new Error('argon2idCost is required when a password is provided')
+        }
+
         usedArgon2idSalt = params.argon2idSalt ?? crypto.getRandomValues(new Uint8Array(16))
-        // These settings roughly exceed the current OWASP Argon2id guidance as of April 2026 (m=128 MiB, t=4, p=1) and aim for well over 500 ms of work on modern laptops while still being tolerable in-browser
-        const stretchedBytes = await argon2id({
-            password: params.password,
-            salt: usedArgon2idSalt,
-            parallelism: 1,
-            iterations: 4,
-            memorySize: 128 << 10, // 128 MiB
-            hashLength: 32,
-            outputType: 'binary',
+        usedArgon2idCost = params.argon2idCost
+        stretched = await argon2idAsync(params.password, usedArgon2idSalt, {
+            t: usedArgon2idCost.t,
+            m: usedArgon2idCost.m,
+            p: usedArgon2idCost.p,
+            dkLen: 32,
         })
-        // Copy into a fresh ArrayBuffer-backed Uint8Array to satisfy
-        // BufferSource constraints (hash-wasm returns ArrayBufferLike)
-        const copy = new Uint8Array(stretchedBytes.byteLength)
-        copy.set(stretchedBytes)
-        stretched = copy
-        hkdfSalt = copy
+        hkdfSalt = asBuf(stretched)
     }
 
     const ikm = await crypto.subtle.importKey('raw', asBuf(params.prfSecret), 'HKDF', false, ['deriveBits'])
@@ -271,7 +265,12 @@ export async function deriveWrappingKey(params: {
         256
     )
 
-    return { wrappingKeyBytes: new Uint8Array(bits), stretched, argon2idSalt: usedArgon2idSalt }
+    return {
+        wrappingKeyBytes: new Uint8Array(bits),
+        stretched,
+        argon2idSalt: usedArgon2idSalt,
+        argon2idCost: usedArgon2idCost,
+    }
 }
 
 /**
@@ -283,6 +282,7 @@ export async function wrapPrimaryKey(params: {
     userId: string
     passwordRequired: boolean
     argon2idSalt?: Uint8Array
+    argon2idCost?: Argon2idCost
 }): Promise<string> {
     const wrappingKey = await crypto.subtle.importKey(
         'raw',
@@ -307,11 +307,15 @@ export async function wrapPrimaryKey(params: {
         ciphertext: bytesToBase64Url(ciphertext),
     }
 
-    if (params.passwordRequired && params.argon2idSalt) {
+    if (params.passwordRequired) {
+        if (!params.argon2idSalt || !params.argon2idCost) {
+            throw new Error('argon2idSalt and argon2idCost are required when passwordRequired is true')
+        }
+
         envelope.argon2id = {
-            m: 128 << 10, // 128 MB
-            t: 4,
-            p: 1,
+            m: params.argon2idCost.m,
+            t: params.argon2idCost.t,
+            p: params.argon2idCost.p,
             salt: bytesToBase64Url(params.argon2idSalt),
         }
     }
@@ -571,7 +575,7 @@ export async function deriveRequestEncKeyPair(params: {
 export async function deriveRequestEncMlkemKeyPair(params: {
     userId: string
     primaryKey: Uint8Array
-}): Promise<{ decapsulationKey: CryptoKey; encapsulationKeyB64: string }> {
+}): Promise<{ secretKey: Uint8Array; encapsulationKeyB64: string }> {
     const ikm = await crypto.subtle.importKey('raw', asBuf(params.primaryKey), 'HKDF', false, ['deriveBits'])
 
     const info = new TextEncoder().encode(`revaulter/v2/requestEncMlkemSeed\nuserId=${params.userId}\nv=1`)
@@ -583,16 +587,11 @@ export async function deriveRequestEncMlkemKeyPair(params: {
         512
     )
 
-    // Import as ML-KEM-768 decapsulation key from seed
-    const dk = await mlkem.importKey('raw-seed', seedBits, 'ML-KEM-768', true, ['decapsulateBits'])
-
-    // Extract the encapsulation (public) key
-    const pk = await mlkem.getPublicKey(dk, ['encapsulateBits'])
-    const pkRaw = await mlkem.exportKey('raw-public', pk)
+    const { secretKey, publicKey } = ml_kem768.keygen(new Uint8Array(seedBits))
 
     return {
-        decapsulationKey: dk,
-        encapsulationKeyB64: bytesToBase64Url(pkRaw),
+        secretKey,
+        encapsulationKeyB64: bytesToBase64Url(publicKey),
     }
 }
 
@@ -624,7 +623,7 @@ export async function decryptRequestPayload(params: {
     })
 
     // Derive the static ML-KEM decapsulation key
-    const { decapsulationKey: mlkemDK } = await deriveRequestEncMlkemKeyPair({
+    const { secretKey: mlkemSK } = await deriveRequestEncMlkemKeyPair({
         userId: params.userId,
         primaryKey: params.primaryKey,
     })
@@ -634,10 +633,10 @@ export async function decryptRequestPayload(params: {
 
     // ML-KEM decapsulation
     const mlkemCT = base64UrlToBytes(params.mlkemCiphertext)
-    const mlkemSharedBuf = await mlkem.decapsulateBits('ML-KEM-768', mlkemDK, asBuf(mlkemCT) as BufferSource)
+    const mlkemShared = ml_kem768.decapsulate(mlkemCT, mlkemSK)
 
     // Derive AES key from combined ECDH + ML-KEM shared secrets
-    const aesKey = await deriveHybridAesKey(ecdhShared, new Uint8Array(mlkemSharedBuf), 'revaulter/v2/request-enc')
+    const aesKey = await deriveHybridAesKey(ecdhShared, mlkemShared, 'revaulter/v2/request-enc')
 
     // Decrypt
     const nonce = base64UrlToBytes(params.nonce)

@@ -45,6 +45,8 @@ func (f *testV2Flags) GetNote() string                    { return "" }
 func (f *testV2Flags) GetConnectionOptions() (bool, bool) { return false, false }
 func (f *testV2Flags) GetOutput() string                  { return f.output }
 func (f *testV2Flags) GetRaw() bool                       { return f.raw }
+func (f *testV2Flags) GetTrustStorePath() string          { return "" }
+func (f *testV2Flags) GetNoTrustStore() bool              { return true }
 func (f *testV2Flags) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
 		Value:                   base64.RawURLEncoding.EncodeToString([]byte("hello")),
@@ -378,6 +380,8 @@ func (f *testV2SignFlags) GetNote() string                    { return "" }
 func (f *testV2SignFlags) GetConnectionOptions() (bool, bool) { return false, false }
 func (f *testV2SignFlags) GetOutput() string                  { return "" }
 func (f *testV2SignFlags) GetRaw() bool                       { return false }
+func (f *testV2SignFlags) GetTrustStorePath() string          { return "" }
+func (f *testV2SignFlags) GetNoTrustStore() bool              { return true }
 func (f *testV2SignFlags) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
 		Value:                   f.digestB64,

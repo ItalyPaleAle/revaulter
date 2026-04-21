@@ -173,7 +173,9 @@ test('changing the password on one passkey leaves the other on the old password 
         await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
 
         await unlockWithPassword(page, newPassword)
-        await expect(page.getByText('Incorrect password')).toBeVisible()
+        await expect(
+            page.getByText('Failed to unwrap primary key. The password or passkey may be incorrect.')
+        ).toBeVisible()
         await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
 
         await unlockWithPassword(page, oldPassword)

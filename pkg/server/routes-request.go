@@ -25,8 +25,18 @@ type v2RequestCreateResponse struct {
 }
 
 type v2RequestPubkeyResponse struct {
+	UserID   string          `json:"userId"`
 	EcdhP256 json.RawMessage `json:"ecdhP256"`
 	Mlkem768 string          `json:"mlkem768"`
+
+	// Hybrid anchor pubkeys + bundle self-signatures. The CLI pins the anchor pubkeys
+	// (TOFU) and verifies both signatures over the bundle to detect server-side pubkey
+	// substitution attacks.
+	AnchorEs384PublicKey         json.RawMessage `json:"anchorEs384PublicKey"`
+	AnchorMldsa87PublicKey       string          `json:"anchorMldsa87PublicKey"`
+	WrappedKeyEpoch              int64           `json:"wrappedKeyEpoch"`
+	PubkeyBundleSignatureEs384   string          `json:"pubkeyBundleSignatureEs384"`
+	PubkeyBundleSignatureMldsa87 string          `json:"pubkeyBundleSignatureMldsa87"`
 }
 
 func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
@@ -141,7 +151,6 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 				AssignedUser:  displayName,
 				KeyLabel:      body.KeyLabel,
 				Algorithm:     body.Algorithm,
-				StateId:       state,
 				Requestor:     c.ClientIP(),
 				Note:          body.Note,
 			})
@@ -167,8 +176,14 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, v2RequestPubkeyResponse{
-		EcdhP256: json.RawMessage(user.RequestEncEcdhPubkey),
-		Mlkem768: user.RequestEncMlkemPubkey,
+		UserID:                       user.ID,
+		EcdhP256:                     json.RawMessage(user.RequestEncEcdhPubkey),
+		Mlkem768:                     user.RequestEncMlkemPubkey,
+		AnchorEs384PublicKey:         json.RawMessage(user.AnchorEs384PublicKey),
+		AnchorMldsa87PublicKey:       user.AnchorMldsa87PublicKey,
+		WrappedKeyEpoch:              user.WrappedKeyEpoch,
+		PubkeyBundleSignatureEs384:   user.PubkeyBundleSignatureEs384,
+		PubkeyBundleSignatureMldsa87: user.PubkeyBundleSignatureMldsa87,
 	})
 }
 
@@ -185,12 +200,23 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 			AbortWithErrorJSON(c, err)
 			return
 		}
+
 		if rec == nil {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 			return
 		}
+
 		switch rec.Status {
 		case db.V2RequestStatusCompleted:
+			rec, err = s.requestStore.GetAndDeleteTerminalRequest(c.Request.Context(), state)
+			if err != nil {
+				AbortWithErrorJSON(c, err)
+				return
+			}
+			if rec == nil {
+				continue
+			}
+
 			c.JSON(http.StatusOK, protocolv2.RequestResultResponse{
 				State:            rec.State,
 				Done:             true,
@@ -198,6 +224,15 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 			})
 			return
 		case db.V2RequestStatusCanceled, db.V2RequestStatusExpired:
+			rec, err = s.requestStore.GetAndDeleteTerminalRequest(c.Request.Context(), state)
+			if err != nil {
+				AbortWithErrorJSON(c, err)
+				return
+			}
+			if rec == nil {
+				continue
+			}
+
 			c.JSON(http.StatusConflict, protocolv2.RequestResultResponse{
 				State:  rec.State,
 				Failed: true,

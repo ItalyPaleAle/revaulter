@@ -81,7 +81,7 @@ func (s *Server) executeDeleteEvent(ev deleteEvent) {
 
 	switch ev.Kind {
 	case "request":
-		err := s.requestStore.DeleteExpiredTerminalRequest(ctx, ev.ID, ev.TTL)
+		err := s.requestStore.DeleteTerminalRequest(ctx, ev.ID, &ev.TTL)
 		if err != nil {
 			log.WarnContext(ctx, "request cleanup failed", slog.Any("error", err), slog.String("state", ev.ID))
 		}

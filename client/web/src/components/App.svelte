@@ -5,6 +5,7 @@ import AuthAccessView from '$components/AuthAccessView.svelte'
 import AuthSetupView from '$components/AuthSetupView.svelte'
 import ReadyView from '$components/ReadyView.svelte'
 
+import { argon2idCost } from '$lib/argon2id-cost'
 import {
     computeEcP256Thumbprint,
     deriveRequestEncKeyPair,
@@ -17,6 +18,17 @@ import {
     unwrapPrimaryKey,
     wrapPrimaryKey,
 } from '$lib/crypto'
+import {
+    type AnchorKeyPair,
+    anchorEs384JwkToString,
+    anchorMldsa87PubToString,
+    generateAnchorKeyPair,
+    serializeAnchorSecret,
+    signCredentialAttestationHybrid,
+    signPubkeyBundleHybrid,
+    unwrapAnchorKey,
+    wrapAnchorKey,
+} from '$lib/crypto-anchor'
 import { ResponseNotOkError } from '$lib/request'
 import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import {
@@ -43,6 +55,7 @@ import {
     v2UpdateWrappedKey,
 } from '$lib/v2-api'
 import type {
+    Argon2idCost,
     DerivedSigningKey,
     V2AuthSessionInfo,
     V2CredentialItem,
@@ -80,6 +93,12 @@ let hasPassword = $state(false)
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
 let primaryKey = $state<Uint8Array | null>(null)
+// Unwrapped hybrid anchor keypair for the current session. Used to sign attestations when adding new credentials.
+let sessionAnchor = $state<AnchorKeyPair | null>(null)
+// Wrapped anchor blob returned by the login finish response; unwrapped once we have the wrapping key.
+let loginWrappedAnchorKey = $state<string | null>(null)
+// Public key (SPKI, base64url) of a freshly-registered credential. Held briefly until the matching finalize step consumes it.
+let pendingCredentialPublicKey = $state<string | null>(null)
 
 let items = $state<Record<string, V2PendingRequestItem>>({})
 let listConnected = $state(false)
@@ -143,6 +162,9 @@ function clearLocalAuthState() {
     session = null
     prfSecret = null
     primaryKey = null
+    sessionAnchor = null
+    loginWrappedAnchorKey = null
+    pendingCredentialPublicKey = null
     loginWrappedPrimaryKey = null
     sessionCredentialId = null
     sessionCredentialWrappedKeyEpoch = 1
@@ -196,6 +218,13 @@ function sessionLabel() {
 }
 
 async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-required'> {
+    primaryKey = null
+    sessionAnchor = null
+    sessionPassword = null
+    loginWrappedPrimaryKey = null
+    loginWrappedAnchorKey = null
+    loginWrappedKeyStale = false
+
     const begin = await v2LoginBegin()
     const assertion = await webauthnLoginWithPrf({
         challenge: begin.challenge,
@@ -222,6 +251,7 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
     sessionCredentialId = assertion.id
     sessionCredentialWrappedKeyEpoch = finish.credentialWrappedKeyEpoch ?? finish.session.wrappedKeyEpoch
     loginWrappedPrimaryKey = finish.wrappedPrimaryKey ?? null
+    loginWrappedAnchorKey = finish.wrappedAnchorKey ?? null
     loginWrappedKeyStale = finish.wrappedKeyStale
 
     if (finish.wrappedPrimaryKey) {
@@ -242,7 +272,16 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
             wrappingKeyBytes,
             userId: finish.session.userId,
         })
+        // Also unwrap the hybrid anchor so subsequent credential-add flows can sign attestations
+        if (loginWrappedAnchorKey) {
+            sessionAnchor = await unwrapAnchorKey({
+                wrapped: loginWrappedAnchorKey,
+                wrappingKeyBytes,
+                userId: finish.session.userId,
+            })
+        }
         loginWrappedPrimaryKey = null
+        loginWrappedAnchorKey = null
     } else {
         hasPassword = false
     }
@@ -250,7 +289,10 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
 }
 
 async function unlockWithPassword(password: string) {
-    if (!loginWrappedPrimaryKey) {
+    const wrappedPrimaryKey = loginWrappedPrimaryKey
+    const wrappedAnchorKey = loginWrappedAnchorKey
+
+    if (!wrappedPrimaryKey) {
         throw new Error('Password unlock is not active')
     }
     if (!prfSecret || !session) {
@@ -263,12 +305,17 @@ async function unlockWithPassword(password: string) {
     }
 
     // Parse Argon2id params from the wrapped-key envelope
-    const envelope = parseWrappedPrimaryKeyEnvelope(loginWrappedPrimaryKey)
+    const envelope = parseWrappedPrimaryKeyEnvelope(wrappedPrimaryKey)
     if (!envelope.argon2id) {
         throw new Error('Wrapped key envelope is missing Argon2id parameters')
     }
 
     const argon2idSalt = base64UrlToBytes(envelope.argon2id.salt)
+    const envelopeArgon2idCost: Argon2idCost = {
+        m: envelope.argon2id.m,
+        t: envelope.argon2id.t,
+        p: envelope.argon2id.p,
+    }
 
     // Derive the wrapping key using Argon2id-stretched password as HKDF salt
     const { wrappingKeyBytes } = await deriveWrappingKey({
@@ -276,40 +323,29 @@ async function unlockWithPassword(password: string) {
         userId: session.userId,
         password,
         argon2idSalt,
+        argon2idCost: envelopeArgon2idCost,
     })
 
     // Unwrap — success proves the password is correct (replaces canary)
     primaryKey = await unwrapPrimaryKey({
-        wrapped: loginWrappedPrimaryKey,
+        wrapped: wrappedPrimaryKey,
         wrappingKeyBytes,
         userId: session.userId,
     })
 
-    if (loginWrappedKeyStale) {
-        const { wrappingKeyBytes: updatedWrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
-            prfSecret,
+    // Unwrap the hybrid anchor secret too. Without it the session cannot add new credentials.
+    if (wrappedAnchorKey) {
+        sessionAnchor = await unwrapAnchorKey({
+            wrapped: wrappedAnchorKey,
+            wrappingKeyBytes,
             userId: session.userId,
-            password,
         })
-
-        const updatedWrapped = await wrapPrimaryKey({
-            primaryKey,
-            wrappingKeyBytes: updatedWrappingKeyBytes,
-            userId: session.userId,
-            passwordRequired: true,
-            argon2idSalt,
-        })
-
-        if (!sessionCredentialId) {
-            throw new Error('Missing session credential')
-        }
-
-        await v2UpdateWrappedKey(sessionCredentialId, updatedWrapped)
-        sessionCredentialWrappedKeyEpoch = session.wrappedKeyEpoch
-        loginWrappedKeyStale = false
     }
 
+    loginWrappedKeyStale = false
+
     loginWrappedPrimaryKey = null
+    loginWrappedAnchorKey = null
 
     // Keep the password in memory for the rest of the session so we can re-wrap the primary key when adding new passkeys or changing credentials without re-prompting
     sessionPassword = password
@@ -350,6 +386,9 @@ async function doRegister() {
             challenge: begin.challenge,
             options: begin.options,
         })
+        // Stash the attestationObject as the credentialPublicKey identity string.
+        // It is signed by the anchor alongside the credentialId; the server does not re-verify its shape.
+        pendingCredentialPublicKey = cred.publicKey
         await v2RegisterFinish({
             challengeId: begin.challengeId,
             credential: (cred.raw as { credential?: unknown })?.credential ?? cred,
@@ -385,8 +424,8 @@ async function doFinishPasswordLogin() {
     try {
         await unlockWithPassword(passwordInput)
         enterReadyView()
-    } catch {
-        authError = 'Incorrect password'
+    } catch (err) {
+        authError = err instanceof Error ? err.message : 'Incorrect password'
     } finally {
         authBusy = false
     }
@@ -400,19 +439,31 @@ async function doSetPassword() {
         uiState = 'signin'
         return
     }
+    if (!sessionCredentialId || !pendingCredentialPublicKey) {
+        clearLocalAuthState()
+        authError = 'Missing credential identity for signup. Sign in again to continue.'
+        uiState = 'signin'
+        return
+    }
 
     authBusy = true
     authError = null
 
     try {
-        // Generate a random primary key
+        // Generate a random primary key and a fresh hybrid anchor (the user's long-lived identity root)
         const pk = await generatePrimaryKey()
+        const anchor = await generateAnchorKeyPair()
 
         // Derive wrapping key (with optional Argon2id if password is set)
-        const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+        const {
+            wrappingKeyBytes,
+            argon2idSalt,
+            argon2idCost: usedCost,
+        } = await deriveWrappingKey({
             prfSecret,
             userId: session.userId,
             password: passwordInput || undefined,
+            argon2idCost: passwordInput ? argon2idCost : undefined,
         })
 
         // Wrap the primary key
@@ -422,6 +473,15 @@ async function doSetPassword() {
             userId: session.userId,
             passwordRequired: !!passwordInput,
             argon2idSalt,
+            argon2idCost: usedCost,
+        })
+
+        // Wrap the anchor secret blob using the same wrapping key
+        const anchorSecret = await serializeAnchorSecret(anchor)
+        const wrappedAnchor = await wrapAnchorKey({
+            anchorSecret,
+            wrappingKeyBytes,
+            userId: session.userId,
         })
 
         // Derive request encryption keys from the primary key
@@ -434,13 +494,51 @@ async function doSetPassword() {
             primaryKey: pk,
         })
 
-        await v2FinalizeSignup(publicKeyJwk, encapsulationKeyB64, wrapped)
+        // Canonical wire strings for the anchor pubkeys — signed by the anchor and also stored on the user row.
+        const anchorEs384Str = anchorEs384JwkToString(anchor.es384.publicKeyJwk)
+        const anchorMldsa87Str = anchorMldsa87PubToString(anchor.mldsa87.publicKey)
+
+        // Sign the pubkey bundle. The CLI pins the anchor and verifies these signatures on every request.
+        const bundleSig = await signPubkeyBundleHybrid(anchor, {
+            userId: session.userId,
+            requestEncEcdhPubkey: JSON.stringify(publicKeyJwk),
+            requestEncMlkemPubkey: encapsulationKeyB64,
+            anchorEs384PublicKey: anchorEs384Str,
+            anchorMldsa87PublicKey: anchorMldsa87Str,
+            wrappedKeyEpoch: 1,
+        })
+
+        // Sign the first-credential attestation with the fresh anchor.
+        const attestSig = await signCredentialAttestationHybrid(anchor, {
+            userId: session.userId,
+            credentialId: sessionCredentialId,
+            credentialPublicKey: pendingCredentialPublicKey,
+            wrappedKeyEpoch: 1,
+            createdAt: Math.floor(Date.now() / 1000),
+        })
+
+        await v2FinalizeSignup({
+            requestEncEcdhPubkey: publicKeyJwk,
+            requestEncMlkemPubkey: encapsulationKeyB64,
+            wrappedPrimaryKey: wrapped,
+            anchorEs384PublicKey: anchor.es384.publicKeyJwk,
+            anchorMldsa87PublicKey: anchorMldsa87Str,
+            pubkeyBundleSignatureEs384: bundleSig.sigEs384,
+            pubkeyBundleSignatureMldsa87: bundleSig.sigMldsa87,
+            wrappedAnchorKey: wrappedAnchor,
+            attestationPayload: attestSig.canonicalBody,
+            attestationSignatureEs384: attestSig.sigEs384,
+            attestationSignatureMldsa87: attestSig.sigMldsa87,
+        })
         primaryKey = pk
+        sessionAnchor = anchor
         hasPassword = !!passwordInput
+        pendingCredentialPublicKey = null
 
         // Remember the password used during signup so subsequent add-passkey operations can wrap the new credential with the same password
         sessionPassword = passwordInput || null
         loginWrappedPrimaryKey = null
+        loginWrappedAnchorKey = null
         enterReadyView()
     } catch (err) {
         authError = err instanceof Error ? err.message : String(err)
@@ -632,6 +730,10 @@ async function doAddPasskey(name: string) {
         settingsError = 'Missing local key material'
         return
     }
+    if (!sessionAnchor) {
+        settingsError = 'Missing anchor secret; sign in again and retry.'
+        return
+    }
 
     settingsBusy = true
     settingsError = null
@@ -663,10 +765,15 @@ async function doAddPasskey(name: string) {
 
         // Derive the wrapping key for the new credential, re-using the current session password (if any) so all passkeys added while signed in share the same password gate
         const password = sessionPassword ?? undefined
-        const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+        const {
+            wrappingKeyBytes,
+            argon2idSalt,
+            argon2idCost: usedCost,
+        } = await deriveWrappingKey({
             prfSecret: prfAssertion.prfSecret,
             userId: session.userId,
             password,
+            argon2idCost: password ? argon2idCost : undefined,
         })
 
         const wrapped = await wrapPrimaryKey({
@@ -675,6 +782,24 @@ async function doAddPasskey(name: string) {
             userId: session.userId,
             passwordRequired: !!password,
             argon2idSalt,
+            argon2idCost: usedCost,
+        })
+
+        // Wrap a copy of the anchor secret with the new credential's wrapping key so the user can sign in with it later.
+        const anchorSecret = await serializeAnchorSecret(sessionAnchor)
+        const wrappedAnchor = await wrapAnchorKey({
+            anchorSecret,
+            wrappingKeyBytes,
+            userId: session.userId,
+        })
+
+        // Sign an attestation binding this credential to the user's existing anchor.
+        const attestSig = await signCredentialAttestationHybrid(sessionAnchor, {
+            userId: session.userId,
+            credentialId: cred.id,
+            credentialPublicKey: cred.publicKey,
+            wrappedKeyEpoch: session.wrappedKeyEpoch,
+            createdAt: Math.floor(Date.now() / 1000),
         })
 
         await v2AddCredentialFinish({
@@ -682,6 +807,10 @@ async function doAddPasskey(name: string) {
             credential: (cred.raw as { credential?: unknown })?.credential ?? cred,
             credentialName: name,
             wrappedPrimaryKey: wrapped,
+            wrappedAnchorKey: wrappedAnchor,
+            attestationPayload: attestSig.canonicalBody,
+            attestationSignatureEs384: attestSig.sigEs384,
+            attestationSignatureMldsa87: attestSig.sigMldsa87,
         })
         await doLoadCredentials()
         settingsSuccess = 'Passkey added.'
@@ -723,7 +852,7 @@ async function doDeletePasskey(id: string) {
 }
 
 async function doChangePassword(password: string) {
-    if (!prfSecret || !session || !primaryKey || !sessionCredentialId) {
+    if (!prfSecret || !session || !primaryKey || !sessionCredentialId || !sessionAnchor) {
         settingsError = 'Missing local key material'
         return
     }
@@ -732,13 +861,15 @@ async function doChangePassword(password: string) {
     settingsError = null
     settingsSuccess = null
     try {
-        const currentEpoch = session.wrappedKeyEpoch
-        session = { ...session, wrappedKeyEpoch: currentEpoch + 1 }
-
-        const { wrappingKeyBytes, argon2idSalt } = await deriveWrappingKey({
+        const {
+            wrappingKeyBytes,
+            argon2idSalt,
+            argon2idCost: usedCost,
+        } = await deriveWrappingKey({
             prfSecret,
             userId: session.userId,
             password: password || undefined,
+            argon2idCost: password ? argon2idCost : undefined,
         })
 
         const wrapped = await wrapPrimaryKey({
@@ -747,11 +878,19 @@ async function doChangePassword(password: string) {
             userId: session.userId,
             passwordRequired: !!password,
             argon2idSalt,
+            argon2idCost: usedCost,
         })
 
         // The wrapped primary key lives on the specific credential that signed us in, not on the user record
-        await v2UpdateWrappedKey(sessionCredentialId, wrapped)
-        sessionCredentialWrappedKeyEpoch = currentEpoch + 1
+        const anchorSecret = await serializeAnchorSecret(sessionAnchor)
+        const wrappedAnchor = await wrapAnchorKey({
+            anchorSecret,
+            wrappingKeyBytes,
+            userId: session.userId,
+        })
+
+        await v2UpdateWrappedKey(sessionCredentialId, wrapped, wrappedAnchor, true)
+        await doLoadCredentials()
         hasPassword = !!password
 
         // Keep the new password in memory so subsequent add-passkey calls wrap with it (or clear it when removed)

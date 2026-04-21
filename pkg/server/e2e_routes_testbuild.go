@@ -227,10 +227,12 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 
 			keyErr = s.authStore.FinalizeSignup(
 				c.Request.Context(),
-				req.UserID,
-				wrappedKey,
-				string(requestEncJWKJSON),
-				base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey-"+req.UserID)),
+				db.FinalizeSignupInput{
+					UserID:                req.UserID,
+					WrappedPrimaryKey:     wrappedKey,
+					RequestEncEcdhPubkey:  string(requestEncJWKJSON),
+					RequestEncMlkemPubkey: base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey-" + req.UserID)),
+				},
 			)
 			if keyErr != nil && !errors.Is(keyErr, db.ErrAlreadyFinalized) {
 				AbortWithErrorJSON(c, keyErr)

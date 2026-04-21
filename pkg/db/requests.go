@@ -123,6 +123,71 @@ func (s *RequestStore) GetRequest(ctx context.Context, state string) (*V2Request
 	return rec, nil
 }
 
+func (s *RequestStore) GetAndDeleteTerminalRequest(ctx context.Context, state string) (*V2RequestRecord, error) {
+	now := time.Now().Unix()
+	var (
+		stateOut, status, operation, userID    string
+		keyLabel, algorithm, requestorIP, note string
+		createdAt, expiresAt, updatedAt        int64
+		encryptedRequest, encryptedResult      string
+	)
+	err := s.db.QueryRow(ctx,
+		`DELETE FROM v2_requests
+			WHERE state = $1 AND (status != $2 OR expires_at < $3)
+			RETURNING
+				state,
+				CASE WHEN status = $2 AND expires_at < $3 THEN $4 ELSE status END,
+				operation,
+				user_id,
+				key_label,
+				algorithm,
+				requestor_ip,
+				note,
+				created_at,
+				expires_at,
+				CASE WHEN status = $2 AND expires_at < $3 THEN $3 ELSE updated_at END,
+				encrypted_request,
+				encrypted_result`,
+		state,
+		string(V2RequestStatusPending),
+		now,
+		string(V2RequestStatusExpired),
+	).Scan(
+		&stateOut, &status, &operation, &userID, &keyLabel, &algorithm, &requestorIP, &note,
+		&createdAt, &expiresAt, &updatedAt, &encryptedRequest, &encryptedResult,
+	)
+	if s.db.IsNoRowsError(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	rec := &V2RequestRecord{
+		State:            stateOut,
+		Status:           V2RequestStatus(status),
+		Operation:        operation,
+		UserID:           userID,
+		KeyLabel:         keyLabel,
+		Algorithm:        algorithm,
+		RequestorIP:      requestorIP,
+		Note:             note,
+		CreatedAt:        time.Unix(createdAt, 0),
+		ExpiresAt:        time.Unix(expiresAt, 0),
+		UpdatedAt:        time.Unix(updatedAt, 0),
+		EncryptedRequest: encryptedRequest,
+	}
+	if encryptedResult != "" {
+		var env protocolv2.ResponseEnvelope
+		err = json.Unmarshal([]byte(encryptedResult), &env)
+		if err != nil {
+			return nil, err
+		}
+		rec.ResponseEnvelope = &env
+	}
+
+	return rec, nil
+}
+
 func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2RequestRecord, error) {
 	rec, err := scanRequestRecord(
 		s.db.QueryRow(ctx,
@@ -249,12 +314,16 @@ func (s *RequestStore) CleanupOldRecords(ctx context.Context, now time.Time) (in
 	return affected, nil
 }
 
-func (s *RequestStore) DeleteExpiredTerminalRequest(ctx context.Context, state string, now time.Time) error {
-	cutoff := now.Add(-10 * time.Minute).Unix()
-	_, err := s.db.Exec(ctx,
-		`DELETE FROM v2_requests WHERE state = $1 AND status != $2 AND expires_at < $3`,
-		state, string(V2RequestStatusPending), cutoff,
-	)
+func (s *RequestStore) DeleteTerminalRequest(ctx context.Context, state string, cutoff *time.Time) error {
+	query := `DELETE FROM v2_requests WHERE state = $1 AND status != $2`
+	args := []any{state, string(V2RequestStatusPending)}
+	if cutoff != nil {
+		expiresBefore := cutoff.Add(-10 * time.Minute).Unix()
+		query += ` AND expires_at < $3`
+		args = append(args, expiresBefore)
+	}
+
+	_, err := s.db.Exec(ctx, query, args...)
 	return err
 }
 

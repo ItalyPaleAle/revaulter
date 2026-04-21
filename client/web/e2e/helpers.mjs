@@ -215,7 +215,7 @@ export async function skipPasswordSetup(page) {
 }
 
 export async function waitForListStream(page) {
-    await expect(page.getByText('Live stream connected')).toBeVisible()
+    await expect(page.getByText('Connected', { exact: true })).toBeVisible()
 }
 
 export async function openSettings(page) {
@@ -230,7 +230,7 @@ export async function openSettingsTab(page, tabName) {
 }
 
 export async function openAllowedIPs(page) {
-    await openSettingsTab(page, 'IP Restrictions')
+    await openSettingsTab(page, 'IP')
 }
 
 export async function seedCredential(request, data) {
@@ -309,15 +309,14 @@ export async function registerWithManager(page, manager, displayName = 'Playwrig
 export async function signInWithAuthenticator(page, manager, authenticatorId) {
     await manager.setActive(authenticatorId)
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
     await page.getByRole('button', { name: 'Continue with passkey' }).click()
 }
 
 // Signs out the current session, returning the UI to the sign-in screen
 export async function signOutThroughUI(page) {
-    await openSettings(page)
-    await page.getByRole('button', { name: 'Sign out' }).first().click()
-    await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
+    await page.getByRole('button', { name: 'Sign out' }).click()
+    await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
 }
 
 // Adds a new passkey through the settings Passkeys tab using whichever authenticator is currently active on the manager
@@ -327,7 +326,7 @@ export async function addPasskeyThroughSettings(page, manager, name) {
     await page.getByRole('button', { name: 'Add passkey' }).click()
     await page.getByLabel('Passkey name (optional)').fill(name)
     await page.getByRole('button', { name: 'Register passkey' }).click()
-    await expect(page.getByText('Passkey added.')).toBeVisible()
+    await expect(page.getByText('Passkey added.')).toBeVisible({ timeout: 15_000 })
     // Close the settings modal so the ready view is interactable again
     await page.getByRole('button', { name: 'Close settings' }).click()
     // Touch the manager reference so the linter is aware the caller must have set the active authenticator beforehand
@@ -344,11 +343,27 @@ export async function setPasswordThroughSettings(page, password) {
     if (await setPasswordInput.count()) {
         await setPasswordInput.fill(password)
         await page.locator('input[placeholder="Confirm password"]').fill(password)
-        await page.getByRole('button', { name: 'Set password' }).click()
+        const [response] = await Promise.all([
+            page.waitForResponse((response) => {
+                return response.url().includes('/v2/auth/update-wrapped-key') && response.request().method() === 'POST'
+            }),
+            page.getByRole('button', { name: 'Set password' }).click(),
+        ])
+        if (!response.ok()) {
+            throw new Error(`Password update failed: ${response.status()} ${await response.text()}`)
+        }
     } else {
         await changePasswordInput.fill(password)
         await page.locator('input[placeholder="Confirm new password"]').fill(password)
-        await page.getByRole('button', { name: 'Change password' }).click()
+        const [response] = await Promise.all([
+            page.waitForResponse((response) => {
+                return response.url().includes('/v2/auth/update-wrapped-key') && response.request().method() === 'POST'
+            }),
+            page.getByRole('button', { name: 'Change password' }).click(),
+        ])
+        if (!response.ok()) {
+            throw new Error(`Password update failed: ${response.status()} ${await response.text()}`)
+        }
     }
 
     await expect(page.getByRole('button', { name: 'Close settings' })).toBeVisible()
@@ -370,6 +385,8 @@ export function startCLIRequest(args) {
         args.algorithm,
         '--note',
         args.note,
+        // The CLI spawned by Playwright has no TTY; skip anchor pinning so the tests do not fail on first contact.
+        '--no-trust-store',
     ]
 
     if (args.operation === 'encrypt') {

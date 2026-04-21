@@ -104,8 +104,18 @@ func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "canary-1", `{"kty":"EC","crv":"P-256","x":"test","y":"test"}`, "dGVzdC1tbGtlbS1wdWJrZXk"))
-	require.ErrorIs(t, store.FinalizeSignup(ctx, "user-1", "canary-2", `{"kty":"EC"}`, "dGVzdA"), ErrAlreadyFinalized)
+	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		WrappedPrimaryKey:     "canary-1",
+		RequestEncEcdhPubkey:  `{"kty":"EC","crv":"P-256","x":"test","y":"test"}`,
+		RequestEncMlkemPubkey: "dGVzdC1tbGtlbS1wdWJrZXk",
+	}))
+	require.ErrorIs(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		WrappedPrimaryKey:     "canary-2",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "dGVzdA",
+	}), ErrAlreadyFinalized)
 
 	allowed, err := store.UpdateAllowedIPs(ctx, "user-1", []string{"127.0.0.1", " 10.0.0.0/8 ", "::1", "127.0.0.1"})
 	require.NoError(t, err)
@@ -142,7 +152,11 @@ func TestAuthStoreRegenerateRequestKey(t *testing.T) {
 
 	// RegenerateRequestKey requires the account to be active and ready;
 	// finalize the signup first.
-	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "", `{"kty":"EC"}`, "mlkem-pub"))
+	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "mlkem-pub",
+	}))
 
 	newKey, err := store.RegenerateRequestKey(ctx, "user-1")
 	require.NoError(t, err)
@@ -497,7 +511,12 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 
 	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyFreshSession.UserID, time.Now().Add(-23*time.Hour).Unix())
 	require.NoError(t, err)
-	require.NoError(t, store.FinalizeSignup(ctx, readySession.UserID, "canary-ready", `{"kty":"EC"}`, "mlkem-ready"))
+	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                readySession.UserID,
+		WrappedPrimaryKey:     "canary-ready",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "mlkem-ready",
+	}))
 
 	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, readySession.UserID, time.Now().Add(-25*time.Hour).Unix())
 	require.NoError(t, err)
@@ -543,7 +562,11 @@ func TestAuthStoreUpdateDisplayName(t *testing.T) {
 		SessionTTL:     time.Minute,
 	})
 	require.NoError(t, err)
-	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "", `{"kty":"EC"}`, "mlkem-pub"))
+	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "mlkem-pub",
+	}))
 
 	// Successful update
 	err = store.UpdateDisplayName(ctx, "user-1", "Bob")
@@ -587,7 +610,12 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 		SessionTTL:     time.Minute,
 	})
 	require.NoError(t, err)
-	require.NoError(t, store.FinalizeSignup(ctx, "user-1", "initial-key", `{"kty":"EC"}`, "mlkem-pub"))
+	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		WrappedPrimaryKey:     "initial-key",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "mlkem-pub",
+	}))
 
 	// The initial wrapped primary key was set on the single credential via FinalizeSignup
 	rec, err := store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
@@ -596,31 +624,102 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 	require.Equal(t, "initial-key", rec.WrappedPrimaryKey)
 
 	// Successful update
-	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "new-wrapped-key")
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "new-wrapped-key", "new-anchor-key")
 	require.NoError(t, err)
 	rec, err = store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
 	require.NoError(t, err)
 	require.Equal(t, "new-wrapped-key", rec.WrappedPrimaryKey)
+	require.Equal(t, "new-anchor-key", rec.WrappedAnchorKey)
 
 	// Empty string is valid (removes password)
-	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "")
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "", "")
 	require.NoError(t, err)
 	rec, err = store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
 	require.NoError(t, err)
 	require.Empty(t, rec.WrappedPrimaryKey)
 
 	// Oversized value
-	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", strings.Repeat("x", 513))
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", strings.Repeat("x", 513), "anchor")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "too large")
 
 	// Non-existent credential
-	err = store.UpdateCredentialWrappedKey(ctx, "no-such-cred", "user-1", "key")
+	err = store.UpdateCredentialWrappedKey(ctx, "no-such-cred", "user-1", "key", "anchor")
 	require.ErrorIs(t, err, ErrCredentialNotFound)
 
 	// Credential belonging to a different user
-	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "other-user", "key")
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "other-user", "key", "anchor")
 	require.ErrorIs(t, err, ErrCredentialNotFound)
+}
+
+func TestAuthStoreCredentialWrappedKeyEpochRotation(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	store, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+
+	_, err = store.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-1",
+		DisplayName:    "Alice",
+		WebAuthnUserID: "webauthn-user-1",
+		CredentialID:   "cred-1",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Minute,
+	})
+	require.NoError(t, err)
+
+	err = store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                "user-1",
+		WrappedPrimaryKey:     "wrapped-1-v1",
+		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
+		RequestEncMlkemPubkey: "mlkem-pub",
+	})
+	require.NoError(t, err)
+
+	err = store.AddCredential(ctx, AddCredentialInput{
+		UserID:            "user-1",
+		CredentialID:      "cred-2",
+		DisplayName:       "Second",
+		PublicKey:         `{"kty":"EC"}`,
+		SignCount:         1,
+		WrappedPrimaryKey: "wrapped-2-v1",
+	})
+	require.NoError(t, err)
+
+	rec1, err := store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
+	require.NoError(t, err)
+	rec2, err := store.GetCredentialByCredentialID(ctx, "cred-2", "user-1")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rec1.WrappedKeyEpoch)
+	require.EqualValues(t, 1, rec2.WrappedKeyEpoch)
+
+	newEpoch, err := store.AdvanceWrappedKeyEpoch(ctx, "user-1")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, newEpoch)
+
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "wrapped-1-v2", "anchor-1-v2")
+	require.NoError(t, err)
+
+	rec1, err = store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
+	require.NoError(t, err)
+	rec2, err = store.GetCredentialByCredentialID(ctx, "cred-2", "user-1")
+	require.NoError(t, err)
+	require.Equal(t, "wrapped-1-v2", rec1.WrappedPrimaryKey)
+	require.Equal(t, "wrapped-2-v1", rec2.WrappedPrimaryKey)
+	require.EqualValues(t, 2, rec1.WrappedKeyEpoch)
+	require.EqualValues(t, 1, rec2.WrappedKeyEpoch)
+
+	err = store.UpdateCredentialWrappedKey(ctx, "cred-2", "user-1", "wrapped-2-v2", "anchor-2-v2")
+	require.NoError(t, err)
+
+	rec2, err = store.GetCredentialByCredentialID(ctx, "cred-2", "user-1")
+	require.NoError(t, err)
+	require.Equal(t, "wrapped-2-v2", rec2.WrappedPrimaryKey)
+	require.EqualValues(t, 2, rec2.WrappedKeyEpoch)
 }
 
 func TestAuthStoreCredentialCRUD(t *testing.T) {

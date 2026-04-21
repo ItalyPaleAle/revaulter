@@ -23,7 +23,7 @@ test('settings modal opens with all tabs', async ({ page }) => {
         // Tab buttons are in the nav element
         const nav = page.locator('nav')
         await expect(nav.locator('button', { hasText: 'User' })).toBeVisible()
-        await expect(nav.locator('button', { hasText: 'IP Restrictions' })).toBeVisible()
+        await expect(nav.locator('button', { hasText: 'IP' })).toBeVisible()
         await expect(nav.locator('button', { hasText: 'Password' })).toBeVisible()
         await expect(nav.locator('button', { hasText: 'Passkeys' })).toBeVisible()
     } finally {
@@ -38,9 +38,10 @@ test('settings panel opens and request key can be regenerated', async ({ page })
         await openSettings(page)
 
         // User tab is the default tab — the request key is inside the bordered container
-        const requestKeyValue = page.locator('div.overflow-x-auto.font-mono')
+        const requestKeyValue = page.locator('div.overflow-x-auto.mono')
         const before = await requestKeyValue.textContent()
-        await page.locator('button', { hasText: 'Regenerate' }).click()
+        await page.getByRole('button', { name: 'Regenerate Regenerate' }).click()
+        await page.getByRole('button', { name: 'Yes, regenerate' }).click()
         await expect(page.getByText('Request key regenerated.')).toBeVisible()
         await expect(requestKeyValue).not.toHaveText(before || '')
     } finally {
@@ -131,9 +132,8 @@ test('logout returns the user to sign-in', async ({ page }) => {
     const auth = await registerAndReachReady(page, 'Settings User')
 
     try {
-        await openSettings(page)
-        await page.getByRole('button', { name: 'Sign out' }).first().click()
-        await expect(page.getByRole('heading', { name: 'Sign in with your passkey' })).toBeVisible()
+        await page.getByRole('button', { name: 'Sign out' }).click()
+        await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
     } finally {
         await auth.passkey.dispose()
     }
