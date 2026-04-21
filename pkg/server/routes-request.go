@@ -151,7 +151,6 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 				AssignedUser:  displayName,
 				KeyLabel:      body.KeyLabel,
 				Algorithm:     body.Algorithm,
-				StateId:       state,
 				Requestor:     c.ClientIP(),
 				Note:          body.Note,
 			})
@@ -201,12 +200,23 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 			AbortWithErrorJSON(c, err)
 			return
 		}
+
 		if rec == nil {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 			return
 		}
+
 		switch rec.Status {
 		case db.V2RequestStatusCompleted:
+			rec, err = s.requestStore.GetAndDeleteTerminalRequest(c.Request.Context(), state)
+			if err != nil {
+				AbortWithErrorJSON(c, err)
+				return
+			}
+			if rec == nil {
+				continue
+			}
+
 			c.JSON(http.StatusOK, protocolv2.RequestResultResponse{
 				State:            rec.State,
 				Done:             true,
@@ -214,6 +224,15 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 			})
 			return
 		case db.V2RequestStatusCanceled, db.V2RequestStatusExpired:
+			rec, err = s.requestStore.GetAndDeleteTerminalRequest(c.Request.Context(), state)
+			if err != nil {
+				AbortWithErrorJSON(c, err)
+				return
+			}
+			if rec == nil {
+				continue
+			}
+
 			c.JSON(http.StatusConflict, protocolv2.RequestResultResponse{
 				State:  rec.State,
 				Failed: true,

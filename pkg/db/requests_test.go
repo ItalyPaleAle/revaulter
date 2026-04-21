@@ -127,6 +127,110 @@ func TestRequestStoreCancel(t *testing.T) {
 	require.Equal(t, V2RequestStatusCanceled, rec.Status)
 }
 
+func TestRequestStoreGetAndDeleteTerminalRequest(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	authStore, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-get-delete",
+		DisplayName:    "Get Delete User",
+		WebAuthnUserID: "webauthn-user-get-delete",
+		CredentialID:   "cred-get-delete",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Minute,
+	})
+	require.NoError(t, err)
+
+	store, err := NewRequestStore(conn, nil)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	err = store.CreateRequest(ctx, CreateRequestInput{
+		State:            "state-terminal",
+		UserID:           "user-get-delete",
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "terminal-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(5 * time.Minute),
+		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
+	})
+	require.NoError(t, err)
+
+	_, err = store.CompleteRequest(ctx, "state-terminal", "user-get-delete", protocolv2.ResponseEnvelope{
+		TransportAlg: protocolv2.TransportAlg,
+		BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
+			Kty: "EC", Crv: "P-256",
+			X: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			Y: "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		},
+		Nonce:      "bm9uY2U",
+		Ciphertext: "Y2lwaGVy",
+	})
+	require.NoError(t, err)
+
+	rec, err := store.GetAndDeleteTerminalRequest(ctx, "state-terminal")
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(t, V2RequestStatusCompleted, rec.Status)
+
+	rec, err = store.GetRequest(ctx, "state-terminal")
+	require.NoError(t, err)
+	require.Nil(t, rec)
+}
+
+func TestRequestStoreGetAndDeleteTerminalRequestExpiresPending(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	authStore, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-get-delete-expired",
+		DisplayName:    "Get Delete Expired User",
+		WebAuthnUserID: "webauthn-user-get-delete-expired",
+		CredentialID:   "cred-get-delete-expired",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Minute,
+	})
+	require.NoError(t, err)
+
+	store, err := NewRequestStore(conn, nil)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	err = store.CreateRequest(ctx, CreateRequestInput{
+		State:            "state-expired-terminal",
+		UserID:           "user-get-delete-expired",
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "expired-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now.Add(-2 * time.Minute),
+		ExpiresAt:        now.Add(-1 * time.Minute),
+		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
+	})
+	require.NoError(t, err)
+
+	rec, err := store.GetAndDeleteTerminalRequest(ctx, "state-expired-terminal")
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(t, V2RequestStatusExpired, rec.Status)
+
+	rec, err = store.GetRequest(ctx, "state-expired-terminal")
+	require.NoError(t, err)
+	require.Nil(t, rec)
+}
+
 func TestRequestStoreMarkExpired(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
@@ -223,7 +327,7 @@ func TestRequestStoreMarkExpired(t *testing.T) {
 	require.Nil(t, expired)
 }
 
-func TestRequestStoreDeleteExpiredTerminalRequest(t *testing.T) {
+func TestRequestStoreDeleteTerminalRequestWithCutoff(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
 
@@ -293,11 +397,11 @@ func TestRequestStoreDeleteExpiredTerminalRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, canceled)
 
-	err = store.DeleteExpiredTerminalRequest(ctx, "state-old-terminal", now)
+	err = store.DeleteTerminalRequest(ctx, "state-old-terminal", &now)
 	require.NoError(t, err)
-	err = store.DeleteExpiredTerminalRequest(ctx, "state-pending", now)
+	err = store.DeleteTerminalRequest(ctx, "state-pending", &now)
 	require.NoError(t, err)
-	err = store.DeleteExpiredTerminalRequest(ctx, "state-recent-terminal", now)
+	err = store.DeleteTerminalRequest(ctx, "state-recent-terminal", &now)
 	require.NoError(t, err)
 
 	rec, err := store.GetRequest(ctx, "state-old-terminal")
@@ -313,4 +417,81 @@ func TestRequestStoreDeleteExpiredTerminalRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 	require.Equal(t, V2RequestStatusCanceled, rec.Status)
+}
+
+func TestRequestStoreDeleteTerminalRequest(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	authStore, err := NewAuthStore(conn, nil)
+	require.NoError(t, err)
+	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
+		UserID:         "user-delete-now",
+		DisplayName:    "Delete Now User",
+		WebAuthnUserID: "webauthn-user-delete-now",
+		CredentialID:   "cred-delete-now",
+		PublicKey:      `{"kty":"EC"}`,
+		SignCount:      1,
+		SessionTTL:     time.Minute,
+	})
+	require.NoError(t, err)
+
+	store, err := NewRequestStore(conn, nil)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	err = store.CreateRequest(ctx, CreateRequestInput{
+		State:            "state-terminal-delete",
+		UserID:           "user-delete-now",
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "terminal-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(5 * time.Minute),
+		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
+	})
+	require.NoError(t, err)
+
+	err = store.CreateRequest(ctx, CreateRequestInput{
+		State:            "state-pending-keep",
+		UserID:           "user-delete-now",
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "pending-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(5 * time.Minute),
+		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
+	})
+	require.NoError(t, err)
+
+	_, err = store.CompleteRequest(ctx, "state-terminal-delete", "user-delete-now", protocolv2.ResponseEnvelope{
+		TransportAlg: protocolv2.TransportAlg,
+		BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
+			Kty: "EC", Crv: "P-256",
+			X: "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			Y: "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		},
+		Nonce:      "bm9uY2U",
+		Ciphertext: "Y2lwaGVy",
+	})
+	require.NoError(t, err)
+
+	err = store.DeleteTerminalRequest(ctx, "state-terminal-delete", nil)
+	require.NoError(t, err)
+
+	rec, err := store.GetRequest(ctx, "state-terminal-delete")
+	require.NoError(t, err)
+	require.Nil(t, rec)
+
+	err = store.DeleteTerminalRequest(ctx, "state-pending-keep", nil)
+	require.NoError(t, err)
+
+	rec, err = store.GetRequest(ctx, "state-pending-keep")
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(t, V2RequestStatusPending, rec.Status)
 }

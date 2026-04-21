@@ -330,7 +330,6 @@ type WebhookRequest struct {
 	KeyLabel     string
 	Algorithm    string
 
-	StateId   string
 	Requestor string
 	Note      string
 }
@@ -345,13 +344,12 @@ func (w *webhookClient) formatPlainMessage(data *WebhookRequest) string {
 
 Open Revaulter: %s
 
-(Request ID: %s - Client IP: %s)%s`,
+(Client IP: %s)%s`,
 		data.OperationName,
 		data.KeyLabel,
 		data.AssignedUser,
 		data.Algorithm,
 		w.getLink(),
-		data.StateId,
 		data.Requestor,
 		note,
 	)
@@ -384,14 +382,13 @@ func (w *webhookClient) formatSlackMessage(data *WebhookRequest) string {
 		note = "Note: *" + escapeSlackText(data.Note) + "*\n"
 	}
 	return fmt.Sprintf(
-		"Received a request to %s using key label **%s** for user **%s** (algorithm **%s**).\n%s[Open Revaulter](%s)\n`(Request ID: %s - Client IP: %s)`",
+		"Received a request to %s using key label **%s** for user **%s** (algorithm **%s**).\n%s[Open Revaulter](%s)\n`(Client IP: %s)`",
 		escapeSlackText(data.OperationName),
 		escapeSlackText(data.KeyLabel),
 		escapeSlackText(data.AssignedUser),
 		escapeSlackText(data.Algorithm),
 		note,
 		w.getLink(),
-		escapeSlackText(data.StateId),
 		escapeSlackText(data.Requestor),
 	)
 }

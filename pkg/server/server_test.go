@@ -182,6 +182,10 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	require.Equal(t, true, result["done"])
 	_, ok = result["responseEnvelope"].(map[string]any)
 	require.True(t, ok)
+
+	res, result = doGetJSON(t, "/v2/request/result/"+state)
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+	require.Contains(t, result["error"], "State not found or expired")
 }
 
 func TestServerV2PublicSignup(t *testing.T) {
@@ -496,6 +500,10 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	res, result := doGetJSON(t, "/v2/request/result/"+expState)
 	require.Equal(t, http.StatusConflict, res.StatusCode)
 	require.Equal(t, true, result["failed"])
+
+	res, result = doGetJSON(t, "/v2/request/result/"+expState)
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+	require.Contains(t, result["error"], "State not found or expired")
 }
 
 func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
@@ -551,7 +559,6 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 		require.Equal(t, "disk-key", msg.KeyLabel)
 		require.Equal(t, "A256GCM", msg.Algorithm)
 		require.Equal(t, "boot unlock", msg.Note)
-		require.NotEmpty(t, msg.StateId)
 	}
 }
 
