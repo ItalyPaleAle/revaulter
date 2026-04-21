@@ -193,6 +193,7 @@ func TestRequestStoreGetAndDeleteTerminalRequestExpiresPending(t *testing.T) {
 
 	authStore, err := NewAuthStore(conn, nil)
 	require.NoError(t, err)
+	// #nosec G101 - Hardcoded credentials are test ones
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-get-delete-expired",
 		DisplayName:    "Get Delete Expired User",
