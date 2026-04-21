@@ -1,118 +1,206 @@
 package protocolv2
 
 import (
-	"bytes"
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"reflect"
+	"strconv"
+	"strings"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
 
-// CredAttestPrefix and PubkeyBundlePrefix are domain-separation prefixes for anchor-signed messages.
-// Every signature the anchor produces must carry one of these literal prefixes.
-// A verifier that accepts a signature without the prefix would let an attacker replay a signature from one context into another.
+// CredAttestPrefix and PubkeyBundlePrefix are domain-separation prefixes for anchor-signed messages
+// Every signature the anchor produces must carry one of these literal prefixes
+// A verifier that accepts a signature without the prefix would let an attacker replay a signature from one context into another
 const (
 	CredAttestPrefix    = "revaulter/v2/cred-attest\n" // #nosec G101 -- domain-separation tag, not a credential
 	PubkeyBundlePrefix  = "revaulter/v2/pubkey-bundle\n"
 	WrappedAnchorAADFmt = "revaulter/v2/wrapped-anchor\nuserId=%s\nv=1"
 )
 
-// Fixed sizes for the PQ and classical legs of the hybrid anchor.
+// Fixed sizes for the PQ and classical legs of the hybrid anchor
 const (
 	MLDSA87PublicKeySize = mldsa87.PublicKeySize // 2592
 	MLDSA87SignatureSize = mldsa87.SignatureSize // 4627
 
-	// ES384SignatureSize is the fixed length of a raw r||s P-384 signature.
-	// WebCrypto's ECDSA produces this format (IEEE P1363), so we accept only this
-	// on the wire and reject ASN.1-DER encoded signatures.
+	// ES384SignatureSize is the fixed length of a raw r||s P-384 signature
+	// WebCrypto's ECDSA produces this format (IEEE P1363), so we accept only this on the wire and reject ASN.1-DER encoded signatures
 	ES384SignatureSize = 2 * p384CoordinateSize // 96
 )
 
-// AttestationPayload is the canonicalized payload that the anchor signs
-// when a new credential is enrolled.
+// AttestationPayload is the canonicalized payload that the anchor signs when a new credential is enrolled
+// The order is load-bearing: client and server must produce identical bytes
 type AttestationPayload struct {
-	UserID              string `json:"userId"`
-	CredentialID        string `json:"credentialId"`
-	CredentialPublicKey string `json:"credentialPublicKey"`
-	WrappedKeyEpoch     int64  `json:"wrappedKeyEpoch"`
-	CreatedAt           int64  `json:"createdAt"`
+	UserID              string `key:"userId"`
+	CredentialID        string `key:"credentialId"`
+	CredentialPublicKey string `key:"credentialPublicKey"`
+	WrappedKeyEpoch     int64  `key:"wrappedKeyEpoch"`
+	CreatedAt           int64  `key:"createdAt"`
 }
 
-// PubkeyBundlePayload is the canonicalized payload that the anchor signs
-// to bind the user's long-lived transport pubkeys and the anchor pubkeys
-// together into a single hybrid-signed bundle.
+// CanonicalBody encodes the attestation payload as ordered key=value lines separated by '\n', with no trailing newline
+// This is the format stored in the database and sent on the wire
+func (p AttestationPayload) CanonicalBody() string {
+	return canonicalBodyFromTaggedFields(p)
+}
+
+// ParseAttestationPayload parses a canonical body string back into an AttestationPayload
+// The input must list every expected key in the documented order, exactly once, separated by '\n', with no trailing newline
+func ParseAttestationPayload(body string) (AttestationPayload, error) {
+	var p AttestationPayload
+	err := parseTaggedFields(body, &p)
+	if err != nil {
+		return p, err
+	}
+
+	return p, nil
+}
+
+// PubkeyBundlePayload is the canonicalized payload that the anchor signs to bind the user's long-lived transport pubkeys and the anchor pubkeys together into a single hybrid-signed bundle
+// The order is load-bearing: client and server must produce identical bytes
 type PubkeyBundlePayload struct {
-	UserID                 string `json:"userId"`
-	RequestEncEcdhPubkey   string `json:"requestEncEcdhPubkey"`
-	RequestEncMlkemPubkey  string `json:"requestEncMlkemPubkey"`
-	AnchorEs384PublicKey   string `json:"anchorEs384PublicKey"`
-	AnchorMldsa87PublicKey string `json:"anchorMldsa87PublicKey"`
-	WrappedKeyEpoch        int64  `json:"wrappedKeyEpoch"`
+	UserID                 string `key:"userId"`
+	RequestEncEcdhPubkey   string `key:"requestEncEcdhPubkey"`
+	RequestEncMlkemPubkey  string `key:"requestEncMlkemPubkey"`
+	AnchorEs384PublicKey   string `key:"anchorEs384PublicKey"`
+	AnchorMldsa87PublicKey string `key:"anchorMldsa87PublicKey"`
+	WrappedKeyEpoch        int64  `key:"wrappedKeyEpoch"`
 }
 
-// CanonicalAttestationMessage returns the domain-separated, canonically-encoded
-// message that both anchor legs (ES384 and ML-DSA-87) sign for credential attestation.
-func CanonicalAttestationMessage(payload AttestationPayload) ([]byte, error) {
-	body, err := canonicalJSON(payload)
-	if err != nil {
-		return nil, fmt.Errorf("canonicalize attestation payload: %w", err)
+// CanonicalBody encodes the pubkey-bundle payload as ordered key=value lines separated by '\n', with no trailing newline
+// This is the body that (with the domain-separation prefix) is signed by both anchor legs
+func (p PubkeyBundlePayload) CanonicalBody() string {
+	return canonicalBodyFromTaggedFields(p)
+}
+
+func canonicalBodyFromTaggedFields(payload any) string {
+	var b strings.Builder
+	v := reflect.ValueOf(payload)
+	t := v.Type()
+
+	for i := range t.NumField() {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+
+		fieldType := t.Field(i)
+		key := fieldType.Tag.Get("key")
+		if key == "" {
+			// Indicates a development-time error
+			panic(fmt.Sprintf("protocolv2: field %s is missing key tag", fieldType.Name))
+		}
+
+		b.WriteString(key)
+		b.WriteByte('=')
+
+		fieldValue := v.Field(i)
+		switch fieldValue.Kind() {
+		case reflect.String:
+			b.WriteString(fieldValue.String())
+		case reflect.Int64:
+			b.WriteString(strconv.FormatInt(fieldValue.Int(), 10))
+		default:
+			// Indicates a development-time error
+			panic(fmt.Sprintf("protocolv2: field %s has unsupported kind %s", fieldType.Name, fieldValue.Kind()))
+		}
 	}
-	out := make([]byte, 0, len(CredAttestPrefix)+len(body))
-	out = append(out, CredAttestPrefix...)
-	out = append(out, body...)
-	return out, nil
+
+	return b.String()
 }
 
-// CanonicalPubkeyBundleMessage returns the domain-separated, canonically-encoded
-// bundle message signed by both anchor legs.
-func CanonicalPubkeyBundleMessage(payload PubkeyBundlePayload) ([]byte, error) {
-	body, err := canonicalJSON(payload)
+// ParsePubkeyBundlePayload parses a canonical body string back into a PubkeyBundlePayload
+// The input must list every expected key in the documented order, exactly once, separated by '\n', with no trailing newline
+func ParsePubkeyBundlePayload(body string) (PubkeyBundlePayload, error) {
+	var p PubkeyBundlePayload
+	err := parseTaggedFields(body, &p)
 	if err != nil {
-		return nil, fmt.Errorf("canonicalize pubkey bundle payload: %w", err)
+		return p, err
 	}
-	out := make([]byte, 0, len(PubkeyBundlePrefix)+len(body))
-	out = append(out, PubkeyBundlePrefix...)
-	out = append(out, body...)
-	return out, nil
+
+	return p, nil
 }
 
-// canonicalJSON produces a deterministic JSON encoding of v by going through Go's default marshaller with HTML escaping disabled, matching the browser's canonical encoding (TextEncoder over JSON.stringify of a fixed-field object).
-func canonicalJSON(v any) ([]byte, error) {
-	b := &bytes.Buffer{}
-	enc := json.NewEncoder(b)
-	enc.SetEscapeHTML(false)
-	err := enc.Encode(v)
-	if err != nil {
-		return nil, err
+func parseTaggedFields(body string, out any) error {
+	v := reflect.ValueOf(out)
+	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Struct {
+		panic("protocolv2: parseTaggedFields expects a pointer to a struct")
 	}
-	// json.Encoder.Encode appends a trailing newline; strip it so the output matches JSON.stringify on the browser side
-	return bytes.TrimSuffix(b.Bytes(), []byte{'\n'}), nil
+
+	v = v.Elem()
+	t := v.Type()
+	lines := strings.Split(body, "\n")
+	if len(lines) != t.NumField() {
+		return fmt.Errorf("expected %d lines, got %d", t.NumField(), len(lines))
+	}
+
+	for i, line := range lines {
+		fieldType := t.Field(i)
+		expectedKey := fieldType.Tag.Get("key")
+		if expectedKey == "" {
+			panic(fmt.Sprintf("protocolv2: field %s is missing key tag", fieldType.Name))
+		}
+
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return fmt.Errorf("line %d missing '='", i)
+		}
+		if key != expectedKey {
+			return fmt.Errorf("line %d: expected key %q, got %q", i, expectedKey, key)
+		}
+
+		fieldValue := v.Field(i)
+		switch fieldValue.Kind() {
+		case reflect.String:
+			fieldValue.SetString(value)
+		case reflect.Int64:
+			n, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return fmt.Errorf("%s: %w", expectedKey, err)
+			}
+			fieldValue.SetInt(n)
+		default:
+			panic(fmt.Sprintf("protocolv2: field %s has unsupported kind %s", fieldType.Name, fieldValue.Kind()))
+		}
+	}
+
+	return nil
 }
 
-// VerifyHybridAttestation verifies that both legs of the hybrid signature cover the canonical attestation message.
-// Both must validate; if either fails the call returns an error describing which legs rejected the signature.
+// CanonicalAttestationMessage returns the domain-separated, canonically-encoded message that both anchor legs (ES384 and ML-DSA-87) sign for credential attestation
+func CanonicalAttestationMessage(payload AttestationPayload) []byte {
+	body := payload.CanonicalBody()
+	out := make([]byte, len(CredAttestPrefix)+len(body))
+	copy(out[0:len(CredAttestPrefix)], CredAttestPrefix)
+	copy(out[len(CredAttestPrefix):], body)
+	return out
+}
+
+// CanonicalPubkeyBundleMessage returns the domain-separated, canonically-encoded bundle message signed by both anchor legs
+func CanonicalPubkeyBundleMessage(payload PubkeyBundlePayload) []byte {
+	body := payload.CanonicalBody()
+	out := make([]byte, len(PubkeyBundlePrefix)+len(body))
+	copy(out[0:len(PubkeyBundlePrefix)], PubkeyBundlePrefix)
+	copy(out[len(PubkeyBundlePrefix):], body)
+	return out
+}
+
+// VerifyHybridAttestation verifies that both legs of the hybrid signature cover the canonical attestation message
+// Both must validate; if either fails the call returns an error describing which legs rejected the signature
 func VerifyHybridAttestation(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload AttestationPayload, sigEs384, sigMldsa87 []byte) error {
-	msg, err := CanonicalAttestationMessage(payload)
-	if err != nil {
-		return err
-	}
+	msg := CanonicalAttestationMessage(payload)
 	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
 }
 
 // VerifyHybridBundle verifies both legs of the hybrid signature covering the canonical pubkey-bundle message
 func VerifyHybridBundle(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload PubkeyBundlePayload, sigEs384, sigMldsa87 []byte) error {
-	msg, err := CanonicalPubkeyBundleMessage(payload)
-	if err != nil {
-		return err
-	}
+	msg := CanonicalPubkeyBundleMessage(payload)
 	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
 }
 
@@ -132,21 +220,24 @@ func verifyHybrid(es384Pub *ecdsa.PublicKey, mldsa87PubBytes, msg, sigEs384, sig
 	return errors.Join(errs...)
 }
 
-// verifyES384 accepts a raw IEEE-P1363 r||s signature (as produced by WebCrypto).
-// ASN.1-DER-encoded signatures are rejected.
+// verifyES384 accepts a raw IEEE-P1363 r||s signature (as produced by WebCrypto) ASN.1-DER-encoded signatures are rejected
 func verifyES384(pub *ecdsa.PublicKey, msg, sig []byte) error {
 	if pub == nil {
 		return errors.New("public key is nil")
 	}
+
 	if len(sig) != ES384SignatureSize {
 		return fmt.Errorf("signature has wrong length %d, expected %d", len(sig), ES384SignatureSize)
 	}
+
 	r := new(big.Int).SetBytes(sig[:p384CoordinateSize])
 	s := new(big.Int).SetBytes(sig[p384CoordinateSize:])
 	digest := sha512.Sum384(msg)
+
 	if !ecdsa.Verify(pub, digest[:], r, s) {
 		return errors.New("signature verification failed")
 	}
+
 	return nil
 }
 
@@ -155,36 +246,36 @@ func verifyMLDSA87(pubBytes, msg, sig []byte) error {
 	if err != nil {
 		return fmt.Errorf("public key: %w", err)
 	}
+
 	if len(sig) != MLDSA87SignatureSize {
 		return fmt.Errorf("signature has wrong length %d, expected %d", len(sig), MLDSA87SignatureSize)
 	}
+
 	if !mldsa87.Verify(pub, msg, nil, sig) {
 		return errors.New("signature verification failed")
 	}
+
 	return nil
 }
 
-// UnmarshalMLDSA87PublicKey decodes a raw ML-DSA-87 public key.
+// UnmarshalMLDSA87PublicKey decodes a raw ML-DSA-87 public key
 func UnmarshalMLDSA87PublicKey(b []byte) (*mldsa87.PublicKey, error) {
 	if len(b) != MLDSA87PublicKeySize {
 		return nil, fmt.Errorf("expected %d bytes, got %d", MLDSA87PublicKeySize, len(b))
 	}
+
 	pk := new(mldsa87.PublicKey)
 	err := pk.UnmarshalBinary(b)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
+
 	return pk, nil
 }
 
-// AnchorFingerprint returns the lowercase hex-encoded SHA-256 fingerprint of
-// the concatenated anchor public-key pair. This is the value humans compare
-// when pinning a server on first contact, and the value mixed into the CLI's
-// request-encryption AAD.
-//
-// The classical leg is canonicalized as its JWK bytes so the fingerprint is
-// reproducible from wire-format inputs alone. Each side is length-prefixed
-// so that concatenation is unambiguous.
+// AnchorFingerprint returns the lowercase hex-encoded SHA-256 fingerprint of the concatenated anchor public-key pair
+// This is the value humans compare when pinning a server on first contact, and the value mixed into the CLI's request-encryption AAD
+// The classical leg is encoded as its SEC1 uncompressed point bytes (0x04 || X || Y, 97 bytes); both legs have fixed sizes so plain concatenation is unambiguous
 func AnchorFingerprint(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte) (string, error) {
 	if es384Pub == nil {
 		return "", errors.New("ES384 public key is nil")
@@ -193,38 +284,33 @@ func AnchorFingerprint(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte) (strin
 		return "", fmt.Errorf("ML-DSA-87 public key must be %d bytes, got %d", MLDSA87PublicKeySize, len(mldsa87PubBytes))
 	}
 
-	jwk, err := ECP384PublicJWKFromECDSA(es384Pub)
+	es384Bytes, err := es384Pub.Bytes()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("encode ES384 public key: %w", err)
 	}
-	jwkBytes, err := canonicalJSON(jwk)
-	if err != nil {
-		return "", err
+	if len(es384Bytes) != 1+2*p384CoordinateSize {
+		return "", fmt.Errorf("unexpected ES384 uncompressed point length %d", len(es384Bytes))
 	}
 
-	// Both lengths are bounded by the ML-DSA-87 / ES384 fixed sizes (a few KiB); uint32 conversion cannot overflow.
 	h := sha256.New()
-	var lenBuf [4]byte
-	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(jwkBytes))) // #nosec G115 -- length bounded above
-	h.Write(lenBuf[:])
-	h.Write(jwkBytes)
-	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(mldsa87PubBytes))) // #nosec G115 -- length bounded above
-	h.Write(lenBuf[:])
+	h.Write(es384Bytes)
 	h.Write(mldsa87PubBytes)
 
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// DecodeBase64Signature decodes a base64url-encoded signature of the given size.
+// DecodeBase64Signature decodes a base64url-encoded signature of the given size
 // Signatures on the wire are always base64url (raw, no padding).
 func DecodeBase64Signature(s string, expectedSize int) ([]byte, error) {
 	if s == "" {
 		return nil, errors.New("signature is empty")
 	}
+
 	b, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
 		return nil, fmt.Errorf("invalid base64: %w", err)
 	}
+
 	if expectedSize > 0 && len(b) != expectedSize {
 		return nil, fmt.Errorf("expected %d bytes, got %d", expectedSize, len(b))
 	}

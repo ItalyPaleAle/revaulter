@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
@@ -59,21 +60,92 @@ func signMLDSA87(t *testing.T, sk *mldsa87.PrivateKey, msg []byte) []byte {
 // Tests.
 
 func TestCanonicalAttestationMessageStable(t *testing.T) {
-	msg1, err := CanonicalAttestationMessage(testAttestationPayload())
-	require.NoError(t, err)
-	msg2, err := CanonicalAttestationMessage(testAttestationPayload())
-	require.NoError(t, err)
+	msg1 := CanonicalAttestationMessage(testAttestationPayload())
+	msg2 := CanonicalAttestationMessage(testAttestationPayload())
 	require.Equal(t, msg1, msg2)
 	require.Contains(t, string(msg1), CredAttestPrefix)
 }
 
+func TestAttestationPayloadCanonicalBody(t *testing.T) {
+	body := testAttestationPayload().CanonicalBody()
+	expected := "userId=user-123\n" +
+		"credentialId=cred-abc\n" +
+		"credentialPublicKey=" + base64.RawURLEncoding.EncodeToString([]byte("cred-public-key-bytes")) + "\n" +
+		"wrappedKeyEpoch=1\n" +
+		"createdAt=1720000000"
+	require.Equal(t, expected, body)
+}
+
+func TestParseAttestationPayloadRoundTrip(t *testing.T) {
+	in := testAttestationPayload()
+	out, err := ParseAttestationPayload(in.CanonicalBody())
+	require.NoError(t, err)
+	require.Equal(t, in, out)
+}
+
+func TestParseAttestationPayloadRejectsMalformed(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"missing-line", "userId=u\ncredentialId=c\ncredentialPublicKey=k\nwrappedKeyEpoch=1"},
+		{"extra-line", testAttestationPayload().CanonicalBody() + "\nextra=x"},
+		{"wrong-key-order", "credentialId=c\nuserId=u\ncredentialPublicKey=k\nwrappedKeyEpoch=1\ncreatedAt=2"},
+		{"missing-equals", "userId u\ncredentialId=c\ncredentialPublicKey=k\nwrappedKeyEpoch=1\ncreatedAt=2"},
+		{"non-integer-epoch", "userId=u\ncredentialId=c\ncredentialPublicKey=k\nwrappedKeyEpoch=not-a-number\ncreatedAt=2"},
+		{"non-integer-created-at", "userId=u\ncredentialId=c\ncredentialPublicKey=k\nwrappedKeyEpoch=1\ncreatedAt=not-a-number"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseAttestationPayload(tt.body)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestCanonicalPubkeyBundleMessageStable(t *testing.T) {
-	msg1, err := CanonicalPubkeyBundleMessage(testBundlePayload())
-	require.NoError(t, err)
-	msg2, err := CanonicalPubkeyBundleMessage(testBundlePayload())
-	require.NoError(t, err)
+	msg1 := CanonicalPubkeyBundleMessage(testBundlePayload())
+	msg2 := CanonicalPubkeyBundleMessage(testBundlePayload())
 	require.Equal(t, msg1, msg2)
 	require.Contains(t, string(msg1), PubkeyBundlePrefix)
+}
+
+func TestPubkeyBundlePayloadCanonicalBody(t *testing.T) {
+	body := testBundlePayload().CanonicalBody()
+	expected := "userId=user-123\n" +
+		`requestEncEcdhPubkey={"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}` + "\n" +
+		"requestEncMlkemPubkey=" + base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes")) + "\n" +
+		`anchorEs384PublicKey={"kty":"EC","crv":"P-384","x":"aaa","y":"bbb"}` + "\n" +
+		"anchorMldsa87PublicKey=" + base64.RawURLEncoding.EncodeToString([]byte("mldsa87-pub-bytes")) + "\n" +
+		"wrappedKeyEpoch=1"
+	require.Equal(t, expected, body)
+}
+
+func TestParsePubkeyBundlePayloadRoundTrip(t *testing.T) {
+	in := testBundlePayload()
+	out, err := ParsePubkeyBundlePayload(in.CanonicalBody())
+	require.NoError(t, err)
+	require.Equal(t, in, out)
+}
+
+func TestParsePubkeyBundlePayloadRejectsMalformed(t *testing.T) {
+	good := testBundlePayload().CanonicalBody()
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"missing-line", strings.Join(strings.Split(good, "\n")[:5], "\n")},
+		{"extra-line", good + "\nextra=x"},
+		{"wrong-key-order", "requestEncEcdhPubkey=x\nuserId=u\nrequestEncMlkemPubkey=x\nanchorEs384PublicKey=x\nanchorMldsa87PublicKey=x\nwrappedKeyEpoch=1"},
+		{"missing-equals", "userId u\nrequestEncEcdhPubkey=x\nrequestEncMlkemPubkey=x\nanchorEs384PublicKey=x\nanchorMldsa87PublicKey=x\nwrappedKeyEpoch=1"},
+		{"non-integer-epoch", "userId=u\nrequestEncEcdhPubkey=x\nrequestEncMlkemPubkey=x\nanchorEs384PublicKey=x\nanchorMldsa87PublicKey=x\nwrappedKeyEpoch=nope"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParsePubkeyBundlePayload(tt.body)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestHybridAttestationRoundTrip(t *testing.T) {
@@ -85,8 +157,7 @@ func TestHybridAttestationRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	payload := testAttestationPayload()
-	msg, err := CanonicalAttestationMessage(payload)
-	require.NoError(t, err)
+	msg := CanonicalAttestationMessage(payload)
 	sigEs := signES384Raw(t, esPriv, msg)
 	sigMl := signMLDSA87(t, mlPriv, msg)
 
@@ -103,8 +174,7 @@ func TestHybridAttestationPartialRejected(t *testing.T) {
 	require.NoError(t, err)
 
 	payload := testAttestationPayload()
-	msg, err := CanonicalAttestationMessage(payload)
-	require.NoError(t, err)
+	msg := CanonicalAttestationMessage(payload)
 	sigEs := signES384Raw(t, esPriv, msg)
 	sigMl := signMLDSA87(t, mlPriv, msg)
 
@@ -138,8 +208,7 @@ func TestHybridBundleRoundTripAndTamper(t *testing.T) {
 	require.NoError(t, err)
 
 	payload := testBundlePayload()
-	msg, err := CanonicalPubkeyBundleMessage(payload)
-	require.NoError(t, err)
+	msg := CanonicalPubkeyBundleMessage(payload)
 	sigEs := signES384Raw(t, esPriv, msg)
 	sigMl := signMLDSA87(t, mlPriv, msg)
 

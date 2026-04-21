@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
     type AttestationPayload,
+    type PubkeyBundlePayload,
     anchorEs384JwkToString,
     anchorFingerprint,
     anchorMldsa87PubToString,
+    attestationPayloadCanonicalBody,
     generateAnchorKeyPair,
     parseAnchorSecret,
+    pubkeyBundlePayloadCanonicalBody,
     serializeAnchorSecret,
     signCredentialAttestationHybrid,
     signPubkeyBundleHybrid,
@@ -85,6 +88,27 @@ describe('hybrid attestation signatures', () => {
         expect(sig.sigEs384.length).toBeGreaterThan(120)
         // 4627 bytes of ML-DSA-87 signature → ~6170 base64url chars
         expect(sig.sigMldsa87.length).toBeGreaterThan(6000)
+        // The returned canonical body matches the stand-alone helper
+        expect(sig.canonicalBody).toBe(attestationPayloadCanonicalBody(payload))
+    })
+
+    it('produces a stable canonical body with ordered key=value lines', () => {
+        const payload: AttestationPayload = {
+            userId: 'u-1',
+            credentialId: 'cred-1',
+            credentialPublicKey: 'pk',
+            wrappedKeyEpoch: 1,
+            createdAt: 1700000000,
+        }
+        expect(attestationPayloadCanonicalBody(payload)).toBe(
+            [
+                'userId=u-1',
+                'credentialId=cred-1',
+                'credentialPublicKey=pk',
+                'wrappedKeyEpoch=1',
+                'createdAt=1700000000',
+            ].join('\n')
+        )
     })
 
     it('signs pubkey bundles with both legs', async () => {
@@ -99,6 +123,27 @@ describe('hybrid attestation signatures', () => {
         })
         expect(sig.sigEs384).toBeTruthy()
         expect(sig.sigMldsa87).toBeTruthy()
+    })
+
+    it('produces a stable canonical pubkey bundle body with ordered key=value lines', () => {
+        const payload: PubkeyBundlePayload = {
+            userId: 'u-1',
+            requestEncEcdhPubkey: 'ecdh',
+            requestEncMlkemPubkey: 'mlkem',
+            anchorEs384PublicKey: 'es384',
+            anchorMldsa87PublicKey: 'mldsa87',
+            wrappedKeyEpoch: 2,
+        }
+        expect(pubkeyBundlePayloadCanonicalBody(payload)).toBe(
+            [
+                'userId=u-1',
+                'requestEncEcdhPubkey=ecdh',
+                'requestEncMlkemPubkey=mlkem',
+                'anchorEs384PublicKey=es384',
+                'anchorMldsa87PublicKey=mldsa87',
+                'wrappedKeyEpoch=2',
+            ].join('\n')
+        )
     })
 })
 

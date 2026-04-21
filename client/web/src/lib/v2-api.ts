@@ -63,7 +63,7 @@ export async function v2FinalizeSignup(args: {
     pubkeyBundleSignatureEs384: string
     pubkeyBundleSignatureMldsa87: string
     wrappedAnchorKey: string
-    attestationPayload: unknown
+    attestationPayload: string
     attestationSignatureEs384: string
     attestationSignatureMldsa87: string
 }) {
@@ -198,7 +198,7 @@ export async function v2AddCredentialFinish(args: {
     credentialName?: string
     wrappedPrimaryKey?: string
     wrappedAnchorKey: string
-    attestationPayload: unknown
+    attestationPayload: string
     attestationSignatureEs384: string
     attestationSignatureMldsa87: string
 }) {

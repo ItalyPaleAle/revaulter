@@ -509,14 +509,13 @@ async function doSetPassword() {
         })
 
         // Sign the first-credential attestation with the fresh anchor.
-        const attestationPayload = {
+        const attestSig = await signCredentialAttestationHybrid(anchor, {
             userId: session.userId,
             credentialId: sessionCredentialId,
             credentialPublicKey: pendingCredentialPublicKey,
             wrappedKeyEpoch: 1,
             createdAt: Math.floor(Date.now() / 1000),
-        }
-        const attestSig = await signCredentialAttestationHybrid(anchor, attestationPayload)
+        })
 
         await v2FinalizeSignup({
             requestEncEcdhPubkey: publicKeyJwk,
@@ -527,7 +526,7 @@ async function doSetPassword() {
             pubkeyBundleSignatureEs384: bundleSig.sigEs384,
             pubkeyBundleSignatureMldsa87: bundleSig.sigMldsa87,
             wrappedAnchorKey: wrappedAnchor,
-            attestationPayload,
+            attestationPayload: attestSig.canonicalBody,
             attestationSignatureEs384: attestSig.sigEs384,
             attestationSignatureMldsa87: attestSig.sigMldsa87,
         })
@@ -795,14 +794,13 @@ async function doAddPasskey(name: string) {
         })
 
         // Sign an attestation binding this credential to the user's existing anchor.
-        const attestationPayload = {
+        const attestSig = await signCredentialAttestationHybrid(sessionAnchor, {
             userId: session.userId,
             credentialId: cred.id,
             credentialPublicKey: cred.publicKey,
             wrappedKeyEpoch: session.wrappedKeyEpoch,
             createdAt: Math.floor(Date.now() / 1000),
-        }
-        const attestSig = await signCredentialAttestationHybrid(sessionAnchor, attestationPayload)
+        })
 
         await v2AddCredentialFinish({
             challengeId: begin.challengeId,
@@ -810,7 +808,7 @@ async function doAddPasskey(name: string) {
             credentialName: name,
             wrappedPrimaryKey: wrapped,
             wrappedAnchorKey: wrappedAnchor,
-            attestationPayload,
+            attestationPayload: attestSig.canonicalBody,
             attestationSignatureEs384: attestSig.sigEs384,
             attestationSignatureMldsa87: attestSig.sigMldsa87,
         })

@@ -220,47 +220,67 @@ function canonicalJson(obj: unknown): Uint8Array {
     return new TextEncoder().encode(JSON.stringify(obj))
 }
 
-function canonicalAttestationMessage(payload: AttestationPayload): Uint8Array {
-    // Field order must exactly match the Go struct tag ordering in pkg/protocolv2.
-    const ordered = {
-        userId: payload.userId,
-        credentialId: payload.credentialId,
-        credentialPublicKey: payload.credentialPublicKey,
-        wrappedKeyEpoch: payload.wrappedKeyEpoch,
-        createdAt: payload.createdAt,
-    }
-    return concatBytes(new TextEncoder().encode(CRED_ATTEST_PREFIX), canonicalJson(ordered))
+/**
+ * Serialize the attestation payload as ordered `key=value` lines separated by `\n`, with no trailing newline
+ * This is the format stored in the database and sent on the wire, and the body that (with the domain-separation prefix) is signed by both anchor legs
+ */
+export function attestationPayloadCanonicalBody(payload: AttestationPayload): string {
+    // Field order must exactly match pkg/protocolv2.AttestationPayload canonical body
+    return [
+        `userId=${payload.userId}`,
+        `credentialId=${payload.credentialId}`,
+        `credentialPublicKey=${payload.credentialPublicKey}`,
+        `wrappedKeyEpoch=${payload.wrappedKeyEpoch}`,
+        `createdAt=${payload.createdAt}`,
+    ].join('\n')
 }
 
-function canonicalPubkeyBundleMessage(payload: PubkeyBundlePayload): Uint8Array {
-    const ordered = {
-        userId: payload.userId,
-        requestEncEcdhPubkey: payload.requestEncEcdhPubkey,
-        requestEncMlkemPubkey: payload.requestEncMlkemPubkey,
-        anchorEs384PublicKey: payload.anchorEs384PublicKey,
-        anchorMldsa87PublicKey: payload.anchorMldsa87PublicKey,
-        wrappedKeyEpoch: payload.wrappedKeyEpoch,
-    }
-    return concatBytes(new TextEncoder().encode(PUBKEY_BUNDLE_PREFIX), canonicalJson(ordered))
+function canonicalAttestationMessage(body: string): Uint8Array {
+    return new TextEncoder().encode(CRED_ATTEST_PREFIX + body)
+}
+
+/**
+ * Serialize the pubkey-bundle payload as ordered `key=value` lines separated by `\n`, with no trailing newline
+ * This is the body that (with the domain-separation prefix) is signed by both anchor legs
+ */
+export function pubkeyBundlePayloadCanonicalBody(payload: PubkeyBundlePayload): string {
+    // Field order must exactly match pkg/protocolv2.PubkeyBundlePayload canonical body
+    return [
+        `userId=${payload.userId}`,
+        `requestEncEcdhPubkey=${payload.requestEncEcdhPubkey}`,
+        `requestEncMlkemPubkey=${payload.requestEncMlkemPubkey}`,
+        `anchorEs384PublicKey=${payload.anchorEs384PublicKey}`,
+        `anchorMldsa87PublicKey=${payload.anchorMldsa87PublicKey}`,
+        `wrappedKeyEpoch=${payload.wrappedKeyEpoch}`,
+    ].join('\n')
+}
+
+function canonicalPubkeyBundleMessage(body: string): Uint8Array {
+    return new TextEncoder().encode(PUBKEY_BUNDLE_PREFIX + body)
 }
 
 /**
  * Hybrid-sign a credential-attestation payload. Both legs MUST succeed; verifiers
  * reject the signature unless both ES384 and ML-DSA-87 check out.
+ *
+ * Returns the canonical body string alongside the signatures so the caller can
+ * transmit the exact same bytes that were signed.
  */
 export async function signCredentialAttestationHybrid(
     anchor: AnchorKeyPair,
     payload: AttestationPayload
-): Promise<{ sigEs384: string; sigMldsa87: string }> {
-    const msg = canonicalAttestationMessage(payload)
-    return signHybrid(anchor, msg)
+): Promise<{ canonicalBody: string; sigEs384: string; sigMldsa87: string }> {
+    const canonicalBody = attestationPayloadCanonicalBody(payload)
+    const msg = canonicalAttestationMessage(canonicalBody)
+    const sig = await signHybrid(anchor, msg)
+    return { canonicalBody, ...sig }
 }
 
 export async function signPubkeyBundleHybrid(
     anchor: AnchorKeyPair,
     payload: PubkeyBundlePayload
 ): Promise<{ sigEs384: string; sigMldsa87: string }> {
-    const msg = canonicalPubkeyBundleMessage(payload)
+    const msg = canonicalPubkeyBundleMessage(pubkeyBundlePayloadCanonicalBody(payload))
     return signHybrid(anchor, msg)
 }
 
@@ -284,8 +304,8 @@ async function signHybrid(anchor: AnchorKeyPair, msg: Uint8Array): Promise<{ sig
 }
 
 /**
- * SHA-256 fingerprint of the anchor pubkey pair (length-prefixed JWK || length-prefixed ML-DSA-87 pubkey).
- * This is what the CLI pins and what humans compare. Matches pkg/protocolv2.AnchorFingerprint.
+ * SHA-256 fingerprint of the anchor pubkey pair (SEC1 uncompressed ES384 point || ML-DSA-87 pubkey)
+ * This is what the CLI pins and what humans compare; matches pkg/protocolv2.AnchorFingerprint
  */
 export async function anchorFingerprint(
     anchorEs384PublicKeyJwk: EcP384PublicJwk,
@@ -294,17 +314,23 @@ export async function anchorFingerprint(
     if (anchorMldsa87PublicKey.length !== MLDSA87_PUB_SIZE) {
         throw new Error(`ML-DSA-87 public key must be ${MLDSA87_PUB_SIZE} bytes, got ${anchorMldsa87PublicKey.length}`)
     }
-    const jwkBytes = canonicalJson(anchorEs384PublicKeyJwk)
-    const buf = new Uint8Array(4 + jwkBytes.length + 4 + anchorMldsa87PublicKey.length)
-    let offset = 0
-    writeUint32BE(buf, offset, jwkBytes.length)
-    offset += 4
-    buf.set(jwkBytes, offset)
-    offset += jwkBytes.length
-    writeUint32BE(buf, offset, anchorMldsa87PublicKey.length)
-    offset += 4
-    buf.set(anchorMldsa87PublicKey, offset)
+    const xBytes = base64UrlToBytes(anchorEs384PublicKeyJwk.x)
+    const yBytes = base64UrlToBytes(anchorEs384PublicKeyJwk.y)
+    if (xBytes.length !== P384_COORD_SIZE || yBytes.length !== P384_COORD_SIZE) {
+        throw new Error(
+            `ES384 JWK coordinates must be ${P384_COORD_SIZE} bytes each, got x=${xBytes.length} y=${yBytes.length}`
+        )
+    }
+
+    // SEC1 uncompressed point: 0x04 || X || Y
+    const buf = new Uint8Array(1 + 2 * P384_COORD_SIZE + anchorMldsa87PublicKey.length)
+    buf[0] = 0x04
+    buf.set(xBytes, 1)
+    buf.set(yBytes, 1 + P384_COORD_SIZE)
+    buf.set(anchorMldsa87PublicKey, 1 + 2 * P384_COORD_SIZE)
+
     const digest = await crypto.subtle.digest('SHA-256', asBuf(buf))
+
     return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
@@ -329,17 +355,6 @@ function writeUint32BE(buf: Uint8Array, offset: number, value: number): void {
 
 function readUint32BE(buf: Uint8Array, offset: number): number {
     return ((buf[offset] << 24) >>> 0) + (buf[offset + 1] << 16) + (buf[offset + 2] << 8) + buf[offset + 3]
-}
-
-function concatBytes(...parts: Uint8Array[]): Uint8Array {
-    const len = parts.reduce((n, p) => n + p.length, 0)
-    const out = new Uint8Array(len)
-    let offset = 0
-    for (const p of parts) {
-        out.set(p, offset)
-        offset += p.length
-    }
-    return out
 }
 
 // Re-exported sizes for use in tests.

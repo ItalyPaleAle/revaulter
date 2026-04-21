@@ -111,10 +111,10 @@ type v2AuthFinalizeSignupRequest struct {
 	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
 
 	// First-credential attestation signed by the anchor.
-	WrappedAnchorKey            string          `json:"wrappedAnchorKey"`
-	AttestationPayload          json.RawMessage `json:"attestationPayload"`
-	AttestationSignatureEs384   string          `json:"attestationSignatureEs384"`
-	AttestationSignatureMldsa87 string          `json:"attestationSignatureMldsa87"`
+	WrappedAnchorKey            string `json:"wrappedAnchorKey"`
+	AttestationPayload          string `json:"attestationPayload"`
+	AttestationSignatureEs384   string `json:"attestationSignatureEs384"`
+	AttestationSignatureMldsa87 string `json:"attestationSignatureMldsa87"`
 }
 
 type v2AuthAllowedIPsRequest struct {
@@ -196,10 +196,10 @@ type v2AuthAddCredentialFinishRequest struct {
 	WrappedPrimaryKey string          `json:"wrappedPrimaryKey,omitempty"`
 
 	// New credentials must carry a hybrid attestation signed by the user's anchor.
-	WrappedAnchorKey            string          `json:"wrappedAnchorKey"`
-	AttestationPayload          json.RawMessage `json:"attestationPayload"`
-	AttestationSignatureEs384   string          `json:"attestationSignatureEs384"`
-	AttestationSignatureMldsa87 string          `json:"attestationSignatureMldsa87"`
+	WrappedAnchorKey            string `json:"wrappedAnchorKey"`
+	AttestationPayload          string `json:"attestationPayload"`
+	AttestationSignatureEs384   string `json:"attestationSignatureEs384"`
+	AttestationSignatureMldsa87 string `json:"attestationSignatureMldsa87"`
 }
 
 type v2AuthRenameCredentialRequest struct {
@@ -506,7 +506,7 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 	}
 
 	var attestPayload protocolv2.AttestationPayload
-	err = json.Unmarshal(req.AttestationPayload, &attestPayload)
+	attestPayload, err = protocolv2.ParseAttestationPayload(req.AttestationPayload)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationPayload: %v", err))
 		return
@@ -548,7 +548,7 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		AnchorMldsa87PublicKey:       req.AnchorMldsa87PublicKey,
 		PubkeyBundleSignatureEs384:   req.PubkeyBundleSignatureEs384,
 		PubkeyBundleSignatureMldsa87: req.PubkeyBundleSignatureMldsa87,
-		AttestationPayload:           string(req.AttestationPayload),
+		AttestationPayload:           req.AttestationPayload,
 		AttestationSignatureEs384:    req.AttestationSignatureEs384,
 		AttestationSignatureMldsa87:  req.AttestationSignatureMldsa87,
 	})
@@ -987,7 +987,7 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		return
 	}
 	var attestPayload protocolv2.AttestationPayload
-	err = json.Unmarshal(req.AttestationPayload, &attestPayload)
+	attestPayload, err = protocolv2.ParseAttestationPayload(req.AttestationPayload)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationPayload: %v", err))
 		return
@@ -1014,7 +1014,7 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		SignCount:                   int64(cred.Authenticator.SignCount),
 		WrappedPrimaryKey:           req.WrappedPrimaryKey,
 		WrappedAnchorKey:            req.WrappedAnchorKey,
-		AttestationPayload:          string(req.AttestationPayload),
+		AttestationPayload:          req.AttestationPayload,
 		AttestationSignatureEs384:   req.AttestationSignatureEs384,
 		AttestationSignatureMldsa87: req.AttestationSignatureMldsa87,
 	})
