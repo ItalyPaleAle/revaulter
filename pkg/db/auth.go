@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,6 +15,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/italypaleale/go-sql-utils/adapter"
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
+	"modernc.org/sqlite"
+
 	"github.com/italypaleale/revaulter/pkg/utils"
 )
 
@@ -38,18 +41,6 @@ type User struct {
 	WrappedKeyEpoch              int64
 	AllowedIPs                   []string
 	Ready                        bool
-}
-
-type AuthSession struct {
-	ID              string
-	UserID          string
-	DisplayName     string
-	RequestKey      string
-	WrappedKeyEpoch int64
-	AllowedIPs      []string
-	Ready           bool
-	ExpiresAt       time.Time
-	CreatedAt       time.Time
 }
 
 type AuthChallenge struct {
@@ -107,6 +98,21 @@ type LoginInput struct {
 	SessionTTL   time.Duration
 }
 
+type FinalizeSignupInput struct {
+	UserID                       string
+	WrappedPrimaryKey            string
+	WrappedAnchorKey             string
+	RequestEncEcdhPubkey         string
+	RequestEncMlkemPubkey        string
+	AnchorEs384PublicKey         string
+	AnchorMldsa87PublicKey       string
+	PubkeyBundleSignatureEs384   string
+	PubkeyBundleSignatureMldsa87 string
+	AttestationPayload           string
+	AttestationSignatureEs384    string
+	AttestationSignatureMldsa87  string
+}
+
 var (
 	ErrUserAlreadyExists  = errors.New("user already exists")
 	ErrUserNotFound       = errors.New("user not found")
@@ -115,6 +121,7 @@ var (
 	ErrCredentialNotFound = errors.New("credential not found")
 	ErrLastCredential     = errors.New("cannot delete the last credential")
 	ErrDisplayNameTooLong = errors.New("display name is too long")
+	ErrAlreadyFinalized   = errors.New("user is already finalized")
 )
 
 func NewAuthStore(db adapter.DatabaseConn) (*AuthStore, error) {
@@ -322,7 +329,7 @@ func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind string
 	return true, nil
 }
 
-func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*AuthSession, error) {
+func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*User, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -339,27 +346,26 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 		return nil, err
 	}
 
-	now := time.Now().UTC().Unix()
+	now := time.Now().Unix()
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, request_key, wrapped_key_epoch, allowed_ips, created_at, updated_at)
-		VALUES ($1, $2, 'active', $3, $4, 1, '', $5, $5)`,
-		in.UserID, in.DisplayName, in.WebAuthnUserID, requestKey, now,
+		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, request_key, wrapped_key_epoch, allowed_ips, ready, created_at, updated_at)
+			VALUES ($1, $2, 'active', $3, $4, 1, '', false, $5, $5)`,
+		in.UserID, strings.TrimSpace(in.DisplayName), in.WebAuthnUserID, requestKey, now,
 	)
-	if err != nil {
+	if isIntegrityViolationError(err) {
+		return nil, ErrUserAlreadyExists
+	} else if err != nil {
 		return nil, err
 	}
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_key_epoch, created_at, last_used_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, '', 1, $7, $7)`,
-		uuid.NewString(), in.UserID, in.CredentialID, in.CredentialDisplayName, in.PublicKey, in.SignCount, now,
+		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, created_at, last_used_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+		uuid.NewString(), in.UserID, in.CredentialID, strings.TrimSpace(in.CredentialDisplayName), in.PublicKey, in.SignCount, now,
 	)
-	if err != nil {
-		return nil, err
-	}
-
-	sess, err := insertSession(ctx, tx, in.UserID, in.SessionTTL)
-	if err != nil {
+	if isIntegrityViolationError(err) {
+		return nil, ErrUserAlreadyExists
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -367,10 +373,20 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 	if err != nil {
 		return nil, err
 	}
-	return s.GetSession(ctx, sess.ID)
+
+	return &User{
+		ID:              in.UserID,
+		DisplayName:     strings.TrimSpace(in.DisplayName),
+		Status:          "active",
+		WebAuthnUserID:  in.WebAuthnUserID,
+		RequestKey:      requestKey,
+		WrappedKeyEpoch: 1,
+		AllowedIPs:      nil,
+		Ready:           false,
+	}, nil
 }
 
-func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, error) {
+func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*User, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -397,93 +413,67 @@ func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, err
 		Scan(&in.UserID)
 	if s.db.IsNoRowsError(err) {
 		return nil, ErrInvalidLogin
-	}
-	if err != nil {
+	} else if err != nil {
 		return nil, err
 	}
 
-	sess, err := insertSession(ctx, tx, in.UserID, in.SessionTTL)
-	if err != nil {
+	user := &User{}
+	var allowedIPsCSV string
+	err = tx.
+		QueryRow(ctx,
+			`SELECT id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, wrapped_key_epoch, allowed_ips, ready
+			FROM v2_users
+			WHERE id = $1 AND status = 'active'`,
+			in.UserID,
+		).
+		Scan(
+			&user.ID,
+			&user.DisplayName,
+			&user.Status,
+			&user.WebAuthnUserID,
+			&user.RequestKey,
+			&user.RequestEncEcdhPubkey,
+			&user.RequestEncMlkemPubkey,
+			&user.AnchorEs384PublicKey,
+			&user.AnchorMldsa87PublicKey,
+			&user.PubkeyBundleSignatureEs384,
+			&user.PubkeyBundleSignatureMldsa87,
+			&user.WrappedKeyEpoch,
+			&allowedIPsCSV,
+			&user.Ready,
+		)
+	if s.db.IsNoRowsError(err) {
+		return nil, ErrInvalidLogin
+	} else if err != nil {
 		return nil, err
 	}
+
+	user.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
 
 	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return s.GetSession(ctx, sess.ID)
-}
-
-func (s *AuthStore) GetSession(ctx context.Context, id string) (*AuthSession, error) {
-	var (
-		sess          AuthSession
-		expiresAt     int64
-		createdAt     int64
-		revokedAt     sql.NullInt64
-		allowedIPsCSV string
-	)
-	err := s.db.
-		QueryRow(ctx,
-			`SELECT s.id, s.user_id, u.display_name, u.request_key, u.wrapped_key_epoch, u.allowed_ips, u.ready, s.expires_at, s.created_at, s.revoked_at
-			FROM v2_user_sessions s
-			INNER JOIN v2_users u ON u.id = s.user_id
-			WHERE s.id = $1 AND u.status = 'active'`,
-			id,
-		).
-		Scan(&sess.ID, &sess.UserID, &sess.DisplayName, &sess.RequestKey, &sess.WrappedKeyEpoch, &allowedIPsCSV, &sess.Ready, &expiresAt, &createdAt, &revokedAt)
-	if s.db.IsNoRowsError(err) {
-		return nil, nil
-	} else if err != nil {
-		return nil, err
-	}
-	if revokedAt.Valid {
-		return nil, nil
-	}
-
-	sess.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
-	sess.ExpiresAt = time.Unix(expiresAt, 0)
-	sess.CreatedAt = time.Unix(createdAt, 0)
-	if sess.ExpiresAt.Before(time.Now()) {
-		return nil, nil
-	}
-	return &sess, nil
-}
-
-var ErrAlreadyFinalized = errors.New("account already finalized")
-
-// FinalizeSignupInput carries the post-WebAuthn-registration material that the browser generates once it has derived the wrapping key from the PRF extension: long-lived transport pubkeys, the hybrid anchor pubkeys + their self-signatures over the pubkey bundle, and the first credential's wrapped secrets + attestation.
-type FinalizeSignupInput struct {
-	UserID                       string
-	WrappedPrimaryKey            string
-	WrappedAnchorKey             string
-	RequestEncEcdhPubkey         string
-	RequestEncMlkemPubkey        string
-	AnchorEs384PublicKey         string
-	AnchorMldsa87PublicKey       string
-	PubkeyBundleSignatureEs384   string
-	PubkeyBundleSignatureMldsa87 string
-	AttestationPayload           string
-	AttestationSignatureEs384    string
-	AttestationSignatureMldsa87  string
+	return user, nil
 }
 
 // FinalizeSignup marks the account as ready and persists all long-lived cryptographic material generated at signup time: the user's transport pubkeys, anchor pubkeys and bundle self-signatures, plus the first credential's wrapped primary key, wrapped anchor key, and hybrid attestation
-// It can only update records with ready = false
-func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) error {
+// Returns the updated user row
+func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) (*User, error) {
 	if len(in.WrappedPrimaryKey) > 512 {
-		return errors.New("wrappedPrimaryKey is too large")
+		return nil, errors.New("wrappedPrimaryKey is too large")
 	}
 	if len(in.WrappedAnchorKey) > 32768 {
-		return errors.New("wrappedAnchorKey is too large")
+		return nil, errors.New("wrappedAnchorKey is too large")
 	}
 	if len(in.AttestationPayload) > 4096 {
-		return errors.New("attestationPayload is too large")
+		return nil, errors.New("attestationPayload is too large")
 	}
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() {
 		rollbackErr := tx.Rollback(ctx)
@@ -492,9 +482,12 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 		}
 	}()
 
-	now := time.Now().UTC().Unix()
-	affected, err := tx.Exec(ctx,
-		`UPDATE v2_users
+	now := time.Now().Unix()
+	updatedUser := &User{}
+	var allowedIPsCSV string
+	err = tx.
+		QueryRow(ctx,
+			`UPDATE v2_users
 			SET request_enc_ecdh_pubkey = $1,
 				request_enc_mlkem_pubkey = $2,
 				anchor_es384_public_key = $3,
@@ -503,32 +496,47 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 				pubkey_bundle_signature_mldsa87 = $6,
 				ready = true,
 				updated_at = $7
-			WHERE id = $8 AND ready = false`,
-		in.RequestEncEcdhPubkey, in.RequestEncMlkemPubkey,
-		in.AnchorEs384PublicKey, in.AnchorMldsa87PublicKey,
-		in.PubkeyBundleSignatureEs384, in.PubkeyBundleSignatureMldsa87,
-		now, in.UserID,
-	)
-	if err != nil {
-		return err
-	}
-	if affected != 1 {
-		// Determine whether the user was already finalized or simply does not exist
+			WHERE id = $8 AND ready = false
+			RETURNING
+				id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, wrapped_key_epoch, allowed_ips, ready`,
+			in.RequestEncEcdhPubkey, in.RequestEncMlkemPubkey,
+			in.AnchorEs384PublicKey, in.AnchorMldsa87PublicKey,
+			in.PubkeyBundleSignatureEs384, in.PubkeyBundleSignatureMldsa87,
+			now, in.UserID,
+		).
+		Scan(
+			&updatedUser.ID,
+			&updatedUser.DisplayName,
+			&updatedUser.Status,
+			&updatedUser.WebAuthnUserID,
+			&updatedUser.RequestKey,
+			&updatedUser.RequestEncEcdhPubkey,
+			&updatedUser.RequestEncMlkemPubkey,
+			&updatedUser.AnchorEs384PublicKey,
+			&updatedUser.AnchorMldsa87PublicKey,
+			&updatedUser.PubkeyBundleSignatureEs384,
+			&updatedUser.PubkeyBundleSignatureMldsa87,
+			&updatedUser.WrappedKeyEpoch,
+			&allowedIPsCSV,
+			&updatedUser.Ready,
+		)
+	if err != nil && !s.db.IsNoRowsError(err) {
+		return nil, err
+	} else if err != nil {
 		var exists bool
-		err = tx.
-			QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, in.UserID).
-			Scan(&exists)
+		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, in.UserID).Scan(&exists)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !exists {
-			return ErrUserNotFound
+			return nil, ErrUserNotFound
 		}
-		return ErrAlreadyFinalized
+		return nil, ErrAlreadyFinalized
 	}
 
-	// Store the wrapped primary key, wrapped anchor, and first credential attestation on the user's
-	// single credential (the one created during registration).
+	updatedUser.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
+
+	// Store the wrapped primary key, wrapped anchor, and first credential attestation on the user's single credential (the one created during registration)
 	_, err = tx.Exec(ctx,
 		`UPDATE v2_user_credentials
 			SET wrapped_primary_key = $1,
@@ -543,10 +551,48 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 		in.UserID,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return tx.Commit(ctx)
+	err = tx.Commit(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return updatedUser, nil
+}
+
+func (s *AuthStore) GetCredentialForUser(ctx context.Context, userID, credentialID string) (*AuthCredentialRecord, error) {
+	var rec AuthCredentialRecord
+	err := s.db.
+		QueryRow(ctx,
+			`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_anchor_key, attestation_payload, attestation_signature_es384, attestation_signature_mldsa87, wrapped_key_epoch, created_at, last_used_at
+			FROM v2_user_credentials
+			WHERE user_id = $1 AND credential_id = $2`,
+			userID, credentialID,
+		).
+		Scan(
+			&rec.ID,
+			&rec.CredentialID,
+			&rec.DisplayName,
+			&rec.PublicKey,
+			&rec.SignCount,
+			&rec.WrappedPrimaryKey,
+			&rec.WrappedAnchorKey,
+			&rec.AttestationPayload,
+			&rec.AttestationSignatureEs384,
+			&rec.AttestationSignatureMldsa87,
+			&rec.WrappedKeyEpoch,
+			&rec.CreatedAt,
+			&rec.LastUsedAt,
+		)
+	if s.db.IsNoRowsError(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	return &rec, nil
 }
 
 func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowedIPs []string) ([]string, error) {
@@ -558,7 +604,7 @@ func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowed
 	// Only allow mutations for users that are active and have completed setup
 	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_users SET allowed_ips = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
-		strings.Join(normalized, ","), time.Now().UTC().Unix(), userID,
+		strings.Join(normalized, ","), time.Now().Unix(), userID,
 	)
 	if err != nil {
 		return nil, err
@@ -580,7 +626,7 @@ func (s *AuthStore) RegenerateRequestKey(ctx context.Context, userID string) (st
 	// Only allow mutations for users that are active and have completed setup
 	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_users SET request_key = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
-		requestKey, time.Now().UTC().Unix(), userID,
+		requestKey, time.Now().Unix(), userID,
 	)
 	if err != nil {
 		return "", err
@@ -601,7 +647,7 @@ func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID, displayName s
 
 	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_users SET display_name = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
-		displayName, time.Now().UTC().Unix(), userID,
+		displayName, time.Now().Unix(), userID,
 	)
 	if err != nil {
 		return err
@@ -644,7 +690,7 @@ func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID
 
 // HasPendingChallenge reports whether the user has an unconsumed, non-expired challenge of the given kind
 func (s *AuthStore) HasPendingChallenge(ctx context.Context, userID, kind string) (bool, error) {
-	now := time.Now().UTC().Unix()
+	now := time.Now().Unix()
 	var exists bool
 	err := s.db.
 		QueryRow(ctx,
@@ -686,7 +732,7 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 		return errors.New("attestationPayload is too large")
 	}
 
-	now := time.Now().UTC().Unix()
+	now := time.Now().Unix()
 	_, err := s.db.Exec(ctx,
 		`INSERT INTO v2_user_credentials (
 				id, user_id, credential_id, display_name, public_key, sign_count,
@@ -709,7 +755,7 @@ func (s *AuthStore) AdvanceWrappedKeyEpoch(ctx context.Context, userID string) (
 	err := s.db.
 		QueryRow(ctx,
 			`UPDATE v2_users SET wrapped_key_epoch = wrapped_key_epoch + 1, updated_at = $1 WHERE id = $2 AND status = 'active' AND ready = true RETURNING wrapped_key_epoch`,
-			time.Now().UTC().Unix(), userID,
+			time.Now().Unix(), userID,
 		).
 		Scan(&epoch)
 	if s.db.IsNoRowsError(err) {
@@ -784,33 +830,6 @@ func (s *AuthStore) DeleteCredential(ctx context.Context, id, userID string) err
 	return nil
 }
 
-func (s *AuthStore) RevokeSession(ctx context.Context, id string) error {
-	_, err := s.db.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $1 WHERE id = $2`, time.Now().UTC().Unix(), id)
-	return err
-}
-
-type txExec interface {
-	Exec(ctx context.Context, query string, args ...any) (int64, error)
-}
-
-func insertSession(ctx context.Context, tx txExec, userID string, ttl time.Duration) (*AuthSession, error) {
-	if ttl <= 0 {
-		ttl = 5 * time.Minute
-	}
-	now := time.Now().UTC()
-	sess := &AuthSession{
-		ID:        uuid.NewString(),
-		UserID:    userID,
-		CreatedAt: now,
-		ExpiresAt: now.Add(ttl),
-	}
-	_, err := tx.Exec(ctx,
-		`INSERT INTO v2_user_sessions (id, user_id, expires_at, created_at, last_seen_at) VALUES ($1, $2, $3, $4, $5)`,
-		sess.ID, sess.UserID, sess.ExpiresAt.Unix(), sess.CreatedAt.Unix(), sess.CreatedAt.Unix(),
-	)
-	return sess, err
-}
-
 func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 	cutoff := now.Add(-10 * time.Minute).Unix()
 
@@ -822,13 +841,6 @@ func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("error deleting expired auth challenges: %w", err)
 	}
 
-	_, err = s.db.Exec(ctx,
-		`DELETE FROM v2_user_sessions WHERE expires_at < $1 OR (revoked_at IS NOT NULL AND revoked_at < $2)`,
-		cutoff, cutoff,
-	)
-	if err != nil {
-		return fmt.Errorf("error deleting expired user sessions: %w", err)
-	}
 	return nil
 }
 
@@ -840,25 +852,6 @@ func (s *AuthStore) DeleteExpiredAuthChallenge(ctx context.Context, id string, n
 	)
 	if err != nil {
 		return fmt.Errorf("error deleting auth challenge: %w", err)
-	}
-	return nil
-}
-
-func (s *AuthStore) DeleteRevokedSession(ctx context.Context, id string, now time.Time, expiredOnly bool) error {
-	query := `DELETE FROM v2_user_sessions WHERE id = $1 AND `
-	args := make([]any, 1, 2)
-	args[0] = id
-	if expiredOnly {
-		cutoff := now.Add(-10 * time.Minute).Unix()
-		query += `(expires_at < $2 OR (revoked_at IS NOT NULL AND revoked_at < $2))`
-		args = append(args, cutoff)
-	} else {
-		query += `revoked_at IS NOT NULL`
-	}
-
-	_, err := s.db.Exec(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("error deleting revoked user session: %w", err)
 	}
 	return nil
 }
@@ -927,4 +920,28 @@ func parseAllowedIPsCSV(raw string) []string {
 	parts = parts[:j]
 
 	return parts
+}
+
+func isIntegrityViolationError(err error) bool {
+	// These bits are set on all constraint-related errors
+	// https://www.sqlite.org/rescode.html#constraint
+	const sqliteConstraintCode = 19
+
+	if err == nil {
+		return false
+	}
+
+	// Handle SQLite errors
+	sqliteErr, ok := errors.AsType[*sqlite.Error](err)
+	if ok {
+		return sqliteErr.Code()&sqliteConstraintCode != 0
+	}
+
+	// Handle Postgres errors
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	if ok {
+		return pgerrcode.IsIntegrityConstraintViolation(pgErr.Code)
+	}
+
+	return false
 }

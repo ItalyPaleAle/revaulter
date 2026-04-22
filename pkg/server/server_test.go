@@ -282,6 +282,63 @@ func TestServerV2SessionMiddlewareAllowsNonreadyUsersOnListAPI(t *testing.T) {
 	require.Empty(t, body)
 }
 
+func TestServerV2FinalizeSignupRefreshesSessionForReadyAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Cleanup(
+		// #nosec G101 -- Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-finalize-refresh.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}),
+	)
+
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	defer cleanup()
+
+	stopServerFn := startTestServer(t, srv)
+	defer stopServerFn(t)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, user := seedV2SessionCookie(t, srv, "user-finalize-refresh", "Refresh User")
+
+	requestEncPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	requestEncJWK, err := protocolv2.ECP256PublicJWKFromECDH(requestEncPriv.PublicKey())
+	require.NoError(t, err)
+	requestEncJWKJSON, err := json.Marshal(requestEncJWK)
+	require.NoError(t, err)
+
+	body, err := json.Marshal(map[string]any{
+		"requestEncEcdhPubkey":         json.RawMessage(requestEncJWKJSON),
+		"requestEncMlkemPubkey":        base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey-refresh")),
+		"anchorEs384PublicKey":         map[string]any{},
+		"anchorMldsa87PublicKey":       "test-anchor-ml-dsa",
+		"pubkeyBundleSignatureEs384":   "sig-es384",
+		"pubkeyBundleSignatureMldsa87": "sig-mldsa87",
+		"wrappedAnchorKey":             base64.RawURLEncoding.EncodeToString([]byte("wrapped-anchor-refresh")),
+		"attestationPayload":           `{"userId":"user-finalize-refresh","credentialId":"cred-user-finalize-refresh","credentialPublicKeyHash":"test","wrappedKeyEpoch":1,"createdAt":1}`,
+		"attestationSignatureEs384":    "sig-es384",
+		"attestationSignatureMldsa87":  "sig-mldsa87",
+	})
+	require.NoError(t, err)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/finalize-signup", testServerPort), bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+	_ = user
+}
+
 func TestServerV2SessionEndpointAllowsNonreadyUsers(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(
@@ -638,14 +695,6 @@ func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
 	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-logout", "Logout User")
 	require.NotEmpty(t, sessionCookie.Value)
 
-	err := srv.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "session-delete:" + sessionCookie.Value,
-		Kind:    "session",
-		ID:      sessionCookie.Value,
-		TTL:     time.Now().UTC().Add(time.Hour),
-	})
-	require.NoError(t, err)
-
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/logout", testServerPort), bytes.NewReader([]byte(`{}`)))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -659,9 +708,21 @@ func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
 	}()
 	require.Equal(t, http.StatusOK, res.StatusCode)
 
-	sess, err := srv.authStore.GetSession(t.Context(), sessionCookie.Value)
+	req2, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/auth/session", testServerPort), nil)
 	require.NoError(t, err)
-	require.Nil(t, sess)
+	resCookies := res.Cookies()
+	for _, cookie := range resCookies {
+		if cookie.Name == sessionCookie.Name {
+			req2.AddCookie(cookie)
+		}
+	}
+	res2, err := client.Do(req2)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res2.Body)
+		res2.Body.Close()
+	}()
+	require.Equal(t, http.StatusUnauthorized, res2.StatusCode)
 }
 
 func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.RoundTripper, logDest io.Writer) (*Server, func()) {
@@ -717,7 +778,7 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName string) (*http.Cookie, *db.User) {
 	t.Helper()
 
-	sess, err := srv.authStore.RegisterUser(t.Context(), db.RegisterUserInput{
+	_, err := srv.authStore.RegisterUser(t.Context(), db.RegisterUserInput{
 		UserID:         userID,
 		DisplayName:    displayName,
 		WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("webauthn-" + userID)),
@@ -734,7 +795,7 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 	require.NoError(t, err)
 	requestEncJWKJSON, err := json.Marshal(requestEncJWK)
 	require.NoError(t, err)
-	err = srv.authStore.FinalizeSignup(
+	_, err = srv.authStore.FinalizeSignup(
 		t.Context(),
 		db.FinalizeSignupInput{
 			UserID:                userID,
@@ -749,9 +810,14 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 	require.NoError(t, err)
 	require.NotNil(t, user)
 
+	signed, err := newAuthSessionToken(user, config.Get().SessionTimeout)
+	require.NoError(t, err)
+	token, err := signAuthSessionToken(signed)
+	require.NoError(t, err)
+
 	return &http.Cookie{
 		Name:  sessionCookieNameSecure,
-		Value: sess.ID,
+		Value: token,
 		Path:  "/",
 	}, user
 }

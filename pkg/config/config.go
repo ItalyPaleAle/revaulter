@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/lestrrat-go/jwx/v4/jwk"
 )
 
 // Config is the struct containing configuration
@@ -144,14 +146,26 @@ type Dev struct {
 
 // Internal properties
 type internal struct {
-	instanceID       string
-	configFileLoaded string // Path to the config file that was loaded
-	prfSalt          string // base64-encoded
+	instanceID string
+
+	// Path to the config file that was loaded
+	configFileLoaded string
+
+	// Session token signing key
+	tokenSigningKey jwk.SymmetricKey
+
+	// Base64-encoded PRF salt
+	prfSalt string
 }
 
 // GetPRFSalt returns the PRF salt
 func (c *Config) GetPRFSalt() string {
 	return c.internal.prfSalt
+}
+
+// TokenSigningKey returns the derived signing key used for JWT sessions
+func (c *Config) TokenSigningKey() jwk.SymmetricKey {
+	return c.internal.tokenSigningKey
 }
 
 // GetLoadedConfigPath returns the path to the config file that was loaded
@@ -182,6 +196,11 @@ func (c *Config) Validate(logger *slog.Logger) error {
 		return errors.New("config entry key 'secretKey' missing")
 	}
 
+	// Ensure that the secret key is at least 20-character long (although ideally it's 32 or more, but enforcing some minimum standard)
+	if len(c.SecretKey) < 20 {
+		return errors.New("secret key is too short: must be at least 20 characters")
+	}
+
 	// Check for invalid values
 	if c.SessionTimeout < time.Second || c.SessionTimeout > time.Hour {
 		return errors.New("config entry key 'sessionTimeout' is invalid: must be between 1s and 1h")
@@ -193,27 +212,43 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	return nil
 }
 
-// SetSecretKey derives the instance-wide deterministic WebAuthn PRF salt
-// from `secretKey`. The resulting salt is NOT used to encrypt any
-// server-side data; it is purely the input-material anchor that every
-// user's in-browser key derivation (static ECDH/ML-KEM decryption keys
-// and per-operation AES-GCM keys) is bound to. Rotating `secretKey`
-// therefore invalidates every existing user's derived keys and bricks
-// every existing account on the instance - see the doc comment on
-// Config.SecretKey for details.
+// SetSecretKey derives the instance-wide deterministic WebAuthn PRF salt from `secretKey` and the token signing key.
+// The resulting salt is NOT used to encrypt any server-side data; it is purely the input-material anchor that every user's in-browser key derivation (static ECDH/ML-KEM decryption keys and per-operation AES-GCM keys) is bound to.
 func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
 	if c.SecretKey == "" {
 		return errors.New("secret key value is empty")
 	}
+	sk := []byte(c.SecretKey)
 
 	// Use HKDF to derive the 128-bit PRF salt
-	prfSalt, err := hkdf.Key(sha256.New, []byte(c.SecretKey), nil, "revaulter-prf-salt", 16)
+	prfSalt, err := hkdf.Key(sha256.New, sk, nil, "revaulter-prf-salt", 16)
 	if err != nil {
 		return fmt.Errorf("failed to derive PRF salt: %w", err)
 	}
 	c.internal.prfSalt = base64.RawURLEncoding.EncodeToString(prfSalt)
 
+	// Use HKDF to derive the 256-bit token signing key
+	tokenSigningKeyRaw, err := hkdf.Key(sha256.New, sk, nil, "revaulter-session-token", 32)
+	if err != nil {
+		return fmt.Errorf("failed to derive token signing key: %w", err)
+	}
+
+	// Import the token signing key as a jwk.Key
+	c.internal.tokenSigningKey, err = jwk.Import[jwk.SymmetricKey](tokenSigningKeyRaw)
+	if err != nil {
+		return fmt.Errorf("failed to import token signing key as jwk.Key: %w", err)
+	}
+
+	// Calculate the key ID
+	_ = c.internal.tokenSigningKey.Set(jwk.KeyIDKey, computeKeyId(tokenSigningKeyRaw))
+
 	return nil
+}
+
+// Returns the key ID from a key
+func computeKeyId(k []byte) string {
+	h := sha256.Sum256(k)
+	return base64.RawURLEncoding.EncodeToString(h[0:12])
 }
 
 // String implements fmt.Stringer and is used for debugging

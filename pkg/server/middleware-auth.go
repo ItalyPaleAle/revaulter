@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,10 +12,9 @@ import (
 )
 
 const (
-	headerSessionTTL          = "x-session-ttl"
+	contextKeySessionTTL      = "SessionTTL"
 	sessionCookieNameSecure   = "__Host-_s"
 	sessionCookieNameInsecure = "_s"
-	contextKeySessionID       = "SessionID"
 	contextKeyUserID          = "UserID"
 	contextKeyRequestUser     = "RequestUser"
 )
@@ -28,40 +26,43 @@ func sessionCookieFor(c *gin.Context) (name, path string) {
 	if secureCookie(c) {
 		return sessionCookieNameSecure, "/"
 	}
+
 	return sessionCookieNameInsecure, "/v2"
 }
 
 func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Try bearer token first, then fall back to cookie
-		sessID := getBearerToken(c)
-		if sessID == "" {
+		token := getBearerToken(c)
+		if token == "" {
 			cookieName, _ := sessionCookieFor(c)
 			var err error
-			sessID, err = c.Cookie(cookieName)
-			if err != nil || sessID == "" {
+			token, err = c.Cookie(cookieName)
+			if err != nil || token == "" {
 				AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User is not authenticated"))
 				return
 			}
 		}
 
-		sess, err := s.authStore.GetSession(c.Request.Context(), sessID)
+		sess, err := parseAuthSessionToken(token)
 		if err != nil || sess == nil {
 			if err != nil {
-				_ = c.Error(fmt.Errorf("session lookup error: %w", err))
+				_ = c.Error(fmt.Errorf("session token parse error: %w", err))
 			}
 			AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User session is invalid or expired"))
 			return
 		}
+
+		userID := sess.UserID
 		if requireReady && !sess.Ready {
+			_ = c.Error(fmt.Errorf("session not ready for %s %s user=%s ready=%t", c.Request.Method, c.Request.URL.Path, userID, sess.Ready))
 			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account setup is not complete"))
 			return
 		}
 
-		ttl := max(time.Until(sess.ExpiresAt), 0)
-		c.Header(headerSessionTTL, strconv.Itoa(int(ttl.Seconds())))
-		c.Set(contextKeySessionID, sess.ID)
-		c.Set(contextKeyUserID, sess.UserID)
+		ttl := int(max(time.Until(sess.ExpiresAt), 0).Seconds())
+		c.Set(contextKeySessionTTL, ttl)
+		c.Set(contextKeyUserID, userID)
 	}
 }
 

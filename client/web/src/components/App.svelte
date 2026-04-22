@@ -103,6 +103,7 @@ let pendingCredentialPublicKeyHash = $state<string | null>(null)
 let items = $state<Record<string, V2PendingRequestItem>>({})
 let listConnected = $state(false)
 let stopStream: (() => void) | null = null
+let awaitingReadySessionRefresh = $state(false)
 
 onMount(() => {
     void initialize()
@@ -418,6 +419,7 @@ async function doRegister() {
 async function doFinishPasswordLogin() {
     authBusy = true
     authError = null
+    awaitingReadySessionRefresh = true
 
     try {
         await unlockWithPassword(passwordInput)
@@ -515,7 +517,7 @@ async function doSetPassword() {
             createdAt: Math.floor(Date.now() / 1000),
         })
 
-        await v2FinalizeSignup({
+        const finalize = await v2FinalizeSignup({
             requestEncEcdhPubkey: publicKeyJwk,
             requestEncMlkemPubkey: encapsulationKeyB64,
             wrappedPrimaryKey: wrapped,
@@ -528,6 +530,10 @@ async function doSetPassword() {
             attestationSignatureEs384: attestSig.sigEs384,
             attestationSignatureMldsa87: attestSig.sigMldsa87,
         })
+        if (finalize.session) {
+            session = toSessionResponse(finalize.session)
+        }
+        session = await v2Session()
         primaryKey = pk
         sessionAnchor = anchor
         hasPassword = !!passwordInput
@@ -541,6 +547,7 @@ async function doSetPassword() {
     } catch (err) {
         authError = err instanceof Error ? err.message : String(err)
     } finally {
+        awaitingReadySessionRefresh = false
         authBusy = false
     }
 }
@@ -949,6 +956,9 @@ function startListStream() {
                 items = {}
                 authError = 'Session expired. Sign in again.'
                 uiState = 'signin'
+                return
+            }
+            if (msg.includes('403') && awaitingReadySessionRefresh) {
                 return
             }
             pageError = msg

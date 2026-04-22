@@ -2,5 +2,8 @@
     "editor.codeActionsOnSave": {
         "source.fixAll": "explicit"
     },
-    "go.buildTags": "unit,e2e"
+    "go.buildTags": "unit,e2e",
+    "go.toolsEnvVars": {
+        "GOEXPERIMENT": "jsonv2"
+    }
 }

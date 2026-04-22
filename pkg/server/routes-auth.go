@@ -117,6 +117,12 @@ type v2AuthFinalizeSignupRequest struct {
 	AttestationSignatureMldsa87 string `json:"attestationSignatureMldsa87"`
 }
 
+type v2AuthFinalizeSignupResponse struct {
+	OK           bool               `json:"ok"`
+	Session      *v2AuthSessionInfo `json:"session,omitempty"`
+	SessionToken string             `json:"sessionToken,omitempty"`
+}
+
 type v2AuthAllowedIPsRequest struct {
 	AllowedIPs []string `json:"allowedIps"`
 }
@@ -294,7 +300,7 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	sess, err := s.v2RegisterFinish(c, req)
+	user, sess, err := s.v2RegisterFinish(c, req)
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "User registration failed",
 			slog.String("client_ip", c.ClientIP()),
@@ -304,11 +310,11 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 	}
 
 	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User registered",
-		slog.String("user_id", sess.UserID),
+		slog.String("user_id", user.ID),
 		slog.String("client_ip", c.ClientIP()),
 	)
 
-	bearerToken, err := s.setSessionCookie(c, sess)
+	bearerToken, err := setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -316,7 +322,7 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 
 	c.JSON(http.StatusOK, v2AuthRegisterFinishResponse{
 		Registered:   true,
-		Session:      sessionInfoFromSession(sess),
+		Session:      sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
 		SessionToken: bearerToken,
 	})
 }
@@ -370,7 +376,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	sess, credRec, err := s.v2LoginFinish(c, req)
+	user, sess, credRec, err := s.v2LoginFinish(c, req)
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Login failed",
 			slog.String("client_ip", c.ClientIP()),
@@ -379,20 +385,20 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	bearerToken, err := s.setSessionCookie(c, sess)
+	bearerToken, err := setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
 	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged in",
-		slog.String("user_id", sess.UserID),
+		slog.String("user_id", user.ID),
 		slog.String("client_ip", c.ClientIP()),
 	)
 
 	resp := v2AuthLoginFinishResponse{
 		Authenticated: true,
-		Session:       sessionInfoFromSession(sess),
+		Session:       sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
 		SessionToken:  bearerToken,
 	}
 
@@ -402,22 +408,13 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	// We refuse the login so the client cannot abuse this endpoint
 	if credRec != nil && credRec.WrappedPrimaryKey != "" {
 		resp.CredentialWrappedKeyEpoch = credRec.WrappedKeyEpoch
-		resp.WrappedKeyStale = credRec.WrappedKeyEpoch > 0 && credRec.WrappedKeyEpoch < sess.WrappedKeyEpoch
-		overLimit := s.wrappedKeyLimiter.OnLimit(c.Writer, c.Request, "v2-wrapped-key:"+sess.UserID)
+		resp.WrappedKeyStale = credRec.WrappedKeyEpoch > 0 && credRec.WrappedKeyEpoch < user.WrappedKeyEpoch
+		overLimit := s.wrappedKeyLimiter.OnLimit(c.Writer, c.Request, "v2-wrapped-key:"+user.ID)
 		if overLimit {
-			// A WebAuthn-authenticated client that exceeds the budget has the new session revoked and a 429 returned
-			revokeErr := s.authStore.RevokeSession(c.Request.Context(), sess.ID)
-			if revokeErr != nil {
-				logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
-					"Failed to revoke session after wrapped-key rate-limit refusal",
-					slog.String("user_id", sess.UserID),
-					slog.Any("error", revokeErr),
-				)
-			}
-
+			// A WebAuthn-authenticated client that exceeds the budget has a 429 returned
 			logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
 				"Refused wrapped-key delivery: per-user rate limit exceeded",
-				slog.String("user_id", sess.UserID),
+				slog.String("user_id", user.ID),
 				slog.String("client_ip", c.ClientIP()),
 			)
 
@@ -429,7 +426,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		resp.WrappedAnchorKey = credRec.WrappedAnchorKey
 		logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(),
 			"Delivered wrapped primary key to authenticated client",
-			slog.String("user_id", sess.UserID),
+			slog.String("user_id", user.ID),
 			slog.String("client_ip", c.ClientIP()),
 		)
 	}
@@ -490,10 +487,7 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
-	// Validate and verify the anchor material. We require both halves of the hybrid
-	// (ES384 + ML-DSA-87) to verify over both the pubkey bundle (so the CLI can pin
-	// the anchor at first contact) and the first credential's attestation (so the
-	// credential is provably bound to the user's identity root, not just to the server's DB).
+	// Validate and verify the anchor material. We require both halves of the hybrid (ES384 + ML-DSA-87) to verify over both the pubkey bundle (so the CLI can pin the anchor at first contact) and the first credential's attestation (so the credential is provably bound to the user's identity root, not just to the server's DB)
 	anchorEs384Pub, mldsa87PubBytes, err := parseAnchorPubkeys(req.AnchorEs384PublicKey, req.AnchorMldsa87PublicKey)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid anchor public key: %v", err))
@@ -579,7 +573,7 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
-	err = s.authStore.FinalizeSignup(c.Request.Context(), db.FinalizeSignupInput{
+	user, err := s.authStore.FinalizeSignup(c.Request.Context(), db.FinalizeSignupInput{
 		UserID:                       userID,
 		WrappedPrimaryKey:            req.WrappedPrimaryKey,
 		WrappedAnchorKey:             req.WrappedAnchorKey,
@@ -611,12 +605,28 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK,
-		struct {
-			OK bool `json:"ok"`
-		}{
-			OK: true,
-		})
+	if user == nil || user.Status != "active" || !user.Ready {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	sess, err := newAuthSessionToken(user, config.Get().SessionTimeout)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	token, err := setSessionCookie(c, sess)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, v2AuthFinalizeSignupResponse{
+		OK:           true,
+		Session:      sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
+		SessionToken: token,
+	})
 }
 
 func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
@@ -665,50 +675,40 @@ func (s *Server) RouteV2AuthRequestKeyRegenerate(c *gin.Context) {
 }
 
 func (s *Server) RouteV2AuthSession(c *gin.Context) {
-	sessID := c.GetString(contextKeySessionID)
-	if sessID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
-		return
-	}
-
-	sess, err := s.authStore.GetSession(c.Request.Context(), sessID)
+	userID := c.GetString(contextKeyUserID)
+	user, err := s.authStore.GetUserByID(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	if sess == nil {
+	if user == nil || user.Status != "active" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		return
+	}
+
+	var ttl int
+	ttlVal, ok := c.Get(contextKeySessionTTL)
+	if ok {
+		ttlInt, ok := ttlVal.(int)
+		if ok && ttlInt > 0 {
+			ttl = ttlInt
+		}
+	}
+
+	info := sessionInfoFromUser(user, ttl)
+	if info == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
 		return
 	}
 
 	c.JSON(http.StatusOK, v2AuthSessionResponse{
 		Authenticated:     true,
-		v2AuthSessionInfo: *sessionInfoFromSession(sess),
+		v2AuthSessionInfo: *info,
 	})
 }
 
 func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
-	id := c.GetString(contextKeySessionID)
-	if id != "" {
-		err := s.authStore.RevokeSession(c.Request.Context(), id)
-		if err != nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Failed to revoke session"))
-			return
-		}
-
-		err = s.authStore.DeleteRevokedSession(c.Request.Context(), id, time.Now().UTC(), false)
-		if err != nil {
-			AbortWithErrorJSON(c, err)
-			return
-		}
-
-		err = s.deleteQueue.Dequeue("session-delete:" + id)
-		if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
-			AbortWithErrorJSON(c, err)
-			return
-		}
-	}
 
 	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged out",
 		slog.String("user_id", userID),
@@ -830,18 +830,12 @@ func (s *Server) RouteV2AuthListCredentials(c *gin.Context) {
 		return
 	}
 
-	sessID := c.GetString(contextKeySessionID)
-	if sessID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
-		return
-	}
-
-	sess, err := s.authStore.GetSession(c.Request.Context(), sessID)
+	user, err := s.authStore.GetUserByID(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	if sess == nil {
+	if user == nil || user.Status != "active" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
 		return
 	}
@@ -858,7 +852,7 @@ func (s *Server) RouteV2AuthListCredentials(c *gin.Context) {
 			ID:              rec.ID,
 			DisplayName:     rec.DisplayName,
 			WrappedKeyEpoch: rec.WrappedKeyEpoch,
-			WrappedKeyStale: rec.WrappedKeyEpoch > 0 && rec.WrappedKeyEpoch < sess.WrappedKeyEpoch,
+			WrappedKeyStale: rec.WrappedKeyEpoch > 0 && rec.WrappedKeyEpoch < user.WrappedKeyEpoch,
 			CreatedAt:       rec.CreatedAt,
 			LastUsedAt:      rec.LastUsedAt,
 		}
@@ -1187,69 +1181,55 @@ func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
 	})
 }
 
-func (s *Server) setSessionCookie(c *gin.Context, sess *db.AuthSession) (sessionToken string, err error) {
-	if sess == nil {
-		return "", NewResponseError(http.StatusInternalServerError, "session is nil")
-	}
-
-	ttl := max(time.Until(sess.ExpiresAt), time.Second)
-
-	cookieName, cookiePath := sessionCookieFor(c)
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(cookieName, sess.ID, int(ttl.Seconds()), cookiePath, "", secureCookie(c), true)
-
-	return sess.ID, nil
-}
-
 func secureCookie(c *gin.Context) bool {
 	url := location.Get(c)
 	return url.Scheme == "https" || config.Get().ForceSecureCookies
 }
 
-func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (*db.AuthSession, error) {
+func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (*db.User, *authSessionToken, error) {
 	var payload v2RegisterChallengePayload
 	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "register", &payload)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !ok {
-		return nil, NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
+		return nil, nil, NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
 	}
 
 	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
 	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if payload.WebAuthnSession == nil {
-		return nil, NewResponseError(http.StatusConflict, "Registration challenge is missing WebAuthn session data")
+		return nil, nil, NewResponseError(http.StatusConflict, "Registration challenge is missing WebAuthn session data")
 	}
 
 	displayName := payload.DisplayName
 	if displayName == "" {
 		displayName = payload.UserID
 	}
-	user := &v2WebAuthnUser{
+	waUser := &v2WebAuthnUser{
 		id:          payload.WebAuthnSession.UserID,
 		userID:      payload.UserID,
 		displayName: displayName,
 	}
 	waReq, err := newJSONHTTPRequest(c, req.Credential)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	cred, err := s.webAuthn.FinishRegistration(user, *payload.WebAuthnSession, waReq)
+	cred, err := s.webAuthn.FinishRegistration(waUser, *payload.WebAuthnSession, waReq)
 	if err != nil {
-		return nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn registration verification failed: %v", err)
+		return nil, nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn registration verification failed: %v", err)
 	}
 
 	credJSON, err := json.Marshal(cred)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	sess, err := s.authStore.RegisterUser(c.Request.Context(), db.RegisterUserInput{
+	user, err := s.authStore.RegisterUser(c.Request.Context(), db.RegisterUserInput{
 		UserID:         payload.UserID,
 		DisplayName:    payload.DisplayName,
 		WebAuthnUserID: payload.WebAuthnUserID,
@@ -1259,52 +1239,47 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 		SessionTTL:     config.Get().SessionTimeout,
 	})
 	if errors.Is(err, db.ErrUserAlreadyExists) {
-		return nil, NewResponseError(http.StatusConflict, "User already exists")
+		return nil, nil, NewResponseError(http.StatusConflict, "User already exists")
 	} else if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	sess, err := newAuthSessionToken(user, config.Get().SessionTimeout)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Register the non-ready user for cleanup if it's not completed in 24 hours
 	err = s.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "user-delete:" + sess.UserID,
+		KeyName: "user-delete:" + user.ID,
 		Kind:    "nonready-user",
-		ID:      sess.UserID,
-		TTL:     sess.CreatedAt.Add(24*time.Hour + time.Minute),
+		ID:      user.ID,
+		TTL:     time.Now().UTC().Add(24*time.Hour + time.Minute),
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	err = s.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "session-delete:" + sess.ID,
-		Kind:    "session",
-		ID:      sess.ID,
-		TTL:     sess.ExpiresAt.Add(10 * time.Minute),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return sess, nil
-}
-
-func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*db.AuthSession, *db.AuthCredentialRecord, error) {
-	var payload v2LoginChallengePayload
-	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", &payload)
 	if err != nil {
 		return nil, nil, err
 	}
+
+	return user, sess, nil
+}
+
+func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*db.User, *authSessionToken, *db.AuthCredentialRecord, error) {
+	var payload v2LoginChallengePayload
+	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", &payload)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	if !ok {
-		return nil, nil, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
+		return nil, nil, nil, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
 	}
 
 	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
 	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if payload.WebAuthnSession == nil {
-		return nil, nil, NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
+		return nil, nil, nil, NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
 	}
 
 	var (
@@ -1336,37 +1311,30 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*d
 
 	waReq, err := newJSONHTTPRequest(c, req.Credential)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	cred, err := s.webAuthn.FinishDiscoverableLogin(handler, *payload.WebAuthnSession, waReq)
 	if err != nil {
-		return nil, nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
+		return nil, nil, nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
 	}
 	if discoveredUser == nil || discoveredDBUser == nil {
-		return nil, nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+		return nil, nil, nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 	}
 
 	err = s.validateAuthenticatorSignCount(c, discoveredUser, cred)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	sess, err := s.createLoginSession(c.Request.Context(), discoveredUser.userID, cred)
-	if err != nil {
-		if errors.Is(err, db.ErrInvalidLogin) {
-			return nil, nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
-		}
-		return nil, nil, err
+	user, sess, credRec, err := s.createLoginSession(c.Request.Context(), discoveredUser.userID, cred)
+	if errors.Is(err, db.ErrInvalidLogin) {
+		return nil, nil, nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+	} else if err != nil {
+		return nil, nil, nil, err
 	}
 
-	// Look up the credential record so the caller can access the per-credential wrapped primary key
-	credRec, err := s.authStore.GetCredentialByCredentialID(c.Request.Context(), base64.RawURLEncoding.EncodeToString(cred.ID), discoveredUser.userID)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return sess, credRec, nil
+	return user, sess, credRec, nil
 }
 
 func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2WebAuthnUser, cred *webauthnlib.Credential) error {
@@ -1416,28 +1384,29 @@ func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2We
 	return NewResponseError(http.StatusForbidden, "Authenticator credential not recognized")
 }
 
-func (s *Server) createLoginSession(ctx context.Context, userID string, cred *webauthnlib.Credential) (*db.AuthSession, error) {
-	sess, err := s.authStore.Login(ctx, db.LoginInput{
+func (s *Server) createLoginSession(ctx context.Context, userID string, cred *webauthnlib.Credential) (*db.User, *authSessionToken, *db.AuthCredentialRecord, error) {
+	credentialID := base64.RawURLEncoding.EncodeToString(cred.ID)
+	user, err := s.authStore.Login(ctx, db.LoginInput{
 		UserID:       userID,
-		CredentialID: base64.RawURLEncoding.EncodeToString(cred.ID),
+		CredentialID: credentialID,
 		SignCount:    int64(cred.Authenticator.SignCount),
 		SessionTTL:   config.Get().SessionTimeout,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
-	err = s.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "session-delete:" + sess.ID,
-		Kind:    "session",
-		ID:      sess.ID,
-		TTL:     sess.ExpiresAt.Add(10 * time.Minute),
-	})
+	credRec, err := s.authStore.GetCredentialForUser(ctx, userID, credentialID)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
-	return sess, nil
+	sess, err := newAuthSessionToken(user, config.Get().SessionTimeout)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return user, sess, credRec, nil
 }
 
 func newJSONHTTPRequest(c *gin.Context, raw json.RawMessage) (*http.Request, error) {
@@ -1545,24 +1514,6 @@ func (s *Server) v2LoadWebAuthnUser(ctx context.Context, userID string) (*v2WebA
 		displayName: displayName,
 		credentials: creds,
 	}, nil
-}
-
-func sessionInfoFromSession(sess *db.AuthSession) *v2AuthSessionInfo {
-	if sess == nil {
-		return nil
-	}
-	allowedIPs := sess.AllowedIPs
-	if allowedIPs == nil {
-		allowedIPs = []string{}
-	}
-	return &v2AuthSessionInfo{
-		UserID:          sess.UserID,
-		DisplayName:     sess.DisplayName,
-		RequestKey:      sess.RequestKey,
-		WrappedKeyEpoch: sess.WrappedKeyEpoch,
-		AllowedIPs:      allowedIPs,
-		TTL:             int(time.Until(sess.ExpiresAt).Seconds()),
-	}
 }
 
 // parseAnchorPubkeys decodes the wire-format hybrid anchor public keys: a JWK for

@@ -49,7 +49,6 @@ async function parseErrorMessage(response: globalThis.Response): Promise<string>
  */
 export type Response<T> = {
     data: T
-    ttl?: number
 }
 
 /**
@@ -120,23 +119,12 @@ export async function Request<T>(url: string, options: RequestOptions = {}): Pro
             throw Error('Response was not JSON')
         }
 
-        // Get the TTL
-        let ttl: number | undefined
-        const ttlHeader = response.headers.get('x-session-ttl')
-        if (ttlHeader) {
-            ttl = Number.parseInt(ttlHeader, 10)
-            if (ttl < 1) {
-                ttl = 0
-            }
-        }
-
         // Get the JSON data from the response
         const body = (await response.json()) as T
 
         // Response
         return {
             data: body,
-            ttl,
         }
     } catch (err) {
         if (err instanceof TimeoutError) {

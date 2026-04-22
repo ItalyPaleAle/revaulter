@@ -23,6 +23,7 @@ jobs:
     env:
       CGO_ENABLED: "0"
       GOLANGCI_LINT_VERSION: "v2.11.4"
+      GOEXPERIMENT: jsonv2
 
     steps:
       - name: Check out code

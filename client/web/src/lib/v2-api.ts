@@ -82,7 +82,10 @@ export async function v2FinalizeSignup(args: {
     if (args.wrappedPrimaryKey) {
         body.wrappedPrimaryKey = args.wrappedPrimaryKey
     }
-    const res = await Request<{ ok: boolean }>('/v2/auth/finalize-signup', { postData: body })
+    const res = await Request<{ ok: boolean; session?: V2AuthSessionInfo; sessionToken?: string }>(
+        '/v2/auth/finalize-signup',
+        { postData: body }
+    )
     return res.data
 }
 

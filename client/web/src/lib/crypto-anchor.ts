@@ -154,7 +154,7 @@ async function derivePublicJwkFromEcdsaPrivate(privateKey: CryptoKey): Promise<E
 
 // Wrapped anchor envelope schema: the decoded body is newline `key=value` in alphabetical order over the three required fields
 // `v=1` is the only supported version; `nonce` is base64url of exactly 12 bytes; `ciphertext` is non-empty base64url
-// Must be kept in sync with server route-level validator 
+// Must be kept in sync with server route-level validator
 export type WrappedAnchorEnvelope = {
     ciphertext: string
     nonce: string
@@ -184,11 +184,7 @@ export async function wrapAnchorKey(params: {
         wrappingKey,
         asBuf(params.anchorSecret)
     )
-    const body = [
-        `ciphertext=${bytesToBase64Url(ciphertext)}`,
-        `nonce=${bytesToBase64Url(nonce)}`,
-        `v=1`,
-    ].join('\n')
+    const body = [`ciphertext=${bytesToBase64Url(ciphertext)}`, `nonce=${bytesToBase64Url(nonce)}`, `v=1`].join('\n')
     return bytesToBase64Url(new TextEncoder().encode(body))
 }
 

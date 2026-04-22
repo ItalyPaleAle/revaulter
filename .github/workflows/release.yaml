@@ -23,6 +23,8 @@ jobs:
   build:
     name: Build and release
     runs-on: ubuntu-latest
+    env:
+      GOEXPERIMENT: jsonv2
 
     steps:
 

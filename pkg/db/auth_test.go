@@ -40,7 +40,7 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	require.Equal(t, "user-1", sess.UserID)
+	require.Equal(t, "user-1", sess.ID)
 	require.Equal(t, "Alice", sess.DisplayName)
 	require.Len(t, sess.RequestKey, 20)
 	require.Empty(t, sess.AllowedIPs)
@@ -64,24 +64,12 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, loginSess)
-	require.NotEqual(t, sess.ID, loginSess.ID)
 	require.Equal(t, sess.RequestKey, loginSess.RequestKey)
 
 	creds, err := store.ListCredentials(ctx, "user-1")
 	require.NoError(t, err)
 	require.Len(t, creds, 1)
 	require.EqualValues(t, 2, creds[0].SignCount)
-
-	got, err := store.GetSession(ctx, loginSess.ID)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Equal(t, "user-1", got.UserID)
-	require.Equal(t, "Alice", got.DisplayName)
-
-	require.NoError(t, store.RevokeSession(ctx, loginSess.ID))
-	got, err = store.GetSession(ctx, loginSess.ID)
-	require.NoError(t, err)
-	require.Nil(t, got)
 }
 
 func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
@@ -104,18 +92,21 @@ func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+	_, err = store.FinalizeSignup(ctx, FinalizeSignupInput{
 		UserID:                "user-1",
 		WrappedPrimaryKey:     "canary-1",
 		RequestEncEcdhPubkey:  `{"kty":"EC","crv":"P-256","x":"test","y":"test"}`,
 		RequestEncMlkemPubkey: "dGVzdC1tbGtlbS1wdWJrZXk",
-	}))
-	require.ErrorIs(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+	})
+	require.NoError(t, err)
+
+	_, err = store.FinalizeSignup(ctx, FinalizeSignupInput{
 		UserID:                "user-1",
 		WrappedPrimaryKey:     "canary-2",
 		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 		RequestEncMlkemPubkey: "dGVzdA",
-	}), ErrAlreadyFinalized)
+	})
+	require.ErrorIs(t, err, ErrAlreadyFinalized)
 
 	allowed, err := store.UpdateAllowedIPs(ctx, "user-1", []string{"127.0.0.1", " 10.0.0.0/8 ", "::1", "127.0.0.1"})
 	require.NoError(t, err)
@@ -152,11 +143,12 @@ func TestAuthStoreRegenerateRequestKey(t *testing.T) {
 
 	// RegenerateRequestKey requires the account to be active and ready;
 	// finalize the signup first.
-	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+	_, err = store.FinalizeSignup(ctx, FinalizeSignupInput{
 		UserID:                "user-1",
 		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 		RequestEncMlkemPubkey: "mlkem-pub",
-	}))
+	})
+	require.NoError(t, err)
 
 	newKey, err := store.RegenerateRequestKey(ctx, "user-1")
 	require.NoError(t, err)
@@ -339,128 +331,6 @@ func TestAuthStoreHasPendingChallenge(t *testing.T) {
 	require.False(t, pending)
 }
 
-func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
-	ctx := t.Context()
-	conn := newTestDatabase(t)
-
-	require.NoError(t, RunMigrations(ctx, conn, nil))
-
-	store, err := NewAuthStore(conn)
-	require.NoError(t, err)
-
-	// #nosec G101 -- Hardcoded credentials are test ones
-	oldRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
-		UserID:         "user-revoked-old",
-		DisplayName:    "Old Revoked",
-		WebAuthnUserID: "webauthn-user-revoked-old",
-		CredentialID:   "cred-revoked-old",
-		PublicKey:      `{"kty":"EC"}`,
-		SignCount:      1,
-		SessionTTL:     time.Minute,
-	})
-	require.NoError(t, err)
-
-	// #nosec G101 -- Hardcoded credentials are test ones
-	tooFreshRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
-		UserID:         "user-revoked-fresh",
-		DisplayName:    "Fresh Revoked",
-		WebAuthnUserID: "webauthn-user-revoked-fresh",
-		CredentialID:   "cred-revoked-fresh",
-		PublicKey:      `{"kty":"EC"}`,
-		SignCount:      1,
-		SessionTTL:     time.Hour,
-	})
-	require.NoError(t, err)
-
-	// #nosec G101 -- Hardcoded credentials are test ones
-	notRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
-		UserID:         "user-not-revoked",
-		DisplayName:    "Not Revoked",
-		WebAuthnUserID: "webauthn-user-not-revoked",
-		CredentialID:   "cred-not-revoked",
-		PublicKey:      `{"kty":"EC"}`,
-		SignCount:      1,
-		SessionTTL:     time.Hour,
-	})
-	require.NoError(t, err)
-
-	_, err = conn.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $2, expires_at = $3 WHERE id = $1`, oldRevokedSession.ID, time.Now().Add(-30*time.Minute).Unix(), time.Now().Add(time.Hour).Unix())
-	require.NoError(t, err)
-
-	_, err = conn.Exec(ctx, `UPDATE v2_user_sessions SET revoked_at = $2, expires_at = $3 WHERE id = $1`, tooFreshRevokedSession.ID, time.Now().Add(-5*time.Minute).Unix(), time.Now().Add(time.Hour).Unix())
-	require.NoError(t, err)
-
-	err = store.DeleteRevokedSession(ctx, oldRevokedSession.ID, time.Now().UTC(), true)
-	require.NoError(t, err)
-	err = store.DeleteRevokedSession(ctx, tooFreshRevokedSession.ID, time.Now().UTC(), true)
-	require.NoError(t, err)
-	err = store.DeleteRevokedSession(ctx, notRevokedSession.ID, time.Now().UTC(), true)
-	require.NoError(t, err)
-
-	var count int
-	err = conn.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, oldRevokedSession.ID).Scan(&count)
-	require.NoError(t, err)
-	require.Equal(t, 0, count)
-
-	err = conn.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, tooFreshRevokedSession.ID).Scan(&count)
-	require.NoError(t, err)
-	require.Equal(t, 1, count)
-
-	err = conn.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_sessions WHERE id = $1`, notRevokedSession.ID).Scan(&count)
-	require.NoError(t, err)
-	require.Equal(t, 1, count)
-}
-
-func TestAuthStoreDeleteRevokedSessionImmediate(t *testing.T) {
-	ctx := t.Context()
-	conn := newTestDatabase(t)
-
-	require.NoError(t, RunMigrations(ctx, conn, nil))
-
-	store, err := NewAuthStore(conn)
-	require.NoError(t, err)
-
-	// #nosec G101 -- Hardcoded credentials are test ones
-	revokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
-		UserID:         "user-revoked-now",
-		DisplayName:    "Revoked Now",
-		WebAuthnUserID: "webauthn-user-revoked-now",
-		CredentialID:   "cred-revoked-now",
-		PublicKey:      `{"kty":"EC"}`,
-		SignCount:      1,
-		SessionTTL:     time.Hour,
-	})
-	require.NoError(t, err)
-
-	// #nosec G101 -- Hardcoded credentials are test ones
-	notRevokedSession, err := store.RegisterUser(ctx, RegisterUserInput{
-		UserID:         "user-still-active",
-		DisplayName:    "Still Active",
-		WebAuthnUserID: "webauthn-user-still-active",
-		CredentialID:   "cred-still-active",
-		PublicKey:      `{"kty":"EC"}`,
-		SignCount:      1,
-		SessionTTL:     time.Hour,
-	})
-	require.NoError(t, err)
-
-	err = store.RevokeSession(ctx, revokedSession.ID)
-	require.NoError(t, err)
-
-	err = store.DeleteRevokedSession(ctx, revokedSession.ID, time.Now().UTC(), false)
-	require.NoError(t, err)
-	err = store.DeleteRevokedSession(ctx, notRevokedSession.ID, time.Now().UTC(), false)
-	require.NoError(t, err)
-
-	got, err := store.GetSession(ctx, revokedSession.ID)
-	require.NoError(t, err)
-	require.Nil(t, got)
-
-	got, err = store.GetSession(ctx, notRevokedSession.ID)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-}
-
 func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 	ctx := t.Context()
 	conn := newTestDatabase(t)
@@ -506,38 +376,40 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyOldSession.UserID, time.Now().Add(-25*time.Hour).Unix())
+	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyOldSession.ID, time.Now().Add(-25*time.Hour).Unix())
 	require.NoError(t, err)
 
-	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyFreshSession.UserID, time.Now().Add(-23*time.Hour).Unix())
+	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyFreshSession.ID, time.Now().Add(-23*time.Hour).Unix())
 	require.NoError(t, err)
-	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
-		UserID:                readySession.UserID,
+
+	_, err = store.FinalizeSignup(ctx, FinalizeSignupInput{
+		UserID:                readySession.ID,
 		WrappedPrimaryKey:     "canary-ready",
 		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 		RequestEncMlkemPubkey: "mlkem-ready",
-	}))
-
-	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, readySession.UserID, time.Now().Add(-25*time.Hour).Unix())
+	})
 	require.NoError(t, err)
 
-	err = store.DeleteNonreadyUser(ctx, nonreadyOldSession.UserID, time.Now().UTC())
-	require.NoError(t, err)
-	err = store.DeleteNonreadyUser(ctx, nonreadyFreshSession.UserID, time.Now().UTC())
-	require.NoError(t, err)
-	err = store.DeleteNonreadyUser(ctx, readySession.UserID, time.Now().UTC())
+	_, err = conn.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, readySession.ID, time.Now().Add(-25*time.Hour).Unix())
 	require.NoError(t, err)
 
-	user, err := store.GetUserByID(ctx, nonreadyOldSession.UserID)
+	err = store.DeleteNonreadyUser(ctx, nonreadyOldSession.ID, time.Now().UTC())
+	require.NoError(t, err)
+	err = store.DeleteNonreadyUser(ctx, nonreadyFreshSession.ID, time.Now().UTC())
+	require.NoError(t, err)
+	err = store.DeleteNonreadyUser(ctx, readySession.ID, time.Now().UTC())
+	require.NoError(t, err)
+
+	user, err := store.GetUserByID(ctx, nonreadyOldSession.ID)
 	require.NoError(t, err)
 	require.Nil(t, user)
 
-	user, err = store.GetUserByID(ctx, nonreadyFreshSession.UserID)
+	user, err = store.GetUserByID(ctx, nonreadyFreshSession.ID)
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.False(t, user.Ready)
 
-	user, err = store.GetUserByID(ctx, readySession.UserID)
+	user, err = store.GetUserByID(ctx, readySession.ID)
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.True(t, user.Ready)
@@ -562,11 +434,13 @@ func TestAuthStoreUpdateDisplayName(t *testing.T) {
 		SessionTTL:     time.Minute,
 	})
 	require.NoError(t, err)
-	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+
+	_, err = store.FinalizeSignup(ctx, FinalizeSignupInput{
 		UserID:                "user-1",
 		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 		RequestEncMlkemPubkey: "mlkem-pub",
-	}))
+	})
+	require.NoError(t, err)
 
 	// Successful update
 	err = store.UpdateDisplayName(ctx, "user-1", "Bob")
@@ -610,12 +484,14 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 		SessionTTL:     time.Minute,
 	})
 	require.NoError(t, err)
-	require.NoError(t, store.FinalizeSignup(ctx, FinalizeSignupInput{
+
+	_, err = store.FinalizeSignup(ctx, FinalizeSignupInput{
 		UserID:                "user-1",
 		WrappedPrimaryKey:     "initial-key",
 		RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 		RequestEncMlkemPubkey: "mlkem-pub",
-	}))
+	})
+	require.NoError(t, err)
 
 	// The initial wrapped primary key was set on the single credential via FinalizeSignup
 	rec, err := store.GetCredentialByCredentialID(ctx, "cred-1", "user-1")
@@ -672,7 +548,7 @@ func TestAuthStoreCredentialWrappedKeyEpochRotation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = store.FinalizeSignup(ctx, FinalizeSignupInput{
+	_, err = store.FinalizeSignup(ctx, FinalizeSignupInput{
 		UserID:                "user-1",
 		WrappedPrimaryKey:     "wrapped-1-v1",
 		RequestEncEcdhPubkey:  `{"kty":"EC"}`,

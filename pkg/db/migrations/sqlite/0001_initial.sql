@@ -52,19 +52,6 @@ CREATE TABLE IF NOT EXISTS v2_auth_challenge_payloads (
 	session_data TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS v2_user_sessions (
-	id TEXT PRIMARY KEY,
-	user_id TEXT NOT NULL REFERENCES v2_users(id) ON DELETE CASCADE,
-	expires_at INTEGER NOT NULL,
-	created_at INTEGER NOT NULL,
-	last_seen_at INTEGER NOT NULL,
-	revoked_at INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_v2_auth_challenges_lookup ON v2_auth_challenges(kind, user_id, expires_at);
-
-CREATE INDEX IF NOT EXISTS idx_v2_user_sessions_lookup ON v2_user_sessions(user_id, expires_at);
-
 CREATE TABLE IF NOT EXISTS v2_requests (
 	state TEXT PRIMARY KEY,
 	status TEXT NOT NULL,

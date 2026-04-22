@@ -20,7 +20,6 @@ func (db *DB) ResetAllForTests(ctx context.Context) error {
 	tables := []string{
 		"v2_auth_challenge_payloads",
 		"v2_auth_challenges",
-		"v2_user_sessions",
 		"v2_user_credentials",
 		"v2_requests",
 		"v2_users",

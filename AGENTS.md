@@ -74,6 +74,8 @@ Prefer the shared button component at `client/src/components/Button.svelte` inst
 
 Always pass `-tags unit` when running Go tests — several test helpers are guarded by that build tag, so tests will fail to compile without it.
 
+When compiling or testing code that imports use Go 1.26+ and set `GOEXPERIMENT=jsonv2`.
+
 ```sh
 go test -tags unit ./...
 ```

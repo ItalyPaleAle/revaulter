@@ -225,7 +225,7 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 				wrappedKey = "e2e-wrapped-key-" + req.UserID
 			}
 
-			keyErr = s.authStore.FinalizeSignup(
+			_, keyErr = s.authStore.FinalizeSignup(
 				c.Request.Context(),
 				db.FinalizeSignupInput{
 					UserID:                req.UserID,
@@ -275,7 +275,7 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 		return
 	}
 
-	sess, err := s.authStore.Login(c.Request.Context(), db.LoginInput{
+	user, err := s.authStore.Login(c.Request.Context(), db.LoginInput{
 		UserID:       req.UserID,
 		CredentialID: "e2e-cred-" + req.UserID,
 		SignCount:    2,
@@ -286,8 +286,19 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 		return
 	}
 
+	sess, err := newAuthSessionToken(user, config.Get().SessionTimeout)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	token, err := signAuthSessionToken(sess)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
 	cookieName := sessionCookieNameInsecure
-	cookiePath := "/v2"
+	cookiePath := "/"
 	if config.Get().ForceSecureCookies {
 		cookieName = sessionCookieNameSecure
 		cookiePath = "/"
@@ -295,10 +306,10 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 
 	c.JSON(http.StatusOK, e2eSeedSessionResponse{
 		OK:          true,
-		SessionID:   sess.ID,
+		SessionID:   token,
 		CookieName:  cookieName,
 		CookiePath:  cookiePath,
-		CookieValue: sess.ID,
+		CookieValue: token,
 	})
 }
 

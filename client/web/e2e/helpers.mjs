@@ -9,7 +9,12 @@ export { createVirtualPasskeyManager as createPasskeyManager } from './passkeys.
 
 function attachAuthDebugLogging(page) {
     const failures = []
-    const trackedPaths = new Set(['/v2/auth/register/finish', '/v2/auth/login/finish', '/v2/auth/finalize-signup'])
+    const trackedPaths = new Set([
+        '/v2/auth/register/finish',
+        '/v2/auth/login/finish',
+        '/v2/auth/finalize-signup',
+        '/v2/api/list',
+    ])
 
     const responseHandler = async (response) => {
         const url = new URL(response.url())

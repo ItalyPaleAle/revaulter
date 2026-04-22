@@ -8,7 +8,7 @@
     "dev": "vite",
     "preview": "vite preview",
     "e2e": "pnpm run e2e:build-server && playwright test",
-    "e2e:build-server": "vite build --mode e2e && mkdir -p ../../.bin && go build -tags e2e -o ../../.bin/revaulter-e2e ../../cmd/revaulter",
+    "e2e:build-server": "vite build --mode e2e && mkdir -p ../../.bin && GOEXPERIMENT=jsonv2 go build -tags e2e -o ../../.bin/revaulter-e2e ../../cmd/revaulter",
     "e2e:headed": "pnpm run e2e:build-server && playwright test --headed",
     "e2e:install": "playwright install --with-deps chromium",
     "format": "biome format --write .",

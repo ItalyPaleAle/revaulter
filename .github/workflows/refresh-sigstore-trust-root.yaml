@@ -21,6 +21,7 @@ jobs:
       pull-requests: write
 
     env:
+      GOEXPERIMENT: jsonv2
       TRUST_ROOT_PATH: pkg/integrity/sigstore_trust_root.json
       TRUST_ROOT_URL: https://raw.githubusercontent.com/sigstore/sigstore-go/main/examples/trusted-root-public-good.json
       # Canonical Rekor pubkey, published directly by Sigstore (not via the sigstore-go repo)

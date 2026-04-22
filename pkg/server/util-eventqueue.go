@@ -90,11 +90,6 @@ func (s *Server) executeDeleteEvent(ev deleteEvent) {
 		if err != nil {
 			log.WarnContext(ctx, "auth challenge cleanup failed", slog.Any("error", err), slog.String("challenge_id", ev.ID))
 		}
-	case "session":
-		err := s.authStore.DeleteRevokedSession(ctx, ev.ID, ev.TTL, true)
-		if err != nil {
-			log.WarnContext(ctx, "auth session cleanup failed", slog.Any("error", err), slog.String("session_id", ev.ID))
-		}
 	case "nonready-user":
 		err := s.authStore.DeleteNonreadyUser(ctx, ev.ID, ev.TTL)
 		if err != nil {

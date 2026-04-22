@@ -172,7 +172,9 @@ describe('parseWrappedAnchorEnvelope', () => {
     })
 
     it('rejects wrong line count', () => {
-        expect(() => parseWrappedAnchorEnvelope(wrapBody(`ciphertext=${goodCiphertext}\nv=1`))).toThrow(/expected 3 lines/)
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(`ciphertext=${goodCiphertext}\nv=1`))).toThrow(
+            /expected 3 lines/
+        )
         expect(() => parseWrappedAnchorEnvelope(wrapBody(`${goodBody}\nextra=x`))).toThrow(/expected 3 lines/)
     })
 
