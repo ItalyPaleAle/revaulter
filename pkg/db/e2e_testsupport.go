@@ -37,7 +37,7 @@ func (db *DB) ResetAllForTests(ctx context.Context) error {
 
 // ForceExpireRequestForTests sets the request expiry in the past for deterministic test setup.
 func (s *RequestStore) ForceExpireRequestForTests(ctx context.Context, state string, expiresAt time.Time) error {
-	if s == nil || s.db == nil || s.db.DatabaseConn == nil {
+	if s == nil || s.db == nil {
 		return fmt.Errorf("request store is not initialized")
 	}
 

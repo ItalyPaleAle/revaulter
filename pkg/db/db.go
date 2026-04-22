@@ -31,6 +31,8 @@ type DB struct {
 	pgx  *pgxpool.Pool
 }
 
+// Close the database connection
+// Implements io.Closer
 func (db *DB) Close(_ context.Context) error {
 	// Close the connection
 	if db.sql != nil {
@@ -49,6 +51,39 @@ func (db *DB) Close(_ context.Context) error {
 	db.DatabaseConn = nil
 
 	return nil
+}
+
+// AuthStore returns an instance of AuthStore
+func (db *DB) AuthStore() *AuthStore {
+	as, err := NewAuthStore(db)
+	if err != nil {
+		// Indicates a development-time error
+		panic(err)
+	}
+
+	return as
+}
+
+// RequestStore returns an instance of RequestStore
+func (db *DB) RequestStore() *RequestStore {
+	as, err := NewRequestStore(db)
+	if err != nil {
+		// Indicates a development-time error
+		panic(err)
+	}
+
+	return as
+}
+
+// SigningKeyStore returns an instance of SigningKeyStore
+func (db *DB) SigningKeyStore() *SigningKeyStore {
+	as, err := NewSigningKeyStore(db)
+	if err != nil {
+		// Indicates a development-time error
+		panic(err)
+	}
+
+	return as
 }
 
 // Open the connection

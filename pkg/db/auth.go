@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/italypaleale/go-sql-utils/adapter"
 	"github.com/italypaleale/revaulter/pkg/utils"
-	"github.com/jackc/pgx/v5"
 )
 
 type AuthStore struct {
-	db *DB
+	db adapter.DatabaseConn
 }
 
 type User struct {
@@ -117,11 +117,14 @@ var (
 	ErrDisplayNameTooLong = errors.New("display name is too long")
 )
 
-func NewAuthStore(db *DB, _ any) (*AuthStore, error) {
+func NewAuthStore(db adapter.DatabaseConn) (*AuthStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
-	return &AuthStore{db: db}, nil
+
+	return &AuthStore{
+		db: db,
+	}, nil
 }
 
 func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
@@ -250,7 +253,7 @@ func (s *AuthStore) insertChallenge(ctx context.Context, rec *AuthChallenge, pay
 	}
 	defer func() {
 		rollbackErr := tx.Rollback(ctx)
-		if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+		if rollbackErr != nil && !s.db.IsTxDoneError(rollbackErr) {
 			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
 		}
 	}()
@@ -326,7 +329,7 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Au
 	}
 	defer func() {
 		rollbackErr := tx.Rollback(ctx)
-		if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+		if rollbackErr != nil && !s.db.IsTxDoneError(rollbackErr) {
 			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
 		}
 	}()
@@ -374,7 +377,7 @@ func (s *AuthStore) Login(ctx context.Context, in LoginInput) (*AuthSession, err
 	}
 	defer func() {
 		rollbackErr := tx.Rollback(ctx)
-		if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+		if rollbackErr != nil && !s.db.IsTxDoneError(rollbackErr) {
 			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
 		}
 	}()
@@ -484,7 +487,7 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 	}
 	defer func() {
 		rollbackErr := tx.Rollback(ctx)
-		if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+		if rollbackErr != nil && !s.db.IsTxDoneError(rollbackErr) {
 			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
 		}
 	}()
@@ -746,7 +749,7 @@ func (s *AuthStore) DeleteCredential(ctx context.Context, id, userID string) err
 	}
 	defer func() {
 		rollbackErr := tx.Rollback(ctx)
-		if rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+		if rollbackErr != nil && !s.db.IsTxDoneError(rollbackErr) {
 			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
 		}
 	}()

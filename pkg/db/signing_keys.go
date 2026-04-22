@@ -3,8 +3,9 @@ package db
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
+
+	"github.com/italypaleale/go-sql-utils/adapter"
 )
 
 // PublishedSigningKey represents a public signing key known to the server
@@ -48,22 +49,16 @@ var (
 )
 
 type SigningKeyStore struct {
-	db  *DB
-	log *slog.Logger
+	db adapter.DatabaseConn
 }
 
-func NewSigningKeyStore(db *DB, logger *slog.Logger) (*SigningKeyStore, error) {
+func NewSigningKeyStore(db adapter.DatabaseConn) (*SigningKeyStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
 
-	if logger == nil {
-		logger = slog.Default()
-	}
-
 	return &SigningKeyStore{
-		db:  db,
-		log: logger,
+		db: db,
 	}, nil
 }
 

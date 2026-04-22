@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"time"
+
+	"github.com/italypaleale/go-sql-utils/adapter"
 
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
@@ -70,22 +71,16 @@ type CreateRequestInput struct {
 }
 
 type RequestStore struct {
-	db  *DB
-	log *slog.Logger
+	db adapter.DatabaseConn
 }
 
-func NewRequestStore(db *DB, logger *slog.Logger) (*RequestStore, error) {
+func NewRequestStore(db adapter.DatabaseConn) (*RequestStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
 
-	if logger == nil {
-		logger = slog.Default()
-	}
-
 	s := &RequestStore{
-		db:  db,
-		log: logger,
+		db: db,
 	}
 
 	return s, nil

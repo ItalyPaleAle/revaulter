@@ -15,7 +15,7 @@ func TestRequestStoreLifecycle(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-1",
@@ -28,7 +28,7 @@ func TestRequestStoreLifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	store, err := NewRequestStore(conn, nil)
+	store, err := NewRequestStore(conn)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -88,7 +88,7 @@ func TestRequestStoreCancel(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-2",
@@ -101,7 +101,7 @@ func TestRequestStoreCancel(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	store, err := NewRequestStore(conn, nil)
+	store, err := NewRequestStore(conn)
 	require.NoError(t, err)
 
 	err = store.CreateRequest(ctx, CreateRequestInput{
@@ -133,7 +133,7 @@ func TestRequestStoreGetAndDeleteTerminalRequest(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-get-delete",
@@ -146,7 +146,7 @@ func TestRequestStoreGetAndDeleteTerminalRequest(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	store, err := NewRequestStore(conn, nil)
+	store, err := NewRequestStore(conn)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -191,7 +191,7 @@ func TestRequestStoreGetAndDeleteTerminalRequestExpiresPending(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	// #nosec G101 - Hardcoded credentials are test ones
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
@@ -205,7 +205,7 @@ func TestRequestStoreGetAndDeleteTerminalRequestExpiresPending(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	store, err := NewRequestStore(conn, nil)
+	store, err := NewRequestStore(conn)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -238,7 +238,7 @@ func TestRequestStoreMarkExpired(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-expire",
@@ -251,7 +251,7 @@ func TestRequestStoreMarkExpired(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	store, err := NewRequestStore(conn, nil)
+	store, err := NewRequestStore(conn)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -334,7 +334,7 @@ func TestRequestStoreDeleteTerminalRequestWithCutoff(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-delete",
@@ -347,7 +347,7 @@ func TestRequestStoreDeleteTerminalRequestWithCutoff(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	store, err := NewRequestStore(conn, nil)
+	store, err := NewRequestStore(conn)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -426,7 +426,7 @@ func TestRequestStoreDeleteTerminalRequest(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-delete-now",
@@ -439,7 +439,7 @@ func TestRequestStoreDeleteTerminalRequest(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	store, err := NewRequestStore(conn, nil)
+	store, err := NewRequestStore(conn)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)

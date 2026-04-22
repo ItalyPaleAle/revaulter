@@ -104,21 +104,21 @@ func main() {
 			return
 		}
 
-		authStore, err = db.NewAuthStore(dbConn, log)
+		authStore, err = db.NewAuthStore(dbConn)
 		if err != nil {
 			_ = dbConn.Close(ctx)
 			slogkit.FatalError(log, "Failed to initialize auth store", err)
 			return
 		}
 
-		requestStore, err = db.NewRequestStore(dbConn, log)
+		requestStore, err = db.NewRequestStore(dbConn)
 		if err != nil {
 			_ = dbConn.Close(ctx)
 			slogkit.FatalError(log, "Failed to initialize request store", err)
 			return
 		}
 
-		signingKeyStore, err = db.NewSigningKeyStore(dbConn, log)
+		signingKeyStore, err = db.NewSigningKeyStore(dbConn)
 		if err != nil {
 			_ = dbConn.Close(ctx)
 			slogkit.FatalError(log, "Failed to initialize signing key store", err)

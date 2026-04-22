@@ -14,7 +14,7 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	n, err := store.CountUsers(ctx)
@@ -90,7 +90,7 @@ func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	_, err = store.RegisterUser(ctx, RegisterUserInput{
@@ -136,7 +136,7 @@ func TestAuthStoreRegenerateRequestKey(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	sess, err := store.RegisterUser(ctx, RegisterUserInput{
@@ -252,7 +252,7 @@ func TestAuthStoreDeleteExpiredAuthChallenge(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -293,7 +293,7 @@ func TestAuthStoreHasPendingChallenge(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -345,7 +345,7 @@ func TestAuthStoreDeleteRevokedSessionExpiredOnly(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	// #nosec G101 -- Hardcoded credentials are test ones
@@ -417,7 +417,7 @@ func TestAuthStoreDeleteRevokedSessionImmediate(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	// #nosec G101 -- Hardcoded credentials are test ones
@@ -467,7 +467,7 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	// #nosec G101 -- Hardcoded credentials are test ones
@@ -549,7 +549,7 @@ func TestAuthStoreUpdateDisplayName(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	_, err = store.RegisterUser(ctx, RegisterUserInput{
@@ -597,7 +597,7 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	_, err = store.RegisterUser(ctx, RegisterUserInput{
@@ -658,7 +658,7 @@ func TestAuthStoreCredentialWrappedKeyEpochRotation(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	_, err = store.RegisterUser(ctx, RegisterUserInput{
@@ -728,7 +728,7 @@ func TestAuthStoreCredentialCRUD(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn, nil)
+	store, err := NewAuthStore(conn)
 	require.NoError(t, err)
 
 	_, err = store.RegisterUser(ctx, RegisterUserInput{

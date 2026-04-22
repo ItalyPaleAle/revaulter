@@ -26,11 +26,11 @@ func TestSigningKeyStoreInsertIdempotentNoOp(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "alice")
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 
 	in := InsertSigningKeyInput{
@@ -77,11 +77,11 @@ func TestSigningKeyStoreInsertRejectsConflictingMaterial(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "bob")
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 
 	// Insert-only semantics: a second call with different material under the same (user, algorithm, label) must not overwrite the first row
@@ -114,12 +114,12 @@ func TestSigningKeyStoreListForUser(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "carol")
 	newSigningKeyTestUser(t, authStore, "dave")
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 
 	_, err = store.Create(ctx, InsertSigningKeyInput{
@@ -160,12 +160,12 @@ func TestSigningKeyStoreSetPublished(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "erin")
 	newSigningKeyTestUser(t, authStore, "mallory")
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 	_, err = store.Create(ctx, InsertSigningKeyInput{
 		ID: "id-e", UserID: "erin", Algorithm: "ES256", KeyLabel: "k",
@@ -219,12 +219,12 @@ func TestSigningKeyStoreDelete(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "owen")
 	newSigningKeyTestUser(t, authStore, "peggy")
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 	_, err = store.Create(ctx, InsertSigningKeyInput{
 		ID: "id-o", UserID: "owen", Algorithm: "ES256", KeyLabel: "k",
@@ -269,7 +269,7 @@ func TestSigningKeyStoreGetByIDNotFoundReturnsNil(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 
 	rec, err := store.GetByID(ctx, "unknown-id")
@@ -282,11 +282,11 @@ func TestSigningKeyStoreCreateUnpublishedInsertsHidden(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "frank")
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 
 	inserted, err := store.Create(ctx, InsertSigningKeyInput{
@@ -322,11 +322,11 @@ func TestSigningKeyStoreCreateUnpublishedNoOpOnExisting(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "gina")
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 
 	first := InsertSigningKeyInput{
@@ -382,11 +382,11 @@ func TestSigningKeyStoreCreateUnpublishedNoOpWhenPublished(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "henry")
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 
 	// Publish a row first, then attempt to auto-store the same (user, algorithm, label) as unpublished
@@ -425,12 +425,12 @@ func TestSigningKeyStoreCreateUnpublishedScopedPerUserAlgorithmLabel(t *testing.
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "ivan")
 	newSigningKeyTestUser(t, authStore, "judy")
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 
 	// Same (algorithm, label) for two different users must both insert — the unique index is (user_id, algorithm, key_label)
@@ -462,11 +462,11 @@ func TestSigningKeyStoreSetPublishedPromotesAutoStored(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn, nil)
+	authStore, err := NewAuthStore(conn)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "kate")
 
-	store, err := NewSigningKeyStore(conn, nil)
+	store, err := NewSigningKeyStore(conn)
 	require.NoError(t, err)
 
 	// Auto-store first (Published=false), then promote via SetPublished — Create alone can't promote under the new insert-only semantics

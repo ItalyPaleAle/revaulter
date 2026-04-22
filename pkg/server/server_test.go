@@ -688,11 +688,11 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	dbConn := db.NewTestDatabaseForServerTests(t)
 	err = db.RunMigrations(t.Context(), dbConn, log)
 	require.NoError(t, err)
-	authStore, err := db.NewAuthStore(dbConn, log)
+	authStore, err := db.NewAuthStore(dbConn)
 	require.NoError(t, err)
-	requestStore, err := db.NewRequestStore(dbConn, log)
+	requestStore, err := db.NewRequestStore(dbConn)
 	require.NoError(t, err)
-	signingKeyStore, err := db.NewSigningKeyStore(dbConn, log)
+	signingKeyStore, err := db.NewSigningKeyStore(dbConn)
 	require.NoError(t, err)
 
 	srv, err := NewServer(NewServerOpts{
