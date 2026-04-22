@@ -39,7 +39,7 @@ export type AnchorKeyPair = {
 export type AttestationPayload = {
     userId: string
     credentialId: string
-    credentialPublicKey: string
+    credentialPublicKeyHash: string
     wrappedKeyEpoch: number
     createdAt: number
 }
@@ -152,7 +152,19 @@ async function derivePublicJwkFromEcdsaPrivate(privateKey: CryptoKey): Promise<E
     return { kty: 'EC', crv: 'P-384', x: jwk.x, y: jwk.y }
 }
 
-/** Wrap the anchor secret blob with the user's wrapping key. Mirrors wrapPrimaryKey. */
+// Wrapped anchor envelope schema: the decoded body is newline `key=value` in alphabetical order over the three required fields
+// `v=1` is the only supported version; `nonce` is base64url of exactly 12 bytes; `ciphertext` is non-empty base64url
+// Must be kept in sync with server route-level validator 
+export type WrappedAnchorEnvelope = {
+    ciphertext: string
+    nonce: string
+    v: 1
+}
+
+const WRAPPED_ANCHOR_FIELDS = ['ciphertext', 'nonce', 'v'] as const
+const WRAPPED_ANCHOR_NONCE_SIZE = 12
+
+// Wrap the anchor secret blob with the user's wrapping key
 export async function wrapAnchorKey(params: {
     anchorSecret: Uint8Array
     wrappingKeyBytes: Uint8Array
@@ -165,19 +177,87 @@ export async function wrapAnchorKey(params: {
         false,
         ['encrypt']
     )
-    const nonce = crypto.getRandomValues(new Uint8Array(12))
+    const nonce = crypto.getRandomValues(new Uint8Array(WRAPPED_ANCHOR_NONCE_SIZE))
     const aad = new TextEncoder().encode(`revaulter/v2/wrapped-anchor\nuserId=${params.userId}\nv=1`)
     const ciphertext = await crypto.subtle.encrypt(
         { name: 'AES-GCM', iv: asBuf(nonce), additionalData: asBuf(aad) },
         wrappingKey,
         asBuf(params.anchorSecret)
     )
-    const envelope = {
-        v: 1,
-        nonce: bytesToBase64Url(nonce),
-        ciphertext: bytesToBase64Url(ciphertext),
+    const body = [
+        `ciphertext=${bytesToBase64Url(ciphertext)}`,
+        `nonce=${bytesToBase64Url(nonce)}`,
+        `v=1`,
+    ].join('\n')
+    return bytesToBase64Url(new TextEncoder().encode(body))
+}
+
+// Parses and strictly validates a wrapped anchor envelope from its base64url-encoded form
+// Rejects missing, duplicate, or unknown fields; malformed base64url; nonce not 12 bytes; empty ciphertext; wrong version
+export function parseWrappedAnchorEnvelope(wrapped: string): WrappedAnchorEnvelope {
+    const body = new TextDecoder().decode(base64UrlToBytes(wrapped))
+    const lines = body.split('\n')
+    if (lines.length !== WRAPPED_ANCHOR_FIELDS.length) {
+        throw new Error(
+            `Invalid wrapped anchor envelope: expected ${WRAPPED_ANCHOR_FIELDS.length} lines, got ${lines.length}`
+        )
     }
-    return bytesToBase64Url(new TextEncoder().encode(JSON.stringify(envelope)))
+
+    const seen = new Map<string, string>()
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        const eq = line.indexOf('=')
+        if (eq < 1) {
+            throw new Error(`Invalid wrapped anchor envelope: line ${i} missing '='`)
+        }
+        const key = line.slice(0, eq)
+        const value = line.slice(eq + 1)
+        if (key !== WRAPPED_ANCHOR_FIELDS[i]) {
+            throw new Error(
+                `Invalid wrapped anchor envelope: expected key "${WRAPPED_ANCHOR_FIELDS[i]}" at line ${i}, got "${key}"`
+            )
+        }
+        if (seen.has(key)) {
+            throw new Error(`Invalid wrapped anchor envelope: duplicate key "${key}"`)
+        }
+        seen.set(key, value)
+    }
+
+    const v = seen.get('v') as string
+    if (v !== '1') {
+        throw new Error(`Invalid wrapped anchor envelope: unsupported version "${v}"`)
+    }
+
+    const nonceB64 = seen.get('nonce') as string
+    const ciphertextB64 = seen.get('ciphertext') as string
+    if (!nonceB64) {
+        throw new Error('Invalid wrapped anchor envelope: empty nonce')
+    }
+    if (!ciphertextB64) {
+        throw new Error('Invalid wrapped anchor envelope: empty ciphertext')
+    }
+
+    let nonceBytes: Uint8Array
+    try {
+        nonceBytes = base64UrlToBytes(nonceB64)
+    } catch {
+        throw new Error('Invalid wrapped anchor envelope: nonce is not valid base64url')
+    }
+
+    if (nonceBytes.length !== WRAPPED_ANCHOR_NONCE_SIZE) {
+        throw new Error(
+            `Invalid wrapped anchor envelope: nonce must be ${WRAPPED_ANCHOR_NONCE_SIZE} bytes, got ${nonceBytes.length}`
+        )
+    }
+
+    // Ensure the ciphertext is valid base64url
+    try {
+        base64UrlToBytes(ciphertextB64)
+    } catch {
+        throw new Error('Invalid wrapped anchor envelope: ciphertext is not valid base64url')
+    }
+
+    return { v: 1, nonce: nonceB64, ciphertext: ciphertextB64 }
 }
 
 export async function unwrapAnchorKey(params: {
@@ -185,14 +265,7 @@ export async function unwrapAnchorKey(params: {
     wrappingKeyBytes: Uint8Array
     userId: string
 }): Promise<AnchorKeyPair> {
-    const envelope = JSON.parse(new TextDecoder().decode(base64UrlToBytes(params.wrapped))) as {
-        v: number
-        nonce: string
-        ciphertext: string
-    }
-    if (envelope.v !== 1 || !envelope.nonce || !envelope.ciphertext) {
-        throw new Error('Invalid wrapped anchor envelope')
-    }
+    const envelope = parseWrappedAnchorEnvelope(params.wrapped)
     const wrappingKey = await crypto.subtle.importKey(
         'raw',
         asBuf(params.wrappingKeyBytes),
@@ -225,11 +298,11 @@ function canonicalJson(obj: unknown): Uint8Array {
  * This is the format stored in the database and sent on the wire, and the body that (with the domain-separation prefix) is signed by both anchor legs
  */
 export function attestationPayloadCanonicalBody(payload: AttestationPayload): string {
-    // Field order must exactly match pkg/protocolv2.AttestationPayload canonical body
+    // Field order must exactly match the server
     return [
         `userId=${payload.userId}`,
         `credentialId=${payload.credentialId}`,
-        `credentialPublicKey=${payload.credentialPublicKey}`,
+        `credentialPublicKeyHash=${payload.credentialPublicKeyHash}`,
         `wrappedKeyEpoch=${payload.wrappedKeyEpoch}`,
         `createdAt=${payload.createdAt}`,
     ].join('\n')

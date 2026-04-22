@@ -484,6 +484,12 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
+	err = validateWrappedAnchorEnvelope(req.WrappedAnchorKey)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid wrappedAnchorKey: %v", err))
+		return
+	}
+
 	// Validate and verify the anchor material. We require both halves of the hybrid
 	// (ES384 + ML-DSA-87) to verify over both the pubkey bundle (so the CLI can pin
 	// the anchor at first contact) and the first credential's attestation (so the
@@ -511,8 +517,24 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationPayload: %v", err))
 		return
 	}
-	if attestPayload.UserID != userID {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload userId does not match session"))
+
+	// Load the user's stored credentials: at finalize-signup time the user must have exactly one credential (created by /register/finish)
+	// Everything the attestation signs must be derivable from that one row
+	creds, err := s.authStore.ListCredentials(c.Request.Context(), userID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	if len(creds) != 1 {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusConflict, "expected exactly one credential for user at finalize-signup, got %d", len(creds)))
+		return
+	}
+
+	expectedCredentialID := creds[0].CredentialID
+	expectedCredentialPublicKeyHash, err := protocolv2.CredentialPublicKeyHashFromStoredCredJSON(creds[0].PublicKey)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusInternalServerError, "failed to derive credential public key hash: %v", err))
 		return
 	}
 
@@ -532,9 +554,28 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
+	// Verify the hybrid attestation signature first, then compare every signed field against server-derived expected values
+	// Only persist after both checks pass
 	err = protocolv2.VerifyHybridAttestation(anchorEs384Pub, mldsa87PubBytes, attestPayload, attestSigEs, attestSigMl)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err))
+		return
+	}
+
+	if attestPayload.UserID != userID {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload userId does not match session"))
+		return
+	}
+	if attestPayload.CredentialID != expectedCredentialID {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload credentialId does not match registered credential"))
+		return
+	}
+	if attestPayload.CredentialPublicKeyHash != expectedCredentialPublicKeyHash {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload credentialPublicKeyHash does not match registered credential"))
+		return
+	}
+	if attestPayload.WrappedKeyEpoch != 1 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload wrappedKeyEpoch must be 1 at signup"))
 		return
 	}
 
@@ -733,6 +774,16 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 	if req.CredentialID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "credentialId is required"))
 		return
+	}
+
+	// Structurally validate the wrapped-anchor envelope before persistence
+	// An empty value means the caller is not updating the anchor for this credential, so only validate when non-empty
+	if req.WrappedAnchorKey != "" {
+		err = validateWrappedAnchorEnvelope(req.WrappedAnchorKey)
+		if err != nil {
+			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid wrappedAnchorKey: %v", err))
+			return
+		}
 	}
 
 	// Refuse the update while an add-credential WebAuthn ceremony is in flight for this user
@@ -965,6 +1016,12 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		return
 	}
 
+	err = validateWrappedAnchorEnvelope(req.WrappedAnchorKey)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid wrappedAnchorKey: %v", err))
+		return
+	}
+
 	// Fetch the user's stored anchor pubkeys and verify the attestation against them.
 	// This is what binds the new credential to the user's identity root.
 	storedUser, err := s.authStore.GetUserByID(c.Request.Context(), userID)
@@ -992,6 +1049,22 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationPayload: %v", err))
 		return
 	}
+
+	// Derive the expected credentialPublicKeyHash from the COSE bytes that the WebAuthn library produced
+	expectedCredentialPublicKeyHash, err := protocolv2.CredentialPublicKeyHash(cred.PublicKey)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "failed to derive credential public key hash: %v", err))
+		return
+	}
+
+	// Verify the hybrid attestation signature first, then compare every signed field against server-derived expected values
+	// Only persist after both checks pass
+	err = protocolv2.VerifyHybridAttestation(anchorEs384Pub, mldsa87PubBytes, attestPayload, attestSigEs, attestSigMl)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err))
+		return
+	}
+
 	if attestPayload.UserID != userID {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload userId does not match session"))
 		return
@@ -1000,9 +1073,12 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload credentialId does not match registered credential"))
 		return
 	}
-	err = protocolv2.VerifyHybridAttestation(anchorEs384Pub, mldsa87PubBytes, attestPayload, attestSigEs, attestSigMl)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err))
+	if attestPayload.CredentialPublicKeyHash != expectedCredentialPublicKeyHash {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload credentialPublicKeyHash does not match registered credential"))
+		return
+	}
+	if attestPayload.WrappedKeyEpoch != storedUser.WrappedKeyEpoch {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload wrappedKeyEpoch does not match current user epoch"))
 		return
 	}
 

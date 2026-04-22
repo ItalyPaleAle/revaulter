@@ -1,7 +1,17 @@
+import { extractCredentialPublicKeyCose } from '$lib/cose-extract'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 
 export function generatePrfSalt(): Uint8Array {
     return crypto.getRandomValues(new Uint8Array(32))
+}
+
+// Returns base64url(SHA-256(raw COSE credential public-key bytes)) for a WebAuthn attestation response
+// The hash is taken over the exact CBOR bytes the authenticator wrote, which lets the server re-derive it from its stored COSE credential without any per-algorithm logic
+// This matches the algorithm the server and works for any WebAuthn key type, including future post-quantum algorithms
+export async function credentialPublicKeyHash(response: AuthenticatorAttestationResponse): Promise<string> {
+    const cose = extractCredentialPublicKeyCose(response.attestationObject)
+    const digest = await crypto.subtle.digest('SHA-256', asBuf(cose))
+    return bytesToBase64Url(new Uint8Array(digest))
 }
 
 function cloneAndDecodeWebAuthnOptions<T>(input: T, skipBinaryDecoding = false): T {
@@ -69,36 +79,27 @@ function serializePublicKeyCredential(cred: PublicKeyCredential) {
 }
 
 export async function webauthnRegister(args: {
-    displayName: string
-    challenge: string
-    options?: unknown
-}): Promise<{ id: string; publicKey: string; signCount: number; raw?: unknown }> {
+    options: unknown
+}): Promise<{ id: string; publicKeyHash: string; signCount: number; raw?: unknown }> {
     if (!('credentials' in navigator) || typeof PublicKeyCredential === 'undefined') {
         throw new Error('WebAuthn is not available in this browser')
     }
+    if (
+        !args.options ||
+        typeof args.options !== 'object' ||
+        !('publicKey' in (args.options as Record<string, unknown>))
+    ) {
+        throw new Error('WebAuthn registration requires server-provided creation options')
+    }
 
-    const userId = crypto.getRandomValues(new Uint8Array(16))
-    const creationOptions =
-        args.options && typeof args.options === 'object' && 'publicKey' in (args.options as Record<string, unknown>)
-            ? (
-                  cloneAndDecodeWebAuthnOptions(args.options) as PublicKeyCredentialCreationOptionsJSON & {
-                      publicKey: PublicKeyCredentialCreationOptions
-                  }
-              ).publicKey
-            : null
+    const creationOptions = (
+        cloneAndDecodeWebAuthnOptions(args.options) as PublicKeyCredentialCreationOptionsJSON & {
+            publicKey: PublicKeyCredentialCreationOptions
+        }
+    ).publicKey
+
     const cred = (await navigator.credentials.create({
-        publicKey: creationOptions ?? {
-            challenge: asBuf(base64UrlToBytes(args.challenge)),
-            rp: { name: 'Revaulter' },
-            user: {
-                id: asBuf(userId),
-                name: args.displayName || 'user',
-                displayName: args.displayName || 'user',
-            },
-            pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
-            timeout: 60_000,
-            attestation: 'none',
-        },
+        publicKey: creationOptions,
     })) as PublicKeyCredential | null
 
     if (!cred) {
@@ -106,10 +107,10 @@ export async function webauthnRegister(args: {
     }
 
     const resp = cred.response as AuthenticatorAttestationResponse
+    const publicKeyHash = await credentialPublicKeyHash(resp)
     return {
         id: cred.id,
-        // The server verifies the registration response and extracts the credential; this field is ignored in the verified path.
-        publicKey: bytesToBase64Url(new Uint8Array(resp.attestationObject)),
+        publicKeyHash,
         signCount: 0,
         raw: {
             credential: serializePublicKeyCredential(cred),

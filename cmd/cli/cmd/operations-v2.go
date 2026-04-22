@@ -305,7 +305,7 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 
 	confirm := o.terminalConfirmer()
 	pinned, err := ts.checkOrPinAnchor(
-		o.flags.GetServer(), o.flags.GetRequestKey(),
+		o.flags.GetServer(), resp.UserID,
 		es384Pub, resp.AnchorEs384PublicKey,
 		resp.AnchorMldsa87PublicKey, mldsa87PubBytes,
 		confirm,

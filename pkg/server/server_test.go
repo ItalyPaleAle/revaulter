@@ -891,6 +891,17 @@ func (w mockWebhook) SetBaseURL(val string) {
 	// Nop
 }
 
+// testValidWrappedAnchorEnvelope returns a syntactically valid wrapped-anchor envelope for tests
+// The envelope is the one enforced by validateWrappedAnchorEnvelope: alphabetical newline `key=value` lines wrapped in base64url
+// The ciphertext is not a real AES-GCM output; these tests exercise route-level structural validation, not decryption
+func testValidWrappedAnchorEnvelope(t *testing.T) string {
+	t.Helper()
+	ciphertext := base64.RawURLEncoding.EncodeToString([]byte("test-ciphertext"))
+	nonce := base64.RawURLEncoding.EncodeToString(make([]byte, 12))
+	body := "ciphertext=" + ciphertext + "\nnonce=" + nonce + "\nv=1"
+	return base64.RawURLEncoding.EncodeToString([]byte(body))
+}
+
 func TestServerV2UpdateDisplayName(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Cleanup(
@@ -1037,8 +1048,11 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 	// The wrapped primary key lives on the credential that authenticated the session, so the route requires its credential_id
 	const credentialID = "cred-user-alice"
 
+	// The update route validates the wrapped-anchor envelope structurally, so tests must send something that passes validation
+	validAnchor := testValidWrappedAnchorEnvelope(t)
+
 	// Successful update
-	res, body := doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "new-key-blob", "wrappedAnchorKey": "new-anchor-blob", "advanceEpoch": true}, sessionCookie)
+	res, body := doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "new-key-blob", "wrappedAnchorKey": validAnchor, "advanceEpoch": true}, sessionCookie)
 	defer func() {
 		_, _ = io.Copy(io.Discard, res.Body)
 		res.Body.Close()
@@ -1065,7 +1079,7 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 	_, err = srv.authStore.BeginChallengeWithPayload(t.Context(), "add-credential", "user-alice", "pending-add", time.Now().UTC().Add(5*time.Minute), nil)
 	require.NoError(t, err)
 
-	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "blocked-while-pending", "wrappedAnchorKey": "blocked-anchor", "advanceEpoch": true}, sessionCookie)
+	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "blocked-while-pending", "wrappedAnchorKey": validAnchor, "advanceEpoch": true}, sessionCookie)
 	defer func() {
 		_, _ = io.Copy(io.Discard, res.Body)
 		res.Body.Close()

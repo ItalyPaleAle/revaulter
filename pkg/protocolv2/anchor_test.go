@@ -17,11 +17,11 @@ import (
 
 func testAttestationPayload() AttestationPayload {
 	return AttestationPayload{
-		UserID:              "user-123",
-		CredentialID:        "cred-abc",
-		CredentialPublicKey: base64.RawURLEncoding.EncodeToString([]byte("cred-public-key-bytes")),
-		WrappedKeyEpoch:     1,
-		CreatedAt:           1720000000,
+		UserID:                  "user-123",
+		CredentialID:            "cred-abc",
+		CredentialPublicKeyHash: base64.RawURLEncoding.EncodeToString([]byte("cred-public-key-hash-bytes")),
+		WrappedKeyEpoch:         1,
+		CreatedAt:               1720000000,
 	}
 }
 
@@ -70,7 +70,7 @@ func TestAttestationPayloadCanonicalBody(t *testing.T) {
 	body := testAttestationPayload().CanonicalBody()
 	expected := "userId=user-123\n" +
 		"credentialId=cred-abc\n" +
-		"credentialPublicKey=" + base64.RawURLEncoding.EncodeToString([]byte("cred-public-key-bytes")) + "\n" +
+		"credentialPublicKeyHash=" + base64.RawURLEncoding.EncodeToString([]byte("cred-public-key-hash-bytes")) + "\n" +
 		"wrappedKeyEpoch=1\n" +
 		"createdAt=1720000000"
 	require.Equal(t, expected, body)
@@ -88,12 +88,12 @@ func TestParseAttestationPayloadRejectsMalformed(t *testing.T) {
 		name string
 		body string
 	}{
-		{"missing-line", "userId=u\ncredentialId=c\ncredentialPublicKey=k\nwrappedKeyEpoch=1"},
+		{"missing-line", "userId=u\ncredentialId=c\ncredentialPublicKeyHash=k\nwrappedKeyEpoch=1"},
 		{"extra-line", testAttestationPayload().CanonicalBody() + "\nextra=x"},
-		{"wrong-key-order", "credentialId=c\nuserId=u\ncredentialPublicKey=k\nwrappedKeyEpoch=1\ncreatedAt=2"},
-		{"missing-equals", "userId u\ncredentialId=c\ncredentialPublicKey=k\nwrappedKeyEpoch=1\ncreatedAt=2"},
-		{"non-integer-epoch", "userId=u\ncredentialId=c\ncredentialPublicKey=k\nwrappedKeyEpoch=not-a-number\ncreatedAt=2"},
-		{"non-integer-created-at", "userId=u\ncredentialId=c\ncredentialPublicKey=k\nwrappedKeyEpoch=1\ncreatedAt=not-a-number"},
+		{"wrong-key-order", "credentialId=c\nuserId=u\ncredentialPublicKeyHash=k\nwrappedKeyEpoch=1\ncreatedAt=2"},
+		{"missing-equals", "userId u\ncredentialId=c\ncredentialPublicKeyHash=k\nwrappedKeyEpoch=1\ncreatedAt=2"},
+		{"non-integer-epoch", "userId=u\ncredentialId=c\ncredentialPublicKeyHash=k\nwrappedKeyEpoch=not-a-number\ncreatedAt=2"},
+		{"non-integer-created-at", "userId=u\ncredentialId=c\ncredentialPublicKeyHash=k\nwrappedKeyEpoch=1\ncreatedAt=not-a-number"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

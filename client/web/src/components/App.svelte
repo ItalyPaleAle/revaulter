@@ -98,7 +98,7 @@ let sessionAnchor = $state<AnchorKeyPair | null>(null)
 // Wrapped anchor blob returned by the login finish response; unwrapped once we have the wrapping key.
 let loginWrappedAnchorKey = $state<string | null>(null)
 // Public key (SPKI, base64url) of a freshly-registered credential. Held briefly until the matching finalize step consumes it.
-let pendingCredentialPublicKey = $state<string | null>(null)
+let pendingCredentialPublicKeyHash = $state<string | null>(null)
 
 let items = $state<Record<string, V2PendingRequestItem>>({})
 let listConnected = $state(false)
@@ -164,7 +164,7 @@ function clearLocalAuthState() {
     primaryKey = null
     sessionAnchor = null
     loginWrappedAnchorKey = null
-    pendingCredentialPublicKey = null
+    pendingCredentialPublicKeyHash = null
     loginWrappedPrimaryKey = null
     sessionCredentialId = null
     sessionCredentialWrappedKeyEpoch = 1
@@ -382,13 +382,11 @@ async function doRegister() {
     try {
         const begin = await v2RegisterBegin(displayName)
         const cred = await webauthnRegister({
-            displayName,
-            challenge: begin.challenge,
             options: begin.options,
         })
-        // Stash the attestationObject as the credentialPublicKey identity string.
-        // It is signed by the anchor alongside the credentialId; the server does not re-verify its shape.
-        pendingCredentialPublicKey = cred.publicKey
+
+        // Stash the credential public key hash so we can sign it into the attestation after password setup
+        pendingCredentialPublicKeyHash = cred.publicKeyHash
         await v2RegisterFinish({
             challengeId: begin.challengeId,
             credential: (cred.raw as { credential?: unknown })?.credential ?? cred,
@@ -439,7 +437,7 @@ async function doSetPassword() {
         uiState = 'signin'
         return
     }
-    if (!sessionCredentialId || !pendingCredentialPublicKey) {
+    if (!sessionCredentialId || !pendingCredentialPublicKeyHash) {
         clearLocalAuthState()
         authError = 'Missing credential identity for signup. Sign in again to continue.'
         uiState = 'signin'
@@ -512,7 +510,7 @@ async function doSetPassword() {
         const attestSig = await signCredentialAttestationHybrid(anchor, {
             userId: session.userId,
             credentialId: sessionCredentialId,
-            credentialPublicKey: pendingCredentialPublicKey,
+            credentialPublicKeyHash: pendingCredentialPublicKeyHash,
             wrappedKeyEpoch: 1,
             createdAt: Math.floor(Date.now() / 1000),
         })
@@ -533,7 +531,7 @@ async function doSetPassword() {
         primaryKey = pk
         sessionAnchor = anchor
         hasPassword = !!passwordInput
-        pendingCredentialPublicKey = null
+        pendingCredentialPublicKeyHash = null
 
         // Remember the password used during signup so subsequent add-passkey operations can wrap the new credential with the same password
         sessionPassword = passwordInput || null
@@ -741,8 +739,6 @@ async function doAddPasskey(name: string) {
     try {
         const begin = await v2AddCredentialBegin(name)
         const cred = await webauthnRegister({
-            displayName: name,
-            challenge: begin.challenge,
             options: begin.options,
         })
 
@@ -797,7 +793,7 @@ async function doAddPasskey(name: string) {
         const attestSig = await signCredentialAttestationHybrid(sessionAnchor, {
             userId: session.userId,
             credentialId: cred.id,
-            credentialPublicKey: cred.publicKey,
+            credentialPublicKeyHash: cred.publicKeyHash,
             wrappedKeyEpoch: session.wrappedKeyEpoch,
             createdAt: Math.floor(Date.now() / 1000),
         })

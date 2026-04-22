@@ -38,11 +38,11 @@ const (
 // AttestationPayload is the canonicalized payload that the anchor signs when a new credential is enrolled
 // The order is load-bearing: client and server must produce identical bytes
 type AttestationPayload struct {
-	UserID              string `key:"userId"`
-	CredentialID        string `key:"credentialId"`
-	CredentialPublicKey string `key:"credentialPublicKey"`
-	WrappedKeyEpoch     int64  `key:"wrappedKeyEpoch"`
-	CreatedAt           int64  `key:"createdAt"`
+	UserID                  string `key:"userId"`
+	CredentialID            string `key:"credentialId"`
+	CredentialPublicKeyHash string `key:"credentialPublicKeyHash"`
+	WrappedKeyEpoch         int64  `key:"wrappedKeyEpoch"`
+	CreatedAt               int64  `key:"createdAt"`
 }
 
 // CanonicalBody encodes the attestation payload as ordered key=value lines separated by '\n', with no trailing newline

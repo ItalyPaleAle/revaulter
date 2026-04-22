@@ -13,10 +13,9 @@ import (
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 
-// trustStore persists pinned anchor public keys per (server, requestKey) tuple.
-// Pinning is TOFU: on first contact the CLI records both halves of the user's
-// hybrid anchor; on every subsequent contact the CLI refuses to proceed if
-// either half does not match the pinned value.
+// trustStore persists pinned anchor public keys per (server, userId) tuple
+// Pinning is TOFU: on first contact the CLI records both halves of the user's hybrid anchor; on every subsequent contact the CLI refuses to proceed if either half does not match the pinned value
+// A mismatch is always surfaced as an explicit rotation prompt — the CLI never silently re-pins
 type trustStore struct {
 	Entries map[string]trustStoreEntry `json:"entries"`
 }
@@ -30,9 +29,10 @@ type trustStoreEntry struct {
 	FirstSeen              time.Time       `json:"firstSeen"`
 }
 
-// trustStoreKey returns the canonical map key for a (server, requestKey) pair.
-func trustStoreKey(server, requestKey string) string {
-	return server + "|" + requestKey
+// trustStoreKey returns the canonical map key for a (server, userId) pair
+// Anchor identity belongs to the user, not to any particular request key that routes traffic to them, so pins survive request-key rotations
+func trustStoreKey(server, userID string) string {
+	return server + "|" + userID
 }
 
 // defaultTrustStorePath returns the default path for the trust store, creating
@@ -116,7 +116,7 @@ func saveTrustStore(path string, ts *trustStore) error {
 // If confirm is nil, the function never prompts and fails closed on first
 // contact; callers pass the terminal confirmer in interactive mode only.
 func (ts *trustStore) checkOrPinAnchor(
-	server, requestKey string,
+	server, userID string,
 	es384Pub *ecdsa.PublicKey,
 	es384Raw json.RawMessage,
 	mldsa87PubB64 string,
@@ -128,32 +128,34 @@ func (ts *trustStore) checkOrPinAnchor(
 		return false, fmt.Errorf("compute anchor fingerprint: %w", err)
 	}
 
-	key := trustStoreKey(server, requestKey)
+	key := trustStoreKey(server, userID)
 	entry, ok := ts.Entries[key]
 	if ok {
 		// Constant-time comparison on the fingerprint hex (same length on both sides).
 		if subtle.ConstantTimeCompare([]byte(entry.Fingerprint), []byte(fp)) != 1 {
 			return false, fmt.Errorf(
-				"anchor fingerprint mismatch for %s; pinned=%s, server=%s",
-				server, entry.Fingerprint, fp,
+				"anchor fingerprint mismatch for %s (user %s); pinned=%s, server=%s; refusing to re-pin without explicit operator approval",
+				server, userID, entry.Fingerprint, fp,
 			)
 		}
 		// Also check the pubkey components directly, so a bug in fingerprinting
 		// cannot mask a real mismatch.
 		if entry.AnchorMldsa87PublicKey != mldsa87PubB64 {
-			return false, fmt.Errorf("anchor ML-DSA-87 pubkey does not match pin for %s", server)
+			return false, fmt.Errorf("anchor ML-DSA-87 pubkey does not match pin for %s (user %s)", server, userID)
 		}
+
 		if !bytesEqualJSON(entry.AnchorEs384PublicKey, es384Raw) {
-			return false, fmt.Errorf("anchor ES384 pubkey does not match pin for %s", server)
+			return false, fmt.Errorf("anchor ES384 pubkey does not match pin for %s (user %s)", server, userID)
 		}
+
 		return false, nil
 	}
 
 	// First contact.
 	if confirm == nil {
 		return false, fmt.Errorf(
-			"anchor for %s is not pinned yet (fingerprint %s); rerun with a TTY or --no-trust-store",
-			server, fp,
+			"anchor for %s (user %s) is not pinned yet (fingerprint %s); rerun with a TTY or --no-trust-store",
+			server, userID, fp,
 		)
 	}
 	accepted, err := confirm(fp)

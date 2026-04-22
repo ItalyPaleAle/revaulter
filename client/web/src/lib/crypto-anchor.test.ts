@@ -8,6 +8,7 @@ import {
     attestationPayloadCanonicalBody,
     generateAnchorKeyPair,
     parseAnchorSecret,
+    parseWrappedAnchorEnvelope,
     pubkeyBundlePayloadCanonicalBody,
     serializeAnchorSecret,
     signCredentialAttestationHybrid,
@@ -79,7 +80,7 @@ describe('hybrid attestation signatures', () => {
         const payload: AttestationPayload = {
             userId: 'u-1',
             credentialId: 'cred-1',
-            credentialPublicKey: bytesToBase64Url(new Uint8Array(32)),
+            credentialPublicKeyHash: bytesToBase64Url(new Uint8Array(32)),
             wrappedKeyEpoch: 1,
             createdAt: 1700000000,
         }
@@ -96,7 +97,7 @@ describe('hybrid attestation signatures', () => {
         const payload: AttestationPayload = {
             userId: 'u-1',
             credentialId: 'cred-1',
-            credentialPublicKey: 'pk',
+            credentialPublicKeyHash: 'pk',
             wrappedKeyEpoch: 1,
             createdAt: 1700000000,
         }
@@ -104,7 +105,7 @@ describe('hybrid attestation signatures', () => {
             [
                 'userId=u-1',
                 'credentialId=cred-1',
-                'credentialPublicKey=pk',
+                'credentialPublicKeyHash=pk',
                 'wrappedKeyEpoch=1',
                 'createdAt=1700000000',
             ].join('\n')
@@ -144,6 +145,77 @@ describe('hybrid attestation signatures', () => {
                 'wrappedKeyEpoch=2',
             ].join('\n')
         )
+    })
+})
+
+describe('parseWrappedAnchorEnvelope', () => {
+    // wrapBody base64url-encodes a literal newline body so tests can construct invalid shapes directly
+    function wrapBody(body: string): string {
+        return bytesToBase64Url(new TextEncoder().encode(body))
+    }
+    const goodCiphertext = bytesToBase64Url(new TextEncoder().encode('ct'))
+    const goodNonce = bytesToBase64Url(new Uint8Array(12))
+    const goodBody = `ciphertext=${goodCiphertext}\nnonce=${goodNonce}\nv=1`
+
+    it('round-trips wrapAnchorKey output', async () => {
+        const kp = await generateAnchorKeyPair()
+        const secret = await serializeAnchorSecret(kp)
+        const wrapped = await wrapAnchorKey({
+            anchorSecret: secret,
+            wrappingKeyBytes: WRAP_KEY,
+            userId: 'u-1',
+        })
+        const env = parseWrappedAnchorEnvelope(wrapped)
+        expect(env.v).toBe(1)
+        expect(env.nonce).toBeTruthy()
+        expect(env.ciphertext).toBeTruthy()
+    })
+
+    it('rejects wrong line count', () => {
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(`ciphertext=${goodCiphertext}\nv=1`))).toThrow(/expected 3 lines/)
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(`${goodBody}\nextra=x`))).toThrow(/expected 3 lines/)
+    })
+
+    it('rejects fields in the wrong order', () => {
+        const reordered = `nonce=${goodNonce}\nciphertext=${goodCiphertext}\nv=1`
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(reordered))).toThrow(/expected key/)
+    })
+
+    it('rejects unknown fields', () => {
+        const withUnknown = `ciphertext=${goodCiphertext}\nnonce=${goodNonce}\nversion=1`
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(withUnknown))).toThrow(/expected key/)
+    })
+
+    it('rejects duplicate keys', () => {
+        // A duplicate nonce inserted in ciphertext's slot breaks the ordered key check first, which still proves duplicates cannot slip through
+        const dup = `nonce=${goodNonce}\nnonce=${goodNonce}\nv=1`
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(dup))).toThrow()
+    })
+
+    it('rejects lines missing an =', () => {
+        const missingEquals = `ciphertext\nnonce=${goodNonce}\nv=1`
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(missingEquals))).toThrow(/missing '='/)
+    })
+
+    it('rejects unsupported version', () => {
+        const v2 = `ciphertext=${goodCiphertext}\nnonce=${goodNonce}\nv=2`
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(v2))).toThrow(/unsupported version/)
+    })
+
+    it('rejects empty ciphertext', () => {
+        const emptyCt = `ciphertext=\nnonce=${goodNonce}\nv=1`
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(emptyCt))).toThrow(/ciphertext/)
+    })
+
+    it('rejects empty nonce', () => {
+        const emptyNonce = `ciphertext=${goodCiphertext}\nnonce=\nv=1`
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(emptyNonce))).toThrow(/nonce/)
+    })
+
+    it('rejects nonce of wrong size', () => {
+        const shortNonce = bytesToBase64Url(new Uint8Array(8))
+        const body = `ciphertext=${goodCiphertext}\nnonce=${shortNonce}\nv=1`
+        expect(() => parseWrappedAnchorEnvelope(wrapBody(body))).toThrow(/12 bytes/)
     })
 })
 
