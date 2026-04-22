@@ -12,6 +12,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/italypaleale/go-kit v0.0.0-20260326154118-cba072650bb2
 	github.com/italypaleale/go-sql-utils v0.2.2
+	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jinzhu/copier v0.4.0
 	github.com/lestrrat-go/jwx/v4 v4.0.0
@@ -38,6 +39,7 @@ require (
 	golang.org/x/term v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
+	modernc.org/sqlite v1.49.1
 )
 
 require (
@@ -98,7 +100,6 @@ require (
 	github.com/in-toto/attestation v1.1.2 // indirect
 	github.com/in-toto/in-toto-golang v0.9.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
@@ -172,5 +173,4 @@ require (
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.49.1 // indirect
 )

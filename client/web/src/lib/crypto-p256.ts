@@ -60,13 +60,7 @@ function buildP256Pkcs8(scalar: Uint8Array): Uint8Array {
  */
 export async function importP256ScalarAsEcdhKey(scalar: Uint8Array): Promise<CryptoKey> {
     const pkcs8 = buildP256Pkcs8(scalar)
-    const result = await Promise.race([
-        crypto.subtle.importKey('pkcs8', asBuf(pkcs8), { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']),
-        new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('PKCS8 P-256 key import timed out')), 30_000)
-        ),
-    ])
-    return result
+    return crypto.subtle.importKey('pkcs8', asBuf(pkcs8), { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
 }
 
 /**

@@ -155,6 +155,13 @@ func (s *AuthStore) GetUserByRequestKey(ctx context.Context, requestKey string) 
 }
 
 func (s *AuthStore) getUser(ctx context.Context, column string, value string) (*User, error) {
+	switch column {
+	case "id", "webauthn_user_id", "request_key":
+		// All good
+	default:
+		return nil, fmt.Errorf("invalid column requested: %s", column)
+	}
+
 	var (
 		user          User
 		allowedIPsCSV string
@@ -520,9 +527,7 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 			&allowedIPsCSV,
 			&updatedUser.Ready,
 		)
-	if err != nil && !s.db.IsNoRowsError(err) {
-		return nil, err
-	} else if err != nil {
+	if !s.db.IsNoRowsError(err) {
 		var exists bool
 		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, in.UserID).Scan(&exists)
 		if err != nil {
@@ -532,6 +537,8 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 			return nil, ErrUserNotFound
 		}
 		return nil, ErrAlreadyFinalized
+	} else if err != nil {
+		return nil, err
 	}
 
 	updatedUser.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)

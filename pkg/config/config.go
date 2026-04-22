@@ -4,7 +4,6 @@ import (
 	"crypto/hkdf"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -249,11 +248,4 @@ func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
 func computeKeyId(k []byte) string {
 	h := sha256.Sum256(k)
 	return base64.RawURLEncoding.EncodeToString(h[0:12])
-}
-
-// String implements fmt.Stringer and is used for debugging
-// Returns the entire configuration as JSON
-func (c *Config) String() string {
-	enc, _ := json.Marshal(c)
-	return string(enc)
 }

@@ -122,7 +122,7 @@ func getBearerToken(c *gin.Context) string {
 	h := c.GetHeader("Authorization")
 
 	// Remove the bearer prefix
-	if len(h) > len(bearerPrefix)+1 && strings.ToLower(h[0:len(bearerPrefix)]) == bearerPrefix {
+	if len(h) > len(bearerPrefix) && strings.ToLower(h[0:len(bearerPrefix)]) == bearerPrefix {
 		return h[len(bearerPrefix):]
 	}
 

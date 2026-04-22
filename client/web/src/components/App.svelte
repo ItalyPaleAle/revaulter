@@ -93,11 +93,12 @@ let hasPassword = $state(false)
 let session = $state<V2SessionResponse | null>(null)
 let prfSecret = $state<Uint8Array | null>(null)
 let primaryKey = $state<Uint8Array | null>(null)
-// Unwrapped hybrid anchor keypair for the current session. Used to sign attestations when adding new credentials.
+// Unwrapped hybrid anchor keypair for the current session
+// Used to sign attestations when adding new credentials
 let sessionAnchor = $state<AnchorKeyPair | null>(null)
-// Wrapped anchor blob returned by the login finish response; unwrapped once we have the wrapping key.
+// Wrapped anchor blob returned by the login finish response; unwrapped once we have the wrapping key
 let loginWrappedAnchorKey = $state<string | null>(null)
-// Public key (SPKI, base64url) of a freshly-registered credential. Held briefly until the matching finalize step consumes it.
+// Public key (SPKI, base64url) of a freshly-registered credential. Held briefly until the matching finalize step consumes it
 let pendingCredentialPublicKeyHash = $state<string | null>(null)
 
 let items = $state<Record<string, V2PendingRequestItem>>({})
@@ -119,7 +120,8 @@ async function initialize() {
     try {
         await v2Session()
 
-        // Sessions survive page reloads, but the PRF secret is intentionally kept in memory only.
+        // While sessions could survive page reloads, but the PRF secret is intentionally kept in memory only
+        // We remove the session state too
         clearLocalAuthState()
         authError = 'Session exists but local key material is missing. Sign in again to continue.'
         uiState = 'signin'
@@ -273,6 +275,7 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
             wrappingKeyBytes,
             userId: finish.session.userId,
         })
+
         // Also unwrap the hybrid anchor so subsequent credential-add flows can sign attestations
         if (loginWrappedAnchorKey) {
             sessionAnchor = await unwrapAnchorKey({
@@ -286,6 +289,7 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
     } else {
         hasPassword = false
     }
+
     return 'authenticated'
 }
 

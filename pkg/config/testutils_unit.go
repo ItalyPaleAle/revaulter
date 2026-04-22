@@ -5,10 +5,19 @@
 package config
 
 import (
+	"encoding/json"
+
 	"github.com/jinzhu/copier"
 
 	"github.com/italypaleale/revaulter/pkg/utils/configloader"
 )
+
+// String implements fmt.Stringer and is used for debugging
+// Returns the entire configuration as JSON
+func (c *Config) String() string {
+	enc, _ := json.Marshal(c)
+	return string(enc)
+}
 
 // SetTestConfig updates the configuration in the global config object for the test
 // Returns a function that should be called with "defer" to restore the previous configuration
