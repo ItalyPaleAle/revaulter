@@ -56,6 +56,7 @@ func NewSigningKeyStore(db *DB, logger *slog.Logger) (*SigningKeyStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
+
 	if logger == nil {
 		logger = slog.Default()
 	}

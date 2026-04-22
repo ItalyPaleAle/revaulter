@@ -82,6 +82,7 @@ func NewRequestStore(db *DB, logger *slog.Logger) (*RequestStore, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+
 	s := &RequestStore{
 		db:  db,
 		log: logger,
