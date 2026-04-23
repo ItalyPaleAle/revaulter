@@ -194,6 +194,12 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 		return
 	}
 
+	user := getRequestUserFromCtx(c)
+	if user == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Missing request user in context"))
+		return
+	}
+
 	for {
 		rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
 		if err != nil {
@@ -202,6 +208,13 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 		}
 
 		if rec == nil {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
+			return
+		}
+
+		// Verify the request belongs to the user identified by the request key
+		// Collapse the mismatch into the same error as "not found" so callers can't probe for another user's states
+		if rec.UserID != user.ID {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 			return
 		}

@@ -448,7 +448,7 @@ func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client,
 			return nil, err
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.flags.GetServer()+"/v2/request/result/"+state, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.flags.GetServer()+"/v2/request/"+o.flags.GetRequestKey()+"/result/"+state, nil)
 		if err != nil {
 			return nil, err
 		}

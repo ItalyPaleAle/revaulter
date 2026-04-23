@@ -93,7 +93,7 @@ The request payload is encrypted end-to-end by the CLI before submission. The se
 - The inner payload's `nonce`, `tag`, and `additionalData` fields must be empty after the browser decrypts; the browser rejects the request otherwise
 - The `algorithm` field must be `ES256` (ECDSA P-256 + SHA-256 per RFC 7518)
 - ECDSA is non-deterministic by design: signing the same digest twice produces different but equally valid signatures.
-- The approved response carries a detached signature; see `GET /v2/request/result/:state` below
+- The approved response carries a detached signature; see `GET /v2/request/:requestKey/result/:state` below
 
 ---
 
@@ -119,7 +119,7 @@ Returns `412 Precondition Failed` if the user has not completed signup (no encry
 
 ---
 
-### `GET /v2/request/result/:state`
+### `GET /v2/request/:requestKey/result/:state`
 
 Long-poll for the result of a previously submitted request. The server holds the connection until the request is completed, canceled, or the client disconnects.
 

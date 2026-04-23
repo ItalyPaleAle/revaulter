@@ -288,7 +288,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2RequestGroup.POST("/:requestKey/decrypt", s.MiddlewareRequestKey, s.RouteV2RequestCreate("decrypt"))
 	v2RequestGroup.POST("/:requestKey/sign", s.MiddlewareRequestKey, s.RouteV2RequestCreate("sign"))
 	v2RequestGroup.GET("/:requestKey/pubkey", s.MiddlewareRequestKey, s.RouteV2RequestPubkey)
-	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
+	v2RequestGroup.GET("/:requestKey/result/:state", s.MiddlewareRequestKey, s.RouteV2RequestResult)
 
 	// Public (unauthenticated) signing key fetch endpoints, rate-limited
 	// Paths carry the format as a dot-extension

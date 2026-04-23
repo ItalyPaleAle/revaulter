@@ -176,14 +176,14 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	require.Equal(t, true, confirmResp["confirmed"])
 
 	// Result endpoint returns completed envelope
-	res, result := doGetJSON(t, "/v2/request/result/"+state)
+	res, result := doGetJSON(t, "/v2/request/"+aliceUser.RequestKey+"/result/"+state)
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, state, result["state"])
 	require.Equal(t, true, result["done"])
 	_, ok = result["responseEnvelope"].(map[string]any)
 	require.True(t, ok)
 
-	res, result = doGetJSON(t, "/v2/request/result/"+state)
+	res, result = doGetJSON(t, "/v2/request/"+aliceUser.RequestKey+"/result/"+state)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 	require.Contains(t, result["error"], "State not found or expired")
 }
@@ -554,11 +554,11 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	expState, _ := create["state"].(string)
 	require.NotEmpty(t, expState)
 	time.Sleep(1_500 * time.Millisecond)
-	res, result := doGetJSON(t, "/v2/request/result/"+expState)
+	res, result := doGetJSON(t, "/v2/request/"+aliceUser.RequestKey+"/result/"+expState)
 	require.Equal(t, http.StatusConflict, res.StatusCode)
 	require.Equal(t, true, result["failed"])
 
-	res, result = doGetJSON(t, "/v2/request/result/"+expState)
+	res, result = doGetJSON(t, "/v2/request/"+aliceUser.RequestKey+"/result/"+expState)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 	require.Contains(t, result["error"], "State not found or expired")
 }

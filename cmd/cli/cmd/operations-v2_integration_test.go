@@ -200,7 +200,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 				return
 			}
 
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/result/"+state):
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/result/"+state):
 			if !createSeen.Load() {
 				http.Error(w, "create not seen yet", http.StatusInternalServerError)
 				return
@@ -556,7 +556,7 @@ func TestV2OperationCmdSignAndVerify(t *testing.T) {
 				return
 			}
 
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/result/"+state):
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/result/"+state):
 			if !createSeen.Load() {
 				http.Error(w, "create not seen yet", http.StatusInternalServerError)
 				return
