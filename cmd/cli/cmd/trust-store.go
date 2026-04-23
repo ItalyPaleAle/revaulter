@@ -23,10 +23,10 @@ type trustStore struct {
 // trustStoreEntry is the per-target record. The fingerprint is redundant but
 // stable — it's what humans compare when verifying a pin.
 type trustStoreEntry struct {
-	AnchorEs384PublicKey   json.RawMessage `json:"anchorEs384PublicKey"`
-	AnchorMldsa87PublicKey string          `json:"anchorMldsa87PublicKey"`
-	Fingerprint            string          `json:"fingerprint"`
-	FirstSeen              time.Time       `json:"firstSeen"`
+	AnchorEs384PublicKey   string    `json:"anchorEs384PublicKey"`
+	AnchorMldsa87PublicKey string    `json:"anchorMldsa87PublicKey"`
+	Fingerprint            string    `json:"fingerprint"`
+	FirstSeen              time.Time `json:"firstSeen"`
 }
 
 // trustStoreKey returns the canonical map key for a (server, userId) pair
@@ -109,16 +109,16 @@ func saveTrustStore(path string, ts *trustStore) error {
 	return nil
 }
 
-// checkOrPinAnchor matches the fetched anchor pubkey pair against the trust
-// store. On first contact it prompts the user (TTY only) to accept the pin.
-// On mismatch it refuses. On match it returns nil.
+// checkOrPinAnchor matches the fetched anchor pubkey pair against the trust store
+// - On first contact it prompts the user (TTY only) to accept the pin
+// - On mismatch it refuses
+// - On match it returns nil
 //
-// If confirm is nil, the function never prompts and fails closed on first
-// contact; callers pass the terminal confirmer in interactive mode only.
+// If confirm is nil, the function never prompts and fails closed on first contact; callers pass the terminal confirmer in interactive mode only.
 func (ts *trustStore) checkOrPinAnchor(
 	server, userID string,
 	es384Pub *ecdsa.PublicKey,
-	es384Raw json.RawMessage,
+	es384Canonical string,
 	mldsa87PubB64 string,
 	mldsa87PubBytes []byte,
 	confirm func(fingerprint string) (bool, error),
@@ -131,27 +131,27 @@ func (ts *trustStore) checkOrPinAnchor(
 	key := trustStoreKey(server, userID)
 	entry, ok := ts.Entries[key]
 	if ok {
-		// Constant-time comparison on the fingerprint hex (same length on both sides).
+		// Constant-time comparison on the fingerprint hex (same length on both sides)
 		if subtle.ConstantTimeCompare([]byte(entry.Fingerprint), []byte(fp)) != 1 {
 			return false, fmt.Errorf(
 				"anchor fingerprint mismatch for %s (user %s); pinned=%s, server=%s; refusing to re-pin without explicit operator approval",
 				server, userID, entry.Fingerprint, fp,
 			)
 		}
-		// Also check the pubkey components directly, so a bug in fingerprinting
-		// cannot mask a real mismatch.
+
+		// Also check the pubkey components directly, so a bug in fingerprinting cannot mask a real mismatch
 		if entry.AnchorMldsa87PublicKey != mldsa87PubB64 {
 			return false, fmt.Errorf("anchor ML-DSA-87 pubkey does not match pin for %s (user %s)", server, userID)
 		}
 
-		if !bytesEqualJSON(entry.AnchorEs384PublicKey, es384Raw) {
+		if subtle.ConstantTimeCompare([]byte(entry.AnchorEs384PublicKey), []byte(es384Canonical)) != 1 {
 			return false, fmt.Errorf("anchor ES384 pubkey does not match pin for %s (user %s)", server, userID)
 		}
 
 		return false, nil
 	}
 
-	// First contact.
+	// First contact
 	if confirm == nil {
 		return false, fmt.Errorf(
 			"anchor for %s (user %s) is not pinned yet (fingerprint %s); rerun with a TTY or --no-trust-store",
@@ -166,28 +166,10 @@ func (ts *trustStore) checkOrPinAnchor(
 		return false, errors.New("anchor pin declined by user")
 	}
 	ts.Entries[key] = trustStoreEntry{
-		AnchorEs384PublicKey:   es384Raw,
+		AnchorEs384PublicKey:   es384Canonical,
 		AnchorMldsa87PublicKey: mldsa87PubB64,
 		Fingerprint:            fp,
 		FirstSeen:              time.Now().UTC(),
 	}
 	return true, nil
-}
-
-// bytesEqualJSON compares two JSON raw messages for byte equality after a
-// canonical decode. This avoids spurious mismatches if the server re-orders
-// JWK fields between pin-time and now (they should not; but defense-in-depth).
-func bytesEqualJSON(a, b json.RawMessage) bool {
-	var av, bv any
-	errA := json.Unmarshal(a, &av)
-	errB := json.Unmarshal(b, &bv)
-	if errA != nil || errB != nil {
-		return false
-	}
-	abytes, errA := json.Marshal(av)
-	bbytes, errB := json.Marshal(bv)
-	if errA != nil || errB != nil {
-		return false
-	}
-	return subtle.ConstantTimeCompare(abytes, bbytes) == 1
 }

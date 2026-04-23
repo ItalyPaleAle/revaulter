@@ -431,8 +431,14 @@ async function doFinishPasswordLogin() {
     } catch (err) {
         authError = err instanceof Error ? err.message : 'Incorrect password'
     } finally {
+        awaitingReadySessionRefresh = false
         authBusy = false
     }
+}
+
+async function doSkipPassword() {
+    passwordInput = ''
+    await doSetPassword()
 }
 
 async function doSetPassword() {
@@ -507,7 +513,10 @@ async function doSetPassword() {
             userId: session.userId,
             requestEncEcdhPubkey: JSON.stringify(publicKeyJwk),
             requestEncMlkemPubkey: encapsulationKeyB64,
-            anchorEs384PublicKey: anchorEs384Str,
+            anchorEs384Crv: anchor.es384.publicKeyJwk.crv,
+            anchorEs384Kty: anchor.es384.publicKeyJwk.kty,
+            anchorEs384X: anchor.es384.publicKeyJwk.x,
+            anchorEs384Y: anchor.es384.publicKeyJwk.y,
             anchorMldsa87PublicKey: anchorMldsa87Str,
             wrappedKeyEpoch: 1,
         })
@@ -525,7 +534,7 @@ async function doSetPassword() {
             requestEncEcdhPubkey: publicKeyJwk,
             requestEncMlkemPubkey: encapsulationKeyB64,
             wrappedPrimaryKey: wrapped,
-            anchorEs384PublicKey: anchor.es384.publicKeyJwk,
+            anchorEs384PublicKey: anchorEs384Str,
             anchorMldsa87PublicKey: anchorMldsa87Str,
             pubkeyBundleSignatureEs384: bundleSig.sigEs384,
             pubkeyBundleSignatureMldsa87: bundleSig.sigMldsa87,
@@ -954,18 +963,17 @@ function startListStream() {
                 return
             }
 
-            const msg = err instanceof Error ? err.message : String(err)
-            if (msg.includes('401')) {
+            if (err instanceof ResponseNotOkError && err.statusCode === 401) {
                 clearLocalAuthState()
                 items = {}
                 authError = 'Session expired. Sign in again.'
                 uiState = 'signin'
                 return
             }
-            if (msg.includes('403') && awaitingReadySessionRefresh) {
+            if (err instanceof ResponseNotOkError && err.statusCode === 403 && awaitingReadySessionRefresh) {
                 return
             }
-            pageError = msg
+            pageError = err instanceof Error ? err.message : String(err)
         } finally {
             if (!stopped) {
                 stopStream = null
@@ -1042,7 +1050,7 @@ function sortedItems() {
             onRegister={doRegister}
             onReturnToSignIn={returnToSignIn}
             onSetPassword={doSetPassword}
-            onSkipPassword={doSetPassword}
+            onSkipPassword={doSkipPassword}
             pageError={pageError}
             passwordInput={passwordInput}
             uiState={uiState}

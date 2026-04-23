@@ -527,7 +527,7 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 			&allowedIPsCSV,
 			&updatedUser.Ready,
 		)
-	if !s.db.IsNoRowsError(err) {
+	if s.db.IsNoRowsError(err) {
 		var exists bool
 		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, in.UserID).Scan(&exists)
 		if err != nil {
@@ -930,8 +930,8 @@ func parseAllowedIPsCSV(raw string) []string {
 }
 
 func isIntegrityViolationError(err error) bool {
-	// These bits are set on all constraint-related errors
-	// https://www.sqlite.org/rescode.html#constraint
+	// Primary result code for all constraint-related errors
+	// Extended result codes shift this into the low 8 bits, see https://www.sqlite.org/rescode.html#constraint
 	const sqliteConstraintCode = 19
 
 	if err == nil {
@@ -941,7 +941,7 @@ func isIntegrityViolationError(err error) bool {
 	// Handle SQLite errors
 	sqliteErr, ok := errors.AsType[*sqlite.Error](err)
 	if ok {
-		return sqliteErr.Code()&sqliteConstraintCode != 0
+		return sqliteErr.Code()&0xFF == sqliteConstraintCode
 	}
 
 	// Handle Postgres errors

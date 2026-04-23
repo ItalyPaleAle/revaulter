@@ -49,7 +49,11 @@ func prepareStaticResponse(c *gin.Context) (ok bool) {
 
 // Serve static files from an embedded FS
 func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
-	reqPath = strings.TrimLeft(reqPath, "/")
+	// Normalize the request path before use
+	// Backslashes are converted to forward slashes because some browsers parse "\" as "/" in Location headers, which would let "\evil.com" be interpreted as the protocol-relative URL "//evil.com"
+	// path.Clean collapses "..", duplicate slashes, and trailing slashes; prefixing "/" ensures the cleaned result is a host-relative absolute path
+	reqPath = path.Clean("/" + strings.ReplaceAll(reqPath, `\`, "/"))
+	reqPath = strings.TrimPrefix(reqPath, "/")
 
 	// Check if the static file exists
 	f, err := filesystem.Open(staticBaseDir + "/" + reqPath)
@@ -58,12 +62,7 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 		if reqPath != "index.html" && !strings.HasSuffix(reqPath, "/index.html") {
 			// ...but first make sure there's a trailing slash
 			if reqPath != "" && !strings.HasSuffix(reqPath, "/") {
-				redirect := reqPath + "/"
-				if c.Request.URL.RawQuery != "" {
-					redirect += "?" + c.Request.URL.RawQuery
-				}
-				c.Header("Location", redirect)
-				c.Status(http.StatusMovedPermanently)
+				safeRedirectLocation(c, reqPath)
 				return
 			}
 			serveStaticFiles(c, path.Join(reqPath, "index.html"), filesystem)
@@ -93,12 +92,7 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 	if stat.IsDir() {
 		// Redirect if the directory name doesn't end in a slash
 		if reqPath != "" && !strings.HasSuffix(reqPath, "/") {
-			redirect := reqPath + "/"
-			if c.Request.URL.RawQuery != "" {
-				redirect += "?" + c.Request.URL.RawQuery
-			}
-			c.Header("Location", redirect)
-			c.Status(http.StatusMovedPermanently)
+			safeRedirectLocation(c, reqPath)
 			return
 		}
 
@@ -121,6 +115,18 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 	}
 
 	http.ServeContent(c.Writer, c.Request, stat.Name(), stat.ModTime(), fseek)
+}
+
+// safeRedirectLocation emits a 301 redirect whose Location is guaranteed to be a host-relative URL starting with a single "/"
+// This prevents user-controlled path segments from producing protocol-relative Locations such as "//evil.com" that would navigate the browser to a different origin
+func safeRedirectLocation(c *gin.Context, reqPath string) {
+	// reqPath has already been normalized by serveStaticFiles, so this just reattaches the leading slash and appends the trailing slash for the redirect
+	redirect := "/" + reqPath + "/"
+	if c.Request.URL.RawQuery != "" {
+		redirect += "?" + c.Request.URL.RawQuery
+	}
+	c.Header("Location", redirect)
+	c.Status(http.StatusMovedPermanently)
 }
 
 func addClientCacheHeaders(cacheMaxAge int64) func(c *gin.Context) {

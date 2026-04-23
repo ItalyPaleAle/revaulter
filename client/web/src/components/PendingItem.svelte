@@ -476,20 +476,20 @@ let terminal = $derived(confirmed || canceled)
                 <Button
                     variant="primary"
                     size="sm"
-                    disabled={working || localStatus !== 'pending'}
+                    disabled={working || (localStatus !== 'pending' && localStatus !== '_failed')}
                     onclick={doConfirm}
                 >
                     {#if working && localStatus === '_processing'}
                         <LoadingSpinner size="0.85rem" />
                     {:else}
                         <Icon icon="check" title="" size="3.5" />
-                        Confirm
+                        {localStatus === '_failed' ? 'Retry' : 'Confirm'}
                     {/if}
                 </Button>
                 <Button
                     variant="ghost"
                     size="sm"
-                    disabled={working || localStatus !== 'pending'}
+                    disabled={working || (localStatus !== 'pending' && localStatus !== '_failed')}
                     onclick={doCancel}
                 >
                     <Icon icon="x" title="" size="3.5" />

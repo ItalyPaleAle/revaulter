@@ -58,7 +58,7 @@ export async function v2FinalizeSignup(args: {
     requestEncEcdhPubkey: EcP256PublicJwk
     requestEncMlkemPubkey: string
     wrappedPrimaryKey?: string
-    anchorEs384PublicKey: unknown
+    anchorEs384PublicKey: string
     anchorMldsa87PublicKey: string
     pubkeyBundleSignatureEs384: string
     pubkeyBundleSignatureMldsa87: string
@@ -82,10 +82,9 @@ export async function v2FinalizeSignup(args: {
     if (args.wrappedPrimaryKey) {
         body.wrappedPrimaryKey = args.wrappedPrimaryKey
     }
-    const res = await Request<{ ok: boolean; session?: V2AuthSessionInfo; sessionToken?: string }>(
-        '/v2/auth/finalize-signup',
-        { postData: body }
-    )
+    const res = await Request<{ ok: boolean; session?: V2AuthSessionInfo }>('/v2/auth/finalize-signup', {
+        postData: body,
+    })
     return res.data
 }
 

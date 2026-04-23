@@ -90,8 +90,18 @@ func (j *ECP256SigningJWK) Thumbprint() (string, error) {
 		return "", err
 	}
 
-	canonical := fmt.Sprintf(`{"crv":%q,"kty":%q,"x":%q,"y":%q}`, j.Crv, j.Kty, j.X, j.Y)
-	h := sha256.Sum256([]byte(canonical))
+	// Serialize the required members in lexicographic order via encoding/json so the string escaping is JSON-spec compliant
+	canonical, err := json.Marshal(struct {
+		Crv string `json:"crv"`
+		Kty string `json:"kty"`
+		X   string `json:"x"`
+		Y   string `json:"y"`
+	}{Crv: j.Crv, Kty: j.Kty, X: j.X, Y: j.Y})
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize JWK for thumbprint: %w", err)
+	}
+
+	h := sha256.Sum256(canonical)
 	return base64.RawURLEncoding.EncodeToString(h[:]), nil
 }
 

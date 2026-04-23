@@ -30,7 +30,10 @@ func testBundlePayload() PubkeyBundlePayload {
 		UserID:                 "user-123",
 		RequestEncEcdhPubkey:   `{"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}`,
 		RequestEncMlkemPubkey:  base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes")),
-		AnchorEs384PublicKey:   `{"kty":"EC","crv":"P-384","x":"aaa","y":"bbb"}`,
+		AnchorEs384Crv:         "P-384",
+		AnchorEs384Kty:         "EC",
+		AnchorEs384X:           "aaa",
+		AnchorEs384Y:           "bbb",
 		AnchorMldsa87PublicKey: base64.RawURLEncoding.EncodeToString([]byte("mldsa87-pub-bytes")),
 		WrappedKeyEpoch:        1,
 	}
@@ -115,7 +118,10 @@ func TestPubkeyBundlePayloadCanonicalBody(t *testing.T) {
 	expected := "userId=user-123\n" +
 		`requestEncEcdhPubkey={"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}` + "\n" +
 		"requestEncMlkemPubkey=" + base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes")) + "\n" +
-		`anchorEs384PublicKey={"kty":"EC","crv":"P-384","x":"aaa","y":"bbb"}` + "\n" +
+		"anchorEs384Crv=P-384\n" +
+		"anchorEs384Kty=EC\n" +
+		"anchorEs384X=aaa\n" +
+		"anchorEs384Y=bbb\n" +
 		"anchorMldsa87PublicKey=" + base64.RawURLEncoding.EncodeToString([]byte("mldsa87-pub-bytes")) + "\n" +
 		"wrappedKeyEpoch=1"
 	require.Equal(t, expected, body)
@@ -134,11 +140,11 @@ func TestParsePubkeyBundlePayloadRejectsMalformed(t *testing.T) {
 		name string
 		body string
 	}{
-		{"missing-line", strings.Join(strings.Split(good, "\n")[:5], "\n")},
+		{"missing-line", strings.Join(strings.Split(good, "\n")[:8], "\n")},
 		{"extra-line", good + "\nextra=x"},
-		{"wrong-key-order", "requestEncEcdhPubkey=x\nuserId=u\nrequestEncMlkemPubkey=x\nanchorEs384PublicKey=x\nanchorMldsa87PublicKey=x\nwrappedKeyEpoch=1"},
-		{"missing-equals", "userId u\nrequestEncEcdhPubkey=x\nrequestEncMlkemPubkey=x\nanchorEs384PublicKey=x\nanchorMldsa87PublicKey=x\nwrappedKeyEpoch=1"},
-		{"non-integer-epoch", "userId=u\nrequestEncEcdhPubkey=x\nrequestEncMlkemPubkey=x\nanchorEs384PublicKey=x\nanchorMldsa87PublicKey=x\nwrappedKeyEpoch=nope"},
+		{"wrong-key-order", "requestEncEcdhPubkey=x\nuserId=u\nrequestEncMlkemPubkey=x\nanchorEs384Crv=P-384\nanchorEs384Kty=EC\nanchorEs384X=a\nanchorEs384Y=b\nanchorMldsa87PublicKey=x\nwrappedKeyEpoch=1"},
+		{"missing-equals", "userId u\nrequestEncEcdhPubkey=x\nrequestEncMlkemPubkey=x\nanchorEs384Crv=P-384\nanchorEs384Kty=EC\nanchorEs384X=a\nanchorEs384Y=b\nanchorMldsa87PublicKey=x\nwrappedKeyEpoch=1"},
+		{"non-integer-epoch", "userId=u\nrequestEncEcdhPubkey=x\nrequestEncMlkemPubkey=x\nanchorEs384Crv=P-384\nanchorEs384Kty=EC\nanchorEs384X=a\nanchorEs384Y=b\nanchorMldsa87PublicKey=x\nwrappedKeyEpoch=nope"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -216,7 +222,7 @@ func TestHybridBundleRoundTripAndTamper(t *testing.T) {
 
 	// Swapping the anchor ES384 pubkey inside the payload breaks both sigs.
 	tamp := payload
-	tamp.AnchorEs384PublicKey = "malicious"
+	tamp.AnchorEs384X = "malicious"
 	err = VerifyHybridBundle(&esPriv.PublicKey, mlPubBytes, tamp, sigEs, sigMl)
 	require.Error(t, err)
 }

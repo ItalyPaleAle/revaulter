@@ -19,6 +19,7 @@ import (
 	kclock "k8s.io/utils/clock"
 
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
@@ -66,7 +67,7 @@ func newWebhookWithClock(clock kclock.Clock) Webhook {
 			if ip == nil {
 				return fmt.Errorf("dial target %q is not an IP literal", host)
 			}
-			if isPrivateIP(ip) {
+			if utils.IsPrivateIP(ip) {
 				return fmt.Errorf("refusing to dial private/internal IP %s: SSRF protection", ip)
 			}
 			return nil
@@ -115,28 +116,6 @@ func validateWebhookScheme(webhookUrl string) error {
 	}
 }
 
-// isPrivateIP returns true if the IP is in a private, loopback, link-local, or
-// otherwise non-routable range.
-func isPrivateIP(ip net.IP) bool {
-	privateRanges := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",
-		"169.254.0.0/16",
-		"::1/128",
-		"fc00::/7",
-		"fe80::/10",
-	}
-	for _, cidr := range privateRanges {
-		_, network, _ := net.ParseCIDR(cidr)
-		if network.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
 // SetBaseURL sets the baseURL in the object
 func (w *webhookClient) SetBaseURL(val string) {
 	w.baseURL = val
@@ -157,6 +136,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) e
 	// Retry up to 3 times
 	const attempts = 3
 	var i int
+retryLoop:
 	for i = range attempts {
 		var req *http.Request
 		reqCtx, reqCancel := context.WithTimeout(ctx, webhookTimeout)
@@ -194,7 +174,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) e
 					// Nop
 				case <-ctx.Done():
 					err = ctx.Err()
-					break
+					break retryLoop
 				}
 				continue
 			}
@@ -224,7 +204,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) e
 					// Nop
 				case <-ctx.Done():
 					err = ctx.Err()
-					break
+					break retryLoop
 				}
 				continue
 			}
@@ -241,7 +221,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) e
 					// Nop
 				case <-ctx.Done():
 					err = ctx.Err()
-					break
+					break retryLoop
 				}
 				continue
 			}

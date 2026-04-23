@@ -97,22 +97,22 @@ func parseAuthSessionToken(token string) (*authSessionToken, error) {
 	}, nil
 }
 
-func setSessionCookie(c *gin.Context, sess *authSessionToken) (string, error) {
+func setSessionCookie(c *gin.Context, sess *authSessionToken) error {
 	if sess == nil {
-		return "", NewResponseError(http.StatusInternalServerError, "session is nil")
+		return NewResponseError(http.StatusInternalServerError, "session is nil")
 	}
 
 	ttl := max(time.Until(sess.ExpiresAt), time.Second)
 	token, err := signAuthSessionToken(sess)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	cookieName, cookiePath := sessionCookieFor(c)
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(cookieName, token, int(ttl.Seconds()), cookiePath, "", secureCookie(c), true)
 
-	return token, nil
+	return nil
 }
 
 func sessionInfoFromUser(user *db.User, ttl int) *v2AuthSessionInfo {

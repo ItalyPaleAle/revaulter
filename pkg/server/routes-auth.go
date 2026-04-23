@@ -74,9 +74,8 @@ type v2AuthSessionInfo struct {
 }
 
 type v2AuthRegisterFinishResponse struct {
-	Registered   bool               `json:"registered"`
-	Session      *v2AuthSessionInfo `json:"session,omitempty"`
-	SessionToken string             `json:"sessionToken,omitempty"`
+	Registered bool               `json:"registered"`
+	Session    *v2AuthSessionInfo `json:"session,omitempty"`
 }
 
 type v2AuthLoginBeginResponse struct {
@@ -91,7 +90,6 @@ type v2AuthLoginBeginResponse struct {
 type v2AuthLoginFinishResponse struct {
 	Authenticated             bool               `json:"authenticated"`
 	Session                   *v2AuthSessionInfo `json:"session,omitempty"`
-	SessionToken              string             `json:"sessionToken,omitempty"`
 	WrappedPrimaryKey         string             `json:"wrappedPrimaryKey,omitempty"`
 	WrappedAnchorKey          string             `json:"wrappedAnchorKey,omitempty"`
 	CredentialWrappedKeyEpoch int64              `json:"credentialWrappedKeyEpoch,omitempty"`
@@ -104,8 +102,8 @@ type v2AuthFinalizeSignupRequest struct {
 	WrappedPrimaryKey     string          `json:"wrappedPrimaryKey,omitempty"`
 
 	// Hybrid anchor (long-lived identity root).
-	AnchorEs384PublicKey   json.RawMessage `json:"anchorEs384PublicKey"`
-	AnchorMldsa87PublicKey string          `json:"anchorMldsa87PublicKey"`
+	AnchorEs384PublicKey   string `json:"anchorEs384PublicKey"`
+	AnchorMldsa87PublicKey string `json:"anchorMldsa87PublicKey"`
 	// Self-signatures by the anchor over the canonical pubkey bundle.
 	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`
 	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
@@ -118,9 +116,8 @@ type v2AuthFinalizeSignupRequest struct {
 }
 
 type v2AuthFinalizeSignupResponse struct {
-	OK           bool               `json:"ok"`
-	Session      *v2AuthSessionInfo `json:"session,omitempty"`
-	SessionToken string             `json:"sessionToken,omitempty"`
+	OK      bool               `json:"ok"`
+	Session *v2AuthSessionInfo `json:"session,omitempty"`
 }
 
 type v2AuthAllowedIPsRequest struct {
@@ -314,16 +311,15 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		slog.String("client_ip", c.ClientIP()),
 	)
 
-	bearerToken, err := setSessionCookie(c, sess)
+	err = setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, v2AuthRegisterFinishResponse{
-		Registered:   true,
-		Session:      sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
-		SessionToken: bearerToken,
+		Registered: true,
+		Session:    sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
 	})
 }
 
@@ -385,7 +381,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	bearerToken, err := setSessionCookie(c, sess)
+	err = setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -399,7 +395,6 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	resp := v2AuthLoginFinishResponse{
 		Authenticated: true,
 		Session:       sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
-		SessionToken:  bearerToken,
 	}
 
 	// Throttle wrapped primary key delivery
@@ -534,11 +529,20 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 
 	// Bundle self-signature: the anchor signs its own wire-format representation.
 	// This is what the CLI verifies on every request.
+	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(req.AnchorEs384PublicKey)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid anchorEs384PublicKey: %v", err))
+		return
+	}
+
 	bundlePayload := protocolv2.PubkeyBundlePayload{
 		UserID:                 userID,
 		RequestEncEcdhPubkey:   string(req.RequestEncEcdhPubkey),
 		RequestEncMlkemPubkey:  req.RequestEncMlkemPubkey,
-		AnchorEs384PublicKey:   string(req.AnchorEs384PublicKey),
+		AnchorEs384Crv:         es384JWK.Crv,
+		AnchorEs384Kty:         es384JWK.Kty,
+		AnchorEs384X:           es384JWK.X,
+		AnchorEs384Y:           es384JWK.Y,
 		AnchorMldsa87PublicKey: req.AnchorMldsa87PublicKey,
 		WrappedKeyEpoch:        1,
 	}
@@ -579,7 +583,7 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		WrappedAnchorKey:             req.WrappedAnchorKey,
 		RequestEncEcdhPubkey:         string(req.RequestEncEcdhPubkey),
 		RequestEncMlkemPubkey:        req.RequestEncMlkemPubkey,
-		AnchorEs384PublicKey:         string(req.AnchorEs384PublicKey),
+		AnchorEs384PublicKey:         req.AnchorEs384PublicKey,
 		AnchorMldsa87PublicKey:       req.AnchorMldsa87PublicKey,
 		PubkeyBundleSignatureEs384:   req.PubkeyBundleSignatureEs384,
 		PubkeyBundleSignatureMldsa87: req.PubkeyBundleSignatureMldsa87,
@@ -616,16 +620,15 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
-	token, err := setSessionCookie(c, sess)
+	err = setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, v2AuthFinalizeSignupResponse{
-		OK:           true,
-		Session:      sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
-		SessionToken: token,
+		OK:      true,
+		Session: sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
 	})
 }
 
@@ -871,6 +874,18 @@ func (s *Server) RouteV2AuthAddCredentialBegin(c *gin.Context) {
 	var req v2AuthAddCredentialBeginRequest
 	_ = c.ShouldBindJSON(&req)
 
+	// The session JWT's Ready claim is a snapshot from token mint time
+	// Re-check the stored user to reject accounts disabled or un-readied after the session was issued
+	storedUser, err := s.authStore.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if storedUser == nil || storedUser.Status != "active" || !storedUser.Ready {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account is not active"))
+		return
+	}
+
 	// Load the existing user with their current credentials to populate excludeCredentials
 	userRecord, err := s.v2LoadWebAuthnUser(c.Request.Context(), userID)
 	if err != nil {
@@ -1023,20 +1038,31 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
 	if storedUser == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
 		return
 	}
-	anchorEs384Pub, mldsa87PubBytes, err := parseAnchorPubkeys(json.RawMessage(storedUser.AnchorEs384PublicKey), storedUser.AnchorMldsa87PublicKey)
+
+	// The session JWT's Ready claim is a snapshot from token mint time
+	// Re-check the stored user to reject accounts disabled or un-readied after the session was issued
+	if storedUser.Status != "active" || !storedUser.Ready {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account is not active"))
+		return
+	}
+
+	anchorEs384Pub, mldsa87PubBytes, err := parseAnchorPubkeys(storedUser.AnchorEs384PublicKey, storedUser.AnchorMldsa87PublicKey)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusInternalServerError, "stored anchor public key is invalid: %v", err))
 		return
 	}
+
 	attestSigEs, attestSigMl, err := parseHybridSignatures(req.AttestationSignatureEs384, req.AttestationSignatureMldsa87)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationSignature: %v", err))
 		return
 	}
+
 	var attestPayload protocolv2.AttestationPayload
 	attestPayload, err = protocolv2.ParseAttestationPayload(req.AttestationPayload)
 	if err != nil {
@@ -1516,21 +1542,20 @@ func (s *Server) v2LoadWebAuthnUser(ctx context.Context, userID string) (*v2WebA
 	}, nil
 }
 
-// parseAnchorPubkeys decodes the wire-format hybrid anchor public keys: a JWK for
-// the ES384 leg and raw base64url bytes for the ML-DSA-87 leg.
-func parseAnchorPubkeys(es384JWKBytes json.RawMessage, mldsa87PubBase64 string) (*ecdsa.PublicKey, []byte, error) {
-	if len(es384JWKBytes) == 0 {
+// parseAnchorPubkeys decodes the wire-format hybrid anchor public keys: a canonical-body JWK for the ES384 leg and raw base64url bytes for the ML-DSA-87 leg.
+func parseAnchorPubkeys(es384JWK string, mldsa87PubBase64 string) (*ecdsa.PublicKey, []byte, error) {
+	if es384JWK == "" {
 		return nil, nil, errors.New("anchorEs384PublicKey is required")
 	}
 	if mldsa87PubBase64 == "" {
 		return nil, nil, errors.New("anchorMldsa87PublicKey is required")
 	}
 
-	var jwk protocolv2.ECP384PublicJWK
-	err := json.Unmarshal(es384JWKBytes, &jwk)
+	jwk, err := protocolv2.ParseECP384PublicJWKCanonicalBody(es384JWK)
 	if err != nil {
 		return nil, nil, fmt.Errorf("anchorEs384PublicKey: %w", err)
 	}
+
 	es384Pub, err := jwk.ToECDSAPublicKey()
 	if err != nil {
 		return nil, nil, fmt.Errorf("anchorEs384PublicKey: %w", err)
@@ -1540,6 +1565,7 @@ func parseAnchorPubkeys(es384JWKBytes json.RawMessage, mldsa87PubBase64 string) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("anchorMldsa87PublicKey: %w", err)
 	}
+
 	if len(mldsa87PubBytes) != protocolv2.MLDSA87PublicKeySize {
 		return nil, nil, fmt.Errorf("anchorMldsa87PublicKey: expected %d bytes, got %d", protocolv2.MLDSA87PublicKeySize, len(mldsa87PubBytes))
 	}

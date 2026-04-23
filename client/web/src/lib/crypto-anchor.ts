@@ -48,7 +48,10 @@ export type PubkeyBundlePayload = {
     userId: string
     requestEncEcdhPubkey: string
     requestEncMlkemPubkey: string
-    anchorEs384PublicKey: string
+    anchorEs384Crv: string
+    anchorEs384Kty: string
+    anchorEs384X: string
+    anchorEs384Y: string
     anchorMldsa87PublicKey: string
     wrappedKeyEpoch: number
 }
@@ -284,11 +287,6 @@ export async function unwrapAnchorKey(params: {
     return parseAnchorSecret(blob)
 }
 
-/** Canonical JSON that matches Go's `json.Marshal` + HTML-unescape. Field order is critical. */
-function canonicalJson(obj: unknown): Uint8Array {
-    return new TextEncoder().encode(JSON.stringify(obj))
-}
-
 /**
  * Serialize the attestation payload as ordered `key=value` lines separated by `\n`, with no trailing newline
  * This is the format stored in the database and sent on the wire, and the body that (with the domain-separation prefix) is signed by both anchor legs
@@ -318,7 +316,10 @@ export function pubkeyBundlePayloadCanonicalBody(payload: PubkeyBundlePayload): 
         `userId=${payload.userId}`,
         `requestEncEcdhPubkey=${payload.requestEncEcdhPubkey}`,
         `requestEncMlkemPubkey=${payload.requestEncMlkemPubkey}`,
-        `anchorEs384PublicKey=${payload.anchorEs384PublicKey}`,
+        `anchorEs384Crv=${payload.anchorEs384Crv}`,
+        `anchorEs384Kty=${payload.anchorEs384Kty}`,
+        `anchorEs384X=${payload.anchorEs384X}`,
+        `anchorEs384Y=${payload.anchorEs384Y}`,
         `anchorMldsa87PublicKey=${payload.anchorMldsa87PublicKey}`,
         `wrappedKeyEpoch=${payload.wrappedKeyEpoch}`,
     ].join('\n')
@@ -405,7 +406,8 @@ export async function anchorFingerprint(
 
 /** Serialize the ES384 JWK to its canonical wire string (what the server stores). */
 export function anchorEs384JwkToString(jwk: EcP384PublicJwk): string {
-    return new TextDecoder().decode(canonicalJson(jwk))
+    // Fields in alphabetical order, `key=value` separated by `\n`
+    return [`crv=${jwk.crv}`, `kty=${jwk.kty}`, `x=${jwk.x}`, `y=${jwk.y}`].join('\n')
 }
 
 export function anchorMldsa87PubToString(pub: Uint8Array): string {
@@ -423,7 +425,13 @@ function writeUint32BE(buf: Uint8Array, offset: number, value: number): void {
 }
 
 function readUint32BE(buf: Uint8Array, offset: number): number {
-    return ((buf[offset] << 24) >>> 0) + (buf[offset + 1] << 16) + (buf[offset + 2] << 8) + buf[offset + 3]
+    if (offset + 4 > buf.length) {
+        throw new Error('readUint32BE: offset runs past end of buffer')
+    }
+    // Multiply the high byte instead of shifting to avoid the sign-extension trap on `byte << 24`
+    // JavaScript's << returns a signed Int32, so `0x80 << 24` becomes a negative number
+    // Using * keeps the result a positive JS Number throughout and avoids the need for a trailing `>>> 0`
+    return buf[offset] * 0x1000000 + (((buf[offset + 1] << 16) | (buf[offset + 2] << 8) | buf[offset + 3]) >>> 0)
 }
 
 // Re-exported sizes for use in tests.

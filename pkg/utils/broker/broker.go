@@ -77,31 +77,23 @@ func (b *Broker[T]) Shutdown() {
 }
 
 // Publish sends a message to all subscribers
-//
-// The send is non-blocking: if a subscriber's channel buffer is full, the message is dropped for that subscriber and a warning is emitted
-// Subscribers snapshot is taken under the read lock and the actual sends happen after the lock is released, so a slow subscriber cannot block Unsubscribe/Shutdown.
 func (b *Broker[T]) Publish(msg T) {
+	// The read lock is held for the entire Publish so Unsubscribe/Shutdown cannot close a subscriber channel concurrently with a send, which would otherwise panic
+	// Non-blocking sends keep Publish bounded, so concurrent Unsubscribe/Shutdown callers only wait microseconds to acquire the write lock
 	b.lock.RLock()
-	logger := b.logger
+	defer b.lock.RUnlock()
 
 	if b.stopped {
-		b.lock.RUnlock()
 		return
 	}
 
-	subs := make([]chan T, 0, len(b.subscribers))
 	for ch := range b.subscribers {
-		subs = append(subs, ch)
-	}
-
-	b.lock.RUnlock()
-
-	for _, ch := range subs {
+		// The send is non-blocking: if a subscriber's channel buffer is full, the message is dropped for that subscriber and a warning is emitted
 		select {
 		case ch <- msg:
 		default:
-			if logger != nil {
-				logger.Warn("broker subscriber channel full; dropping message")
+			if b.logger != nil {
+				b.logger.Warn("broker subscriber channel full; dropping message")
 			}
 		}
 	}

@@ -1,13 +1,11 @@
 <script lang="ts">
 import { tick } from 'svelte'
-
+import heroImage from '$assets/hero.avif'
 import Button from '$components/Button.svelte'
 import Icon from '$components/Icon.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
 import Logo from '$components/Logo.svelte'
 import TextField from '$components/TextField.svelte'
-
-import heroImage from '$assets/hero.avif'
 
 interface Props {
     authBusy: boolean

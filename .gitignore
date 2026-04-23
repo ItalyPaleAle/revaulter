@@ -8,6 +8,7 @@ scratchpad
 .cache
 server/static
 .pnpm-store
+.gocache
 
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,linux,macos,windows,go
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,linux,macos,windows,go

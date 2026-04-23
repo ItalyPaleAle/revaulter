@@ -69,12 +69,14 @@ func (s *Server) RouteV2APIList(c *gin.Context) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	filtered := list[:0]
+
+	filtered := make([]db.V2RequestListItem, 0, len(list))
 	for _, item := range list {
 		if item.UserID == userID {
 			filtered = append(filtered, item)
 		}
 	}
+
 	c.JSON(http.StatusOK, filtered)
 }
 
@@ -87,13 +89,9 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 		return
 	}
 
-	if rec == nil {
+	// Return the same error for missing records and records owned by another user, so the endpoint does not reveal whether a foreign state exists
+	if rec == nil || !s.authorizeUser(c, rec.UserID) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
-		return
-	}
-
-	if !s.authorizeUser(c, rec.UserID) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request is not assigned to this user"))
 		return
 	}
 
@@ -239,7 +237,7 @@ func (s *Server) authorizeUser(c *gin.Context, userID string) bool {
 }
 
 func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V2RequestRecord, pub *confirmPublicKey) {
-	id, err := validateSigningJWKAndPEM(pub.JWK, pub.PEM)
+	id, canonicalJWK, err := validateSigningJWKAndPEM(pub.JWK, pub.PEM)
 	if err != nil {
 		log.WarnContext(c.Request.Context(), "Skipping auto-store of signing public key: invalid payload",
 			slog.String("state", rec.State),
@@ -254,7 +252,7 @@ func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V
 		UserID:    rec.UserID,
 		Algorithm: rec.Algorithm,
 		KeyLabel:  rec.KeyLabel,
-		JWK:       string(pub.JWK),
+		JWK:       string(canonicalJWK),
 		PEM:       pub.PEM,
 		Published: false,
 	})
@@ -301,7 +299,6 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 		if item.UserID == userID {
 			_ = enc.Encode(item)
 			sent = true
-			break
 		}
 	}
 

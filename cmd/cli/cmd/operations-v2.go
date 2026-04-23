@@ -219,11 +219,11 @@ type v2PubkeyResponse struct {
 	EcdhP256 json.RawMessage `json:"ecdhP256"`
 	Mlkem768 string          `json:"mlkem768"`
 
-	AnchorEs384PublicKey         json.RawMessage `json:"anchorEs384PublicKey"`
-	AnchorMldsa87PublicKey       string          `json:"anchorMldsa87PublicKey"`
-	WrappedKeyEpoch              int64           `json:"wrappedKeyEpoch"`
-	PubkeyBundleSignatureEs384   string          `json:"pubkeyBundleSignatureEs384"`
-	PubkeyBundleSignatureMldsa87 string          `json:"pubkeyBundleSignatureMldsa87"`
+	AnchorEs384PublicKey         string `json:"anchorEs384PublicKey"`
+	AnchorMldsa87PublicKey       string `json:"anchorMldsa87PublicKey"`
+	WrappedKeyEpoch              int64  `json:"wrappedKeyEpoch"`
+	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`
+	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
 }
 
 func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClient *http.Client) (*ecdh.PublicKey, *mlkem.EncapsulationKey768, error) {
@@ -278,14 +278,23 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 	if resp.UserID == "" {
 		return nil, nil, errors.New("server did not return userId; refusing to proceed (use --no-trust-store to override)")
 	}
+
 	// Verify both halves of the hybrid bundle signature against the SERVER-PROVIDED
 	// anchor pubkeys. The subsequent pin check catches anchor rotation; this catches
 	// a server that serves a corrupt or mismatched bundle.
+	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(resp.AnchorEs384PublicKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid anchorEs384PublicKey: %w", err)
+	}
+
 	bundlePayload := protocolv2.PubkeyBundlePayload{
 		UserID:                 resp.UserID,
 		RequestEncEcdhPubkey:   string(resp.EcdhP256),
 		RequestEncMlkemPubkey:  resp.Mlkem768,
-		AnchorEs384PublicKey:   string(resp.AnchorEs384PublicKey),
+		AnchorEs384Crv:         es384JWK.Crv,
+		AnchorEs384Kty:         es384JWK.Kty,
+		AnchorEs384X:           es384JWK.X,
+		AnchorEs384Y:           es384JWK.Y,
 		AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
 		WrappedKeyEpoch:        resp.WrappedKeyEpoch,
 	}
@@ -367,9 +376,8 @@ func (o *v2OperationCmd) terminalConfirmer() func(fingerprint string) (bool, err
 }
 
 // parseAnchorPubkeysFromWire decodes the CLI-facing wire form of the hybrid anchor.
-func parseAnchorPubkeysFromWire(es384JWKBytes json.RawMessage, mldsa87PubB64 string) (*ecdsa.PublicKey, []byte, error) {
-	var jwk protocolv2.ECP384PublicJWK
-	err := json.Unmarshal(es384JWKBytes, &jwk)
+func parseAnchorPubkeysFromWire(es384JWK string, mldsa87PubB64 string) (*ecdsa.PublicKey, []byte, error) {
+	jwk, err := protocolv2.ParseECP384PublicJWKCanonicalBody(es384JWK)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ES384 JWK: %w", err)
 	}
@@ -407,6 +415,20 @@ func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client,
 	if kp == nil {
 		return nil, errors.New("missing transport key pair")
 	}
+
+	// Apply a local deadline so the CLI can't poll indefinitely if the server hangs, drops the state, or keeps returning pending beyond the negotiated timeout
+	// Use the user-supplied --timeout plus a small grace window so the server's expiry fires first and produces a clean "failed" response; fall back to a sensible default when unset
+	const defaultResultTimeout = 15 * time.Minute
+	const resultTimeoutGrace = 30 * time.Second
+	localTimeout := o.flags.GetTimeoutDuration()
+	if localTimeout > 0 {
+		localTimeout += resultTimeoutGrace
+	} else {
+		localTimeout = defaultResultTimeout
+	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, localTimeout)
+	defer cancel()
 
 	// The server long-polls and may return {pending:true} when its own subscription window elapses, when the broker is saturated, or when the subscriber slot is temporarily unavailable
 	// Treat those as "keep waiting" and re-issue the request until the context is canceled (or its deadline is reached)

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
@@ -41,6 +42,7 @@ func (f *testV2Flags) GetRequestKey() string              { return "request-key-
 func (f *testV2Flags) GetKeyLabel() string                { return f.keyLabel }
 func (f *testV2Flags) GetAlgorithm() string               { return f.alg }
 func (f *testV2Flags) GetTimeout() string                 { return "" }
+func (f *testV2Flags) GetTimeoutDuration() time.Duration  { return 0 }
 func (f *testV2Flags) GetNote() string                    { return "" }
 func (f *testV2Flags) GetConnectionOptions() (bool, bool) { return false, false }
 func (f *testV2Flags) GetOutput() string                  { return f.output }
@@ -376,6 +378,7 @@ func (f *testV2SignFlags) GetRequestKey() string              { return "request-
 func (f *testV2SignFlags) GetKeyLabel() string                { return f.keyLabel }
 func (f *testV2SignFlags) GetAlgorithm() string               { return protocolv2.SigningAlgES256 }
 func (f *testV2SignFlags) GetTimeout() string                 { return "" }
+func (f *testV2SignFlags) GetTimeoutDuration() time.Duration  { return 0 }
 func (f *testV2SignFlags) GetNote() string                    { return "" }
 func (f *testV2SignFlags) GetConnectionOptions() (bool, bool) { return false, false }
 func (f *testV2SignFlags) GetOutput() string                  { return "" }

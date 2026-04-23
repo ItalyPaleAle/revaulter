@@ -354,8 +354,7 @@ Complete account registration with the WebAuthn credential response.
     "wrappedKeyEpoch": 0,
     "allowedIps": [],
     "ttl": 300
-  },
-  "sessionToken": "<bearer-token>"
+  }
 }
 ```
 
@@ -406,7 +405,6 @@ Complete login with the WebAuthn assertion response.
     "allowedIps": [],
     "ttl": 300
   },
-  "sessionToken": "<bearer-token>",
   "wrappedPrimaryKey": "<base64url>",
   "credentialWrappedKeyEpoch": 1,
   "wrappedKeyStale": false

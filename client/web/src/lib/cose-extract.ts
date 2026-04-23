@@ -9,16 +9,28 @@ function readCborUint(buf: Uint8Array, o: number, info: number): { value: number
         return { value: info, size: 0 }
     }
     if (info === 24) {
+        if (o + 1 > buf.length) {
+            throw new Error('CBOR argument truncated')
+        }
         return { value: buf[o], size: 1 }
     }
     if (info === 25) {
+        if (o + 2 > buf.length) {
+            throw new Error('CBOR argument truncated')
+        }
         return { value: (buf[o] << 8) | buf[o + 1], size: 2 }
     }
     if (info === 26) {
+        if (o + 4 > buf.length) {
+            throw new Error('CBOR argument truncated')
+        }
         const v = buf[o] * 0x1000000 + (((buf[o + 1] << 16) | (buf[o + 2] << 8) | buf[o + 3]) >>> 0)
         return { value: v, size: 4 }
     }
     if (info === 27) {
+        if (o + 8 > buf.length) {
+            throw new Error('CBOR argument truncated')
+        }
         const high = buf[o] * 0x1000000 + (((buf[o + 1] << 16) | (buf[o + 2] << 8) | buf[o + 3]) >>> 0)
         const low = buf[o + 4] * 0x1000000 + (((buf[o + 5] << 16) | (buf[o + 6] << 8) | buf[o + 7]) >>> 0)
         if (high > 0x1fffff) {
@@ -51,6 +63,9 @@ function cborItemLength(buf: Uint8Array, o: number): number {
             return o - start
         case 2:
         case 3:
+            if (o + arg > buf.length) {
+                throw new Error('CBOR byte/text string runs past end of buffer')
+            }
             return o - start + arg
         case 4: {
             let end = o
@@ -95,6 +110,9 @@ function extractAuthData(attestationObject: Uint8Array): Uint8Array {
 
     const decoder = new TextDecoder()
     for (let i = 0; i < entryCount; i++) {
+        if (o >= attestationObject.length) {
+            throw new Error('attestationObject map key runs past end of buffer')
+        }
         const keyInitial = attestationObject[o++]
         if (keyInitial >> 5 !== 3) {
             throw new Error('attestationObject map key is not a text string')
@@ -103,10 +121,16 @@ function extractAuthData(attestationObject: Uint8Array): Uint8Array {
         const { value: keyLen, size: keyArgSize } = readCborUint(attestationObject, o, keyInfo)
         o += keyArgSize
         const keyEnd = o + keyLen
+        if (keyEnd > attestationObject.length) {
+            throw new Error('attestationObject map key runs past end of buffer')
+        }
         const key = decoder.decode(attestationObject.subarray(o, keyEnd))
         o = keyEnd
 
         if (key === 'authData') {
+            if (o >= attestationObject.length) {
+                throw new Error('attestationObject map value runs past end of buffer')
+            }
             const valInitial = attestationObject[o++]
             if (valInitial >> 5 !== 2) {
                 throw new Error('authData is not a byte string')
@@ -121,7 +145,11 @@ function extractAuthData(attestationObject: Uint8Array): Uint8Array {
             return attestationObject.subarray(o, valEnd)
         }
 
-        o += cborItemLength(attestationObject, o)
+        const skip = cborItemLength(attestationObject, o)
+        if (o + skip > attestationObject.length) {
+            throw new Error('attestationObject map value runs past end of buffer')
+        }
+        o += skip
     }
     throw new Error('attestationObject is missing authData')
 }

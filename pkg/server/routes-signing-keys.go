@@ -15,40 +15,45 @@ import (
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 
-// validateSigningJWKAndPEM parses the JWK and PEM representations of a signing public key, checks that they refer to the same point, and returns the JWK thumbprint used as the canonical id
-func validateSigningJWKAndPEM(jwkBytes json.RawMessage, pemStr string) (string, error) {
+// validateSigningJWKAndPEM parses the JWK and PEM representations of a signing public key, checks that they refer to the same point, and returns the JWK thumbprint used as the canonical id along with a canonical re-serialization of the JWK
+func validateSigningJWKAndPEM(jwkBytes json.RawMessage, pemStr string) (id string, canonical []byte, err error) {
 	if len(jwkBytes) == 0 {
-		return "", errors.New("missing jwk")
+		return "", nil, errors.New("missing jwk")
 	}
 	if pemStr == "" {
-		return "", errors.New("missing pem")
+		return "", nil, errors.New("missing pem")
 	}
 
 	jwk, err := protocolv2.ParseECP256SigningJWK(jwkBytes)
 	if err != nil {
-		return "", fmt.Errorf("invalid jwk: %w", err)
+		return "", nil, fmt.Errorf("invalid jwk: %w", err)
 	}
 
 	pemRaw, err := protocolv2.ParseECP256SigningPEM([]byte(pemStr))
 	if err != nil {
-		return "", fmt.Errorf("invalid pem: %w", err)
+		return "", nil, fmt.Errorf("invalid pem: %w", err)
 	}
 
 	jwkPub, err := jwk.ToECDHPublicKey()
 	if err != nil {
-		return "", fmt.Errorf("invalid jwk: %w", err)
+		return "", nil, fmt.Errorf("invalid jwk: %w", err)
 	}
 
 	if !bytes.Equal(jwkPub.Bytes(), pemRaw) {
-		return "", errors.New("jwk and pem do not match")
+		return "", nil, errors.New("jwk and pem do not match")
 	}
 
-	id, err := jwk.Thumbprint()
+	id, err = jwk.Thumbprint()
 	if err != nil {
-		return "", fmt.Errorf("failed to compute thumbprint: %w", err)
+		return "", nil, fmt.Errorf("failed to compute thumbprint: %w", err)
 	}
 
-	return id, nil
+	canonical, err = json.Marshal(jwk)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to canonicalize jwk: %w", err)
+	}
+
+	return id, canonical, nil
 }
 
 type v2SigningKeyCreateRequest struct {
@@ -151,7 +156,7 @@ func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 		return
 	}
 
-	id, err := validateSigningJWKAndPEM(req.JWK, req.PEM)
+	id, canonicalJWK, err := validateSigningJWKAndPEM(req.JWK, req.PEM)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "%v", err))
 		return
@@ -162,7 +167,7 @@ func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 		UserID:    userID,
 		Algorithm: req.Algorithm,
 		KeyLabel:  req.KeyLabel,
-		JWK:       string(req.JWK),
+		JWK:       string(canonicalJWK),
 		PEM:       req.PEM,
 		Published: req.Published,
 	})

@@ -149,7 +149,7 @@ func (s *Server) RouteE2EReset(c *gin.Context) {
 	}
 
 	s.lock.Lock()
-	s.subs = map[string]chan struct{}{}
+	s.subs = map[string][]chan struct{}{}
 	s.lock.Unlock()
 
 	c.JSON(http.StatusOK, e2eOKResponse{OK: true})

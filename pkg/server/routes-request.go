@@ -32,7 +32,7 @@ type v2RequestPubkeyResponse struct {
 	// Hybrid anchor pubkeys + bundle self-signatures. The CLI pins the anchor pubkeys
 	// (TOFU) and verifies both signatures over the bundle to detect server-side pubkey
 	// substitution attacks.
-	AnchorEs384PublicKey         json.RawMessage `json:"anchorEs384PublicKey"`
+	AnchorEs384PublicKey         string          `json:"anchorEs384PublicKey"`
 	AnchorMldsa87PublicKey       string          `json:"anchorMldsa87PublicKey"`
 	WrappedKeyEpoch              int64           `json:"wrappedKeyEpoch"`
 	PubkeyBundleSignatureEs384   string          `json:"pubkeyBundleSignatureEs384"`
@@ -179,7 +179,7 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 		UserID:                       user.ID,
 		EcdhP256:                     json.RawMessage(user.RequestEncEcdhPubkey),
 		Mlkem768:                     user.RequestEncMlkemPubkey,
-		AnchorEs384PublicKey:         json.RawMessage(user.AnchorEs384PublicKey),
+		AnchorEs384PublicKey:         user.AnchorEs384PublicKey,
 		AnchorMldsa87PublicKey:       user.AnchorMldsa87PublicKey,
 		WrappedKeyEpoch:              user.WrappedKeyEpoch,
 		PubkeyBundleSignatureEs384:   user.PubkeyBundleSignatureEs384,

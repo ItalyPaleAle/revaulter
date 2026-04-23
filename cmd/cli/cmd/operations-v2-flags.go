@@ -12,6 +12,7 @@ import (
 	"maps"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -73,6 +74,7 @@ func (f *v2OperationFlagsBase) GetRequestKey() string              { return f.Re
 func (f *v2OperationFlagsBase) GetKeyLabel() string                { return f.KeyLabel }
 func (f *v2OperationFlagsBase) GetAlgorithm() string               { return f.Algorithm }
 func (f *v2OperationFlagsBase) GetTimeout() string                 { return f.Timeout.String() }
+func (f *v2OperationFlagsBase) GetTimeoutDuration() time.Duration  { return time.Duration(f.Timeout) }
 func (f *v2OperationFlagsBase) GetNote() string                    { return f.Note }
 func (f *v2OperationFlagsBase) GetConnectionOptions() (bool, bool) { return f.Insecure, f.NoH2C }
 func (f *v2OperationFlagsBase) GetOutput() string                  { return f.Output }
@@ -89,6 +91,7 @@ type v2OperationFlags interface {
 	GetKeyLabel() string
 	GetAlgorithm() string
 	GetTimeout() string
+	GetTimeoutDuration() time.Duration
 	GetNote() string
 	GetConnectionOptions() (insecure bool, noh2c bool)
 	GetOutput() string

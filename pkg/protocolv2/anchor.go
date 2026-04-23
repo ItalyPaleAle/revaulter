@@ -65,11 +65,15 @@ func ParseAttestationPayload(body string) (AttestationPayload, error) {
 
 // PubkeyBundlePayload is the canonicalized payload that the anchor signs to bind the user's long-lived transport pubkeys and the anchor pubkeys together into a single hybrid-signed bundle
 // The order is load-bearing: client and server must produce identical bytes
+// The ES384 anchor pubkey is flattened to its JWK members (crv, kty, x, y) so every field stays on a single line, consistent with every other key=value canonical body in this codebase
 type PubkeyBundlePayload struct {
 	UserID                 string `key:"userId"`
 	RequestEncEcdhPubkey   string `key:"requestEncEcdhPubkey"`
 	RequestEncMlkemPubkey  string `key:"requestEncMlkemPubkey"`
-	AnchorEs384PublicKey   string `key:"anchorEs384PublicKey"`
+	AnchorEs384Crv         string `key:"anchorEs384Crv"`
+	AnchorEs384Kty         string `key:"anchorEs384Kty"`
+	AnchorEs384X           string `key:"anchorEs384X"`
+	AnchorEs384Y           string `key:"anchorEs384Y"`
 	AnchorMldsa87PublicKey string `key:"anchorMldsa87PublicKey"`
 	WrappedKeyEpoch        int64  `key:"wrappedKeyEpoch"`
 }

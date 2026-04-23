@@ -7,7 +7,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,15 +17,14 @@ import (
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 
-func newTestAnchorPubkeys(t *testing.T) (*ecdsa.PublicKey, json.RawMessage, []byte, string) {
+func newTestAnchorPubkeys(t *testing.T) (*ecdsa.PublicKey, string, []byte, string) {
 	t.Helper()
 
 	priv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
 	jwk, err := protocolv2.ECP384PublicJWKFromECDSA(&priv.PublicKey)
 	require.NoError(t, err)
-	jwkBytes, err := json.Marshal(jwk)
-	require.NoError(t, err)
+	jwkBody := jwk.CanonicalBody()
 
 	mlPub, _, err := mldsa87.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -34,7 +32,7 @@ func newTestAnchorPubkeys(t *testing.T) (*ecdsa.PublicKey, json.RawMessage, []by
 	require.NoError(t, err)
 	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPubBytes)
 
-	return &priv.PublicKey, jwkBytes, mlPubBytes, mlPubB64
+	return &priv.PublicKey, jwkBody, mlPubBytes, mlPubB64
 }
 
 func TestTrustStorePinAndReload(t *testing.T) {

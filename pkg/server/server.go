@@ -68,7 +68,7 @@ type Server struct {
 	// Subscribers for pending request list updates
 	pubsub *broker.Broker[*db.V2RequestListItem]
 	// Subscriptions to watch request status changes
-	subs map[string]chan struct{}
+	subs map[string][]chan struct{}
 
 	// Delayed work for request expiry and record deletion
 	requestExpiryQueue *eventqueue.Processor[string, requestExpiryEvent]
@@ -126,7 +126,7 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		subs:            map[string]chan struct{}{},
+		subs:            map[string][]chan struct{}{},
 		pubsub:          broker.NewBroker[*db.V2RequestListItem](),
 		webhook:         opts.Webhook,
 		metrics:         opts.Metrics,
@@ -316,7 +316,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
 	v2AuthGroup.POST("/login/finish", s.RouteV2AuthLoginFinish)
-	v2AuthGroup.GET("/session", sessionMw, s.RouteV2AuthSession)
+	v2AuthGroup.GET("/session", sessionReadyMw, s.RouteV2AuthSession)
 	v2AuthGroup.POST("/finalize-signup", sessionMw, s.RouteV2AuthFinalizeSignup)
 	v2AuthGroup.POST("/allowed-ips", sessionReadyMw, s.RouteV2AuthAllowedIPs)
 	v2AuthGroup.POST("/regenerate-request-key", sessionReadyMw, s.RouteV2AuthRequestKeyRegenerate)
@@ -429,10 +429,13 @@ func (s *Server) startAppServer(ctx context.Context) error {
 	log := logging.LogFromContext(ctx)
 
 	// Create the HTTP(S) server
+	// WriteTimeout is intentionally left unset because long-polling and NDJSON streaming routes legitimately hold the response open for minutes
 	s.appSrv = &http.Server{
 		Addr:              net.JoinHostPort(cfg.Bind, strconv.Itoa(cfg.Port)),
 		MaxHeaderBytes:    1 << 20,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	if s.tlsConfig != nil {

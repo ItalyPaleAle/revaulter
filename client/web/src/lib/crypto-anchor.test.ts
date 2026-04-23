@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
     type AttestationPayload,
-    type PubkeyBundlePayload,
     anchorEs384JwkToString,
     anchorFingerprint,
     anchorMldsa87PubToString,
     attestationPayloadCanonicalBody,
     generateAnchorKeyPair,
+    type PubkeyBundlePayload,
     parseAnchorSecret,
     parseWrappedAnchorEnvelope,
     pubkeyBundlePayloadCanonicalBody,
@@ -118,7 +118,10 @@ describe('hybrid attestation signatures', () => {
             userId: 'u-1',
             requestEncEcdhPubkey: '{"kty":"EC","crv":"P-256","x":"a","y":"b"}',
             requestEncMlkemPubkey: bytesToBase64Url(new Uint8Array(32)),
-            anchorEs384PublicKey: anchorEs384JwkToString(kp.es384.publicKeyJwk),
+            anchorEs384Crv: kp.es384.publicKeyJwk.crv,
+            anchorEs384Kty: kp.es384.publicKeyJwk.kty,
+            anchorEs384X: kp.es384.publicKeyJwk.x,
+            anchorEs384Y: kp.es384.publicKeyJwk.y,
             anchorMldsa87PublicKey: anchorMldsa87PubToString(kp.mldsa87.publicKey),
             wrappedKeyEpoch: 1,
         })
@@ -131,7 +134,10 @@ describe('hybrid attestation signatures', () => {
             userId: 'u-1',
             requestEncEcdhPubkey: 'ecdh',
             requestEncMlkemPubkey: 'mlkem',
-            anchorEs384PublicKey: 'es384',
+            anchorEs384Crv: 'P-384',
+            anchorEs384Kty: 'EC',
+            anchorEs384X: 'aaa',
+            anchorEs384Y: 'bbb',
             anchorMldsa87PublicKey: 'mldsa87',
             wrappedKeyEpoch: 2,
         }
@@ -140,11 +146,19 @@ describe('hybrid attestation signatures', () => {
                 'userId=u-1',
                 'requestEncEcdhPubkey=ecdh',
                 'requestEncMlkemPubkey=mlkem',
-                'anchorEs384PublicKey=es384',
+                'anchorEs384Crv=P-384',
+                'anchorEs384Kty=EC',
+                'anchorEs384X=aaa',
+                'anchorEs384Y=bbb',
                 'anchorMldsa87PublicKey=mldsa87',
                 'wrappedKeyEpoch=2',
             ].join('\n')
         )
+    })
+
+    it('serializes an ES384 JWK as alphabetical key=value lines', () => {
+        const jwk = { kty: 'EC', crv: 'P-384', x: 'aaa', y: 'bbb' } as const
+        expect(anchorEs384JwkToString(jwk)).toBe(['crv=P-384', 'kty=EC', 'x=aaa', 'y=bbb'].join('\n'))
     })
 })
 

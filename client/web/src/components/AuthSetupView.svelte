@@ -1,11 +1,10 @@
 <script lang="ts">
+import heroImage from '$assets/hero.avif'
 import Button from '$components/Button.svelte'
 import Icon from '$components/Icon.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
 import Logo from '$components/Logo.svelte'
 import TextField from '$components/TextField.svelte'
-
-import heroImage from '$assets/hero.avif'
 
 interface Props {
     authBusy: boolean
@@ -181,7 +180,10 @@ function authBodyCopy() {
                             class="flex-1"
                             variant="secondary"
                             size="lg"
-                            onclick={onSkipPassword}
+                            onclick={async (event) => {
+                                event.preventDefault()
+                                onSkipPassword()
+                            }}
                             disabled={authBusy}
                         >
                             Skip password
