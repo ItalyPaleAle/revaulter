@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v4/jwk"
@@ -193,6 +194,15 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	}
 	if c.SecretKey == "" {
 		return errors.New("config entry key 'secretKey' missing")
+	}
+
+	// Validate the webhook URL
+	parsedWebhook, err := url.Parse(c.WebhookUrl)
+	if err != nil {
+		return fmt.Errorf("config entry key 'webhookUrl' is invalid: %w", err)
+	}
+	if parsedWebhook.Scheme != "http" && parsedWebhook.Scheme != "https" {
+		return fmt.Errorf("config entry key 'webhookUrl' has disallowed scheme %q: only http and https are permitted", parsedWebhook.Scheme)
 	}
 
 	// Ensure that the secret key is at least 20-character long (although ideally it's 32 or more, but enforcing some minimum standard)

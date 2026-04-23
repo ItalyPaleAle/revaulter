@@ -23,7 +23,8 @@ import (
 )
 
 type AuthStore struct {
-	db adapter.DatabaseConn
+	db   adapter.DatabaseConn
+	kind BackendKind
 }
 
 type User struct {
@@ -124,13 +125,14 @@ var (
 	ErrAlreadyFinalized   = errors.New("user is already finalized")
 )
 
-func NewAuthStore(db adapter.DatabaseConn) (*AuthStore, error) {
+func NewAuthStore(db adapter.DatabaseConn, kind BackendKind) (*AuthStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
 
 	return &AuthStore{
-		db: db,
+		db:   db,
+		kind: kind,
 	}, nil
 }
 
@@ -179,6 +181,7 @@ func (s *AuthStore) getUser(ctx context.Context, column string, value string) (*
 	}
 
 	user.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
+
 	return &user, nil
 }
 
@@ -677,11 +680,13 @@ func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID
 		return errors.New("wrappedAnchorKey is too large")
 	}
 
+	// Guard against updates for non-active users (frozen/disabled/removed) by gating both the target row and the epoch subquery on status = 'active'
 	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_user_credentials SET wrapped_primary_key = $1, wrapped_anchor_key = $2, wrapped_key_epoch = (
-			SELECT wrapped_key_epoch FROM v2_users WHERE id = $4
+			SELECT wrapped_key_epoch FROM v2_users WHERE id = $4 AND status = 'active'
 		)
-			WHERE credential_id = $3 AND user_id = $4`,
+			WHERE credential_id = $3 AND user_id = $4
+			AND EXISTS (SELECT 1 FROM v2_users WHERE id = $4 AND status = 'active')`,
 		wrappedPrimaryKey, wrappedAnchorKey, credentialID, userID,
 	)
 	if err != nil {
@@ -796,45 +801,100 @@ func (s *AuthStore) RenameCredential(ctx context.Context, id, userID, displayNam
 }
 
 func (s *AuthStore) DeleteCredential(ctx context.Context, id, userID string) error {
-	tx, err := s.db.Begin(ctx)
+	switch s.kind {
+	case BackendPostgres:
+		return s.deleteCredentialPostgres(ctx, id, userID)
+	case BackendSQLite:
+		return s.deleteCredentialSQLite(ctx, id, userID)
+	default:
+		return fmt.Errorf("unsupported backend: %s", s.kind)
+	}
+}
+
+// deleteCredentialPostgres performs the delete in a single atomic statement.
+func (s *AuthStore) deleteCredentialPostgres(ctx context.Context, id, userID string) error {
+	// The `locked` CTE acquires row-level locks via `FOR UPDATE` on all of the user's credential rows, so a concurrent delete on a sibling credential can't race us between the count and the DELETE
+	// The wrapping SELECT always returns exactly one row with the diagnostic counts, so the three outcomes (deleted / not found / last credential) are distinguishable without a second round trip
+	var total, tgt, deleted int
+	err := s.db.
+		QueryRow(ctx, `
+WITH locked AS MATERIALIZED (
+    SELECT id FROM v2_user_credentials WHERE user_id = $2 FOR UPDATE
+),
+del AS (
+    DELETE FROM v2_user_credentials
+    WHERE id = $1 AND user_id = $2
+      AND (SELECT COUNT(*) FROM locked) > 1
+      AND EXISTS (SELECT 1 FROM locked WHERE id = $1)
+    RETURNING 1
+)
+SELECT
+    (SELECT COUNT(*) FROM locked),
+    (SELECT COUNT(*) FROM locked WHERE id = $1),
+    (SELECT COUNT(*) FROM del)
+`,
+			id, userID).
+		Scan(&total, &tgt, &deleted)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		rollbackErr := tx.Rollback(ctx)
-		if rollbackErr != nil && !s.db.IsTxDoneError(rollbackErr) {
-			slog.Warn("Error rolling back transaction", slog.Any("err", rollbackErr))
-		}
-	}()
 
-	var count int
-	err = tx.QueryRow(ctx, `SELECT COUNT(*) FROM v2_user_credentials WHERE user_id = $1`, userID).Scan(&count)
-	if err != nil {
-		return err
-	}
-
-	if count <= 1 {
+	switch {
+	case deleted == 1:
+		return nil
+	case tgt == 0:
+		return ErrCredentialNotFound
+	case total <= 1:
 		return ErrLastCredential
+	default:
+		// Shouldn't happen: either the delete fired or one of the guards tripped
+		return errors.New("delete credential: unexpected state")
+	}
+}
+
+// deleteCredentialSQLite performs the delete in one DML statement.
+func (s *AuthStore) deleteCredentialSQLite(ctx context.Context, id, userID string) error {
+	// SQLite opens writer transactions with `txlock=immediate`, so the implicit transaction this DELETE runs in serializes against every other writer: the `MATERIALIZED` CTE captures a consistent snapshot that no concurrent writer can change before the DELETE fires
+	// RETURNING yields one row only when the DELETE actually ran; a `tgt` column of 0 vs. 1 in that row — or an empty result set — distinguishes the three outcomes
+	// When nothing was deleted, a small follow-up SELECT disambiguates: races with concurrent writers are benign because the write serialization means the snapshot we observe is still a real past state
+	var total, tgt int
+	err := s.db.
+		QueryRow(ctx, `
+WITH snap AS MATERIALIZED (
+    SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE id = $1) AS tgt
+    FROM v2_user_credentials WHERE user_id = $2
+)
+DELETE FROM v2_user_credentials
+WHERE id = $1 AND user_id = $2
+  AND (SELECT total FROM snap) > 1
+RETURNING (SELECT total FROM snap), (SELECT tgt FROM snap)
+`,
+			id, userID).
+		Scan(&total, &tgt)
+	switch {
+	case err == nil:
+		return nil
+	case !s.db.IsNoRowsError(err):
+		return err
 	}
 
-	affected, err := tx.Exec(ctx,
-		`DELETE FROM v2_user_credentials WHERE id = $1 AND user_id = $2`,
-		id, userID,
-	)
+	// DELETE did not fire; diagnose why
+	err = s.db.
+		QueryRow(ctx, `
+SELECT COUNT(*), COUNT(*) FILTER (WHERE id = $1)
+FROM v2_user_credentials WHERE user_id = $2
+`,
+			id, userID,
+		).
+		Scan(&total, &tgt)
 	if err != nil {
 		return err
 	}
 
-	if affected == 0 {
+	if tgt == 0 {
 		return ErrCredentialNotFound
 	}
-
-	err = tx.Commit(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return ErrLastCredential
 }
 
 func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
@@ -925,6 +985,10 @@ func parseAllowedIPsCSV(raw string) []string {
 		}
 	}
 	parts = parts[:j]
+
+	if len(parts) == 0 {
+		return nil
+	}
 
 	return parts
 }

@@ -85,7 +85,8 @@ func validateTrustedRequestID(v string) bool {
 
 // MiddlewareNoCache is a middleware that disables caching on clients and CDNs
 func (s *Server) MiddlewareNoCache(c *gin.Context) {
-	c.Header("Cache-Control", "no-cache")
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate")
+	c.Header("Pragma", "no-cache")
 }
 
 // MiddlewareCSRF offers CSRF protection for browser-facing endpoints

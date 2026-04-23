@@ -53,14 +53,15 @@ func run(distDir, outPath, version, commit, buildDate string) error {
 	if err != nil {
 		return fmt.Errorf("build manifest: %w", err)
 	}
+	manifestData := manifest.Marshal()
 
 	// Permissions 0644 are appropriate here
 	//nolint:gosec
-	err = os.WriteFile(outPath, manifest.Marshal(), 0o644)
+	err = os.WriteFile(outPath, manifestData, 0o644)
 	if err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "build-manifest: wrote %d files, %d bytes, to %s\n", len(manifest.Files), len(manifest.Marshal()), outPath)
+	fmt.Fprintf(os.Stderr, "build-manifest: wrote %d files, %d bytes, to %s\n", len(manifest.Files), len(manifestData), outPath)
 	return nil
 }

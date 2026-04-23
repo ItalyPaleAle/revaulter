@@ -51,14 +51,15 @@ func newV2OperationCmd(op, short string, newFlags func() v2OperationFlags) *cobr
 
 func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 	log := logging.LogFromContext(cmd.Context())
+
+	err := o.flags.Validate()
+	if err != nil {
+		return fmt.Errorf("invalid flags: %w", err)
+	}
+
 	httpClient, err := getV2HTTPClient(log, o.flags)
 	if err != nil {
 		return err
-	}
-
-	err = o.flags.Validate()
-	if err != nil {
-		return fmt.Errorf("invalid flags: %w", err)
 	}
 
 	kp, err := newV2TransportKeyPair()
@@ -381,17 +382,21 @@ func parseAnchorPubkeysFromWire(es384JWK string, mldsa87PubB64 string) (*ecdsa.P
 	if err != nil {
 		return nil, nil, fmt.Errorf("ES384 JWK: %w", err)
 	}
+
 	ecdsaPub, err := jwk.ToECDSAPublicKey()
 	if err != nil {
 		return nil, nil, fmt.Errorf("ES384 pubkey: %w", err)
 	}
+
 	mldsa87PubBytes, err := base64.RawURLEncoding.DecodeString(mldsa87PubB64)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ML-DSA-87 pubkey base64: %w", err)
 	}
+
 	if len(mldsa87PubBytes) != protocolv2.MLDSA87PublicKeySize {
 		return nil, nil, fmt.Errorf("ML-DSA-87 pubkey: expected %d bytes, got %d", protocolv2.MLDSA87PublicKeySize, len(mldsa87PubBytes))
 	}
+
 	return ecdsaPub, mldsa87PubBytes, nil
 }
 
@@ -512,6 +517,9 @@ func getV2HTTPClient(log *slog.Logger, flags v2OperationFlags) (*http.Client, er
 		WriteByteTimeout: 30 * time.Second,
 	}
 	if serverURL.Scheme == "http" && !noH2c {
+		if log != nil {
+			log.Warn("Server URL uses the 'http://' scheme: traffic is unencrypted and integrity checks can be bypassed by a network attacker")
+		}
 		transport.AllowHTTP = true
 		transport.DialTLSContext = func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
 			return net.Dial(network, addr)

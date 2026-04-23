@@ -26,7 +26,7 @@ func TestSigningKeyStoreInsertIdempotentNoOp(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "alice")
 
@@ -77,7 +77,7 @@ func TestSigningKeyStoreInsertRejectsConflictingMaterial(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "bob")
 
@@ -114,7 +114,7 @@ func TestSigningKeyStoreListForUser(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "carol")
 	newSigningKeyTestUser(t, authStore, "dave")
@@ -160,7 +160,7 @@ func TestSigningKeyStoreSetPublished(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "erin")
 	newSigningKeyTestUser(t, authStore, "mallory")
@@ -219,7 +219,7 @@ func TestSigningKeyStoreDelete(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "owen")
 	newSigningKeyTestUser(t, authStore, "peggy")
@@ -282,7 +282,7 @@ func TestSigningKeyStoreCreateUnpublishedInsertsHidden(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "frank")
 
@@ -322,7 +322,7 @@ func TestSigningKeyStoreCreateUnpublishedNoOpOnExisting(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "gina")
 
@@ -382,7 +382,7 @@ func TestSigningKeyStoreCreateUnpublishedNoOpWhenPublished(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "henry")
 
@@ -425,7 +425,7 @@ func TestSigningKeyStoreCreateUnpublishedScopedPerUserAlgorithmLabel(t *testing.
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "ivan")
 	newSigningKeyTestUser(t, authStore, "judy")
@@ -462,7 +462,7 @@ func TestSigningKeyStoreSetPublishedPromotesAutoStored(t *testing.T) {
 	conn := newTestDatabase(t)
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	newSigningKeyTestUser(t, authStore, "kate")
 

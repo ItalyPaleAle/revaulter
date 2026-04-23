@@ -725,6 +725,60 @@ func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, res2.StatusCode)
 }
 
+func TestServerV2AuthLogoutClearsBothCookieNames(t *testing.T) {
+	// Regression: logout must clear both the `__Host-_s` (secure) and `_s` (insecure) cookie names
+	// A scheme change between login and logout (e.g. a proxy switching https→http on a subsequent hop) would otherwise leave a stray session cookie behind
+	tmpDir := t.TempDir()
+	t.Cleanup(
+		// #nosec G101 - Hardcoded credentials are test ones
+		config.SetTestConfig(map[string]any{
+			"databaseDSN":     tmpDir + "/v2-logout-both.db",
+			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+		}))
+
+	srv, cleanup := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	defer cleanup()
+
+	stopServerFn := startTestServer(t, srv)
+	defer stopServerFn(t)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-logout-both", "Logout Both User")
+	require.NotEmpty(t, sessionCookie.Value)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/logout", testServerPort), bytes.NewReader([]byte(`{}`)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+
+	var sawSecure, sawInsecure bool
+	for _, cookie := range res.Cookies() {
+		switch cookie.Name {
+		case sessionCookieNameSecure:
+			sawSecure = true
+			require.Equal(t, "/", cookie.Path, "secure cookie must be cleared with path=/")
+			require.True(t, cookie.MaxAge < 0 || !cookie.Expires.IsZero() && cookie.Expires.Before(time.Now()), "secure cookie must be expired")
+		case sessionCookieNameInsecure:
+			sawInsecure = true
+			require.Equal(t, "/v2", cookie.Path, "insecure cookie must be cleared with path=/v2")
+			require.True(t, cookie.MaxAge < 0 || !cookie.Expires.IsZero() && cookie.Expires.Before(time.Now()), "insecure cookie must be expired")
+		}
+	}
+	require.True(t, sawSecure, "logout must set an expired __Host-_s cookie")
+	require.True(t, sawInsecure, "logout must set an expired _s cookie")
+}
+
 func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.RoundTripper, logDest io.Writer) (*Server, func()) {
 	t.Helper()
 
@@ -749,7 +803,7 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	dbConn := db.NewTestDatabaseForServerTests(t)
 	err = db.RunMigrations(t.Context(), dbConn, log)
 	require.NoError(t, err)
-	authStore, err := db.NewAuthStore(dbConn)
+	authStore, err := db.NewAuthStore(dbConn, dbConn.Kind())
 	require.NoError(t, err)
 	requestStore, err := db.NewRequestStore(dbConn)
 	require.NoError(t, err)
@@ -1259,11 +1313,11 @@ func TestServerV2CredentialLifecycle(t *testing.T) {
 	}()
 	require.Equal(t, http.StatusConflict, res2.StatusCode)
 
-	// Delete nonexistent credential — still 409 because there's only one credential
+	// Delete nonexistent credential — 404
 	res2, _ = doPostJSON(t, "/v2/auth/credentials/delete", map[string]any{"id": "nonexistent"}, sessionCookie)
 	defer func() {
 		_, _ = io.Copy(io.Discard, res.Body)
 		res2.Body.Close()
 	}()
-	require.Equal(t, http.StatusConflict, res2.StatusCode)
+	require.Equal(t, http.StatusNotFound, res2.StatusCode)
 }

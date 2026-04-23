@@ -20,9 +20,11 @@ func HasManifest() bool {
 	if len(ManifestBytes) == 0 {
 		return false
 	}
+
 	// The bundle stub is `{}` plus an optional trailing newline
 	if len(BundleBytes) <= 3 {
 		return false
 	}
+
 	return true
 }

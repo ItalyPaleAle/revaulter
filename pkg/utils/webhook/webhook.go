@@ -238,7 +238,7 @@ retryLoop:
 	}
 
 	if err != nil {
-		err = fmt.Errorf("failed to send webhook after %d attempts; last error: %w", i, err)
+		err = fmt.Errorf("failed to send webhook after %d attempts; last error: %w", i+1, err)
 	}
 	return err
 }

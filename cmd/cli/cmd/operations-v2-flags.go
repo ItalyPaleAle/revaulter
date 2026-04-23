@@ -161,6 +161,7 @@ type v2OperationFlagsSign struct {
 	v2OperationFlagsBase
 
 	Input     string
+	File      string
 	Digest    string
 	Format    string
 	JwsHeader string
@@ -175,10 +176,11 @@ type v2OperationFlagsSign struct {
 func (f *v2OperationFlagsSign) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
 	cmd.Flags().StringVar(&f.Input, "input", "", "Path to the message file to sign; use '-' for stdin. Aliased by --file")
-	cmd.Flags().StringVar(&f.Input, "file", "", "Alias for --input")
+	cmd.Flags().StringVar(&f.File, "file", "", "Alias for --input")
 	cmd.Flags().StringVar(&f.Digest, "digest", "", "Pre-computed SHA-256 digest (hex or base64url, 32 bytes)")
 	cmd.Flags().StringVar(&f.Format, "format", "raw", "Output format: 'raw' (JSON envelope with base64url r||s signature) or 'jws' (compact JWS string)")
 	cmd.Flags().StringVar(&f.JwsHeader, "jws-header", "", "Optional JSON fragment merged into the default protected header when building a JWS from --input")
+	cmd.MarkFlagsMutuallyExclusive("input", "file")
 }
 
 func (f *v2OperationFlagsSign) Validate() error {
@@ -189,6 +191,11 @@ func (f *v2OperationFlagsSign) Validate() error {
 
 	if f.Algorithm != protocolv2.SigningAlgES256 {
 		return fmt.Errorf("unsupported signing algorithm %q (only %q is supported in v1)", f.Algorithm, protocolv2.SigningAlgES256)
+	}
+
+	// --file is an alias for --input; cobra enforces mutual exclusion, so only one is non-empty here
+	if f.File != "" {
+		f.Input = f.File
 	}
 
 	// Exactly one of --input, --digest must be set

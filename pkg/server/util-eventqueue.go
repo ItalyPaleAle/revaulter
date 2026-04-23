@@ -95,5 +95,7 @@ func (s *Server) executeDeleteEvent(ev deleteEvent) {
 		if err != nil {
 			log.WarnContext(ctx, "non-ready user cleanup failed", slog.Any("error", err), slog.String("user_id", ev.ID))
 		}
+	default:
+		log.WarnContext(ctx, "executing unsupported cleanup event kind", slog.String("kind", ev.Kind))
 	}
 }

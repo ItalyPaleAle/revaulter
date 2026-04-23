@@ -15,7 +15,7 @@ func TestRequestStoreLifecycle(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-1",
@@ -88,7 +88,7 @@ func TestRequestStoreCancel(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-2",
@@ -133,7 +133,7 @@ func TestRequestStoreGetAndDeleteTerminalRequest(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-get-delete",
@@ -191,7 +191,7 @@ func TestRequestStoreGetAndDeleteTerminalRequestExpiresPending(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	// #nosec G101 - Hardcoded credentials are test ones
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
@@ -238,7 +238,7 @@ func TestRequestStoreMarkExpired(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-expire",
@@ -334,7 +334,7 @@ func TestRequestStoreDeleteTerminalRequestWithCutoff(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-delete",
@@ -426,7 +426,7 @@ func TestRequestStoreDeleteTerminalRequest(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	authStore, err := NewAuthStore(conn)
+	authStore, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 	_, err = authStore.RegisterUser(ctx, RegisterUserInput{
 		UserID:         "user-delete-now",

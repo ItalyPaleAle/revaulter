@@ -17,6 +17,9 @@ const (
 	sessionClaimUserID      = "userId"
 	sessionClaimDisplayName = "displayName"
 	sessionClaimReady       = "ready"
+
+	// sessionClockSkew is the tolerance applied when validating `iat`/`nbf`/`exp`
+	sessionClockSkew = 2 * time.Minute
 )
 
 type authSessionToken struct {
@@ -64,6 +67,7 @@ func parseAuthSessionToken(token string) (*authSessionToken, error) {
 	parsed, err := jwt.ParseString(token,
 		jwt.WithKey(jwa.HS256(), config.Get().TokenSigningKey()),
 		jwt.WithValidate(true),
+		jwt.WithAcceptableSkew(sessionClockSkew),
 	)
 	if err != nil {
 		return nil, err

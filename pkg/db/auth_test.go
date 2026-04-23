@@ -14,7 +14,7 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn)
+	store, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 
 	n, err := store.CountUsers(ctx)
@@ -78,7 +78,7 @@ func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn)
+	store, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 
 	_, err = store.RegisterUser(ctx, RegisterUserInput{
@@ -127,7 +127,7 @@ func TestAuthStoreRegenerateRequestKey(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn)
+	store, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 
 	sess, err := store.RegisterUser(ctx, RegisterUserInput{
@@ -175,7 +175,7 @@ func TestParseAllowedIPsCSV(t *testing.T) {
 		{name: "whitespace only", input: "  \t  ", expected: nil},
 		{name: "single value", input: "127.0.0.1", expected: []string{"127.0.0.1"}},
 		{name: "trims and drops empty entries", input: " 127.0.0.1 , , 10.0.0.0/8,   ::1  ", expected: []string{"127.0.0.1", "10.0.0.0/8", "::1"}},
-		{name: "all empty entries", input: ", , ,", expected: []string{}},
+		{name: "all empty entries", input: ", , ,", expected: nil},
 	}
 
 	for _, test := range tests {
@@ -244,7 +244,7 @@ func TestAuthStoreDeleteExpiredAuthChallenge(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn)
+	store, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -285,7 +285,7 @@ func TestAuthStoreHasPendingChallenge(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn)
+	store, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -337,7 +337,7 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn)
+	store, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 
 	// #nosec G101 -- Hardcoded credentials are test ones
@@ -421,7 +421,7 @@ func TestAuthStoreUpdateDisplayName(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn)
+	store, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 
 	_, err = store.RegisterUser(ctx, RegisterUserInput{
@@ -471,7 +471,7 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn)
+	store, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 
 	_, err = store.RegisterUser(ctx, RegisterUserInput{
@@ -534,7 +534,7 @@ func TestAuthStoreCredentialWrappedKeyEpochRotation(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn)
+	store, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 
 	_, err = store.RegisterUser(ctx, RegisterUserInput{
@@ -604,7 +604,7 @@ func TestAuthStoreCredentialCRUD(t *testing.T) {
 
 	require.NoError(t, RunMigrations(ctx, conn, nil))
 
-	store, err := NewAuthStore(conn)
+	store, err := NewAuthStore(conn, conn.kind)
 	require.NoError(t, err)
 
 	_, err = store.RegisterUser(ctx, RegisterUserInput{
@@ -681,5 +681,5 @@ func TestAuthStoreCredentialCRUD(t *testing.T) {
 
 	// Delete nonexistent credential
 	err = store.DeleteCredential(ctx, "nonexistent-id", "user-1")
-	require.ErrorIs(t, err, ErrLastCredential)
+	require.ErrorIs(t, err, ErrCredentialNotFound)
 }

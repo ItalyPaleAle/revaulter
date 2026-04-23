@@ -31,6 +31,11 @@ type DB struct {
 	pgx  *pgxpool.Pool
 }
 
+// Kind returns the backend kind for this connection
+func (db *DB) Kind() BackendKind {
+	return db.kind
+}
+
 // Close the database connection
 // Implements io.Closer
 func (db *DB) Close(_ context.Context) error {
@@ -55,7 +60,7 @@ func (db *DB) Close(_ context.Context) error {
 
 // AuthStore returns an instance of AuthStore
 func (db *DB) AuthStore() *AuthStore {
-	as, err := NewAuthStore(db)
+	as, err := NewAuthStore(db, db.kind)
 	if err != nil {
 		// Indicates a development-time error
 		panic(err)

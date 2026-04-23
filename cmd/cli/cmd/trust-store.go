@@ -67,45 +67,60 @@ func loadTrustStore(path string) (*trustStore, error) {
 	return ts, nil
 }
 
-// saveTrustStore writes the trust store to disk with 0600 permissions. The
-// parent directory is created with 0700 if missing.
+// saveTrustStore writes the trust store to disk with 0600 permissions
+// The parent directory is created with 0700 if missing, and tightened to 0700 if it already existed with looser perms
 func saveTrustStore(path string, ts *trustStore) error {
 	dir := filepath.Dir(path)
 	err := os.MkdirAll(dir, 0o700)
 	if err != nil {
 		return fmt.Errorf("failed to create trust store dir %q: %w", dir, err)
 	}
+
+	// os.MkdirAll only applies the permission bits to directories it newly creates
+	// Explicitly chmod the leaf dir so an already-existing directory with looser perms gets tightened
+	err = os.Chmod(dir, 0o700)
+	if err != nil {
+		return fmt.Errorf("failed to tighten trust store dir %q permissions: %w", dir, err)
+	}
+
 	b, err := json.MarshalIndent(ts, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to serialize trust store: %w", err)
 	}
+
 	// Write atomically via rename to avoid partial writes on crash.
 	tmp, err := os.CreateTemp(dir, "trust-*.json")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
+
 	tmpPath := tmp.Name()
 	defer func() {
-		_ = os.Remove(tmpPath)
+		_ = os.RemoveAll(tmpPath)
 	}()
+
 	_, err = tmp.Write(b)
 	if err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("failed to write trust store: %w", err)
 	}
+
 	err = tmp.Chmod(0o600)
 	if err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("failed to chmod trust store: %w", err)
 	}
+
 	err = tmp.Close()
 	if err != nil {
 		return fmt.Errorf("failed to close temp file: %w", err)
 	}
+
 	err = os.Rename(tmpPath, path)
 	if err != nil {
 		return fmt.Errorf("failed to rename trust store: %w", err)
 	}
+
 	return nil
 }
 

@@ -104,7 +104,7 @@ func main() {
 			return
 		}
 
-		authStore, err = db.NewAuthStore(dbConn)
+		authStore, err = db.NewAuthStore(dbConn, dbConn.Kind())
 		if err != nil {
 			_ = dbConn.Close(ctx)
 			slogkit.FatalError(log, "Failed to initialize auth store", err)

@@ -648,7 +648,7 @@ func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
 
 	allowedIPs, err := s.authStore.UpdateAllowedIPs(c.Request.Context(), userID, req.AllowedIPs)
 	if err != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, err.Error()))
+		AbortWithErrorJSON(c, err)
 		return
 	}
 
@@ -718,10 +718,12 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 		slog.String("client_ip", c.ClientIP()),
 	)
 
-	cookieName, cookiePath := sessionCookieFor(c)
+	// Clear both possible cookie names so a scheme change between login and logout (e.g. a proxy switching https→http) cannot leave a stray session cookie behind
+	// __Host- is only legal on Secure cookies, so we must emit each with the secure flag that matches its prefix
 	isSecure := secureCookie(c)
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(cookieName, "", -1, cookiePath, "", isSecure, true)
+	c.SetCookie(sessionCookieNameSecure, "", -1, "/", "", true, true)
+	c.SetCookie(sessionCookieNameInsecure, "", -1, "/v2", "", isSecure, true)
 
 	c.JSON(http.StatusOK, v2AuthLogoutResponse{
 		LoggedOut: true,
