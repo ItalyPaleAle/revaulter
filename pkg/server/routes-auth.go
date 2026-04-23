@@ -648,6 +648,10 @@ func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
 
 	allowedIPs, err := s.authStore.UpdateAllowedIPs(c.Request.Context(), userID, req.AllowedIPs)
 	if err != nil {
+		if errors.Is(err, db.ErrInvalidIP) || errors.Is(err, db.ErrInvalidCIDR) {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, err.Error()))
+			return
+		}
 		AbortWithErrorJSON(c, err)
 		return
 	}

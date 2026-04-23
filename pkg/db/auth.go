@@ -123,6 +123,8 @@ var (
 	ErrLastCredential     = errors.New("cannot delete the last credential")
 	ErrDisplayNameTooLong = errors.New("display name is too long")
 	ErrAlreadyFinalized   = errors.New("user is already finalized")
+	ErrInvalidIP          = errors.New("invalid IP")
+	ErrInvalidCIDR        = errors.New("invalid CIDR")
 )
 
 func NewAuthStore(db adapter.DatabaseConn, kind BackendKind) (*AuthStore, error) {
@@ -949,13 +951,13 @@ func NormalizeAllowedIPs(allowedIPs []string) ([]string, error) {
 		if strings.ContainsRune(entry, '/') {
 			_, network, err := net.ParseCIDR(entry)
 			if err != nil {
-				return nil, fmt.Errorf("invalid CIDR: %s", entry)
+				return nil, &InvalidAllowedIPError{Kind: ErrInvalidCIDR, Value: entry}
 			}
 			canonical = network.String()
 		} else {
 			ip := net.ParseIP(entry)
 			if ip == nil {
-				return nil, fmt.Errorf("invalid IP: %s", entry)
+				return nil, &InvalidAllowedIPError{Kind: ErrInvalidIP, Value: entry}
 			}
 			canonical = ip.String()
 		}
@@ -1015,4 +1017,29 @@ func isIntegrityViolationError(err error) bool {
 	}
 
 	return false
+}
+
+type InvalidAllowedIPError struct {
+	Kind  error
+	Value string
+}
+
+func (e *InvalidAllowedIPError) Error() string {
+	if e == nil || e.Kind == nil {
+		return "invalid allowed IP"
+	}
+
+	if e.Value == "" {
+		return e.Kind.Error()
+	}
+
+	return e.Kind.Error() + ": " + e.Value
+}
+
+func (e *InvalidAllowedIPError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+
+	return e.Kind
 }

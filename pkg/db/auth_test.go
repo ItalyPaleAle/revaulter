@@ -229,12 +229,14 @@ func TestNormalizeAllowedIPsNormalizesCanonicalizesDeduplicatesAndPreservesOrder
 func TestNormalizeAllowedIPsInvalidIP(t *testing.T) {
 	result, err := NormalizeAllowedIPs([]string{"127.0.0.1", "not-an-ip"})
 	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrInvalidIP)
 	require.EqualError(t, err, "invalid IP: not-an-ip")
 }
 
 func TestNormalizeAllowedIPsInvalidCIDR(t *testing.T) {
 	result, err := NormalizeAllowedIPs([]string{" 10.0.0.0/33 "})
 	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrInvalidCIDR)
 	require.EqualError(t, err, "invalid CIDR: 10.0.0.0/33")
 }
 
