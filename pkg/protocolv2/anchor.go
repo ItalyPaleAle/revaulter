@@ -197,30 +197,41 @@ func CanonicalPubkeyBundleMessage(payload PubkeyBundlePayload) []byte {
 
 // VerifyHybridAttestation verifies that both legs of the hybrid signature cover the canonical attestation message
 // Both must validate; if either fails the call returns an error describing which legs rejected the signature
+//
+// SECURITY: This is a consistency check between the supplied pubkeys, payload, and signatures
+// It does NOT by itself establish trust in the anchor pubkeys or in the payload's bindings
+// Callers MUST independently verify that the anchor pubkeys belong to the expected principal (for example, by matching them against values stored at registration time) AND cross-check the payload fields (UserID, CredentialID, CredentialPublicKeyHash, ...) against an independent source of truth
+// Without those checks an attacker can present attacker-controlled pubkeys and signatures that verify consistently but bind to nothing the server trusts
 func VerifyHybridAttestation(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload AttestationPayload, sigEs384, sigMldsa87 []byte) error {
 	msg := CanonicalAttestationMessage(payload)
 	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
 }
 
 // VerifyHybridBundle verifies both legs of the hybrid signature covering the canonical pubkey-bundle message
+//
+// SECURITY: This is a consistency check only - it proves that the holder of both anchor private keys
+// produced the bundle, but it does NOT establish trust in those pubkeys
+// In a self-signed bundle (like the one submitted during signup) the signer's pubkeys are chosen by the caller, so a successful verification only confirms internal consistency
+// Callers MUST independently bind the anchor pubkeys to the principal they represent (e.g., by pinning them at registration and comparing on subsequent use) before trusting the payload.
 func VerifyHybridBundle(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload PubkeyBundlePayload, sigEs384, sigMldsa87 []byte) error {
 	msg := CanonicalPubkeyBundleMessage(payload)
 	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
 }
 
 func verifyHybrid(es384Pub *ecdsa.PublicKey, mldsa87PubBytes, msg, sigEs384, sigMldsa87 []byte) error {
+	esErr := verifyES384(es384Pub, msg, sigEs384)
+	mlErr := verifyMLDSA87(mldsa87PubBytes, msg, sigMldsa87)
+	if esErr == nil && mlErr == nil {
+		return nil
+	}
+
 	var errs []error
-
-	err := verifyES384(es384Pub, msg, sigEs384)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("ES384: %w", err))
+	if esErr != nil {
+		errs = append(errs, fmt.Errorf("ES384: %w", esErr))
 	}
-
-	err = verifyMLDSA87(mldsa87PubBytes, msg, sigMldsa87)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("ML-DSA-87: %w", err))
+	if mlErr != nil {
+		errs = append(errs, fmt.Errorf("ML-DSA-87: %w", mlErr))
 	}
-
 	return errors.Join(errs...)
 }
 
