@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/mlkem"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -465,14 +466,14 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 	}
 
 	// Validate the ML-KEM public key is valid base64
-	_, err = utils.DecodeBase64String(req.RequestEncMlkemPubkey)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid requestEncMlkemPubkey format"))
+	mlkemKey, err := utils.DecodeBase64String(req.RequestEncMlkemPubkey)
+	if err != nil || len(mlkemKey) != mlkem.EncapsulationKeySize768 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid requestEncMlkemPubkey"))
 		return
 	}
 
-	if req.WrappedPrimaryKey != "" && len(req.WrappedPrimaryKey) > 512 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "wrappedPrimaryKey is too large"))
+	if req.WrappedPrimaryKey == "" || len(req.WrappedPrimaryKey) > 512 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid wrappedPrimaryKey"))
 		return
 	}
 
