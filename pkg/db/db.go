@@ -13,6 +13,8 @@ import (
 	postgresadapter "github.com/italypaleale/go-sql-utils/adapter/postgres"
 	sqladapter "github.com/italypaleale/go-sql-utils/adapter/sql"
 	sqliteutils "github.com/italypaleale/go-sql-utils/sqlite"
+	transactions "github.com/italypaleale/go-sql-utils/transactions/adapter"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -89,6 +91,57 @@ func (db *DB) SigningKeyStore() *SigningKeyStore {
 	}
 
 	return as
+}
+
+type dbTx struct {
+	adapter.Querier
+
+	kind BackendKind
+}
+
+// AuthStore returns an instance of AuthStore
+/*func (tx *dbTx) AuthStore() *AuthStore {
+	as, err := NewAuthStore(tx, tx.kind)
+	if err != nil {
+		// Indicates a development-time error
+		panic(err)
+	}
+
+	return as
+}*/
+
+// RequestStore returns an instance of RequestStore
+func (tx *dbTx) RequestStore() *RequestStore {
+	as, err := NewRequestStore(tx)
+	if err != nil {
+		// Indicates a development-time error
+		panic(err)
+	}
+
+	return as
+}
+
+// SigningKeyStore returns an instance of SigningKeyStore
+func (tx *dbTx) SigningKeyStore() *SigningKeyStore {
+	as, err := NewSigningKeyStore(tx)
+	if err != nil {
+		// Indicates a development-time error
+		panic(err)
+	}
+
+	return as
+}
+
+// Note that the timeout for pgx is tied to the begin command only, while it's tied to the entire transaction for SQL adapters
+func (db *DB) ExecuteInTransaction(ctx context.Context, timeout time.Duration, fn func(ctx context.Context, tx *dbTx) error) error {
+	_, err := transactions.ExecuteInTransaction(ctx, logging.LogFromContext(ctx), db.DatabaseConn, timeout, func(ctx context.Context, tx adapter.Querier) (struct{}, error) {
+		wrapped := &dbTx{
+			Querier: tx,
+			kind:    db.kind,
+		}
+		return struct{}{}, fn(ctx, wrapped)
+	})
+	return err
 }
 
 // Open the connection

@@ -11,7 +11,7 @@ require (
 	github.com/go-webauthn/webauthn v0.17.0
 	github.com/google/uuid v1.6.0
 	github.com/italypaleale/go-kit v0.0.0-20260326154118-cba072650bb2
-	github.com/italypaleale/go-sql-utils v0.2.2
+	github.com/italypaleale/go-sql-utils v0.2.3
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jinzhu/copier v0.4.0

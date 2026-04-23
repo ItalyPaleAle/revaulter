@@ -49,10 +49,10 @@ var (
 )
 
 type SigningKeyStore struct {
-	db adapter.DatabaseConn
+	db adapter.Querier
 }
 
-func NewSigningKeyStore(db adapter.DatabaseConn) (*SigningKeyStore, error) {
+func NewSigningKeyStore(db adapter.Querier) (*SigningKeyStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
@@ -137,7 +137,7 @@ func (s *SigningKeyStore) GetForUser(ctx context.Context, userID, id string) (*P
 	return rec, nil
 }
 
-// ListForUser returns the user's known keys (metadata only, no JWK/PEM) so the settings UI can render the list without transferring key material
+// ListForUser returns the user's known keys (metadata only, no JWK/PEM)
 // Both published and auto-stored keys are returned; the UI uses the Published flag to distinguish them
 func (s *SigningKeyStore) ListForUser(ctx context.Context, userID string) ([]PublishedSigningKeyListItem, error) {
 	rows, err := s.db.Query(ctx,

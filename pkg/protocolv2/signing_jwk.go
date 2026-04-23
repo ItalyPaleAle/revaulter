@@ -28,7 +28,6 @@ type ECP256SigningJWK struct {
 }
 
 // ValidateSigningKey enforces the structural and algorithmic constraints for a published ES256 signing JWK
-// It also verifies the point is on the P-256 curve
 func (j *ECP256SigningJWK) ValidateSigningKey() error {
 	if j.Kty != "EC" {
 		return fmt.Errorf("invalid JWK 'kty': %q", j.Kty)
@@ -47,11 +46,6 @@ func (j *ECP256SigningJWK) ValidateSigningKey() error {
 	}
 	if j.Use != "" && j.Use != "sig" {
 		return fmt.Errorf("invalid JWK 'use': %q", j.Use)
-	}
-
-	_, err := j.ToECDHPublicKey()
-	if err != nil {
-		return err
 	}
 
 	return nil
@@ -145,6 +139,8 @@ func ParseECP256SigningPEM(pemBytes []byte) ([]byte, error) {
 	if block == nil {
 		return nil, errors.New("invalid PEM: no block found")
 	}
+
+	// We only support keys in PKIX format, which are in PEM blocks of type "PUBLIC KEY"
 	if block.Type != "PUBLIC KEY" {
 		return nil, fmt.Errorf("invalid PEM block type: %q", block.Type)
 	}

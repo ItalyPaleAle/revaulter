@@ -71,10 +71,10 @@ type CreateRequestInput struct {
 }
 
 type RequestStore struct {
-	db adapter.DatabaseConn
+	db adapter.Querier
 }
 
-func NewRequestStore(db adapter.DatabaseConn) (*RequestStore, error) {
+func NewRequestStore(db adapter.Querier) (*RequestStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}

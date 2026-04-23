@@ -87,8 +87,6 @@ func TestECP256SigningJWKValidateRejectsInvalid(t *testing.T) {
 		{"includes-d", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: validX, Y: validY, D: "secret"}},
 		{"wrong-alg", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: validX, Y: validY, Alg: "ES384"}},
 		{"wrong-use", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: validX, Y: validY, Use: "enc"}},
-		{"bad-x-base64", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: "not-valid!base64", Y: validY}},
-		{"off-curve", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", Y: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

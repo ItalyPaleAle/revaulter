@@ -15,53 +15,34 @@ import (
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 
-// validateSigningJWKAndPEM parses the JWK and PEM representations of a signing public key, checks that they refer to the same point, and returns the JWK thumbprint used as the canonical id along with a canonical re-serialization of the JWK
-func validateSigningJWKAndPEM(jwkBytes json.RawMessage, pemStr string) (id string, canonical []byte, err error) {
-	if len(jwkBytes) == 0 {
-		return "", nil, errors.New("missing jwk")
-	}
-	if pemStr == "" {
-		return "", nil, errors.New("missing pem")
-	}
-
-	jwk, err := protocolv2.ParseECP256SigningJWK(jwkBytes)
-	if err != nil {
-		return "", nil, fmt.Errorf("invalid jwk: %w", err)
-	}
-
-	pemRaw, err := protocolv2.ParseECP256SigningPEM([]byte(pemStr))
-	if err != nil {
-		return "", nil, fmt.Errorf("invalid pem: %w", err)
-	}
-
-	jwkPub, err := jwk.ToECDHPublicKey()
-	if err != nil {
-		return "", nil, fmt.Errorf("invalid jwk: %w", err)
-	}
-
-	if !bytes.Equal(jwkPub.Bytes(), pemRaw) {
-		return "", nil, errors.New("jwk and pem do not match")
-	}
-
-	id, err = jwk.Thumbprint()
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to compute thumbprint: %w", err)
-	}
-
-	canonical, err = json.Marshal(jwk)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to canonicalize jwk: %w", err)
-	}
-
-	return id, canonical, nil
-}
-
 type v2SigningKeyCreateRequest struct {
 	Algorithm string          `json:"algorithm"`
 	KeyLabel  string          `json:"keyLabel"`
 	JWK       json.RawMessage `json:"jwk"`
 	PEM       string          `json:"pem"`
 	Published bool            `json:"published"`
+}
+
+func (req *v2SigningKeyCreateRequest) Validate() (kid string, canonicalJWK []byte, err error) {
+	if req.Algorithm == "" {
+		return "", nil, errors.New("missing algorithm")
+	}
+	if !protocolv2.IsSupportedSigningAlgorithm(req.Algorithm) {
+		return "", nil, fmt.Errorf("unsupported signing algorithm %q", req.Algorithm)
+	}
+	if req.KeyLabel == "" {
+		return "", nil, errors.New("missing keyLabel")
+	}
+	if len(req.KeyLabel) > 128 {
+		return "", nil, errors.New("keyLabel too long")
+	}
+
+	kid, canonicalJWK, err = validateSigningJWKAndPEM(req.JWK, req.PEM)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return kid, canonicalJWK, nil
 }
 
 type v2SigningKeyItemResponse struct {
@@ -109,7 +90,8 @@ func (s *Server) RouteV2APISigningKeyList(c *gin.Context) {
 		return
 	}
 
-	items, err := s.signingKeyStore.ListForUser(c.Request.Context(), userID)
+	sks := s.db.SigningKeyStore()
+	items, err := sks.ListForUser(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -132,6 +114,7 @@ func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 		return
 	}
 
+	// Parse and validate the body
 	var req v2SigningKeyCreateRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -139,31 +122,16 @@ func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 		return
 	}
 
-	if req.Algorithm == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing algorithm"))
-		return
-	}
-	if !protocolv2.IsSupportedSigningAlgorithm(req.Algorithm) {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "unsupported signing algorithm %q", req.Algorithm))
-		return
-	}
-	if req.KeyLabel == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing keyLabel"))
-		return
-	}
-	if len(req.KeyLabel) > 128 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "keyLabel too long"))
-		return
-	}
-
-	id, canonicalJWK, err := validateSigningJWKAndPEM(req.JWK, req.PEM)
+	kid, canonicalJWK, err := req.Validate()
 	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "%v", err))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, err.Error()))
 		return
 	}
 
-	rec, err := s.signingKeyStore.Create(c.Request.Context(), db.InsertSigningKeyInput{
-		ID:        id,
+	// Save in the database
+	sks := s.db.SigningKeyStore()
+	rec, err := sks.Create(c.Request.Context(), db.InsertSigningKeyInput{
+		ID:        kid,
 		UserID:    userID,
 		Algorithm: req.Algorithm,
 		KeyLabel:  req.KeyLabel,
@@ -172,10 +140,10 @@ func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 		Published: req.Published,
 	})
 	if errors.Is(err, db.ErrSigningKeyAlreadyExists) {
+		// Conflict on (user, algorithm, keyLabel)
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, err.Error()))
 		return
-	}
-	if err != nil {
+	} else if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
@@ -349,4 +317,52 @@ func (s *Server) RouteV2SigningKeyPublic(c *gin.Context) {
 		CreatedAt: rec.CreatedAt,
 		JWK:       json.RawMessage(rec.JWK),
 	})
+}
+
+// validateSigningJWKAndPEM parses the JWK and PEM representations of a signing public key, checks that they refer to the same point, and returns the JWK thumbprint used as the canonical id along with a canonical re-serialization of the JWK
+func validateSigningJWKAndPEM(jwkBytes json.RawMessage, pemStr string) (kid string, canonical []byte, err error) {
+	if len(jwkBytes) == 0 {
+		return "", nil, errors.New("missing jwk")
+	}
+	if pemStr == "" {
+		return "", nil, errors.New("missing pem")
+	}
+
+	// Parse the key as JWK
+	jwk, err := protocolv2.ParseECP256SigningJWK(jwkBytes)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid jwk: %w", err)
+	}
+
+	// Parse the key as PEM
+	pemRaw, err := protocolv2.ParseECP256SigningPEM([]byte(pemStr))
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid pem: %w", err)
+	}
+
+	// Get the public key
+	// This also performs additional validations to ensure the JWK represents a valid ECDH key, on-curve
+	jwkPub, err := jwk.ToECDHPublicKey()
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid jwk: %w", err)
+	}
+
+	// Ensure the two keys are equal
+	if !bytes.Equal(jwkPub.Bytes(), pemRaw) {
+		return "", nil, errors.New("jwk and pem do not match")
+	}
+
+	// Compute the key ID
+	kid, err = jwk.Thumbprint()
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to compute thumbprint: %w", err)
+	}
+
+	// Re-encode the JWK in a canonical format
+	canonical, err = json.Marshal(jwk)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to canonicalize jwk: %w", err)
+	}
+
+	return kid, canonical, nil
 }
