@@ -132,6 +132,7 @@ func (tx *dbTx) SigningKeyStore() *SigningKeyStore {
 	return as
 }
 
+// ExecuteInTransaction executes a method in a transaction
 // Note that the timeout for pgx is tied to the begin command only, while it's tied to the entire transaction for SQL adapters
 func (db *DB) ExecuteInTransaction(ctx context.Context, timeout time.Duration, fn func(ctx context.Context, tx *dbTx) error) error {
 	_, err := transactions.ExecuteInTransaction(ctx, logging.LogFromContext(ctx), db.DatabaseConn, timeout, func(ctx context.Context, tx adapter.Querier) (struct{}, error) {

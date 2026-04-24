@@ -148,6 +148,7 @@ func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 		return
 	}
 
+	// Respond
 	c.JSON(http.StatusCreated, v2SigningKeyItemResponse{
 		ID:        rec.ID,
 		Algorithm: rec.Algorithm,
@@ -167,12 +168,14 @@ func (s *Server) RouteV2APISigningKeyUpdate(c *gin.Context) {
 		return
 	}
 
+	// Get the key ID form the URL
 	id := c.Param("id")
 	if id == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing id"))
 		return
 	}
 
+	// Parse the request body
 	var req v2SigningKeySetPublishedRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -180,7 +183,9 @@ func (s *Server) RouteV2APISigningKeyUpdate(c *gin.Context) {
 		return
 	}
 
-	rec, err := s.signingKeyStore.SetPublished(c.Request.Context(), userID, id, req.Published)
+	// Update in the database
+	sks := s.db.SigningKeyStore()
+	rec, err := sks.SetPublished(c.Request.Context(), userID, id, req.Published)
 	if errors.Is(err, db.ErrSigningKeyNotFound) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "not found"))
 		return
@@ -189,6 +194,7 @@ func (s *Server) RouteV2APISigningKeyUpdate(c *gin.Context) {
 		return
 	}
 
+	// Respond
 	c.JSON(http.StatusOK, v2SigningKeyItemResponse{
 		ID:        rec.ID,
 		Algorithm: rec.Algorithm,
@@ -208,22 +214,27 @@ func (s *Server) RouteV2APISigningKeyGet(c *gin.Context) {
 		return
 	}
 
+	// Get the key ID form the URL
 	id := c.Param("id")
 	if id == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing id"))
 		return
 	}
 
-	rec, err := s.signingKeyStore.GetForUser(c.Request.Context(), userID, id)
+	// Query the database
+	sks := s.db.SigningKeyStore()
+	rec, err := sks.GetForUser(c.Request.Context(), userID, id)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 	if rec == nil {
+		// GetForUser returns nil if the key exists but doesn't belong to the current user
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "not found"))
 		return
 	}
 
+	// Respond
 	c.JSON(http.StatusOK, v2SigningKeyDetailResponse{
 		ID:        rec.ID,
 		Algorithm: rec.Algorithm,
@@ -245,22 +256,27 @@ func (s *Server) RouteV2APISigningKeyDelete(c *gin.Context) {
 		return
 	}
 
+	// Get the key ID form the URL
 	id := c.Param("id")
 	if id == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing id"))
 		return
 	}
 
-	ok, err := s.signingKeyStore.Delete(c.Request.Context(), userID, id)
+	// Delete from the database
+	sks := s.db.SigningKeyStore()
+	ok, err := sks.Delete(c.Request.Context(), userID, id)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 	if !ok {
+		// Key doesn't exist or doesn't belong to the current user
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "not found"))
 		return
 	}
 
+	// Respond
 	c.JSON(http.StatusOK, v2SigningKeyDeleteResponse{
 		Deleted: true,
 	})
@@ -271,6 +287,7 @@ func (s *Server) RouteV2APISigningKeyDelete(c *gin.Context) {
 // - .pem and .pub return the PEM
 // The endpoint is unauthenticated and rate-limited; unknown IDs and formats return 404
 func (s *Server) RouteV2SigningKeyPublic(c *gin.Context) {
+	// Get the key ID and requested format (PEM or JWK) by looking at the last path of the URL
 	filename := c.Param("filename")
 	dot := strings.LastIndexByte(filename, '.')
 	if dot <= 0 || dot == len(filename)-1 {
@@ -291,12 +308,15 @@ func (s *Server) RouteV2SigningKeyPublic(c *gin.Context) {
 		return
 	}
 
-	rec, err := s.signingKeyStore.GetPublishedByID(c.Request.Context(), id)
+	// Get from the database
+	sks := s.db.SigningKeyStore()
+	rec, err := sks.GetPublishedByID(c.Request.Context(), id)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 	if rec == nil {
+		// Key doesn't exist or is not published
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "not found"))
 		return
 	}
@@ -304,19 +324,22 @@ func (s *Server) RouteV2SigningKeyPublic(c *gin.Context) {
 	// Override the cache-control as this route is cacheable
 	c.Header("Cache-Control", "public, max-age=3600")
 
-	if wantPEM {
+	switch wantPEM {
+	case true:
+		// Respond with PEM
 		c.Header("Content-Type", "application/x-pem-file")
 		c.String(http.StatusOK, rec.PEM)
 		return
+	case false:
+		// Respond with JWK
+		c.JSON(http.StatusOK, v2SigningKeyPublicResponse{
+			ID:        rec.ID,
+			Algorithm: rec.Algorithm,
+			KeyLabel:  rec.KeyLabel,
+			CreatedAt: rec.CreatedAt,
+			JWK:       json.RawMessage(rec.JWK),
+		})
 	}
-
-	c.JSON(http.StatusOK, v2SigningKeyPublicResponse{
-		ID:        rec.ID,
-		Algorithm: rec.Algorithm,
-		KeyLabel:  rec.KeyLabel,
-		CreatedAt: rec.CreatedAt,
-		JWK:       json.RawMessage(rec.JWK),
-	})
 }
 
 // validateSigningJWKAndPEM parses the JWK and PEM representations of a signing public key, checks that they refer to the same point, and returns the JWK thumbprint used as the canonical id along with a canonical re-serialization of the JWK

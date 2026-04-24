@@ -199,18 +199,35 @@ func (s *RequestStore) getRequestRaw(ctx context.Context, state string) (*V2Requ
 	return rec, nil
 }
 
-func (s *RequestStore) ListPending(ctx context.Context) ([]V2RequestListItem, error) {
+// ListPending returns all pending requests
+// The userId parameter is optional and it allows filtering by user
+func (s *RequestStore) ListPending(ctx context.Context, userID string) ([]V2RequestListItem, error) {
+	// Opportunistically expire pending requests in background (no matter the user)
 	_ = s.ExpirePending(ctx, time.Now())
-	var out []V2RequestListItem
+
+	// Add the user clause if needed
+	params := make([]any, 1, 2)
+	params[0] = string(V2RequestStatusPending)
+	var userClause string
+	if userID != "" {
+		userClause = " AND user_id = $2"
+		params = append(params, userID)
+	}
+
+	// List all pending items
 	rows, err := s.db.Query(ctx,
-		`SELECT state,status,operation,user_id,key_label,algorithm,requestor_ip,note,created_at,expires_at FROM v2_requests WHERE status = $1 ORDER BY created_at ASC`,
-		string(V2RequestStatusPending),
+		`SELECT state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at FROM v2_requests
+		WHERE status = $1 `+userClause+`
+		ORDER BY created_at ASC`,
+		params...,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
+	// Scan records
+	var out []V2RequestListItem
 	for rows.Next() {
 		var item V2RequestListItem
 		err = rows.Scan(&item.State, &item.Status, &item.Operation, &item.UserID, &item.KeyLabel, &item.Algorithm, &item.Requestor, &item.Note, &item.Date, &item.Expiry)

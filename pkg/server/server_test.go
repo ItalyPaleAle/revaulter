@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -58,23 +59,12 @@ func TestMain(m *testing.M) {
 }
 
 func TestServerV2RequestLifecycle(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-req.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-req.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
@@ -189,23 +179,12 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 }
 
 func TestServerV2PublicSignup(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-users.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-users.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
@@ -245,23 +224,12 @@ func TestServerV2PublicSignup(t *testing.T) {
 }
 
 func TestServerV2SessionMiddlewareAllowsNonreadyUsersOnListAPI(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-nonready.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-nonready.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-nonready", "Non-ready")
@@ -282,24 +250,113 @@ func TestServerV2SessionMiddlewareAllowsNonreadyUsersOnListAPI(t *testing.T) {
 	require.Empty(t, body)
 }
 
-func TestServerV2FinalizeSignupRefreshesSessionForReadyAPI(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-finalize-refresh.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+func TestServerV2APIListScopesToSignedInUser(t *testing.T) {
+	setTestConfig(t, "v2-list-scope.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice-list", "Alice")
+	bobCookie, bobUser := seedV2SessionCookie(t, srv, "user-bob-list", "Bob")
+
+	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
+	require.NoError(t, err)
+
+	// Create a pending request on the given user's request-key endpoint and return the state
+	// The handler is API-to-server, so no session cookie is required
+	createRequest := func(t *testing.T, user *db.User, label string) string {
+		t.Helper()
+		payload, mErr := json.Marshal(newV2CreateRequestBody(label, "A256GCM", clientJWK))
+		require.NoError(t, mErr)
+		req, rErr := http.NewRequestWithContext(
+			t.Context(),
+			http.MethodPost,
+			fmt.Sprintf("https://localhost:%d/v2/request/%s/encrypt", testServerPort, user.RequestKey),
+			bytes.NewReader(payload),
+		)
+		require.NoError(t, rErr)
+		req.Header.Set("Content-Type", "application/json")
+		res, dErr := client.Do(req)
+		require.NoError(t, dErr)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		require.Equal(t, http.StatusAccepted, res.StatusCode)
+		var out map[string]any
+		require.NoError(t, json.NewDecoder(res.Body).Decode(&out))
+		state, _ := out["state"].(string)
+		require.NotEmpty(t, state)
+		return state
+	}
+
+	listRequests := func(t *testing.T, cookie *http.Cookie) (int, []map[string]any) {
+		t.Helper()
+		req, rErr := http.NewRequestWithContext(
+			t.Context(),
+			http.MethodGet,
+			fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort),
+			nil,
+		)
+		require.NoError(t, rErr)
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		res, dErr := client.Do(req)
+		require.NoError(t, dErr)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		if res.StatusCode != http.StatusOK {
+			return res.StatusCode, nil
+		}
+		var out []map[string]any
+		require.NoError(t, json.NewDecoder(res.Body).Decode(&out))
+		return res.StatusCode, out
+	}
+
+	aliceState1 := createRequest(t, aliceUser, "alice-key-1")
+	aliceState2 := createRequest(t, aliceUser, "alice-key-2")
+	bobState := createRequest(t, bobUser, "bob-key")
+
+	// Alice's list returns only her requests
+	status, aliceList := listRequests(t, aliceCookie)
+	require.Equal(t, http.StatusOK, status)
+	require.Len(t, aliceList, 2)
+	seen := make([]string, 0, len(aliceList))
+	for _, item := range aliceList {
+		require.Equal(t, aliceUser.ID, item["userId"])
+		state, _ := item["state"].(string)
+		require.NotEqual(t, bobState, state, "Bob's state must not appear in Alice's list")
+		seen = append(seen, state)
+	}
+	require.ElementsMatch(t, []string{aliceState1, aliceState2}, seen)
+
+	// Bob's list returns only his single request
+	status, bobList := listRequests(t, bobCookie)
+	require.Equal(t, http.StatusOK, status)
+	require.Len(t, bobList, 1)
+	require.Equal(t, bobUser.ID, bobList[0]["userId"])
+	require.Equal(t, bobState, bobList[0]["state"])
+
+	// Unauthenticated requests are rejected before the handler reads the store
+	status, _ = listRequests(t, nil)
+	require.Equal(t, http.StatusUnauthorized, status)
+}
+
+func TestServerV2FinalizeSignupRefreshesSessionForReadyAPI(t *testing.T) {
+	setTestConfig(t, "v2-finalize-refresh.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	sessionCookie, user := seedV2SessionCookie(t, srv, "user-finalize-refresh", "Refresh User")
@@ -340,23 +397,12 @@ func TestServerV2FinalizeSignupRefreshesSessionForReadyAPI(t *testing.T) {
 }
 
 func TestServerV2SessionEndpointAllowsNonreadyUsers(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-session-nonready.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-session-nonready.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-nonready-session", "Nonready Session")
@@ -379,24 +425,12 @@ func TestServerV2SessionEndpointAllowsNonreadyUsers(t *testing.T) {
 }
 
 func TestServerV2DisableSignup(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-disable-signup.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-			"disableSignup":   true,
-		}),
-	)
+	setTestConfig(t, "v2-disable-signup.db", map[string]any{"disableSignup": true})
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	body, err := json.Marshal(map[string]any{"displayName": "Alice"})
@@ -414,23 +448,12 @@ func TestServerV2DisableSignup(t *testing.T) {
 }
 
 func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-security.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-security.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
@@ -564,23 +587,12 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 }
 
 func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-webhook.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-webhook.db")
 
 	webhookRequests := make(chan *webhook.WebhookRequest, 1)
-	srv, cleanup := newTestServer(t, &mockWebhook{requests: webhookRequests}, nil, nil)
+	srv := newTestServer(t, &mockWebhook{requests: webhookRequests}, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
@@ -620,20 +632,10 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 }
 
 func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-expiry-callback.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-expiry-callback.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
 	_, user := seedV2SessionCookie(t, srv, "user-expiry-callback", "Expiry Callback")
 	now := time.Now().UTC().Truncate(time.Second)
@@ -674,22 +676,12 @@ func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T
 }
 
 func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-logout.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}))
+	setTestConfig(t, "v2-logout.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-logout", "Logout User")
@@ -728,22 +720,12 @@ func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
 func TestServerV2AuthLogoutClearsBothCookieNames(t *testing.T) {
 	// Regression: logout must clear both the `__Host-_s` (secure) and `_s` (insecure) cookie names
 	// A scheme change between login and logout (e.g. a proxy switching https→http on a subsequent hop) would otherwise leave a stray session cookie behind
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 - Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-logout-both.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}))
+	setTestConfig(t, "v2-logout-both.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-logout-both", "Logout Both User")
@@ -779,7 +761,7 @@ func TestServerV2AuthLogoutClearsBothCookieNames(t *testing.T) {
 	require.True(t, sawInsecure, "logout must set an expired _s cookie")
 }
 
-func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.RoundTripper, logDest io.Writer) (*Server, func()) {
+func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.RoundTripper, logDest io.Writer) *Server {
 	t.Helper()
 
 	if logDest == nil {
@@ -796,10 +778,12 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	cert, key, err := getSelfSignedTLSCredentials()
 	require.NoError(t, err, "cannot get TLS credentials")
 
-	cleanup := config.SetTestConfig(map[string]any{
-		"tLSCertPEM": cert,
-		"tLSKeyPEM":  key,
-	})
+	t.Cleanup(
+		config.SetTestConfig(map[string]any{
+			"tLSCertPEM": cert,
+			"tLSKeyPEM":  key,
+		}),
+	)
 	dbConn := db.NewTestDatabaseForServerTests(t)
 	err = db.RunMigrations(t.Context(), dbConn, log)
 	require.NoError(t, err)
@@ -807,16 +791,13 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	require.NoError(t, err)
 	requestStore, err := db.NewRequestStore(dbConn)
 	require.NoError(t, err)
-	signingKeyStore, err := db.NewSigningKeyStore(dbConn)
-	require.NoError(t, err)
 
 	srv, err := NewServer(NewServerOpts{
-		Log:             log,
-		Webhook:         wh,
-		DB:              dbConn,
-		AuthStore:       authStore,
-		RequestStore:    requestStore,
-		SigningKeyStore: signingKeyStore,
+		Log:          log,
+		Webhook:      wh,
+		DB:           dbConn,
+		AuthStore:    authStore,
+		RequestStore: requestStore,
 	})
 	require.NoError(t, err)
 
@@ -826,7 +807,31 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 		srv.httpClient.Transport = httpClientTransport
 	}
 
-	return srv, cleanup
+	return srv
+}
+
+// setTestConfig applies the standard v2 server test config, registering cleanup with t
+// dbName is joined to t.TempDir() and used for databaseDSN
+// Optional override maps are merged on top of the defaults, so callers can toggle extra flags (e.g. "disableSignup": true)
+func setTestConfig(t *testing.T, dbName string, overrides ...map[string]any) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	cfg := map[string]any{
+		"databaseDSN": tmpDir + "/" + dbName,
+		// #nosec G101 -- Hardcoded credentials are test ones
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+	}
+
+	// Add overrides
+	for _, o := range overrides {
+		maps.Copy(cfg, o)
+	}
+
+	// Set the test config and enable automated cleanup on test end
+	t.Cleanup(config.SetTestConfig(cfg))
 }
 
 func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName string) (*http.Cookie, *db.User) {
@@ -876,7 +881,7 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 	}, user
 }
 
-func startTestServer(t *testing.T, srv *Server) func(t *testing.T) {
+func startTestServer(t *testing.T, srv *Server) {
 	t.Helper()
 
 	// Start the server in a background goroutine
@@ -895,16 +900,14 @@ func startTestServer(t *testing.T, srv *Server) func(t *testing.T) {
 		t.Fatalf("Received an unexpected error in startErrCh: %v", err)
 	}
 
-	// Return a function to tear down the test server, which must be invoked at the end of the test
-	return func(t *testing.T) {
-		t.Helper()
-
+	// Tear down the test server when test is done
+	t.Cleanup(func() {
 		// Shutdown the server
 		srvCancel()
 
 		// At the end of the test, there should be no error
 		require.NoError(t, <-startErrCh, "received an unexpected error in startErrCh")
-	}
+	})
 }
 
 func clientForListener(ln net.Listener) *http.Client {
@@ -1023,23 +1026,12 @@ func testValidWrappedAnchorEnvelope(t *testing.T) string {
 }
 
 func TestServerV2UpdateDisplayName(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-display-name.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-display-name.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
@@ -1121,23 +1113,12 @@ func TestServerV2UpdateDisplayName(t *testing.T) {
 }
 
 func TestServerV2UpdateWrappedKey(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-wrapped-key.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-wrapped-key.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
@@ -1209,23 +1190,12 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 }
 
 func TestServerV2CredentialLifecycle(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-cred-lifecycle.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-cred-lifecycle.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {

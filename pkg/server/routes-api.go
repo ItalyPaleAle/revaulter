@@ -57,49 +57,56 @@ func (s *Server) RouteV2APIList(c *gin.Context) {
 		return
 	}
 
+	// The session middleware must have authenticated a user before this handler runs
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		// The session middleware must have authenticated a user before this handler runs
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Unauthenticated"))
 		return
 	}
 
-	list, err := s.requestStore.ListPending(c.Request.Context())
+	// Query the database
+	rs := s.db.RequestStore()
+	list, err := rs.ListPending(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	filtered := make([]db.V2RequestListItem, 0, len(list))
-	for _, item := range list {
-		if item.UserID == userID {
-			filtered = append(filtered, item)
-		}
-	}
-
-	c.JSON(http.StatusOK, filtered)
+	// Respond
+	c.JSON(http.StatusOK, list)
 }
 
 func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 	state := c.Param("state")
 
-	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
+	// The session middleware must have authenticated a user before this handler runs
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Unauthenticated"))
+		return
+	}
+
+	// Get the key request from the database
+	rs := s.db.RequestStore()
+	rec, err := rs.GetRequest(c.Request.Context(), state)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
 	// Return the same error for missing records and records owned by another user, so the endpoint does not reveal whether a foreign state exists
-	if rec == nil || !s.authorizeUser(c, rec.UserID) {
+	if rec == nil || userID != rec.UserID {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 		return
 	}
 
+	// Encode the request object
 	var encReq json.RawMessage
 	if rec.EncryptedRequest != "" {
 		encReq = json.RawMessage(rec.EncryptedRequest)
 	}
 
+	// Respond
 	c.JSON(http.StatusOK, v2APIRequestDetailResponse{
 		State:            rec.State,
 		Status:           string(rec.Status),
@@ -231,11 +238,6 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	})
 }
 
-func (s *Server) authorizeUser(c *gin.Context, userID string) bool {
-	sessionUserID := c.GetString(contextKeyUserID)
-	return sessionUserID != "" && sessionUserID == userID
-}
-
 func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V2RequestRecord, pub *confirmPublicKey) {
 	id, canonicalJWK, err := validateSigningJWKAndPEM(pub.JWK, pub.PEM)
 	if err != nil {
@@ -247,7 +249,8 @@ func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V
 	}
 
 	// Auto-stored keys always land as Published=false so they appear in the settings UI but aren't served from the public fetch endpoint until the user publishes them
-	inserted, err := s.signingKeyStore.Create(c.Request.Context(), db.InsertSigningKeyInput{
+	sks := s.db.SigningKeyStore()
+	inserted, err := sks.Create(c.Request.Context(), db.InsertSigningKeyInput{
 		ID:        id,
 		UserID:    rec.UserID,
 		Algorithm: rec.Algorithm,
@@ -257,8 +260,11 @@ func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V
 		Published: false,
 	})
 	if errors.Is(err, db.ErrSigningKeyAlreadyExists) {
+		// Conflict on (user, algorithm, keyLabel)
+		// In this case, we ignore the error
 		return
 	} else if err != nil {
+		// Log the error as warning but do not abort the request
 		log.WarnContext(c.Request.Context(), "Failed to auto-store signing public key",
 			slog.String("state", rec.State),
 			slog.Any("err", err),
@@ -282,7 +288,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 		return
 	}
 
-	list, err := s.requestStore.ListPending(c.Request.Context())
+	list, err := s.requestStore.ListPending(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -294,12 +300,13 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 	enc := json.NewEncoder(c.Writer)
 	enc.SetEscapeHTML(false)
 
-	sent := false
-	for _, item := range list {
-		if item.UserID == userID {
+	if len(list) > 0 {
+		for _, item := range list {
 			_ = enc.Encode(item)
-			sent = true
 		}
+	} else {
+		// Send an empty message if we haven't sent anything
+		_, _ = c.Writer.Write([]byte("{}\n"))
 	}
 
 	events, err := s.pubsub.Subscribe()
@@ -308,11 +315,6 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 		return
 	}
 	defer s.pubsub.Unsubscribe(events)
-
-	if !sent {
-		// Send an empty message
-		_, _ = c.Writer.Write([]byte("{}\n"))
-	}
 
 	c.Writer.Flush()
 	flushTicker := time.NewTicker(100 * time.Millisecond)

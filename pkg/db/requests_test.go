@@ -46,10 +46,22 @@ func TestRequestStoreLifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	list, err := store.ListPending(ctx)
+	// Returns all pending
+	list, err := store.ListPending(ctx, "")
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.Equal(t, "state-1", list[0].State)
+
+	// Filtering by the owner returns the same record
+	list, err = store.ListPending(ctx, "user-1")
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "state-1", list[0].State)
+
+	// Filtering by a different user returns nothing
+	list, err = store.ListPending(ctx, "user-other")
+	require.NoError(t, err)
+	require.Empty(t, list)
 
 	rec, err := store.GetRequest(ctx, "state-1")
 	require.NoError(t, err)
@@ -495,4 +507,86 @@ func TestRequestStoreDeleteTerminalRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 	require.Equal(t, V2RequestStatusPending, rec.Status)
+}
+
+func TestRequestStoreListPendingByUser(t *testing.T) {
+	ctx := t.Context()
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(ctx, conn, nil))
+
+	authStore, err := NewAuthStore(conn, conn.kind)
+	require.NoError(t, err)
+
+	for _, id := range []string{"user-list-alice", "user-list-bob"} {
+		_, err = authStore.RegisterUser(ctx, RegisterUserInput{
+			UserID:         id,
+			DisplayName:    id,
+			WebAuthnUserID: "webauthn-" + id,
+			CredentialID:   "cred-" + id,
+			PublicKey:      `{"kty":"EC"}`,
+			SignCount:      1,
+			SessionTTL:     time.Minute,
+		})
+		require.NoError(t, err)
+	}
+
+	store, err := NewRequestStore(conn)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	mkReq := func(state, userID, label string, createdOffset time.Duration) {
+		err = store.CreateRequest(ctx, CreateRequestInput{
+			State:            state,
+			UserID:           userID,
+			Operation:        "encrypt",
+			RequestorIP:      "127.0.0.1",
+			KeyLabel:         label,
+			Algorithm:        "A256GCM",
+			CreatedAt:        now.Add(createdOffset),
+			ExpiresAt:        now.Add(5 * time.Minute),
+			EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
+		})
+		require.NoError(t, err)
+	}
+
+	// Offsets keep ASC ordering deterministic without relying on insertion time
+	mkReq("state-alice-1", "user-list-alice", "alice-1", 0)
+	mkReq("state-alice-2", "user-list-alice", "alice-2", time.Second)
+	mkReq("state-bob-1", "user-list-bob", "bob-1", 2*time.Second)
+
+	// Empty userID returns every pending row
+	list, err := store.ListPending(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, list, 3)
+
+	// Filter by Alice returns only her two rows and no cross-user leakage
+	list, err = store.ListPending(ctx, "user-list-alice")
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	states := []string{list[0].State, list[1].State}
+	require.ElementsMatch(t, []string{"state-alice-1", "state-alice-2"}, states)
+	for _, item := range list {
+		require.Equal(t, "user-list-alice", item.UserID)
+	}
+
+	// Filter by Bob returns only his row
+	list, err = store.ListPending(ctx, "user-list-bob")
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "state-bob-1", list[0].State)
+	require.Equal(t, "user-list-bob", list[0].UserID)
+
+	// A userID that owns no rows yields an empty slice, not an error
+	list, err = store.ListPending(ctx, "user-list-nobody")
+	require.NoError(t, err)
+	require.Empty(t, list)
+
+	// Terminal rows never appear in the pending list, regardless of filter
+	_, err = store.CancelRequest(ctx, "state-alice-1", "user-list-alice")
+	require.NoError(t, err)
+	list, err = store.ListPending(ctx, "user-list-alice")
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, "state-alice-2", list[0].State)
 }

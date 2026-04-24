@@ -75,11 +75,10 @@ type Server struct {
 	deleteQueue        *eventqueue.Processor[string, deleteEvent]
 
 	// Database and request store
-	db              *db.DB
-	requestStore    *db.RequestStore
-	authStore       *db.AuthStore
-	signingKeyStore *db.SigningKeyStore
-	webAuthn        *webauthnlib.WebAuthn
+	db           *db.DB
+	requestStore *db.RequestStore
+	authStore    *db.AuthStore
+	webAuthn     *webauthnlib.WebAuthn
 
 	// Per-user rate limiter for wrapped primary key delivery
 	// Protects delivery of the wrapped root-key blob to a WebAuthn-authenticated client
@@ -106,14 +105,13 @@ type Server struct {
 
 // NewServerOpts contains options for the NewServer method
 type NewServerOpts struct {
-	Log             *slog.Logger
-	Webhook         webhook.Webhook
-	Metrics         *metrics.RevaulterMetrics
-	TraceExporter   sdkTrace.SpanExporter
-	DB              *db.DB
-	RequestStore    *db.RequestStore
-	AuthStore       *db.AuthStore
-	SigningKeyStore *db.SigningKeyStore
+	Log           *slog.Logger
+	Webhook       webhook.Webhook
+	Metrics       *metrics.RevaulterMetrics
+	TraceExporter sdkTrace.SpanExporter
+	DB            *db.DB
+	RequestStore  *db.RequestStore
+	AuthStore     *db.AuthStore
 }
 
 // NewServer creates a new Server object and initializes it
@@ -126,14 +124,13 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		subs:            map[string][]chan struct{}{},
-		pubsub:          broker.NewBroker[*db.V2RequestListItem](),
-		webhook:         opts.Webhook,
-		metrics:         opts.Metrics,
-		db:              opts.DB,
-		authStore:       opts.AuthStore,
-		requestStore:    opts.RequestStore,
-		signingKeyStore: opts.SigningKeyStore,
+		subs:         map[string][]chan struct{}{},
+		pubsub:       broker.NewBroker[*db.V2RequestListItem](),
+		webhook:      opts.Webhook,
+		metrics:      opts.Metrics,
+		db:           opts.DB,
+		authStore:    opts.AuthStore,
+		requestStore: opts.RequestStore,
 
 		httpClient: httpClient,
 
@@ -493,8 +490,8 @@ func (s *Server) startAppServer(ctx context.Context) error {
 			return fmt.Errorf("failed to cleanup old request records at startup: %w", err)
 		}
 
-		// Load currently-pending items to enqueue for cleanup
-		list, err := s.requestStore.ListPending(ctx)
+		// Load currently-pending items to enqueue for cleanup, for all users
+		list, err := s.requestStore.ListPending(ctx, "")
 		if err != nil {
 			return fmt.Errorf("failed to initialize request expiry queue: %w", err)
 		}

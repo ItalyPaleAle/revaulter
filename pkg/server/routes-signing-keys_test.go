@@ -18,7 +18,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 
@@ -56,22 +55,12 @@ func newSigningKeyMaterial(t *testing.T) testSigningKeyMaterial {
 }
 
 func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-signing-keys.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}))
+	setTestConfig(t, "v2-signing-keys.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	aliceCookie, _ := seedV2SessionCookie(t, srv, "user-sign-1", "Alice")
@@ -299,20 +288,10 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 }
 
 func TestServerV2SigningKeyPublishValidatesInputs(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-signing-keys-validate.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}))
+	setTestConfig(t, "v2-signing-keys-validate.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
-	defer cleanup()
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	srv := newTestServer(t, nil, nil, nil)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	aliceCookie, _ := seedV2SessionCookie(t, srv, "validator-user", "Alice")
@@ -373,23 +352,12 @@ func TestServerV2SigningKeyPublishValidatesInputs(t *testing.T) {
 // store the key as published=false. The key must not be served from the
 // public endpoint until the user explicitly publishes it
 func TestServerV2SigningKeyAutoStoreOnSign(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-signing-keys-autostore.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-signing-keys-autostore.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-auto-sign", "Alice")
@@ -535,22 +503,11 @@ func TestServerV2SigningKeyAutoStoreOnSign(t *testing.T) {
 // fires for sign operations — an encrypt confirm with a publicKey payload must
 // not cause a row to be written
 func TestServerV2SigningKeyAutoStoreSkippedOnNonSign(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-signing-keys-autostore-skip.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-signing-keys-autostore-skip.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-skip-sign", "Alice")
@@ -623,21 +580,10 @@ func TestServerV2SigningKeyAutoStoreSkippedOnNonSign(t *testing.T) {
 // creating a second key under the same (user, algorithm, keyLabel) returns 409 Conflict and does NOT replace the existing key
 // The caller must DELETE the existing row first if they want to store different material under the same label
 func TestServerV2SigningKeyUniqueLabelRejectsDuplicate(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-signing-keys-duplicate.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-signing-keys-duplicate.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
-	defer cleanup()
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	srv := newTestServer(t, nil, nil, nil)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	aliceCookie, _ := seedV2SessionCookie(t, srv, "duplicate-user", "Alice")
@@ -707,23 +653,12 @@ func TestServerV2SigningKeyUniqueLabelRejectsDuplicate(t *testing.T) {
 // - returns 404 for unknown ids and for ids owned by a different user
 // - returns the row (including jwk and pem) regardless of the published flag
 func TestServerV2SigningKeyGetForUser(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Cleanup(
-		// #nosec G101 -- Hardcoded credentials are test ones
-		config.SetTestConfig(map[string]any{
-			"databaseDSN":     tmpDir + "/v2-signing-keys-get.db",
-			"secretKey":       "dGVzdC12Mi1kYi1rZXk",
-			"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
-			"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
-		}),
-	)
+	setTestConfig(t, "v2-signing-keys-get.db")
 
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	defer cleanup()
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-get-sign", "Alice")
