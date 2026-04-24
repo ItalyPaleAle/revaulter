@@ -125,12 +125,14 @@ func (s *Server) RouteV2APIRequestGet(c *gin.Context) {
 func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	log := logging.LogFromContext(c.Request.Context())
 
+	// Get the user from the context
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
 		return
 	}
 
+	// Parse and validate the request
 	var req confirmRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -147,8 +149,13 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
+	rs := s.db.RequestStore()
+
+	// Handle cancellation requests
 	if req.Cancel {
-		rec, err := s.requestStore.CancelRequest(c.Request.Context(), req.State, userID)
+		// Cancel the request in the database
+		// Returns ErrRequestNotModifiable if the request can't be found, if it's not pending, or if it doesn't belong to the current user
+		rec, err := rs.CancelRequest(c.Request.Context(), req.State, userID)
 		if errors.Is(err, db.ErrRequestNotModifiable) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be canceled"))
 			return
@@ -163,19 +170,25 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			slog.String("client_ip", c.ClientIP()),
 		)
 
+		// Dequeue from the expiry queue
 		err = s.requestExpiryQueue.Dequeue("request-expiry:" + req.State)
 		if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
 			AbortWithErrorJSON(c, err)
 			return
 		}
 
+		// Send notification to subscribers
+		// TODO: Because this blocks until we get a lock, if this becomes a problem consider using a message queue
 		s.lock.Lock()
 		s.notifySubscriber(req.State)
 		s.lock.Unlock()
 
+		// Respond
 		c.JSON(http.StatusOK, v2APICanceledResponse{
 			Canceled: true,
 		})
+
+		// Publish the list item
 		s.publishListItem(&db.V2RequestListItem{
 			State:  req.State,
 			Status: "removed",
@@ -184,18 +197,20 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
+	// Additional validation for complete requests
 	if req.ResponseEnvelope == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing responseEnvelope"))
 		return
 	}
-
 	err = req.ResponseEnvelope.Validate()
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid responseEnvelope: %v", err))
 		return
 	}
 
-	rec, err := s.requestStore.CompleteRequest(c.Request.Context(), req.State, userID, *req.ResponseEnvelope)
+	// Complete the request
+	// Returns ErrRequestNotModifiable if the request can't be found, if it's not pending, or if it doesn't belong to the current user
+	rec, err := rs.CompleteRequest(c.Request.Context(), req.State, userID, *req.ResponseEnvelope)
 	if errors.Is(err, db.ErrRequestNotModifiable) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be confirmed"))
 		return
@@ -217,20 +232,25 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		slog.String("client_ip", c.ClientIP()),
 	)
 
+	// Dequeue from the expiry queue
 	err = s.requestExpiryQueue.Dequeue("request-expiry:" + req.State)
 	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Send notification to subscribers
+	// TODO: Because this blocks until we get a lock, if this becomes a problem consider using a message queue
 	s.lock.Lock()
 	s.notifySubscriber(req.State)
 	s.lock.Unlock()
 
+	// Respond
 	c.JSON(http.StatusOK, v2APIConfirmedResponse{
 		Confirmed: true,
 	})
 
+	// Publish the list item
 	s.publishListItem(&db.V2RequestListItem{
 		State:  req.State,
 		Status: "removed",
@@ -239,6 +259,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 }
 
 func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V2RequestRecord, pub *confirmPublicKey) {
+	// Validate the key
 	id, canonicalJWK, err := validateSigningJWKAndPEM(pub.JWK, pub.PEM)
 	if err != nil {
 		log.WarnContext(c.Request.Context(), "Skipping auto-store of signing public key: invalid payload",
@@ -281,25 +302,29 @@ func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V
 }
 
 func (s *Server) routeV2APIListStream(c *gin.Context) {
+	// Get the signed-in user
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		// Fail closed: require an authenticated session before streaming.
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Unauthenticated"))
 		return
 	}
 
-	list, err := s.requestStore.ListPending(c.Request.Context(), userID)
+	// List currently-pending items
+	rs := s.db.RequestStore()
+	list, err := rs.ListPending(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Set the ndJSON content type and send the headers
 	c.Header("Content-Type", ndJSONContentType)
 	c.Status(http.StatusOK)
 
 	enc := json.NewEncoder(c.Writer)
 	enc.SetEscapeHTML(false)
 
+	// Send out the list of items already pending
 	if len(list) > 0 {
 		for _, item := range list {
 			_ = enc.Encode(item)
@@ -309,6 +334,8 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte("{}\n"))
 	}
 
+	// Start a subscription to watch for new items
+	// Note that items that were received between the time we queried the database and when we subscribe may not show up and will require the user to reload the page; we consider that an acceptable UX
 	events, err := s.pubsub.Subscribe()
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -316,35 +343,60 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 	}
 	defer s.pubsub.Unsubscribe(events)
 
+	// Flush to the writer right away
 	c.Writer.Flush()
-	flushTicker := time.NewTicker(100 * time.Millisecond)
-	defer flushTicker.Stop()
 
-	hasData := false
+	// Batch flushing every 100ms
+	const flushDelay = 100 * time.Millisecond
+	var (
+		flushCh <-chan time.Time
+		hasData bool
+	)
+
+	// Flush whatever was in the buffer when returning
+	defer func() {
+		if hasData {
+			c.Writer.Flush()
+		}
+	}()
+
+	// Send events as they come in, until the stream is done or the request ends
 	for {
 		select {
 		case msg, more := <-events:
+			// When more is false, the stream is done
 			if !more {
 				return
 			}
+
 			if msg == nil {
 				continue
 			}
+
 			// Every broker message must carry a UserID, and it must match the session user
 			if msg.UserID == "" || msg.UserID != userID {
 				continue
 			}
 
+			// Send the message
 			_ = enc.Encode(msg)
-			hasData = true
 
-		case <-flushTicker.C:
+			// Schedule a flush if there isn't one already for the batch
+			hasData = true
+			if flushCh == nil {
+				flushCh = time.After(flushDelay)
+			}
+
+		case <-flushCh:
+			// Flush the data
 			if hasData {
 				c.Writer.Flush()
 				hasData = false
 			}
+			flushCh = nil
 
 		case <-c.Request.Context().Done():
+			// Request is done
 			return
 		}
 	}

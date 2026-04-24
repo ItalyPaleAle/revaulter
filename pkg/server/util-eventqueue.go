@@ -45,7 +45,8 @@ func (s *Server) executeRequestExpiryEvent(ev requestExpiryEvent) {
 	defer cancel()
 	log := logging.LogFromContext(ctx)
 
-	rec, err := s.requestStore.MarkExpired(ctx, ev.State)
+	rs := s.db.RequestStore()
+	rec, err := rs.MarkExpired(ctx, ev.State)
 	if err != nil {
 		log.WarnContext(ctx, "error expiring request", slog.Any("error", err), slog.String("state", ev.State))
 		return
@@ -81,17 +82,17 @@ func (s *Server) executeDeleteEvent(ev deleteEvent) {
 
 	switch ev.Kind {
 	case "request":
-		err := s.requestStore.DeleteTerminalRequest(ctx, ev.ID, &ev.TTL)
+		err := s.db.RequestStore().DeleteTerminalRequest(ctx, ev.ID, &ev.TTL)
 		if err != nil {
 			log.WarnContext(ctx, "request cleanup failed", slog.Any("error", err), slog.String("state", ev.ID))
 		}
 	case "challenge":
-		err := s.authStore.DeleteExpiredAuthChallenge(ctx, ev.ID, ev.TTL)
+		err := s.db.AuthStore().DeleteExpiredAuthChallenge(ctx, ev.ID, ev.TTL)
 		if err != nil {
 			log.WarnContext(ctx, "auth challenge cleanup failed", slog.Any("error", err), slog.String("challenge_id", ev.ID))
 		}
 	case "nonready-user":
-		err := s.authStore.DeleteNonreadyUser(ctx, ev.ID, ev.TTL)
+		err := s.db.AuthStore().DeleteNonreadyUser(ctx, ev.ID, ev.TTL)
 		if err != nil {
 			log.WarnContext(ctx, "non-ready user cleanup failed", slog.Any("error", err), slog.String("user_id", ev.ID))
 		}

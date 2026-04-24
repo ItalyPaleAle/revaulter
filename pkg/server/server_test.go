@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdh"
@@ -348,6 +349,188 @@ func TestServerV2APIListScopesToSignedInUser(t *testing.T) {
 	// Unauthenticated requests are rejected before the handler reads the store
 	status, _ = listRequests(t, nil)
 	require.Equal(t, http.StatusUnauthorized, status)
+}
+
+// openListStream opens /v2/api/list with Accept: application/x-ndjson and returns the response together with a channel that delivers each ndjson line
+// Callers must defer the returned cleanup to close the body and cancel the request context
+func openListStream(t *testing.T, client *http.Client, cookie *http.Cookie) (*http.Response, <-chan string) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort),
+		nil,
+	)
+	require.NoError(t, err)
+	req.Header.Set("Accept", ndJSONContentType)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+
+	lines := make(chan string, 8)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(res.Body)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		_ = res.Body.Close()
+	})
+	return res, lines
+}
+
+func TestServerV2APIListStreamUnauthenticated(t *testing.T) {
+	setTestConfig(t, "v2-list-stream-unauth.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	// Note stream is closed with a cleanup function
+	//nolint:bodyclose
+	res, _ := openListStream(t, client, nil)
+	require.Equal(t, http.StatusUnauthorized, res.StatusCode)
+}
+
+func TestServerV2APIListStreamEmptySendsSentinel(t *testing.T) {
+	setTestConfig(t, "v2-list-stream-empty.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, _ := seedV2SessionCookie(t, srv, "user-alice-stream-empty", "Alice")
+
+	// Note stream is closed with a cleanup function
+	//nolint:bodyclose
+	res, lines := openListStream(t, client, aliceCookie)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Contains(t, res.Header.Get("Content-Type"), ndJSONContentType)
+
+	// When the initial list is empty the handler writes a single `{}` sentinel line before entering the event loop
+	select {
+	case line, ok := <-lines:
+		require.True(t, ok, "stream closed before delivering sentinel")
+		require.Equal(t, "{}", line)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for empty-list sentinel")
+	}
+}
+
+func TestServerV2APIListStreamScopesToSignedInUser(t *testing.T) {
+	setTestConfig(t, "v2-list-stream-scope.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice-stream", "Alice")
+	_, bobUser := seedV2SessionCookie(t, srv, "user-bob-stream", "Bob")
+
+	// Seed one pending request for each user directly against the store so the test doesn't depend on the encrypt endpoint
+	now := time.Now().UTC().Truncate(time.Second)
+	err := srv.requestStore.CreateRequest(t.Context(), db.CreateRequestInput{
+		State:            "alice-stream-state",
+		UserID:           aliceUser.ID,
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "alice-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(10 * time.Minute),
+		EncryptedRequest: `{}`,
+	})
+	require.NoError(t, err)
+
+	err = srv.requestStore.CreateRequest(t.Context(), db.CreateRequestInput{
+		State:            "bob-stream-state",
+		UserID:           bobUser.ID,
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "bob-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(10 * time.Minute),
+		EncryptedRequest: `{}`,
+	})
+	require.NoError(t, err)
+
+	// Open the stream
+	// Note stream is closed with a cleanup function
+	//nolint:bodyclose
+	res, lines := openListStream(t, client, aliceCookie)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Contains(t, res.Header.Get("Content-Type"), ndJSONContentType)
+
+	readLine := func(t *testing.T, timeout time.Duration) string {
+		t.Helper()
+		select {
+		case line, ok := <-lines:
+			require.True(t, ok, "stream closed while waiting for a line")
+			return line
+		case <-time.After(timeout):
+			t.Fatal("timed out waiting for stream line")
+			return ""
+		}
+	}
+
+	// Initial batch must contain only Alice's pending request
+	initial := readLine(t, 2*time.Second)
+	var item map[string]any
+	require.NoError(t, json.Unmarshal([]byte(initial), &item))
+	require.Equal(t, "alice-stream-state", item["state"])
+	require.Equal(t, aliceUser.ID, item["userId"])
+
+	// No Bob rows must follow in the initial batch
+	select {
+	case extra, ok := <-lines:
+		if ok {
+			t.Fatalf("unexpected extra row in initial batch: %s", extra)
+		}
+	case <-time.After(300 * time.Millisecond):
+		// expected — initial batch exhausted
+	}
+
+	// Reading the initial line proves the handler has already Subscribe()'d and Flush()'d, so any publish after this point is observable
+	// A pubsub event targeting a different user must be filtered out by the UserID check in the handler
+	srv.publishListItem(&db.V2RequestListItem{
+		State:  "bob-live-update",
+		Status: "removed",
+		UserID: bobUser.ID,
+	})
+	select {
+	case leaked := <-lines:
+		t.Fatalf("Alice received a message targeting Bob: %s", leaked)
+	case <-time.After(400 * time.Millisecond):
+		// expected — filtered
+	}
+
+	// A pubsub event targeting Alice must be delivered within a couple of flush ticks
+	srv.publishListItem(&db.V2RequestListItem{
+		State:  "alice-live-update",
+		Status: "removed",
+		UserID: aliceUser.ID,
+	})
+	live := readLine(t, 2*time.Second)
+	require.NoError(t, json.Unmarshal([]byte(live), &item))
+	require.Equal(t, "alice-live-update", item["state"])
+	require.Equal(t, aliceUser.ID, item["userId"])
 }
 
 func TestServerV2FinalizeSignupRefreshesSessionForReadyAPI(t *testing.T) {

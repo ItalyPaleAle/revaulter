@@ -102,14 +102,15 @@ type v2AuthFinalizeSignupRequest struct {
 	RequestEncMlkemPubkey string          `json:"requestEncMlkemPubkey"`
 	WrappedPrimaryKey     string          `json:"wrappedPrimaryKey,omitempty"`
 
-	// Hybrid anchor (long-lived identity root).
+	// Hybrid anchor (long-lived identity root)
 	AnchorEs384PublicKey   string `json:"anchorEs384PublicKey"`
 	AnchorMldsa87PublicKey string `json:"anchorMldsa87PublicKey"`
-	// Self-signatures by the anchor over the canonical pubkey bundle.
+
+	// Self-signatures by the anchor over the canonical pubkey bundle
 	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`
 	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
 
-	// First-credential attestation signed by the anchor.
+	// First-credential attestation signed by the anchor
 	WrappedAnchorKey            string `json:"wrappedAnchorKey"`
 	AttestationPayload          string `json:"attestationPayload"`
 	AttestationSignatureEs384   string `json:"attestationSignatureEs384"`
@@ -199,7 +200,7 @@ type v2AuthAddCredentialFinishRequest struct {
 	CredentialName    string          `json:"credentialName"`
 	WrappedPrimaryKey string          `json:"wrappedPrimaryKey,omitempty"`
 
-	// New credentials must carry a hybrid attestation signed by the user's anchor.
+	// New credentials must carry a hybrid attestation signed by the user's anchor
 	WrappedAnchorKey            string `json:"wrappedAnchorKey"`
 	AttestationPayload          string `json:"attestationPayload"`
 	AttestationSignatureEs384   string `json:"attestationSignatureEs384"`
@@ -215,13 +216,17 @@ type v2AuthDeleteCredentialRequest struct {
 	ID string `json:"id"`
 }
 
+// RouteV2AuthRegisterBegin is the handler for POST /v2/auth/register/begin
 func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	cfg := config.Get()
+
+	// Stop if account creation is disabled
 	if cfg.DisableSignup {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Account creation is disabled"))
 		return
 	}
 
+	// Parse the request body
 	var req v2AuthRegisterBeginRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -229,6 +234,7 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		return
 	}
 
+	// Create the user object for registration
 	userID := uuid.NewString()
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
 	user, err := newV2WebAuthnUserForRegistration(userID, req.DisplayName)
@@ -237,8 +243,11 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		return
 	}
 
+	// Begin the WebAuthn registration session
 	creation, session, err := s.webAuthn.BeginRegistration(user,
+		// We require discoverable credentials aka Passkeys
 		webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
+		// Add PRF extension
 		webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
 			"prf": map[string]any{},
 		}),
@@ -248,6 +257,7 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		return
 	}
 
+	// Store the challenge in the database
 	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "register", userID, session.Challenge, session.Expires, v2RegisterChallengePayload{
 		UserID:          userID,
 		DisplayName:     req.DisplayName,
@@ -259,6 +269,7 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		return
 	}
 
+	// Add the challenge to the cleanup queue
 	err = s.deleteQueue.Enqueue(deleteEvent{
 		KeyName: "challenge-delete:" + ch.ID,
 		Kind:    "challenge",
@@ -270,6 +281,7 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		return
 	}
 
+	// Send response
 	c.JSON(http.StatusOK, v2AuthRegisterBeginResponse{
 		ChallengeID: ch.ID,
 		Challenge:   session.Challenge,
@@ -280,13 +292,17 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	})
 }
 
+// RouteV2AuthRegisterFinish is the handler for POST /v2/auth/register/finish
 func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 	cfg := config.Get()
+
+	// Stop if account creation is disabled
 	if cfg.DisableSignup {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Account creation is disabled"))
 		return
 	}
 
+	// Parse and validate the request body
 	var req v2AuthRegisterFinishRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -298,6 +314,7 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		return
 	}
 
+	// Complete the registration
 	user, sess, err := s.v2RegisterFinish(c, req)
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "User registration failed",

@@ -238,7 +238,7 @@ func (s *AuthStore) BeginChallenge(ctx context.Context, kind, userID string, ttl
 	return rec, s.insertChallenge(ctx, rec, nil)
 }
 
-func (s *AuthStore) BeginChallengeWithPayload(ctx context.Context, kind, userID string, challenge string, expiresAt time.Time, payload any) (*AuthChallenge, error) {
+func (s *AuthStore) BeginChallengeWithPayload(ctx context.Context, kind string, userID string, challenge string, expiresAt time.Time, payload any) (*AuthChallenge, error) {
 	if challenge == "" {
 		return nil, errors.New("challenge is empty")
 	}
@@ -303,7 +303,7 @@ func (s *AuthStore) insertChallenge(ctx context.Context, rec *AuthChallenge, pay
 	return nil
 }
 
-func (s *AuthStore) ConsumeChallenge(ctx context.Context, id, kind string) (bool, error) {
+func (s *AuthStore) ConsumeChallenge(ctx context.Context, id string, kind string) (bool, error) {
 	now := time.Now().Unix()
 	affected, err := s.db.Exec(ctx,
 		`UPDATE v2_auth_challenges SET used_at = $1 WHERE id = $2 AND kind = $3 AND used_at IS NULL AND expires_at >= $1`,
@@ -315,7 +315,7 @@ func (s *AuthStore) ConsumeChallenge(ctx context.Context, id, kind string) (bool
 	return affected == 1, nil
 }
 
-func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind string, out any) (bool, error) {
+func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id string, kind string, out any) (bool, error) {
 	ok, err := s.ConsumeChallenge(ctx, id, kind)
 	if err != nil || !ok {
 		return ok, err
@@ -324,6 +324,7 @@ func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind string
 		return true, nil
 	}
 
+	// Execute the query
 	var payload string
 	err = s.db.
 		QueryRow(ctx, `SELECT session_data FROM v2_auth_challenge_payloads WHERE challenge_id = $1`, id).
@@ -334,6 +335,7 @@ func (s *AuthStore) ConsumeChallengePayload(ctx context.Context, id, kind string
 		return false, err
 	}
 
+	// Unmarshal the payload
 	err = json.Unmarshal([]byte(payload), out)
 	if err != nil {
 		return false, err

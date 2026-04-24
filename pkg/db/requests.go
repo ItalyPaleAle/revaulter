@@ -268,7 +268,7 @@ func (s *RequestStore) CompleteRequest(ctx context.Context, state, userID string
 
 // CancelRequest atomically transitions a pending request owned by userID to canceled
 // Returns the updated record on success, or ErrRequestNotModifiable if no row matched (same collapsed-cases rationale as CompleteRequest)
-func (s *RequestStore) CancelRequest(ctx context.Context, state, userID string) (*V2RequestRecord, error) {
+func (s *RequestStore) CancelRequest(ctx context.Context, state string, userID string) (*V2RequestRecord, error) {
 	now := time.Now().Unix()
 	rec, err := scanRequestRecord(
 		s.db.QueryRow(ctx,

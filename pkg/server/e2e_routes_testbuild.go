@@ -339,9 +339,11 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 		status = string(db.V2RequestStatusPending)
 	}
 
+	rs := s.db.RequestStore()
+
 	now := time.Now().UTC()
 	encryptedRequest := `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","y":"AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"mlkemCiphertext":"dGVzdC1tbGtlbS1jaXBoZXJ0ZXh0","nonce":"MTIzNDU2Nzg5MDEy","ciphertext":"dGVzdC1yZXF1ZXN0LWNpcGhlcnRleHQifQ}`
-	err = s.requestStore.CreateRequest(c.Request.Context(), db.CreateRequestInput{
+	err = rs.CreateRequest(c.Request.Context(), db.CreateRequestInput{
 		State:            req.State,
 		UserID:           req.UserID,
 		Operation:        req.Operation,
@@ -362,9 +364,9 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 	case string(db.V2RequestStatusPending):
 		// nothing else to do
 	case string(db.V2RequestStatusCanceled):
-		_, err = s.requestStore.CancelRequest(c.Request.Context(), req.State, req.UserID)
+		_, err = rs.CancelRequest(c.Request.Context(), req.State, req.UserID)
 	case string(db.V2RequestStatusCompleted):
-		_, err = s.requestStore.CompleteRequest(c.Request.Context(), req.State, req.UserID, protocolv2.ResponseEnvelope{
+		_, err = rs.CompleteRequest(c.Request.Context(), req.State, req.UserID, protocolv2.ResponseEnvelope{
 			TransportAlg: protocolv2.TransportAlg,
 			BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 				Kty: "EC",
@@ -378,9 +380,9 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 			ResultType:      "bytes",
 		})
 	case string(db.V2RequestStatusExpired):
-		execErr := s.requestStore.ForceExpireRequestForTests(c.Request.Context(), req.State, now.Add(-time.Second))
+		execErr := rs.ForceExpireRequestForTests(c.Request.Context(), req.State, now.Add(-time.Second))
 		if execErr == nil {
-			_, err = s.requestStore.MarkExpired(c.Request.Context(), req.State)
+			_, err = rs.MarkExpired(c.Request.Context(), req.State)
 		} else {
 			err = execErr
 		}
@@ -417,7 +419,9 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 
 func (s *Server) RouteE2EGetRequest(c *gin.Context) {
 	state := c.Param("state")
-	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
+	rs := s.db.RequestStore()
+
+	rec, err := rs.GetRequest(c.Request.Context(), state)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -441,7 +445,9 @@ func (s *Server) RouteE2EGetRequest(c *gin.Context) {
 
 func (s *Server) RouteE2EGetRequestResult(c *gin.Context) {
 	state := c.Param("state")
-	rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
+	rs := s.db.RequestStore()
+
+	rec, err := rs.GetRequest(c.Request.Context(), state)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
