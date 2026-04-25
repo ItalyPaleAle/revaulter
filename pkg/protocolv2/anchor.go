@@ -178,7 +178,7 @@ func parseTaggedFields(body string, out any) error {
 }
 
 // CanonicalAttestationMessage returns the domain-separated, canonically-encoded message that both anchor legs (ES384 and ML-DSA-87) sign for credential attestation
-func CanonicalAttestationMessage(payload AttestationPayload) []byte {
+func CanonicalAttestationMessage(payload *AttestationPayload) []byte {
 	body := payload.CanonicalBody()
 	out := make([]byte, len(CredAttestPrefix)+len(body))
 	copy(out[0:len(CredAttestPrefix)], CredAttestPrefix)
@@ -187,7 +187,7 @@ func CanonicalAttestationMessage(payload AttestationPayload) []byte {
 }
 
 // CanonicalPubkeyBundleMessage returns the domain-separated, canonically-encoded bundle message signed by both anchor legs
-func CanonicalPubkeyBundleMessage(payload PubkeyBundlePayload) []byte {
+func CanonicalPubkeyBundleMessage(payload *PubkeyBundlePayload) []byte {
 	body := payload.CanonicalBody()
 	out := make([]byte, len(PubkeyBundlePrefix)+len(body))
 	copy(out[0:len(PubkeyBundlePrefix)], PubkeyBundlePrefix)
@@ -202,7 +202,7 @@ func CanonicalPubkeyBundleMessage(payload PubkeyBundlePayload) []byte {
 // It does NOT by itself establish trust in the anchor pubkeys or in the payload's bindings
 // Callers MUST independently verify that the anchor pubkeys belong to the expected principal (for example, by matching them against values stored at registration time) AND cross-check the payload fields (UserID, CredentialID, CredentialPublicKeyHash, ...) against an independent source of truth
 // Without those checks an attacker can present attacker-controlled pubkeys and signatures that verify consistently but bind to nothing the server trusts
-func VerifyHybridAttestation(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload AttestationPayload, sigEs384, sigMldsa87 []byte) error {
+func VerifyHybridAttestation(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload *AttestationPayload, sigEs384, sigMldsa87 []byte) error {
 	msg := CanonicalAttestationMessage(payload)
 	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
 }
@@ -213,7 +213,7 @@ func VerifyHybridAttestation(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, 
 // produced the bundle, but it does NOT establish trust in those pubkeys
 // In a self-signed bundle (like the one submitted during signup) the signer's pubkeys are chosen by the caller, so a successful verification only confirms internal consistency
 // Callers MUST independently bind the anchor pubkeys to the principal they represent (e.g., by pinning them at registration and comparing on subsequent use) before trusting the payload.
-func VerifyHybridBundle(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload PubkeyBundlePayload, sigEs384, sigMldsa87 []byte) error {
+func VerifyHybridBundle(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload *PubkeyBundlePayload, sigEs384 []byte, sigMldsa87 []byte) error {
 	msg := CanonicalPubkeyBundleMessage(payload)
 	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
 }

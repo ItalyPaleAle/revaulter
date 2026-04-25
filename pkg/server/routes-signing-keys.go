@@ -86,7 +86,7 @@ type v2SigningKeyPublicResponse struct {
 func (s *Server) RouteV2APISigningKeyList(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
@@ -110,7 +110,7 @@ func (s *Server) RouteV2APISigningKeyList(c *gin.Context) {
 func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
@@ -164,7 +164,7 @@ func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 func (s *Server) RouteV2APISigningKeyUpdate(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
@@ -210,7 +210,7 @@ func (s *Server) RouteV2APISigningKeyUpdate(c *gin.Context) {
 func (s *Server) RouteV2APISigningKeyGet(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
@@ -252,7 +252,7 @@ func (s *Server) RouteV2APISigningKeyGet(c *gin.Context) {
 func (s *Server) RouteV2APISigningKeyDelete(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 

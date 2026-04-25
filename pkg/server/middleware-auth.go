@@ -44,6 +44,7 @@ func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 			}
 		}
 
+		// Parse the session token and validate it
 		sess, err := parseAuthSessionToken(token)
 		if err != nil || sess == nil {
 			if err != nil {
@@ -53,16 +54,16 @@ func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 			return
 		}
 
-		userID := sess.UserID
+		// If we require the user to be ready, enforce that
 		if requireReady && !sess.Ready {
-			_ = c.Error(fmt.Errorf("session not ready for %s %s user=%s ready=%t", c.Request.Method, c.Request.URL.Path, userID, sess.Ready))
+			_ = c.Error(fmt.Errorf("session not ready for %s %s user=%s ready=%t", c.Request.Method, c.Request.URL.Path, sess.UserID, sess.Ready))
 			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account setup is not complete"))
 			return
 		}
 
 		ttl := int(max(time.Until(sess.ExpiresAt), 0).Seconds())
 		c.Set(contextKeySessionTTL, ttl)
-		c.Set(contextKeyUserID, userID)
+		c.Set(contextKeyUserID, sess.UserID)
 	}
 }
 
@@ -75,8 +76,10 @@ func (s *Server) MiddlewareRequestKey(c *gin.Context) {
 		return
 	}
 
-	// Get the user
-	user, err := s.authStore.GetUserByRequestKey(c.Request.Context(), requestKey)
+	// Get the user matching the request key from the database
+	// Note: this is not performed in a transaction because we can't easily make a transaction that spans this middleware and the handlers that use it
+	// However, handlers that use this middleware do not modify the auth store
+	user, err := s.db.AuthStore().GetUserByRequestKey(c.Request.Context(), requestKey)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -85,13 +88,15 @@ func (s *Server) MiddlewareRequestKey(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request key not found"))
 		return
 	}
+
+	// User must be ready
 	if !user.Ready {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusPreconditionFailed, "User account setup is not complete"))
 		return
 	}
 
-	// Check if the client IP is allowed
-	if !clientIPAllowed(c.ClientIP(), user.AllowedIPs) {
+	// Check if the client IP is allowed (if there's an allowlist)
+	if !clientIPAllowed(c, user.AllowedIPs) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "This client's IP is not allowed to perform this request"))
 		return
 	}

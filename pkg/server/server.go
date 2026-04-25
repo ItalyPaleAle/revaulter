@@ -75,10 +75,8 @@ type Server struct {
 	deleteQueue        *eventqueue.Processor[string, deleteEvent]
 
 	// Database and request store
-	db           *db.DB
-	requestStore *db.RequestStore
-	authStore    *db.AuthStore
-	webAuthn     *webauthnlib.WebAuthn
+	db       *db.DB
+	webAuthn *webauthnlib.WebAuthn
 
 	// Per-user rate limiter for wrapped primary key delivery
 	// Protects delivery of the wrapped root-key blob to a WebAuthn-authenticated client
@@ -110,8 +108,6 @@ type NewServerOpts struct {
 	Metrics       *metrics.RevaulterMetrics
 	TraceExporter sdkTrace.SpanExporter
 	DB            *db.DB
-	RequestStore  *db.RequestStore
-	AuthStore     *db.AuthStore
 }
 
 // NewServer creates a new Server object and initializes it
@@ -124,13 +120,11 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		subs:         map[string][]chan struct{}{},
-		pubsub:       broker.NewBroker[*db.V2RequestListItem](),
-		webhook:      opts.Webhook,
-		metrics:      opts.Metrics,
-		db:           opts.DB,
-		authStore:    opts.AuthStore,
-		requestStore: opts.RequestStore,
+		subs:    map[string][]chan struct{}{},
+		pubsub:  broker.NewBroker[*db.V2RequestListItem](),
+		webhook: opts.Webhook,
+		metrics: opts.Metrics,
+		db:      opts.DB,
 
 		httpClient: httpClient,
 
@@ -280,12 +274,12 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 
 	// Request group is API-to-server (not browser-originated), so no CSRF middleware
 	v2RequestGroup := v2RouteGroup.Group("/request")
-	v2RequestGroup.Use(requestRateLimiter)
-	v2RequestGroup.POST("/:requestKey/encrypt", s.MiddlewareRequestKey, s.RouteV2RequestCreate("encrypt"))
-	v2RequestGroup.POST("/:requestKey/decrypt", s.MiddlewareRequestKey, s.RouteV2RequestCreate("decrypt"))
-	v2RequestGroup.POST("/:requestKey/sign", s.MiddlewareRequestKey, s.RouteV2RequestCreate("sign"))
-	v2RequestGroup.GET("/:requestKey/pubkey", s.MiddlewareRequestKey, s.RouteV2RequestPubkey)
-	v2RequestGroup.GET("/:requestKey/result/:state", s.MiddlewareRequestKey, s.RouteV2RequestResult)
+	v2RequestGroup.Use(requestRateLimiter, s.MiddlewareRequestKey)
+	v2RequestGroup.POST("/:requestKey/encrypt", s.RouteV2RequestCreate("encrypt"))
+	v2RequestGroup.POST("/:requestKey/decrypt", s.RouteV2RequestCreate("decrypt"))
+	v2RequestGroup.POST("/:requestKey/sign", s.RouteV2RequestCreate("sign"))
+	v2RequestGroup.GET("/:requestKey/pubkey", s.RouteV2RequestPubkey)
+	v2RequestGroup.GET("/:requestKey/result/:state", s.RouteV2RequestResult)
 
 	// Public (unauthenticated) signing key fetch endpoints, rate-limited
 	// Paths carry the format as a dot-extension
@@ -479,19 +473,26 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		}
 	}()
 
-	if s.requestStore != nil {
+	if s.db != nil {
+		rs := s.db.RequestStore()
+		as := s.db.AuthStore()
+
 		now := time.Now()
-		err := s.requestStore.ExpirePending(ctx, now)
+
+		// Cleanup expired requests
+		err := rs.ExpirePending(ctx, now)
 		if err != nil {
 			return fmt.Errorf("failed to cleanup expired requests at startup: %w", err)
 		}
-		_, err = s.requestStore.CleanupOldRecords(ctx, now)
+
+		// Cleanup expired records
+		_, err = rs.CleanupOldRecords(ctx, now)
 		if err != nil {
 			return fmt.Errorf("failed to cleanup old request records at startup: %w", err)
 		}
 
 		// Load currently-pending items to enqueue for cleanup, for all users
-		list, err := s.requestStore.ListPending(ctx, "")
+		list, err := rs.ListPending(ctx, "")
 		if err != nil {
 			return fmt.Errorf("failed to initialize request expiry queue: %w", err)
 		}
@@ -505,10 +506,9 @@ func (s *Server) startAppServer(ctx context.Context) error {
 				return fmt.Errorf("failed to enqueue request expiry for %s: %w", item.State, err)
 			}
 		}
-	}
 
-	if s.authStore != nil {
-		err := s.authStore.CleanupExpired(ctx, time.Now())
+		// Cleanup expired auth records
+		err = as.CleanupExpired(ctx, time.Now())
 		if err != nil {
 			return fmt.Errorf("failed to cleanup expired auth records at startup: %w", err)
 		}

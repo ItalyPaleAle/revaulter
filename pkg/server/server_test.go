@@ -175,7 +175,7 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	require.True(t, ok)
 
 	res, result = doGetJSON(t, "/v2/request/"+aliceUser.RequestKey+"/result/"+state)
-	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+	require.Equal(t, http.StatusNotFound, res.StatusCode)
 	require.Contains(t, result["error"], "State not found or expired")
 }
 
@@ -436,6 +436,7 @@ func TestServerV2APIListStreamScopesToSignedInUser(t *testing.T) {
 
 	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
+	rs := srv.db.RequestStore()
 
 	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
@@ -445,7 +446,7 @@ func TestServerV2APIListStreamScopesToSignedInUser(t *testing.T) {
 
 	// Seed one pending request for each user directly against the store so the test doesn't depend on the encrypt endpoint
 	now := time.Now().UTC().Truncate(time.Second)
-	err := srv.requestStore.CreateRequest(t.Context(), db.CreateRequestInput{
+	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
 		State:            "alice-stream-state",
 		UserID:           aliceUser.ID,
 		Operation:        "encrypt",
@@ -458,7 +459,7 @@ func TestServerV2APIListStreamScopesToSignedInUser(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = srv.requestStore.CreateRequest(t.Context(), db.CreateRequestInput{
+	err = rs.CreateRequest(t.Context(), db.CreateRequestInput{
 		State:            "bob-stream-state",
 		UserID:           bobUser.ID,
 		Operation:        "encrypt",
@@ -765,7 +766,7 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	require.Equal(t, true, result["failed"])
 
 	res, result = doGetJSON(t, "/v2/request/"+aliceUser.RequestKey+"/result/"+expState)
-	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+	require.Equal(t, http.StatusNotFound, res.StatusCode)
 	require.Contains(t, result["error"], "State not found or expired")
 }
 
@@ -819,10 +820,11 @@ func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T
 
 	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
+	rs := srv.db.RequestStore()
 
 	_, user := seedV2SessionCookie(t, srv, "user-expiry-callback", "Expiry Callback")
 	now := time.Now().UTC().Truncate(time.Second)
-	err := srv.requestStore.CreateRequest(t.Context(), db.CreateRequestInput{
+	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
 		State:            "state-expiry-callback",
 		UserID:           user.ID,
 		Operation:        "encrypt",
@@ -841,7 +843,7 @@ func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T
 		TTL:    now.Add(-1 * time.Minute),
 	})
 
-	rec, err := srv.requestStore.GetRequest(t.Context(), "state-expiry-callback")
+	rec, err := rs.GetRequest(t.Context(), "state-expiry-callback")
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 	require.Equal(t, db.V2RequestStatusExpired, rec.Status)
@@ -853,7 +855,7 @@ func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T
 		TTL:     now.Add(10 * time.Minute),
 	})
 
-	rec, err = srv.requestStore.GetRequest(t.Context(), "state-expiry-callback")
+	rec, err = rs.GetRequest(t.Context(), "state-expiry-callback")
 	require.NoError(t, err)
 	require.Nil(t, rec)
 }
@@ -970,17 +972,11 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	dbConn := db.NewTestDatabaseForServerTests(t)
 	err = db.RunMigrations(t.Context(), dbConn, log)
 	require.NoError(t, err)
-	authStore, err := db.NewAuthStore(dbConn, dbConn.Kind())
-	require.NoError(t, err)
-	requestStore, err := db.NewRequestStore(dbConn)
-	require.NoError(t, err)
 
 	srv, err := NewServer(NewServerOpts{
-		Log:          log,
-		Webhook:      wh,
-		DB:           dbConn,
-		AuthStore:    authStore,
-		RequestStore: requestStore,
+		Log:     log,
+		Webhook: wh,
+		DB:      dbConn,
 	})
 	require.NoError(t, err)
 
@@ -1020,37 +1016,43 @@ func setTestConfig(t *testing.T, dbName string, overrides ...map[string]any) {
 func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName string) (*http.Cookie, *db.User) {
 	t.Helper()
 
-	_, err := srv.authStore.RegisterUser(t.Context(), db.RegisterUserInput{
-		UserID:         userID,
-		DisplayName:    displayName,
-		WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("webauthn-" + userID)),
-		CredentialID:   "cred-" + userID,
-		PublicKey:      `{}`,
-		SignCount:      1,
-		SessionTTL:     config.Get().SessionTimeout,
+	user, _ := db.ExecuteInTransaction(t.Context(), srv.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (*db.User, error) {
+		as := tx.AuthStore()
+
+		_, err := as.RegisterUser(ctx, db.RegisterUserInput{
+			UserID:         userID,
+			DisplayName:    displayName,
+			WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("webauthn-" + userID)),
+			CredentialID:   "cred-" + userID,
+			PublicKey:      `{}`,
+			SignCount:      1,
+			SessionTTL:     config.Get().SessionTimeout,
+		})
+		require.NoError(t, err)
+
+		requestEncPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		requestEncJWK, err := protocolv2.ECP256PublicJWKFromECDH(requestEncPriv.PublicKey())
+		require.NoError(t, err)
+		requestEncJWKJSON, err := json.Marshal(requestEncJWK)
+		require.NoError(t, err)
+		_, err = as.FinalizeSignup(
+			ctx,
+			db.FinalizeSignupInput{
+				UserID:                userID,
+				WrappedPrimaryKey:     "test-wrapped-primary-key",
+				RequestEncEcdhPubkey:  string(requestEncJWKJSON),
+				RequestEncMlkemPubkey: base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey")),
+			},
+		)
+		require.NoError(t, err)
+
+		user, err := as.GetUserByID(ctx, userID)
+		require.NoError(t, err)
+		require.NotNil(t, user)
+
+		return user, nil
 	})
-	require.NoError(t, err)
-
-	requestEncPriv, err := ecdh.P256().GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	requestEncJWK, err := protocolv2.ECP256PublicJWKFromECDH(requestEncPriv.PublicKey())
-	require.NoError(t, err)
-	requestEncJWKJSON, err := json.Marshal(requestEncJWK)
-	require.NoError(t, err)
-	_, err = srv.authStore.FinalizeSignup(
-		t.Context(),
-		db.FinalizeSignupInput{
-			UserID:                userID,
-			WrappedPrimaryKey:     "test-wrapped-primary-key",
-			RequestEncEcdhPubkey:  string(requestEncJWKJSON),
-			RequestEncMlkemPubkey: base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey")),
-		},
-	)
-	require.NoError(t, err)
-
-	user, err := srv.authStore.GetUserByID(t.Context(), userID)
-	require.NoError(t, err)
-	require.NotNil(t, user)
 
 	signed, err := newAuthSessionToken(user, config.Get().SessionTimeout)
 	require.NoError(t, err)
@@ -1300,6 +1302,7 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 
 	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
+	as := srv.db.AuthStore()
 
 	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
@@ -1343,7 +1346,7 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 	}()
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, true, body["ok"])
-	user, err := srv.authStore.GetUserByID(t.Context(), "user-alice")
+	user, err := as.GetUserByID(t.Context(), "user-alice")
 	require.NoError(t, err)
 	require.EqualValues(t, 2, user.WrappedKeyEpoch)
 
@@ -1355,12 +1358,14 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 	}()
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, true, body["ok"])
-	user, err = srv.authStore.GetUserByID(t.Context(), "user-alice")
+	user, err = as.GetUserByID(t.Context(), "user-alice")
 	require.NoError(t, err)
 	require.EqualValues(t, 2, user.WrappedKeyEpoch)
 
 	// Starting an add-credential WebAuthn ceremony must block concurrent password changes
-	_, err = srv.authStore.BeginChallengeWithPayload(t.Context(), "add-credential", "user-alice", "pending-add", time.Now().UTC().Add(5*time.Minute), nil)
+	_, err = db.ExecuteInTransaction(t.Context(), srv.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (any, error) {
+		return tx.AuthStore().BeginChallenge(ctx, "add-credential", "user-alice", "pending-add", time.Now().UTC().Add(5*time.Minute), nil)
+	})
 	require.NoError(t, err)
 
 	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "blocked-while-pending", "wrappedAnchorKey": validAnchor, "advanceEpoch": true}, sessionCookie)

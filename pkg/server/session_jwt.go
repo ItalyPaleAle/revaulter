@@ -18,7 +18,7 @@ const (
 	sessionClaimDisplayName = "displayName"
 	sessionClaimReady       = "ready"
 
-	// sessionClockSkew is the tolerance applied when validating `iat`/`nbf`/`exp`
+	// sessionClockSkew is the tolerance applied when validating session tokens' timestamps
 	sessionClockSkew = 2 * time.Minute
 )
 
@@ -103,7 +103,7 @@ func parseAuthSessionToken(token string) (*authSessionToken, error) {
 
 func setSessionCookie(c *gin.Context, sess *authSessionToken) error {
 	if sess == nil {
-		return NewResponseError(http.StatusInternalServerError, "session is nil")
+		return errors.New("session is nil")
 	}
 
 	ttl := max(time.Until(sess.ExpiresAt), time.Second)
@@ -120,10 +120,6 @@ func setSessionCookie(c *gin.Context, sess *authSessionToken) error {
 }
 
 func sessionInfoFromUser(user *db.User, ttl int) *v2AuthSessionInfo {
-	if user == nil {
-		return nil
-	}
-
 	allowedIPs := user.AllowedIPs
 	if allowedIPs == nil {
 		allowedIPs = []string{}

@@ -288,7 +288,7 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 		return nil, nil, fmt.Errorf("invalid anchorEs384PublicKey: %w", err)
 	}
 
-	bundlePayload := protocolv2.PubkeyBundlePayload{
+	bundlePayload := &protocolv2.PubkeyBundlePayload{
 		UserID:                 resp.UserID,
 		RequestEncEcdhPubkey:   string(resp.EcdhP256),
 		RequestEncMlkemPubkey:  resp.Mlkem768,

@@ -3,7 +3,10 @@
         "source.fixAll": "explicit"
     },
     "go.buildTags": "unit,e2e",
+    "go.testEnvVars": {
+        "GOEXPERIMENT": "jsonv2",
+    },
     "go.toolsEnvVars": {
-        "GOEXPERIMENT": "jsonv2"
+        "GOEXPERIMENT": "jsonv2",
     }
 }

@@ -216,6 +216,9 @@ type v2AuthDeleteCredentialRequest struct {
 	ID string `json:"id"`
 }
 
+//nolint:errname
+var noSessionResponseError = NewResponseError(http.StatusUnauthorized, "No session")
+
 // RouteV2AuthRegisterBegin is the handler for POST /v2/auth/register/begin
 func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	cfg := config.Get()
@@ -244,25 +247,21 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	}
 
 	// Begin the WebAuthn registration session
-	creation, session, err := s.webAuthn.BeginRegistration(user,
-		// We require discoverable credentials aka Passkeys
-		webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
-		// Add PRF extension
-		webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
-			"prf": map[string]any{},
-		}),
-	)
+	creation, session, err := s.beginWebAuthnSession(user)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
 	// Store the challenge in the database
-	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "register", userID, session.Challenge, session.Expires, v2RegisterChallengePayload{
-		UserID:          userID,
-		DisplayName:     req.DisplayName,
-		WebAuthnUserID:  base64.RawURLEncoding.EncodeToString(user.id),
-		WebAuthnSession: session,
+	// BeginChallenge must be executed in a transaction
+	ch, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (*db.AuthChallenge, error) {
+		return tx.AuthStore().BeginChallenge(ctx, "register", userID, session.Challenge, session.Expires, v2RegisterChallengePayload{
+			UserID:          userID,
+			DisplayName:     req.DisplayName,
+			WebAuthnUserID:  base64.RawURLEncoding.EncodeToString(user.id),
+			WebAuthnSession: session,
+		})
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -292,6 +291,18 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	})
 }
 
+func (s *Server) beginWebAuthnSession(user *v2WebAuthnUser) (creation *protocol.CredentialCreation, session *webauthnlib.SessionData, err error) {
+	// Begin the WebAuthn registration session
+	return s.webAuthn.BeginRegistration(user,
+		// We require discoverable credentials aka Passkeys
+		webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
+		// Add PRF extension
+		webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
+			"prf": map[string]any{},
+		}),
+	)
+}
+
 // RouteV2AuthRegisterFinish is the handler for POST /v2/auth/register/finish
 func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 	cfg := config.Get()
@@ -315,7 +326,10 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 	}
 
 	// Complete the registration
-	user, sess, err := s.v2RegisterFinish(c, req)
+	// This must be executed in a transaction
+	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (registerFinishRes, error) {
+		return s.registerFinish(c, tx, req)
+	})
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "User registration failed",
 			slog.String("client_ip", c.ClientIP()),
@@ -324,39 +338,59 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User registered",
-		slog.String("user_id", user.ID),
-		slog.String("client_ip", c.ClientIP()),
-	)
-
-	err = setSessionCookie(c, sess)
+	// Register the non-ready user for cleanup if it's not completed in 24 hours
+	err = s.deleteQueue.Enqueue(deleteEvent{
+		KeyName: "user-delete:" + res.user.ID,
+		Kind:    "nonready-user",
+		ID:      res.user.ID,
+		TTL:     time.Now().UTC().Add(24*time.Hour + time.Minute),
+	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Set the session cookie
+	err = setSessionCookie(c, res.sess)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User registered",
+		slog.String("user_id", res.user.ID),
+		slog.String("client_ip", c.ClientIP()),
+	)
+
+	// Respond
 	c.JSON(http.StatusOK, v2AuthRegisterFinishResponse{
 		Registered: true,
-		Session:    sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
+		Session:    sessionInfoFromUser(res.user, int(max(time.Until(res.sess.ExpiresAt), 0).Seconds())),
 	})
 }
 
+// RouteV2AuthLoginBegin is the handler for POST /v2/auth/login/begin
 func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
+	// Get an assertion and store it in the database
 	assertion, session, err := s.webAuthn.BeginDiscoverableLogin()
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "login", "", session.Challenge, session.Expires, v2LoginChallengePayload{
-		Challenge:       session.Challenge,
-		WebAuthnSession: session,
+	// BeginChallenge must be executed in a transaction
+	ch, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (*db.AuthChallenge, error) {
+		return tx.AuthStore().BeginChallenge(ctx, "login", "", session.Challenge, session.Expires, v2LoginChallengePayload{
+			Challenge:       session.Challenge,
+			WebAuthnSession: session,
+		})
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Enqueue the challenge for cleanup when it expires
 	err = s.deleteQueue.Enqueue(deleteEvent{
 		KeyName: "challenge-delete:" + ch.ID,
 		Kind:    "challenge",
@@ -368,6 +402,7 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 		return
 	}
 
+	// Respond
 	c.JSON(http.StatusOK, v2AuthLoginBeginResponse{
 		ChallengeID: ch.ID,
 		Challenge:   session.Challenge,
@@ -378,7 +413,9 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 	})
 }
 
+// RouteV2AuthLoginFinish is the handler for POST /v2/auth/login/finish
 func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
+	// Parse the request body
 	var req v2AuthLoginFinishRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -390,7 +427,11 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	user, sess, credRec, err := s.v2LoginFinish(c, req)
+	// Finish the login
+	// This must be executed in a transaction
+	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (loginFinishRes, error) {
+		return s.loginFinish(c, tx, req)
+	})
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Login failed",
 			slog.String("client_ip", c.ClientIP()),
@@ -399,35 +440,40 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	err = setSessionCookie(c, sess)
+	// Set the session cookie
+	err = setSessionCookie(c, res.sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User logged in",
-		slog.String("user_id", user.ID),
-		slog.String("client_ip", c.ClientIP()),
-	)
+	// Remove the challenge from the cleanup queue
+	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
+	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
+		AbortWithErrorJSON(c, err)
+		return
+	}
 
+	// Create the response object
 	resp := v2AuthLoginFinishResponse{
 		Authenticated: true,
-		Session:       sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
+		Session:       sessionInfoFromUser(res.user, int(max(time.Until(res.sess.ExpiresAt), 0).Seconds())),
 	}
 
 	// Throttle wrapped primary key delivery
-	// The wrapped primary key is the user's encrypted root-key material; an attacker that controls a passkey
-	// could otherwise call /v2/auth/login/finish in a tight loop and harvest the blob for offline password cracking
+	// The wrapped primary key is the user's encrypted root-key material:
+	// an attacker that controls a passkey could otherwise call /v2/auth/login/finish in a tight loop and harvest the blob for offline password cracking
 	// We refuse the login so the client cannot abuse this endpoint
-	if credRec != nil && credRec.WrappedPrimaryKey != "" {
-		resp.CredentialWrappedKeyEpoch = credRec.WrappedKeyEpoch
-		resp.WrappedKeyStale = credRec.WrappedKeyEpoch > 0 && credRec.WrappedKeyEpoch < user.WrappedKeyEpoch
-		overLimit := s.wrappedKeyLimiter.OnLimit(c.Writer, c.Request, "v2-wrapped-key:"+user.ID)
+	logMsg := "User logged in"
+	if res.cred != nil && res.cred.WrappedPrimaryKey != "" {
+		resp.CredentialWrappedKeyEpoch = res.cred.WrappedKeyEpoch
+		resp.WrappedKeyStale = res.cred.WrappedKeyEpoch > 0 && res.cred.WrappedKeyEpoch < res.user.WrappedKeyEpoch
+		overLimit := s.wrappedKeyLimiter.OnLimit(c.Writer, c.Request, "v2-wrapped-key:"+res.user.ID)
 		if overLimit {
 			// A WebAuthn-authenticated client that exceeds the budget has a 429 returned
 			logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
 				"Refused wrapped-key delivery: per-user rate limit exceeded",
-				slog.String("user_id", user.ID),
+				slog.String("user_id", res.user.ID),
 				slog.String("client_ip", c.ClientIP()),
 			)
 
@@ -435,228 +481,177 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 			return
 		}
 
-		resp.WrappedPrimaryKey = credRec.WrappedPrimaryKey
-		resp.WrappedAnchorKey = credRec.WrappedAnchorKey
-		logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(),
-			"Delivered wrapped primary key to authenticated client",
-			slog.String("user_id", user.ID),
-			slog.String("client_ip", c.ClientIP()),
-		)
+		resp.WrappedPrimaryKey = res.cred.WrappedPrimaryKey
+		resp.WrappedAnchorKey = res.cred.WrappedAnchorKey
+		logMsg = "User logged in and delivered wrapped primary key"
 	}
 
+	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), logMsg,
+		slog.String("user_id", res.user.ID),
+		slog.String("client_ip", c.ClientIP()),
+	)
+
+	// Send the response
 	c.JSON(http.StatusOK, resp)
 }
 
+// RouteV2AuthFinalizeSignup is the handler for POST /v2/auth/finalize-signup
 func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
-	userID := c.GetString(contextKeyUserID)
-	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+	cfg := config.Get()
+
+	// Stop if account creation is disabled
+	if cfg.DisableSignup {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Account creation is disabled"))
 		return
 	}
 
+	// Get the user from the context
+	userID := c.GetString(contextKeyUserID)
+	if userID == "" {
+		AbortWithErrorJSON(c, noSessionResponseError)
+		return
+	}
+
+	// Parse and validate the request body
 	var req v2AuthFinalizeSignupRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
-	if len(req.RequestEncEcdhPubkey) == 0 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "requestEncEcdhPubkey is required"))
-		return
-	}
-	if req.RequestEncMlkemPubkey == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "requestEncMlkemPubkey is required"))
-		return
-	}
 
-	// Validate the ECDH public key is a valid P-256 JWK
-	var ecdhPubkey protocolv2.ECP256PublicJWK
-	err = json.Unmarshal(req.RequestEncEcdhPubkey, &ecdhPubkey)
+	err = validateV2AuthFinalizeSignupRequest(&req)
 	if err != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid requestEncEcdhPubkey"))
-		return
-	}
-	err = ecdhPubkey.ValidatePublic()
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid requestEncEcdhPubkey: %v", err))
+		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	// Validate the ML-KEM public key is valid base64
-	mlkemKey, err := utils.DecodeBase64String(req.RequestEncMlkemPubkey)
-	if err != nil || len(mlkemKey) != mlkem.EncapsulationKeySize768 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid requestEncMlkemPubkey"))
-		return
-	}
+	// Validate and verify the anchor material
+	// We require both halves of the hybrid (ES384 + ML-DSA-87) to verify over both the pubkey bundle (so the CLI can pin the anchor at first contact) and the first credential's attestation (so the credential is provably bound to the user's identity root, not just to the server's DB)
 
-	if req.WrappedPrimaryKey == "" || len(req.WrappedPrimaryKey) > 512 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid wrappedPrimaryKey"))
-		return
-	}
-
-	err = validateWrappedAnchorEnvelope(req.WrappedAnchorKey)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid wrappedAnchorKey: %v", err))
-		return
-	}
-
-	// Validate and verify the anchor material. We require both halves of the hybrid (ES384 + ML-DSA-87) to verify over both the pubkey bundle (so the CLI can pin the anchor at first contact) and the first credential's attestation (so the credential is provably bound to the user's identity root, not just to the server's DB)
+	// To start, parse the ECDSA and ML-DSA anchor public keys
 	anchorEs384Pub, mldsa87PubBytes, err := parseAnchorPubkeys(req.AnchorEs384PublicKey, req.AnchorMldsa87PublicKey)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid anchor public key: %v", err))
 		return
 	}
 
+	// Parse the bundle signature
 	bundleSigEs, bundleSigMl, err := parseHybridSignatures(req.PubkeyBundleSignatureEs384, req.PubkeyBundleSignatureMldsa87)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid pubkeyBundleSignature: %v", err))
 		return
 	}
+
+	// Parse the attestation signature
 	attestSigEs, attestSigMl, err := parseHybridSignatures(req.AttestationSignatureEs384, req.AttestationSignatureMldsa87)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationSignature: %v", err))
 		return
 	}
 
-	var attestPayload protocolv2.AttestationPayload
-	attestPayload, err = protocolv2.ParseAttestationPayload(req.AttestationPayload)
+	// Extract the attestation payload
+	attestPayload, err := protocolv2.ParseAttestationPayload(req.AttestationPayload)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationPayload: %v", err))
 		return
 	}
 
-	// Load the user's stored credentials: at finalize-signup time the user must have exactly one credential (created by /register/finish)
-	// Everything the attestation signs must be derivable from that one row
-	creds, err := s.authStore.ListCredentials(c.Request.Context(), userID)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	if len(creds) != 1 {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusConflict, "expected exactly one credential for user at finalize-signup, got %d", len(creds)))
-		return
-	}
-
-	expectedCredentialID := creds[0].CredentialID
-	expectedCredentialPublicKeyHash, err := protocolv2.CredentialPublicKeyHashFromStoredCredJSON(creds[0].PublicKey)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusInternalServerError, "failed to derive credential public key hash: %v", err))
-		return
-	}
-
-	// Bundle self-signature: the anchor signs its own wire-format representation.
-	// This is what the CLI verifies on every request.
-	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(req.AnchorEs384PublicKey)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid anchorEs384PublicKey: %v", err))
-		return
-	}
-
-	bundlePayload := protocolv2.PubkeyBundlePayload{
-		UserID:                 userID,
-		RequestEncEcdhPubkey:   string(req.RequestEncEcdhPubkey),
-		RequestEncMlkemPubkey:  req.RequestEncMlkemPubkey,
-		AnchorEs384Crv:         es384JWK.Crv,
-		AnchorEs384Kty:         es384JWK.Kty,
-		AnchorEs384X:           es384JWK.X,
-		AnchorEs384Y:           es384JWK.Y,
-		AnchorMldsa87PublicKey: req.AnchorMldsa87PublicKey,
-		WrappedKeyEpoch:        1,
-	}
-	err = protocolv2.VerifyHybridBundle(anchorEs384Pub, mldsa87PubBytes, bundlePayload, bundleSigEs, bundleSigMl)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "pubkey bundle signature verification failed: %v", err))
-		return
-	}
-
-	// Verify the hybrid attestation signature first, then compare every signed field against server-derived expected values
-	// Only persist after both checks pass
-	err = protocolv2.VerifyHybridAttestation(anchorEs384Pub, mldsa87PubBytes, attestPayload, attestSigEs, attestSigMl)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err))
-		return
-	}
-
-	if attestPayload.UserID != userID {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload userId does not match session"))
-		return
-	}
-	if attestPayload.CredentialID != expectedCredentialID {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload credentialId does not match registered credential"))
-		return
-	}
-	if attestPayload.CredentialPublicKeyHash != expectedCredentialPublicKeyHash {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload credentialPublicKeyHash does not match registered credential"))
-		return
-	}
-	if attestPayload.WrappedKeyEpoch != 1 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload wrappedKeyEpoch must be 1 at signup"))
-		return
-	}
-
-	user, err := s.authStore.FinalizeSignup(c.Request.Context(), db.FinalizeSignupInput{
-		UserID:                       userID,
-		WrappedPrimaryKey:            req.WrappedPrimaryKey,
-		WrappedAnchorKey:             req.WrappedAnchorKey,
-		RequestEncEcdhPubkey:         string(req.RequestEncEcdhPubkey),
-		RequestEncMlkemPubkey:        req.RequestEncMlkemPubkey,
-		AnchorEs384PublicKey:         req.AnchorEs384PublicKey,
-		AnchorMldsa87PublicKey:       req.AnchorMldsa87PublicKey,
-		PubkeyBundleSignatureEs384:   req.PubkeyBundleSignatureEs384,
-		PubkeyBundleSignatureMldsa87: req.PubkeyBundleSignatureMldsa87,
-		AttestationPayload:           req.AttestationPayload,
-		AttestationSignatureEs384:    req.AttestationSignatureEs384,
-		AttestationSignatureMldsa87:  req.AttestationSignatureMldsa87,
+	// Rest of the method requires a transaction
+	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (finalizeSetupRes, error) {
+		return s.finalizeSetup(c, tx, finalizeSetupVals{
+			userID:          userID,
+			req:             &req,
+			anchorEs384Pub:  anchorEs384Pub,
+			mldsa87PubBytes: mldsa87PubBytes,
+			bundleSigEs:     bundleSigEs,
+			bundleSigMl:     bundleSigMl,
+			attestSigEs:     attestSigEs,
+			attestSigMl:     attestSigMl,
+			attestPayload:   &attestPayload,
+		})
 	})
-	switch {
-	case errors.Is(err, db.ErrAlreadyFinalized):
-		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Account is already finalized"))
-		return
-	case errors.Is(err, db.ErrUserNotFound):
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
-		return
-	case err != nil:
+	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Remove the now-ready user from the cleanup queue
 	err = s.deleteQueue.Dequeue("user-delete:" + userID)
 	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	if user == nil || user.Status != "active" || !user.Ready {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
-		return
-	}
-
-	sess, err := newAuthSessionToken(user, config.Get().SessionTimeout)
+	// Create the new session token, where the user is ready
+	sess, err := newAuthSessionToken(res.user, config.Get().SessionTimeout)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Set the updated session cookie
 	err = setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Send the response
 	c.JSON(http.StatusOK, v2AuthFinalizeSignupResponse{
 		OK:      true,
-		Session: sessionInfoFromUser(user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
+		Session: sessionInfoFromUser(res.user, int(max(time.Until(sess.ExpiresAt), 0).Seconds())),
 	})
 }
 
+func validateV2AuthFinalizeSignupRequest(req *v2AuthFinalizeSignupRequest) error {
+	if len(req.RequestEncEcdhPubkey) == 0 {
+		return NewResponseError(http.StatusBadRequest, "requestEncEcdhPubkey is required")
+	}
+	if req.RequestEncMlkemPubkey == "" {
+		return NewResponseError(http.StatusBadRequest, "requestEncMlkemPubkey is required")
+	}
+
+	// Validate the ECDH public key is a valid P-256 JWK
+	var ecdhPubkey protocolv2.ECP256PublicJWK
+	err := json.Unmarshal(req.RequestEncEcdhPubkey, &ecdhPubkey)
+	if err != nil {
+		return NewResponseError(http.StatusBadRequest, "invalid requestEncEcdhPubkey")
+	}
+	err = ecdhPubkey.ValidatePublic()
+	if err != nil {
+		return NewResponseErrorf(http.StatusBadRequest, "invalid requestEncEcdhPubkey: %v", err)
+	}
+
+	// Validate the ML-KEM public key is valid base64
+	mlkemKey, err := utils.DecodeBase64String(req.RequestEncMlkemPubkey)
+	if err != nil || len(mlkemKey) != mlkem.EncapsulationKeySize768 {
+		return NewResponseError(http.StatusBadRequest, "invalid requestEncMlkemPubkey")
+	}
+
+	// Enforce max length on the wrapped primary key
+	if req.WrappedPrimaryKey == "" || len(req.WrappedPrimaryKey) > 512 {
+		return NewResponseError(http.StatusBadRequest, "invalid wrappedPrimaryKey")
+	}
+
+	err = validateWrappedAnchorEnvelope(req.WrappedAnchorKey)
+	if err != nil {
+		return NewResponseErrorf(http.StatusBadRequest, "invalid wrappedAnchorKey: %v", err)
+	}
+
+	return nil
+}
+
+// RouteV2AuthAllowedIPs is the handler for POST /v2/auth/allowed-ips
 func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
+	// Get the user ID
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
+	// Parse the request body
 	var req v2AuthAllowedIPsRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -664,53 +659,67 @@ func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
 		return
 	}
 
-	allowedIPs, err := s.authStore.UpdateAllowedIPs(c.Request.Context(), userID, req.AllowedIPs)
-	if err != nil {
-		if errors.Is(err, db.ErrInvalidIP) || errors.Is(err, db.ErrInvalidCIDR) {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, err.Error()))
-			return
-		}
+	// Update in the database
+	allowedIPs, err := s.db.AuthStore().UpdateAllowedIPs(c.Request.Context(), userID, req.AllowedIPs)
+	if errors.Is(err, db.ErrInvalidIP) || errors.Is(err, db.ErrInvalidCIDR) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, err.Error()))
+		return
+	} else if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Send response
 	c.JSON(http.StatusOK, v2AuthAllowedIPsResponse{
 		OK:         true,
 		AllowedIPs: allowedIPs,
 	})
 }
 
+// RouteV2AuthRequestKeyRegenerate is the handler for POST /v2/auth/regenerate-request-key
 func (s *Server) RouteV2AuthRequestKeyRegenerate(c *gin.Context) {
+	// Get the user
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
-	requestKey, err := s.authStore.RegenerateRequestKey(c.Request.Context(), userID)
+	// Rotate the request key
+	requestKey, err := s.db.AuthStore().RegenerateRequestKey(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Send response
 	c.JSON(http.StatusOK, v2AuthRequestKeyResponse{
 		OK:         true,
 		RequestKey: requestKey,
 	})
 }
 
+// RouteV2AuthSession is the handler for /v2/auth/session
 func (s *Server) RouteV2AuthSession(c *gin.Context) {
+	// Get the user
 	userID := c.GetString(contextKeyUserID)
-	user, err := s.authStore.GetUserByID(c.Request.Context(), userID)
+	if userID == "" {
+		AbortWithErrorJSON(c, noSessionResponseError)
+		return
+	}
+
+	// Load the user, making sure it's in active status
+	user, err := s.db.AuthStore().GetUserByID(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 	if user == nil || user.Status != "active" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
+	// Get the TTL
 	var ttl int
 	ttlVal, ok := c.Get(contextKeySessionTTL)
 	if ok {
@@ -720,18 +729,16 @@ func (s *Server) RouteV2AuthSession(c *gin.Context) {
 		}
 	}
 
+	// Send response
 	info := sessionInfoFromUser(user, ttl)
-	if info == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
-		return
-	}
-
 	c.JSON(http.StatusOK, v2AuthSessionResponse{
 		Authenticated:     true,
 		v2AuthSessionInfo: *info,
 	})
 }
 
+// RouteV2AuthLogout is the handler for POST /v2/auth/logout
+// Note that the logout sends cookies to clear existing sessions, but doesn't invalidate issued session tokens
 func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
 
@@ -747,26 +754,32 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	c.SetCookie(sessionCookieNameSecure, "", -1, "/", "", true, true)
 	c.SetCookie(sessionCookieNameInsecure, "", -1, "/v2", "", isSecure, true)
 
+	// Send response
 	c.JSON(http.StatusOK, v2AuthLogoutResponse{
 		LoggedOut: true,
 	})
 }
 
+// RouteV2AuthUpdateDisplayName is the handler for /v2/auth/update-display-name
 func (s *Server) RouteV2AuthUpdateDisplayName(c *gin.Context) {
+	// Get the user
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
+	// Parse the request body
 	var req v2AuthUpdateDisplayNameRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
 
-	err = s.authStore.UpdateDisplayName(c.Request.Context(), userID, req.DisplayName)
+	// Update the name in the database
+	err = s.db.AuthStore().UpdateDisplayName(c.Request.Context(), userID, req.DisplayName)
 	switch {
 	case errors.Is(err, db.ErrDisplayNameTooLong):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Display name is too long"))
@@ -779,19 +792,23 @@ func (s *Server) RouteV2AuthUpdateDisplayName(c *gin.Context) {
 		return
 	}
 
+	// Send response
 	c.JSON(http.StatusOK, v2AuthDisplayNameResponse{
 		OK:          true,
-		DisplayName: strings.TrimSpace(req.DisplayName),
+		DisplayName: req.DisplayName,
 	})
 }
 
+// RouteV2AuthUpdateWrappedKey is the handler for POST /v2/auth/update-wrapped-key
 func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
+	// Get the user
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
+	// Parse the request body
 	var req v2AuthUpdateWrappedKeyRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -813,66 +830,84 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 		}
 	}
 
-	// Refuse the update while an add-credential WebAuthn ceremony is in flight for this user
-	// The in-flight ceremony will wrap the new credential's primary key with the current password, and letting the password change land in between would leave that new credential wrapped with the old password while the signed-in credential picks up the new one
-	pending, err := s.authStore.HasPendingChallenge(c.Request.Context(), userID, "add-credential")
+	// Rest of the method must run in a transaction
+	_, err = db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
+		return struct{}{}, s.updateWrappedKey(ctx, tx, userID, &req)
+	})
 	if err != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Failed to check pending challenges"))
-		return
-	}
-	if pending {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Cannot change password while a passkey registration is in progress"))
+		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	if req.AdvanceEpoch {
-		_, err = s.authStore.AdvanceWrappedKeyEpoch(c.Request.Context(), userID)
-		if errors.Is(err, db.ErrUserNotFound) {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
-			return
-		} else if err != nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Failed to update password state"))
-			return
-		}
-	}
-
-	err = s.authStore.UpdateCredentialWrappedKey(c.Request.Context(), req.CredentialID, userID, req.WrappedPrimaryKey, req.WrappedAnchorKey)
-	if errors.Is(err, db.ErrCredentialNotFound) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Credential not found"))
-		return
-	} else if err != nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, err.Error()))
-		return
-	}
-
+	// Send response
 	c.JSON(http.StatusOK, v2AuthOKResponse{
 		OK: true,
 	})
 }
 
+func (s *Server) updateWrappedKey(ctx context.Context, tx *db.DbTx, userID string, req *v2AuthUpdateWrappedKeyRequest) error {
+	as := tx.AuthStore()
+
+	// Refuse the update while an add-credential WebAuthn ceremony is in flight for this user
+	// The in-flight ceremony will wrap the new credential's primary key with the current password, and letting the password change land in between would leave that new credential wrapped with the old password while the signed-in credential picks up the new one
+	pending, err := as.HasPendingChallenge(ctx, userID, "add-credential")
+	if err != nil {
+		return NewResponseError(http.StatusInternalServerError, "Failed to check pending challenges")
+	}
+	if pending {
+		return NewResponseError(http.StatusConflict, "Cannot change password while a passkey registration is in progress")
+	}
+
+	if req.AdvanceEpoch {
+		_, err = as.AdvanceWrappedKeyEpoch(ctx, userID)
+		if errors.Is(err, db.ErrUserNotFound) {
+			return NewResponseError(http.StatusNotFound, "User not found")
+		} else if err != nil {
+			return NewResponseError(http.StatusInternalServerError, "Failed to update password state")
+		}
+	}
+
+	err = as.UpdateCredentialWrappedKey(ctx, req.CredentialID, userID, req.WrappedPrimaryKey, req.WrappedAnchorKey)
+	if errors.Is(err, db.ErrCredentialNotFound) {
+		return NewResponseError(http.StatusNotFound, "Credential not found")
+	} else if err != nil {
+		return NewResponseError(http.StatusBadRequest, err.Error())
+	}
+
+	return nil
+}
+
+// RouteV2AuthListCredentials is the handler for GET /v2/auth/credentials
 func (s *Server) RouteV2AuthListCredentials(c *gin.Context) {
+	// Get the user
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
-	user, err := s.authStore.GetUserByID(c.Request.Context(), userID)
+	as := s.db.AuthStore()
+
+	// Get the user and ensure it's active
+	// We don't need a transaction here as we're just reading data
+	user, err := as.GetUserByID(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 	if user == nil || user.Status != "active" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
-	records, err := s.authStore.ListCredentials(c.Request.Context(), userID)
+	// List all credentials
+	records, err := as.ListCredentials(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Send response
 	items := make([]v2AuthCredentialItem, len(records))
 	for i, rec := range records {
 		items[i] = v2AuthCredentialItem{
@@ -888,91 +923,117 @@ func (s *Server) RouteV2AuthListCredentials(c *gin.Context) {
 	c.JSON(http.StatusOK, items)
 }
 
+// RouteV2AuthAddCredentialBegin is the handler for POST /v2/auth/credentials/add/begin
 func (s *Server) RouteV2AuthAddCredentialBegin(c *gin.Context) {
+	// Get the user
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
+	// Parse request body
 	var req v2AuthAddCredentialBeginRequest
-	_ = c.ShouldBindJSON(&req)
+	err := c.ShouldBindJSON(&req)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
+		return
+	}
+
+	// Rest of the method must run in a transaction
+	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (addCredentialBeginRes, error) {
+		return s.addCredentialBegin(c.Request.Context(), tx, userID, &req)
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	// Enqueue the challenge to be cleaned up
+	err = s.deleteQueue.Enqueue(deleteEvent{
+		KeyName: "challenge-delete:" + res.challenge.ID,
+		Kind:    "challenge",
+		ID:      res.challenge.ID,
+		TTL:     res.challenge.ExpiresAt.Add(10 * time.Minute),
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	// Send response
+	c.JSON(http.StatusOK, v2AuthAddCredentialBeginResponse{
+		ChallengeID: res.challenge.ID,
+		Challenge:   res.session.Challenge,
+		ExpiresAt:   res.challenge.ExpiresAt.Unix(),
+		Options:     res.creation,
+		BasePrfSalt: config.Get().GetPRFSalt(),
+	})
+}
+
+type addCredentialBeginRes struct {
+	creation  *protocol.CredentialCreation
+	session   *webauthnlib.SessionData
+	challenge *db.AuthChallenge
+}
+
+func (s *Server) addCredentialBegin(ctx context.Context, tx *db.DbTx, userID string, req *v2AuthAddCredentialBeginRequest) (addCredentialBeginRes, error) {
+	as := tx.AuthStore()
 
 	// The session JWT's Ready claim is a snapshot from token mint time
 	// Re-check the stored user to reject accounts disabled or un-readied after the session was issued
-	storedUser, err := s.authStore.GetUserByID(c.Request.Context(), userID)
+	// ...besides, we need to user object
+	storedUser, err := as.GetUserByID(ctx, userID)
 	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
+		return addCredentialBeginRes{}, err
 	}
 	if storedUser == nil || storedUser.Status != "active" || !storedUser.Ready {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account is not active"))
-		return
+		return addCredentialBeginRes{}, NewResponseError(http.StatusForbidden, "User account is not active")
 	}
 
 	// Load the existing user with their current credentials to populate excludeCredentials
-	userRecord, err := s.v2LoadWebAuthnUser(c.Request.Context(), userID)
+	userRecord, err := loadWebAuthnUser(ctx, as, storedUser)
 	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
+		return addCredentialBeginRes{}, err
 	}
 	if userRecord == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
-		return
+		return addCredentialBeginRes{}, NewResponseError(http.StatusNotFound, "User not found")
 	}
 
-	creation, session, err := s.webAuthn.BeginRegistration(userRecord,
-		webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
-		webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
-			"prf": map[string]any{},
-		}),
-	)
+	// Begin the WebAuthn registration
+	// Begin the WebAuthn registration session
+	creation, session, err := s.beginWebAuthnSession(userRecord)
 	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
+		return addCredentialBeginRes{}, err
 	}
 
-	ch, err := s.authStore.BeginChallengeWithPayload(c.Request.Context(), "add-credential", userID, session.Challenge, session.Expires, v2AddCredentialChallengePayload{
+	ch, err := as.BeginChallenge(ctx, "add-credential", userID, session.Challenge, session.Expires, v2AddCredentialChallengePayload{
 		UserID:          userID,
 		WebAuthnUserID:  base64.RawURLEncoding.EncodeToString(userRecord.id),
 		DisplayName:     strings.TrimSpace(req.CredentialName),
 		WebAuthnSession: session,
 	})
 	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
+		return addCredentialBeginRes{}, err
 	}
 
-	err = s.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "challenge-delete:" + ch.ID,
-		Kind:    "challenge",
-		ID:      ch.ID,
-		TTL:     ch.ExpiresAt.Add(10 * time.Minute),
-	})
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	c.JSON(http.StatusOK, v2AuthAddCredentialBeginResponse{
-		ChallengeID: ch.ID,
-		Challenge:   session.Challenge,
-		ExpiresAt:   ch.ExpiresAt.Unix(),
-		Options:     creation,
-		BasePrfSalt: config.Get().GetPRFSalt(),
-	})
+	return addCredentialBeginRes{
+		creation:  creation,
+		session:   session,
+		challenge: ch,
+	}, nil
 }
 
 func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
+	// Parse and validate the request body
 	var req v2AuthAddCredentialFinishRequest
-	err := c.ShouldBindJSON(&req)
-	if err != nil {
+	if c.ShouldBindJSON(&req) != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
@@ -980,165 +1041,54 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing required fields"))
 		return
 	}
+	req.CredentialName = strings.TrimSpace(req.CredentialName)
 
-	var payload v2AddCredentialChallengePayload
-	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "add-credential", &payload)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	if !ok {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Challenge is invalid or expired"))
-		return
-	}
-
-	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
-	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	// Verify the challenge belongs to the authenticated user
-	if payload.UserID != userID {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Challenge does not belong to this user"))
-		return
-	}
-
-	if payload.WebAuthnSession == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Challenge is missing WebAuthn session data"))
-		return
-	}
-
-	// Load the user record with existing credentials for the verification
-	userRecord, err := s.v2LoadWebAuthnUser(c.Request.Context(), userID)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	if userRecord == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
-		return
-	}
-
-	waReq, err := newJSONHTTPRequest(c, req.Credential)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	cred, err := s.webAuthn.FinishRegistration(userRecord, *payload.WebAuthnSession, waReq)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn registration verification failed: %v", err))
-		return
-	}
-
-	credJSON, err := json.Marshal(cred)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	// Use the credential name from the finish request, falling back to the begin request
-	credName := strings.TrimSpace(req.CredentialName)
-	if credName == "" {
-		credName = payload.DisplayName
-	}
-
-	if req.WrappedPrimaryKey != "" && len(req.WrappedPrimaryKey) > 512 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "wrappedPrimaryKey is too large"))
-		return
-	}
-
-	err = validateWrappedAnchorEnvelope(req.WrappedAnchorKey)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid wrappedAnchorKey: %v", err))
-		return
-	}
-
-	// Fetch the user's stored anchor pubkeys and verify the attestation against them.
-	// This is what binds the new credential to the user's identity root.
-	storedUser, err := s.authStore.GetUserByID(c.Request.Context(), userID)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	if storedUser == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
-		return
-	}
-
-	// The session JWT's Ready claim is a snapshot from token mint time
-	// Re-check the stored user to reject accounts disabled or un-readied after the session was issued
-	if storedUser.Status != "active" || !storedUser.Ready {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account is not active"))
-		return
-	}
-
-	anchorEs384Pub, mldsa87PubBytes, err := parseAnchorPubkeys(storedUser.AnchorEs384PublicKey, storedUser.AnchorMldsa87PublicKey)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusInternalServerError, "stored anchor public key is invalid: %v", err))
-		return
-	}
-
+	// Parse the bundle signature
 	attestSigEs, attestSigMl, err := parseHybridSignatures(req.AttestationSignatureEs384, req.AttestationSignatureMldsa87)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationSignature: %v", err))
 		return
 	}
 
-	var attestPayload protocolv2.AttestationPayload
-	attestPayload, err = protocolv2.ParseAttestationPayload(req.AttestationPayload)
+	// Extract the attestation payload
+	attestPayload, err := protocolv2.ParseAttestationPayload(req.AttestationPayload)
 	if err != nil {
 		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid attestationPayload: %v", err))
 		return
 	}
 
-	// Derive the expected credentialPublicKeyHash from the COSE bytes that the WebAuthn library produced
-	expectedCredentialPublicKeyHash, err := protocolv2.CredentialPublicKeyHash(cred.PublicKey)
+	// Enforce max length on the wrapped primary key
+	if req.WrappedPrimaryKey != "" && len(req.WrappedPrimaryKey) > 512 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "wrappedPrimaryKey is too large"))
+		return
+	}
+
+	// Structurally validate the wrapped-anchor envelope
+	err = validateWrappedAnchorEnvelope(req.WrappedAnchorKey)
 	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "failed to derive credential public key hash: %v", err))
+		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid wrappedAnchorKey: %v", err))
 		return
 	}
 
-	// Verify the hybrid attestation signature first, then compare every signed field against server-derived expected values
-	// Only persist after both checks pass
-	err = protocolv2.VerifyHybridAttestation(anchorEs384Pub, mldsa87PubBytes, attestPayload, attestSigEs, attestSigMl)
-	if err != nil {
-		AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err))
-		return
-	}
-
-	if attestPayload.UserID != userID {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload userId does not match session"))
-		return
-	}
-	if attestPayload.CredentialID != base64.RawURLEncoding.EncodeToString(cred.ID) {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload credentialId does not match registered credential"))
-		return
-	}
-	if attestPayload.CredentialPublicKeyHash != expectedCredentialPublicKeyHash {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload credentialPublicKeyHash does not match registered credential"))
-		return
-	}
-	if attestPayload.WrappedKeyEpoch != storedUser.WrappedKeyEpoch {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "attestationPayload wrappedKeyEpoch does not match current user epoch"))
-		return
-	}
-
-	err = s.authStore.AddCredential(c.Request.Context(), db.AddCredentialInput{
-		UserID:                      userID,
-		CredentialID:                base64.RawURLEncoding.EncodeToString(cred.ID),
-		DisplayName:                 credName,
-		PublicKey:                   string(credJSON),
-		SignCount:                   int64(cred.Authenticator.SignCount),
-		WrappedPrimaryKey:           req.WrappedPrimaryKey,
-		WrappedAnchorKey:            req.WrappedAnchorKey,
-		AttestationPayload:          req.AttestationPayload,
-		AttestationSignatureEs384:   req.AttestationSignatureEs384,
-		AttestationSignatureMldsa87: req.AttestationSignatureMldsa87,
+	// Complete adding the credential
+	// This must be executed in a transaction
+	_, err = db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (addCredentialFinishRes, error) {
+		return s.addCredentialFinish(c, tx, addCredentialFinishVals{
+			userID:        userID,
+			req:           &req,
+			attestSigEs:   attestSigEs,
+			attestSigMl:   attestSigMl,
+			attestPayload: &attestPayload,
+		})
 	})
 	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	// Remove the challenge from the cleanup queue
+	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
+	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
@@ -1148,18 +1098,142 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		slog.String("client_ip", c.ClientIP()),
 	)
 
+	// Send response
 	c.JSON(http.StatusOK, v2AuthOKResponse{
 		OK: true,
 	})
 }
 
+type addCredentialFinishVals struct {
+	userID        string
+	req           *v2AuthAddCredentialFinishRequest
+	attestSigEs   []byte
+	attestSigMl   []byte
+	attestPayload *protocolv2.AttestationPayload
+}
+type addCredentialFinishRes struct{}
+
+func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCredentialFinishVals) (addCredentialFinishRes, error) {
+	as := tx.AuthStore()
+
+	var payload v2AddCredentialChallengePayload
+	err := as.ConsumeChallenge(c.Request.Context(), vals.req.ChallengeID, "add-credential", &payload)
+	if errors.Is(err, db.ErrInvalidChallenge) {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusConflict, "Challenge is invalid or expired")
+	} else if err != nil {
+		return addCredentialFinishRes{}, err
+	}
+
+	// Verify the challenge belongs to the authenticated user
+	if payload.UserID != vals.userID {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusForbidden, "Challenge does not belong to this user")
+	}
+
+	if payload.WebAuthnSession == nil {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusConflict, "Challenge is missing WebAuthn session data")
+	}
+
+	// Load the user
+	storedUser, err := as.GetUserByID(c.Request.Context(), vals.userID)
+	if err != nil {
+		return addCredentialFinishRes{}, err
+	}
+
+	if storedUser == nil {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusNotFound, "User not found")
+	}
+
+	// The session JWT's Ready claim is a snapshot from token mint time
+	// Re-check the stored user to reject accounts disabled or un-readied after the session was issued
+	if storedUser.Status != "active" || !storedUser.Ready {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusForbidden, "User account is not active")
+	}
+
+	// Load the user record with existing credentials for the verification
+	userRecord, err := loadWebAuthnUser(c.Request.Context(), as, storedUser)
+	if err != nil {
+		return addCredentialFinishRes{}, err
+	}
+	if userRecord == nil {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusNotFound, "User not found")
+	}
+
+	// Complete the WebAuthn registration
+	cred, credJSON, err := s.finishWebAuthnRegistration(c, userRecord, vals.req.Credential, payload.WebAuthnSession)
+	if err != nil {
+		return addCredentialFinishRes{}, err
+	}
+	credID := base64.RawURLEncoding.EncodeToString(cred.ID)
+
+	// Verify the attestation against the stored anchor pubkeys
+	// This is what binds the new credential to the user's identity root
+	anchorEs384Pub, mldsa87PubBytes, err := parseAnchorPubkeys(storedUser.AnchorEs384PublicKey, storedUser.AnchorMldsa87PublicKey)
+	if err != nil {
+		return addCredentialFinishRes{}, NewResponseErrorf(http.StatusInternalServerError, "stored anchor public key is invalid: %v", err)
+	}
+
+	// Derive the expected credentialPublicKeyHash from the COSE bytes that the WebAuthn library produced
+	expectedCredentialPublicKeyHash, err := protocolv2.CredentialPublicKeyHash(cred.PublicKey)
+	if err != nil {
+		return addCredentialFinishRes{}, NewResponseErrorf(http.StatusBadRequest, "failed to derive credential public key hash: %v", err)
+	}
+
+	// Verify the hybrid attestation signature first, then compare every signed field against server-derived expected values
+	// Only persist after both checks pass
+	err = protocolv2.VerifyHybridAttestation(anchorEs384Pub, mldsa87PubBytes, vals.attestPayload, vals.attestSigEs, vals.attestSigMl)
+	if err != nil {
+		return addCredentialFinishRes{}, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err)
+	}
+
+	// Verify the challenge belongs to the authenticated user, and that the credential ID, publish key hash, and epoch match expectations
+	if vals.attestPayload.UserID != vals.userID {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusBadRequest, "attestationPayload userId does not match session")
+	}
+	if vals.attestPayload.CredentialID != credID {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusBadRequest, "attestationPayload credentialId does not match registered credential")
+	}
+	if vals.attestPayload.CredentialPublicKeyHash != expectedCredentialPublicKeyHash {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusBadRequest, "attestationPayload credentialPublicKeyHash does not match registered credential")
+	}
+	if vals.attestPayload.WrappedKeyEpoch != storedUser.WrappedKeyEpoch {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusBadRequest, "attestationPayload wrappedKeyEpoch does not match current user epoch")
+	}
+
+	// Use the credential name from the finish request, falling back to the begin request
+	credName := vals.req.CredentialName
+	if credName == "" {
+		credName = payload.DisplayName
+	}
+
+	err = as.AddCredential(c.Request.Context(), db.AddCredentialInput{
+		UserID:                      vals.userID,
+		CredentialID:                credID,
+		DisplayName:                 credName,
+		PublicKey:                   string(credJSON),
+		SignCount:                   int64(cred.Authenticator.SignCount),
+		WrappedPrimaryKey:           vals.req.WrappedPrimaryKey,
+		WrappedAnchorKey:            vals.req.WrappedAnchorKey,
+		AttestationPayload:          vals.req.AttestationPayload,
+		AttestationSignatureEs384:   vals.req.AttestationSignatureEs384,
+		AttestationSignatureMldsa87: vals.req.AttestationSignatureMldsa87,
+	})
+	if err != nil {
+		return addCredentialFinishRes{}, err
+	}
+
+	return addCredentialFinishRes{}, nil
+}
+
+// RouteV2AuthRenameCredential is the handler for /v2/auth/credentials/rename
 func (s *Server) RouteV2AuthRenameCredential(c *gin.Context) {
+	// Get the user
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
+	// Parse the request body
 	var req v2AuthRenameCredentialRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -1171,7 +1245,8 @@ func (s *Server) RouteV2AuthRenameCredential(c *gin.Context) {
 		return
 	}
 
-	err = s.authStore.RenameCredential(c.Request.Context(), req.ID, userID, req.DisplayName)
+	// Rename the credential in the database
+	err = s.db.AuthStore().RenameCredential(c.Request.Context(), req.ID, userID, req.DisplayName)
 	switch {
 	case errors.Is(err, db.ErrDisplayNameTooLong):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Display name is too long"))
@@ -1184,18 +1259,22 @@ func (s *Server) RouteV2AuthRenameCredential(c *gin.Context) {
 		return
 	}
 
+	// Send response
 	c.JSON(http.StatusOK, v2AuthOKResponse{
 		OK: true,
 	})
 }
 
+// RouteV2AuthDeleteCredential is the handler for /v2/auth/credentials/delete
 func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
+	// Get the user
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 
+	// Parse the request body
 	var req v2AuthDeleteCredentialRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -1207,7 +1286,8 @@ func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
 		return
 	}
 
-	err = s.authStore.DeleteCredential(c.Request.Context(), req.ID, userID)
+	// Delete the credential from the database
+	err = s.db.AuthStore().DeleteCredential(c.Request.Context(), req.ID, userID)
 	switch {
 	case errors.Is(err, db.ErrLastCredential):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Cannot delete the last credential"))
@@ -1226,6 +1306,7 @@ func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
 		slog.String("client_ip", c.ClientIP()),
 	)
 
+	// Send response
 	c.JSON(http.StatusOK, v2AuthOKResponse{
 		OK: true,
 	})
@@ -1236,25 +1317,28 @@ func secureCookie(c *gin.Context) bool {
 	return url.Scheme == "https" || config.Get().ForceSecureCookies
 }
 
-func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (*db.User, *authSessionToken, error) {
-	var payload v2RegisterChallengePayload
-	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "register", &payload)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !ok {
-		return nil, nil, NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
-	}
+type registerFinishRes struct {
+	user *db.User
+	sess *authSessionToken
+}
 
-	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
-	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
-		return nil, nil, err
+func (s *Server) registerFinish(c *gin.Context, tx *db.DbTx, req v2AuthRegisterFinishRequest) (registerFinishRes, error) {
+	as := tx.AuthStore()
+
+	// Consume the challenge in the database and retrieve the payload
+	var payload v2RegisterChallengePayload
+	err := as.ConsumeChallenge(c.Request.Context(), req.ChallengeID, "register", &payload)
+	if errors.Is(err, db.ErrInvalidChallenge) {
+		return registerFinishRes{}, NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
+	} else if err != nil {
+		return registerFinishRes{}, err
 	}
 
 	if payload.WebAuthnSession == nil {
-		return nil, nil, NewResponseError(http.StatusConflict, "Registration challenge is missing WebAuthn session data")
+		return registerFinishRes{}, NewResponseError(http.StatusConflict, "Registration challenge is missing WebAuthn session data")
 	}
 
+	// Create the WebAuthnUser object
 	displayName := payload.DisplayName
 	if displayName == "" {
 		displayName = payload.UserID
@@ -1264,22 +1348,15 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 		userID:      payload.UserID,
 		displayName: displayName,
 	}
-	waReq, err := newJSONHTTPRequest(c, req.Credential)
+
+	// Complete the WebAuthn registration
+	cred, credJSON, err := s.finishWebAuthnRegistration(c, waUser, req.Credential, payload.WebAuthnSession)
 	if err != nil {
-		return nil, nil, err
+		return registerFinishRes{}, err
 	}
 
-	cred, err := s.webAuthn.FinishRegistration(waUser, *payload.WebAuthnSession, waReq)
-	if err != nil {
-		return nil, nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn registration verification failed: %v", err)
-	}
-
-	credJSON, err := json.Marshal(cred)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	user, err := s.authStore.RegisterUser(c.Request.Context(), db.RegisterUserInput{
+	// Register the user in the database
+	user, err := as.RegisterUser(c.Request.Context(), db.RegisterUserInput{
 		UserID:         payload.UserID,
 		DisplayName:    payload.DisplayName,
 		WebAuthnUserID: payload.WebAuthnUserID,
@@ -1289,56 +1366,55 @@ func (s *Server) v2RegisterFinish(c *gin.Context, req v2AuthRegisterFinishReques
 		SessionTTL:     config.Get().SessionTimeout,
 	})
 	if errors.Is(err, db.ErrUserAlreadyExists) {
-		return nil, nil, NewResponseError(http.StatusConflict, "User already exists")
+		return registerFinishRes{}, NewResponseError(http.StatusConflict, "User already exists")
 	} else if err != nil {
-		return nil, nil, err
+		return registerFinishRes{}, err
 	}
 
+	// Get a session token
 	sess, err := newAuthSessionToken(user, config.Get().SessionTimeout)
 	if err != nil {
-		return nil, nil, err
+		return registerFinishRes{}, err
 	}
 
-	// Register the non-ready user for cleanup if it's not completed in 24 hours
-	err = s.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "user-delete:" + user.ID,
-		Kind:    "nonready-user",
-		ID:      user.ID,
-		TTL:     time.Now().UTC().Add(24*time.Hour + time.Minute),
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return user, sess, nil
+	return registerFinishRes{
+		user: user,
+		sess: sess,
+	}, nil
 }
 
-func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*db.User, *authSessionToken, *db.AuthCredentialRecord, error) {
-	var payload v2LoginChallengePayload
-	ok, err := s.authStore.ConsumeChallengePayload(c.Request.Context(), req.ChallengeID, "login", &payload)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if !ok {
-		return nil, nil, nil, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
-	}
+type loginFinishRes struct {
+	user *db.User
+	sess *authSessionToken
+	cred *db.AuthCredentialRecord
+}
 
-	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
-	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
-		return nil, nil, nil, err
+func (s *Server) loginFinish(c *gin.Context, tx *db.DbTx, req v2AuthLoginFinishRequest) (loginFinishRes, error) {
+	as := tx.AuthStore()
+	ctx := c.Request.Context()
+
+	// Consume the challenge in the database and retrieve the payload
+	var payload v2LoginChallengePayload
+	err := as.ConsumeChallenge(ctx, req.ChallengeID, "login", &payload)
+	if errors.Is(err, db.ErrInvalidChallenge) {
+		return loginFinishRes{}, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
+	} else if err != nil {
+		return loginFinishRes{}, err
 	}
 
 	if payload.WebAuthnSession == nil {
-		return nil, nil, nil, NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
+		return loginFinishRes{}, NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
 	}
 
+	// Handler for the WebAuthn call
+	// Note this is executed synchronously
 	var (
 		discoveredUser   *v2WebAuthnUser
 		discoveredDBUser *db.User
 	)
-	handler := func(rawID, userHandle []byte) (webauthnlib.User, error) {
+	handler := func(rawID []byte, userHandle []byte) (webauthnlib.User, error) {
 		webAuthnUserID := base64.RawURLEncoding.EncodeToString(userHandle)
-		user, hErr := s.authStore.GetUserByWebAuthnUserID(c.Request.Context(), webAuthnUserID)
+		user, hErr := as.GetUserByWebAuthnUserID(ctx, webAuthnUserID)
 		if hErr != nil {
 			return nil, hErr
 		}
@@ -1346,7 +1422,7 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*d
 			return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
 		}
 
-		userRecord, hErr := s.v2LoadWebAuthnUser(c.Request.Context(), user.ID)
+		userRecord, hErr := loadWebAuthnUser(ctx, as, user)
 		if hErr != nil {
 			return nil, hErr
 		}
@@ -1356,41 +1432,203 @@ func (s *Server) v2LoginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (*d
 
 		discoveredDBUser = user
 		discoveredUser = userRecord
+
 		return userRecord, nil
 	}
 
+	// The WebAuthn requires a *http.Request object formatted with a very specific body
 	waReq, err := newJSONHTTPRequest(c, req.Credential)
 	if err != nil {
-		return nil, nil, nil, err
+		return loginFinishRes{}, err
 	}
 
+	// Complete the WebAuthn login
 	cred, err := s.webAuthn.FinishDiscoverableLogin(handler, *payload.WebAuthnSession, waReq)
 	if err != nil {
-		return nil, nil, nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
+		return loginFinishRes{}, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
 	}
 	if discoveredUser == nil || discoveredDBUser == nil {
-		return nil, nil, nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+		return loginFinishRes{}, NewResponseError(http.StatusUnauthorized, "Invalid login")
 	}
 
+	// Validate the authenticator sign count
 	err = s.validateAuthenticatorSignCount(c, discoveredUser, cred)
 	if err != nil {
-		return nil, nil, nil, err
+		return loginFinishRes{}, err
 	}
 
-	user, sess, credRec, err := s.createLoginSession(c.Request.Context(), discoveredUser.userID, cred)
+	// Update the sign count in the database
+	credentialID := base64.RawURLEncoding.EncodeToString(cred.ID)
+	err = as.Login(ctx, db.LoginInput{
+		UserID:       discoveredDBUser.ID,
+		CredentialID: credentialID,
+		SignCount:    int64(cred.Authenticator.SignCount),
+		SessionTTL:   config.Get().SessionTimeout,
+	})
 	if errors.Is(err, db.ErrInvalidLogin) {
-		return nil, nil, nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+		return loginFinishRes{}, NewResponseError(http.StatusUnauthorized, "Invalid login")
 	} else if err != nil {
-		return nil, nil, nil, err
+		return loginFinishRes{}, err
 	}
 
-	return user, sess, credRec, nil
+	// Retrieve the credential (which was just updated)
+	credRec, err := as.GetCredentialForUser(ctx, discoveredDBUser.ID, credentialID)
+	if err != nil {
+		return loginFinishRes{}, err
+	}
+
+	// Return the session token object
+	sess, err := newAuthSessionToken(discoveredDBUser, config.Get().SessionTimeout)
+	if err != nil {
+		return loginFinishRes{}, err
+	}
+
+	return loginFinishRes{
+		user: discoveredDBUser,
+		sess: sess,
+		cred: credRec,
+	}, nil
+}
+
+func (s *Server) finishWebAuthnRegistration(c *gin.Context, user *v2WebAuthnUser, msg json.RawMessage, sess *webauthnlib.SessionData) (*webauthnlib.Credential, []byte, error) {
+	// The WebAuthn library needs a specially-requested HTTP request, so we create one with the credential in the body
+	waReq, err := newJSONHTTPRequest(c, msg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Finish the registration
+	cred, err := s.webAuthn.FinishRegistration(user, *sess, waReq)
+	if err != nil {
+		return nil, nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn registration verification failed: %v", err)
+	}
+
+	// Encode to JSON
+	credJSON, err := json.Marshal(cred)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return cred, credJSON, nil
+}
+
+type finalizeSetupVals struct {
+	userID          string
+	req             *v2AuthFinalizeSignupRequest
+	anchorEs384Pub  *ecdsa.PublicKey
+	mldsa87PubBytes []byte
+	bundleSigEs     []byte
+	bundleSigMl     []byte
+	attestSigEs     []byte
+	attestSigMl     []byte
+	attestPayload   *protocolv2.AttestationPayload
+}
+
+type finalizeSetupRes struct {
+	user *db.User
+}
+
+func (s *Server) finalizeSetup(c *gin.Context, tx *db.DbTx, vals finalizeSetupVals) (finalizeSetupRes, error) {
+	as := tx.AuthStore()
+
+	// Load the user's stored credentials: at finalize-signup time the user must have exactly one credential (created by /register/finish)
+	// Everything the attestation signs must be derivable from that one row
+	creds, err := as.ListCredentials(c.Request.Context(), vals.userID)
+	if err != nil {
+		return finalizeSetupRes{}, err
+	}
+
+	if len(creds) != 1 {
+		return finalizeSetupRes{}, NewResponseErrorf(http.StatusConflict, "expected exactly one credential for user at finalize-signup, got %d", len(creds))
+	}
+
+	// Get the expected pub key hash
+	expectedCredentialID := creds[0].CredentialID
+	expectedCredentialPublicKeyHash, err := protocolv2.CredentialPublicKeyHashFromStoredCredJSON(creds[0].PublicKey)
+	if err != nil {
+		return finalizeSetupRes{}, NewResponseErrorf(http.StatusInternalServerError, "failed to derive credential public key hash: %v", err)
+	}
+
+	// Bundle self-signature: the anchor signs its own wire-format representation
+	// This is what the CLI verifies on every request
+	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(vals.req.AnchorEs384PublicKey)
+	if err != nil {
+		return finalizeSetupRes{}, NewResponseErrorf(http.StatusBadRequest, "invalid anchorEs384PublicKey: %v", err)
+	}
+
+	bundlePayload := &protocolv2.PubkeyBundlePayload{
+		UserID:                 vals.userID,
+		RequestEncEcdhPubkey:   string(vals.req.RequestEncEcdhPubkey),
+		RequestEncMlkemPubkey:  vals.req.RequestEncMlkemPubkey,
+		AnchorEs384Crv:         es384JWK.Crv,
+		AnchorEs384Kty:         es384JWK.Kty,
+		AnchorEs384X:           es384JWK.X,
+		AnchorEs384Y:           es384JWK.Y,
+		AnchorMldsa87PublicKey: vals.req.AnchorMldsa87PublicKey,
+		WrappedKeyEpoch:        1,
+	}
+	err = protocolv2.VerifyHybridBundle(vals.anchorEs384Pub, vals.mldsa87PubBytes, bundlePayload, vals.bundleSigEs, vals.bundleSigMl)
+	if err != nil {
+		return finalizeSetupRes{}, NewResponseErrorf(http.StatusBadRequest, "pubkey bundle signature verification failed: %v", err)
+	}
+
+	// Verify the hybrid attestation signature first, then compare every signed field against server-derived expected values
+	// Only persist after both checks pass
+	err = protocolv2.VerifyHybridAttestation(vals.anchorEs384Pub, vals.mldsa87PubBytes, vals.attestPayload, vals.attestSigEs, vals.attestSigMl)
+	if err != nil {
+		return finalizeSetupRes{}, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err)
+	}
+
+	if vals.attestPayload.UserID != vals.userID {
+		return finalizeSetupRes{}, NewResponseError(http.StatusBadRequest, "attestationPayload userId does not match session")
+	}
+	if vals.attestPayload.CredentialID != expectedCredentialID {
+		return finalizeSetupRes{}, NewResponseError(http.StatusBadRequest, "attestationPayload credentialId does not match registered credential")
+	}
+	if vals.attestPayload.CredentialPublicKeyHash != expectedCredentialPublicKeyHash {
+		return finalizeSetupRes{}, NewResponseError(http.StatusBadRequest, "attestationPayload credentialPublicKeyHash does not match registered credential")
+	}
+	if vals.attestPayload.WrappedKeyEpoch != 1 {
+		return finalizeSetupRes{}, NewResponseError(http.StatusBadRequest, "attestationPayload wrappedKeyEpoch must be 1 at signup")
+	}
+
+	// Finalize the signup in the database
+	user, err := as.FinalizeSignup(c.Request.Context(), db.FinalizeSignupInput{
+		UserID:                       vals.userID,
+		WrappedPrimaryKey:            vals.req.WrappedPrimaryKey,
+		WrappedAnchorKey:             vals.req.WrappedAnchorKey,
+		RequestEncEcdhPubkey:         string(vals.req.RequestEncEcdhPubkey),
+		RequestEncMlkemPubkey:        vals.req.RequestEncMlkemPubkey,
+		AnchorEs384PublicKey:         vals.req.AnchorEs384PublicKey,
+		AnchorMldsa87PublicKey:       vals.req.AnchorMldsa87PublicKey,
+		PubkeyBundleSignatureEs384:   vals.req.PubkeyBundleSignatureEs384,
+		PubkeyBundleSignatureMldsa87: vals.req.PubkeyBundleSignatureMldsa87,
+		AttestationPayload:           vals.req.AttestationPayload,
+		AttestationSignatureEs384:    vals.req.AttestationSignatureEs384,
+		AttestationSignatureMldsa87:  vals.req.AttestationSignatureMldsa87,
+	})
+	switch {
+	case errors.Is(err, db.ErrAlreadyFinalized):
+		return finalizeSetupRes{}, NewResponseError(http.StatusConflict, "Account is already finalized")
+	case errors.Is(err, db.ErrUserNotFound):
+		return finalizeSetupRes{}, NewResponseError(http.StatusNotFound, "User not found")
+	case err != nil:
+		return finalizeSetupRes{}, err
+	}
+
+	if user == nil || user.Status != "active" || !user.Ready {
+		return finalizeSetupRes{}, noSessionResponseError
+	}
+
+	return finalizeSetupRes{
+		user: user,
+	}, nil
 }
 
 func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2WebAuthnUser, cred *webauthnlib.Credential) error {
-	// Detect possible cloned authenticator by comparing the returned sign count with the stored value.
-	// If the stored count was non-zero but the new count is not strictly greater, the credential may have been cloned.
-	// Note: Some authenticators do not report a counter, which is always 0.
+	// Detect possible cloned authenticator by comparing the returned sign count with the stored value
+	// If the stored count was non-zero but the new count is not strictly greater, the credential may have been cloned
+	// Note: Some authenticators do not report a counter, which is always 0
 	newCount := cred.Authenticator.SignCount
 
 	credIDEncoded := base64.RawURLEncoding.EncodeToString(cred.ID)
@@ -1420,11 +1658,8 @@ func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2We
 		return nil
 	}
 
-	// Fail-closed: if the credential that signed the assertion isn't in the
-	// user's stored credential list, refuse the login. This should be
-	// unreachable because FinishDiscoverableLogin already matched a stored
-	// credential, but we want a defense-in-depth guarantee against a future
-	// refactor that reorders the lookups.
+	// Fail-closed: if the credential that signed the assertion isn't in the user's stored credential list, refuse the login
+	// This should be unreachable because FinishDiscoverableLogin already matched a stored credential
 	logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
 		"Authenticator credential not found in user's stored credentials",
 		slog.String("user_id", userRecord.userID),
@@ -1434,31 +1669,8 @@ func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2We
 	return NewResponseError(http.StatusForbidden, "Authenticator credential not recognized")
 }
 
-func (s *Server) createLoginSession(ctx context.Context, userID string, cred *webauthnlib.Credential) (*db.User, *authSessionToken, *db.AuthCredentialRecord, error) {
-	credentialID := base64.RawURLEncoding.EncodeToString(cred.ID)
-	user, err := s.authStore.Login(ctx, db.LoginInput{
-		UserID:       userID,
-		CredentialID: credentialID,
-		SignCount:    int64(cred.Authenticator.SignCount),
-		SessionTTL:   config.Get().SessionTimeout,
-	})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	credRec, err := s.authStore.GetCredentialForUser(ctx, userID, credentialID)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	sess, err := newAuthSessionToken(user, config.Get().SessionTimeout)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	return user, sess, credRec, nil
-}
-
+// newJSONHTTPRequest returns a new http.Request with a JSON body
+// This is used by the WebAuthn library as input in many instances
 func newJSONHTTPRequest(c *gin.Context, raw json.RawMessage) (*http.Request, error) {
 	if len(raw) == 0 || !json.Valid(raw) {
 		return nil, NewResponseError(http.StatusBadRequest, "credential payload must be valid JSON")
@@ -1503,16 +1715,12 @@ func (u *v2WebAuthnUser) WebAuthnName() string                          { return
 func (u *v2WebAuthnUser) WebAuthnDisplayName() string                   { return u.displayName }
 func (u *v2WebAuthnUser) WebAuthnCredentials() []webauthnlib.Credential { return u.credentials }
 
-func (s *Server) v2LoadWebAuthnUser(ctx context.Context, userID string) (*v2WebAuthnUser, error) {
-	user, err := s.authStore.GetUserByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
+func loadWebAuthnUser(ctx context.Context, as *db.AuthStore, user *db.User) (*v2WebAuthnUser, error) {
 	if user == nil || user.Status != "active" {
 		return nil, nil
 	}
 
-	records, err := s.authStore.ListCredentials(ctx, userID)
+	records, err := as.ListCredentials(ctx, user.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -1531,7 +1739,7 @@ func (s *Server) v2LoadWebAuthnUser(ctx context.Context, userID string) (*v2WebA
 		if rec.SignCount < 0 || rec.SignCount > math.MaxUint32 {
 			logging.LogFromContext(ctx).WarnContext(ctx,
 				"Credential sign count out of uint32 range; skipping credential",
-				slog.String("user_id", userID),
+				slog.String("user_id", user.ID),
 				slog.String("credential_id", rec.CredentialID),
 				slog.Int64("sign_count", rec.SignCount),
 			)
@@ -1560,7 +1768,6 @@ func (s *Server) v2LoadWebAuthnUser(ctx context.Context, userID string) (*v2WebA
 
 	return &v2WebAuthnUser{
 		id:          decodedUserID,
-		userID:      user.ID,
 		displayName: displayName,
 		credentials: creds,
 	}, nil

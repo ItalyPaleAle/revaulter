@@ -93,14 +93,27 @@ func (db *DB) SigningKeyStore() *SigningKeyStore {
 	return as
 }
 
-type dbTx struct {
+func (db *DB) Begin(ctx context.Context) (*DbTx, error) {
+	tx, err := db.DatabaseConn.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DbTx{
+		Querier: tx,
+		kind:    db.kind,
+	}, nil
+}
+
+// DbTx is a database transaction
+type DbTx struct {
 	adapter.Querier
 
 	kind BackendKind
 }
 
 // AuthStore returns an instance of AuthStore
-/*func (tx *dbTx) AuthStore() *AuthStore {
+func (tx *DbTx) AuthStore() *AuthStore {
 	as, err := NewAuthStore(tx, tx.kind)
 	if err != nil {
 		// Indicates a development-time error
@@ -108,10 +121,10 @@ type dbTx struct {
 	}
 
 	return as
-}*/
+}
 
 // RequestStore returns an instance of RequestStore
-func (tx *dbTx) RequestStore() *RequestStore {
+func (tx *DbTx) RequestStore() *RequestStore {
 	as, err := NewRequestStore(tx)
 	if err != nil {
 		// Indicates a development-time error
@@ -122,7 +135,7 @@ func (tx *dbTx) RequestStore() *RequestStore {
 }
 
 // SigningKeyStore returns an instance of SigningKeyStore
-func (tx *dbTx) SigningKeyStore() *SigningKeyStore {
+func (tx *DbTx) SigningKeyStore() *SigningKeyStore {
 	as, err := NewSigningKeyStore(tx)
 	if err != nil {
 		// Indicates a development-time error
@@ -134,15 +147,14 @@ func (tx *dbTx) SigningKeyStore() *SigningKeyStore {
 
 // ExecuteInTransaction executes a method in a transaction
 // Note that the timeout for pgx is tied to the begin command only, while it's tied to the entire transaction for SQL adapters
-func (db *DB) ExecuteInTransaction(ctx context.Context, timeout time.Duration, fn func(ctx context.Context, tx *dbTx) error) error {
-	_, err := transactions.ExecuteInTransaction(ctx, logging.LogFromContext(ctx), db.DatabaseConn, timeout, func(ctx context.Context, tx adapter.Querier) (struct{}, error) {
-		wrapped := &dbTx{
+func ExecuteInTransaction[T any](ctx context.Context, db *DB, timeout time.Duration, fn func(ctx context.Context, tx *DbTx) (T, error)) (res T, err error) {
+	return transactions.ExecuteInTransaction(ctx, logging.LogFromContext(ctx), db.DatabaseConn, timeout, func(ctx context.Context, tx adapter.Querier) (T, error) {
+		wrapped := &DbTx{
 			Querier: tx,
 			kind:    db.kind,
 		}
-		return struct{}{}, fn(ctx, wrapped)
+		return fn(ctx, wrapped)
 	})
-	return err
 }
 
 // Open the connection

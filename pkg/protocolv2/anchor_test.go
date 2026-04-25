@@ -15,8 +15,8 @@ import (
 
 // Helpers.
 
-func testAttestationPayload() AttestationPayload {
-	return AttestationPayload{
+func testAttestationPayload() *AttestationPayload {
+	return &AttestationPayload{
 		UserID:                  "user-123",
 		CredentialID:            "cred-abc",
 		CredentialPublicKeyHash: base64.RawURLEncoding.EncodeToString([]byte("cred-public-key-hash-bytes")),
@@ -25,8 +25,8 @@ func testAttestationPayload() AttestationPayload {
 	}
 }
 
-func testBundlePayload() PubkeyBundlePayload {
-	return PubkeyBundlePayload{
+func testBundlePayload() *PubkeyBundlePayload {
+	return &PubkeyBundlePayload{
 		UserID:                 "user-123",
 		RequestEncEcdhPubkey:   `{"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}`,
 		RequestEncMlkemPubkey:  base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes")),
@@ -83,7 +83,7 @@ func TestParseAttestationPayloadRoundTrip(t *testing.T) {
 	in := testAttestationPayload()
 	out, err := ParseAttestationPayload(in.CanonicalBody())
 	require.NoError(t, err)
-	require.Equal(t, in, out)
+	require.Equal(t, *in, out)
 }
 
 func TestParseAttestationPayloadRejectsMalformed(t *testing.T) {
@@ -131,7 +131,7 @@ func TestParsePubkeyBundlePayloadRoundTrip(t *testing.T) {
 	in := testBundlePayload()
 	out, err := ParsePubkeyBundlePayload(in.CanonicalBody())
 	require.NoError(t, err)
-	require.Equal(t, in, out)
+	require.Equal(t, *in, out)
 }
 
 func TestParsePubkeyBundlePayloadRejectsMalformed(t *testing.T) {

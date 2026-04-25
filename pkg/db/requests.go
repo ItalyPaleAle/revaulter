@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/italypaleale/go-sql-utils/adapter"
@@ -309,7 +310,7 @@ func (s *RequestStore) MarkExpired(ctx context.Context, state string) (*V2Reques
 func (s *RequestStore) ExpirePending(ctx context.Context, now time.Time) error {
 	n := now.Unix()
 	_, err := s.db.Exec(ctx,
-		`UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4`,
+		"UPDATE v2_requests SET status = $1, updated_at = $2 WHERE status = $3 AND expires_at < $4",
 		string(V2RequestStatusExpired), n, string(V2RequestStatusPending), n,
 	)
 	return err
@@ -319,8 +320,9 @@ func (s *RequestStore) ExpirePending(ctx context.Context, now time.Time) error {
 func (s *RequestStore) CleanupOldRecords(ctx context.Context, now time.Time) (int64, error) {
 	cutoff := now.Add(-10 * time.Minute).Unix()
 	affected, err := s.db.Exec(ctx,
-		`DELETE FROM v2_requests WHERE status != $1 AND expires_at < $2`,
-		string(V2RequestStatusPending), cutoff)
+		"DELETE FROM v2_requests WHERE status != $1 AND expires_at < $2",
+		string(V2RequestStatusPending), cutoff,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -328,7 +330,7 @@ func (s *RequestStore) CleanupOldRecords(ctx context.Context, now time.Time) (in
 }
 
 func (s *RequestStore) DeleteTerminalRequest(ctx context.Context, state string, cutoff *time.Time) error {
-	query := `DELETE FROM v2_requests WHERE state = $1 AND status != $2`
+	query := "DELETE FROM v2_requests WHERE state = $1 AND status != $2"
 	args := []any{state, string(V2RequestStatusPending)}
 	if cutoff != nil {
 		expiresBefore := cutoff.Add(-10 * time.Minute).Unix()
@@ -337,6 +339,10 @@ func (s *RequestStore) DeleteTerminalRequest(ctx context.Context, state string, 
 	}
 
 	_, err := s.db.Exec(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("error deleting request: %w", err)
+	}
+
 	return err
 }
 

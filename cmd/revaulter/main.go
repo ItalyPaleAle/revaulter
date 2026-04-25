@@ -81,44 +81,24 @@ func main() {
 	// Init the webhook object
 	webhook := webhook.NewWebhook()
 
-	// Initialize the database and stores in main so their lifecycle is explicit
-	var (
-		dbConn       *db.DB
-		authStore    *db.AuthStore
-		requestStore *db.RequestStore
-	)
-	if conf.DatabaseDSN != "" {
-		connCtx, connCancel := context.WithTimeout(ctx, 20*time.Second)
-		dbConn, err = db.Open(connCtx, conf.DatabaseDSN)
-		connCancel()
-		if err != nil {
-			slogkit.FatalError(log, "Failed to open database", err)
-			return
-		}
-
-		err = db.RunMigrations(ctx, dbConn, log)
-		if err != nil {
-			_ = dbConn.Close(ctx)
-			slogkit.FatalError(log, "Failed to run database migrations", err)
-			return
-		}
-
-		authStore, err = db.NewAuthStore(dbConn, dbConn.Kind())
-		if err != nil {
-			_ = dbConn.Close(ctx)
-			slogkit.FatalError(log, "Failed to initialize auth store", err)
-			return
-		}
-
-		requestStore, err = db.NewRequestStore(dbConn)
-		if err != nil {
-			_ = dbConn.Close(ctx)
-			slogkit.FatalError(log, "Failed to initialize request store", err)
-			return
-		}
-
-		shutdownFns = append(shutdownFns, dbConn.Close)
+	// Initialize the database
+	connCtx, connCancel := context.WithTimeout(ctx, 20*time.Second)
+	dbConn, err := db.Open(connCtx, conf.DatabaseDSN)
+	connCancel()
+	if err != nil {
+		slogkit.FatalError(log, "Failed to open database", err)
+		return
 	}
+
+	// Run DB migrations
+	err = db.RunMigrations(ctx, dbConn, log)
+	if err != nil {
+		_ = dbConn.Close(ctx)
+		slogkit.FatalError(log, "Failed to run database migrations", err)
+		return
+	}
+
+	shutdownFns = append(shutdownFns, dbConn.Close)
 
 	// Init metrics
 	metrics, metricsShutdownFn, err := revaultermetrics.NewRevaulterMetrics(ctx, log)
@@ -149,8 +129,6 @@ func main() {
 		Metrics:       metrics,
 		TraceExporter: traceExporter,
 		DB:            dbConn,
-		AuthStore:     authStore,
-		RequestStore:  requestStore,
 	})
 	if err != nil {
 		slogkit.FatalError(log, "Cannot initialize the server", err)

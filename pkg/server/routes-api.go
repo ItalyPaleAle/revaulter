@@ -128,7 +128,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 	// Get the user from the context
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "No session"))
+		AbortWithErrorJSON(c, noSessionResponseError)
 		return
 	}
 

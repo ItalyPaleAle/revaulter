@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -39,18 +41,22 @@ type v2RequestPubkeyResponse struct {
 	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
 }
 
+// RouteV2RequestCreate is the handler for POST /v2/request/:requestKey/(encrypt|decrypt|sign)
 func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := config.Get()
 		log := logging.LogFromContext(c.Request.Context())
 		span := trace.SpanFromContext(c.Request.Context())
 
+		// Get the user from the context
 		user := getRequestUserFromCtx(c)
 		if user == nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Missing request user in context"))
+			// Should never happen
+			AbortWithErrorJSON(c, errors.New("missing request user in context"))
 			return
 		}
 
+		// Parse the request body, then validate it
 		var body protocolv2.RequestCreateBody
 		err := c.ShouldBindJSON(&body)
 		if err != nil {
@@ -58,12 +64,13 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
-		err = validateV2CreateBody(operation, body)
+		err = validateV2CreateBody(operation, &body)
 		if err != nil {
 			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "Invalid request: %v", err))
 			return
 		}
 
+		// Get the timeout or set the default one
 		timeout := body.GetTimeout()
 		if timeout == 0 {
 			timeout = cfg.RequestTimeout
@@ -72,6 +79,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
+		// Save the request in the database
 		now := time.Now()
 		id, err := uuid.NewRandom()
 		if err != nil {
@@ -92,7 +100,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
-		err = s.requestStore.CreateRequest(c.Request.Context(), db.CreateRequestInput{
+		err = s.db.RequestStore().CreateRequest(c.Request.Context(), db.CreateRequestInput{
 			State:            state,
 			UserID:           user.ID,
 			Operation:        operation,
@@ -109,20 +117,24 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
+		// Enqueue the request for cleanup when it expires
 		err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
 			State:  state,
 			UserID: user.ID,
-			TTL:    now.Add(timeout),
+			TTL:    now.Add(timeout + 5*time.Second),
 		})
 		if err != nil {
 			AbortWithErrorJSON(c, err)
 			return
 		}
 
+		// Send response
 		c.JSON(http.StatusAccepted, v2RequestCreateResponse{
 			State:   state,
 			Pending: true,
 		})
+
+		// Publish the new item
 		s.publishListItem(&db.V2RequestListItem{
 			State:     state,
 			Status:    string(db.V2RequestStatusPending),
@@ -163,18 +175,22 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 	}
 }
 
+// RouteV2RequestPubkey is the handler for /v2/request/:requestKey/pubkey
 func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
+	// Retrieve the user (which includes the key) from the context
 	user := getRequestUserFromCtx(c)
 	if user == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Missing request user in context"))
+		// Should never happen
+		AbortWithErrorJSON(c, errors.New("missing request user in context"))
 		return
 	}
 
-	if user.RequestEncEcdhPubkey == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusPreconditionFailed, "User has not configured request encryption key"))
+	if user.RequestEncEcdhPubkey == "" || user.RequestEncMlkemPubkey == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "User has not configured request encryption key"))
 		return
 	}
 
+	// Send the response
 	c.JSON(http.StatusOK, v2RequestPubkeyResponse{
 		UserID:                       user.ID,
 		EcdhP256:                     json.RawMessage(user.RequestEncEcdhPubkey),
@@ -187,6 +203,7 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 	})
 }
 
+// RouteV2RequestResult is the handler for GET /v2/request/:requestKey/result/:state
 func (s *Server) RouteV2RequestResult(c *gin.Context) {
 	state := c.Param("state")
 	if state == "" {
@@ -194,34 +211,65 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 		return
 	}
 
+	// Get the user from the context, set by the middleware
 	user := getRequestUserFromCtx(c)
 	if user == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusInternalServerError, "Missing request user in context"))
+		// Should never happen
+		AbortWithErrorJSON(c, errors.New("missing request user in context"))
 		return
 	}
 
+	rs := s.db.RequestStore()
+
+	// Initial read to validate ownership before subscribing
+	// We must not allow subscriptions to a state the caller doesn't own
+	rec, err := rs.GetRequest(c.Request.Context(), state)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	if rec == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
+		return
+	}
+
+	// Verify the request belongs to the user identified by the request key
+	// Collapse the mismatch into the same error as "not found" so callers can't probe for another user's states
+	if rec.UserID != user.ID {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
+		return
+	}
+
+	// Subscribe now that ownership is verified
+	// A single subscription covers the whole long-poll: terminal transitions are final, so notifySubscriber fires at most once per state
+	s.lock.Lock()
+	watch := s.subscribeState(state)
+	s.lock.Unlock()
+	defer func() {
+		s.lock.Lock()
+		s.unsubscribeState(state, watch)
+		s.lock.Unlock()
+	}()
+
 	for {
-		rec, err := s.requestStore.GetRequest(c.Request.Context(), state)
+		// Re-read on every iteration: closes the race between the ownership read and the subscribe, and reflects state after each wakeup
+		// UserID is immutable, so we don't need to re-check ownership
+		rec, err = rs.GetRequest(c.Request.Context(), state)
 		if err != nil {
 			AbortWithErrorJSON(c, err)
 			return
 		}
-
 		if rec == nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
-			return
-		}
-
-		// Verify the request belongs to the user identified by the request key
-		// Collapse the mismatch into the same error as "not found" so callers can't probe for another user's states
-		if rec.UserID != user.ID {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
 			return
 		}
 
 		switch rec.Status {
 		case db.V2RequestStatusCompleted:
-			rec, err = s.requestStore.GetAndDeleteTerminalRequest(c.Request.Context(), state)
+			// This method deletes the request only if it's still pending, so it's safe to not use a transaction
+			// Besides, thanks to the subscription handling, we get concurrency control anyways
+			rec, err = rs.GetAndDeleteTerminalRequest(c.Request.Context(), state)
 			if err != nil {
 				AbortWithErrorJSON(c, err)
 				return
@@ -230,6 +278,7 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 				continue
 			}
 
+			// Send response
 			c.JSON(http.StatusOK, protocolv2.RequestResultResponse{
 				State:            rec.State,
 				Done:             true,
@@ -237,7 +286,9 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 			})
 			return
 		case db.V2RequestStatusCanceled, db.V2RequestStatusExpired:
-			rec, err = s.requestStore.GetAndDeleteTerminalRequest(c.Request.Context(), state)
+			// This method deletes the request only if it's still pending, so it's safe to not use a transaction
+			// Besides, thanks to the subscription handling, we get concurrency control anyways
+			rec, err = rs.GetAndDeleteTerminalRequest(c.Request.Context(), state)
 			if err != nil {
 				AbortWithErrorJSON(c, err)
 				return
@@ -246,6 +297,7 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 				continue
 			}
 
+			// Send response
 			c.JSON(http.StatusConflict, protocolv2.RequestResultResponse{
 				State:  rec.State,
 				Failed: true,
@@ -253,34 +305,24 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 			return
 		}
 
-		// Pending: wait for notification or timeout/disconnect.
-		s.lock.Lock()
-		watch := s.subscribeState(state)
-		s.lock.Unlock()
+		// Pending: wait for notification or disconnect
 		select {
 		case <-watch:
-			s.lock.Lock()
-			s.unsubscribeState(state, watch)
-			s.lock.Unlock()
+			// We got a notification so let's restart the loop to retrieve the current state
 			continue
 		case <-c.Request.Context().Done():
-			s.lock.Lock()
-			s.unsubscribeState(state, watch)
-			s.lock.Unlock()
+			// Context canceled; usually the client has disconnected
+			// Send response anyway
 			c.JSON(http.StatusAccepted, protocolv2.RequestResultResponse{
 				State:   rec.State,
 				Pending: true,
 			})
 			return
-		case <-time.After(250 * time.Millisecond):
-			s.lock.Lock()
-			s.unsubscribeState(state, watch)
-			s.lock.Unlock()
 		}
 	}
 }
 
-func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
+func validateV2CreateBody(op string, body *protocolv2.RequestCreateBody) error {
 	// Validate the operation
 	switch op {
 	case protocolv2.OperationEncrypt,
@@ -318,35 +360,33 @@ func validateV2CreateBody(op string, body protocolv2.RequestCreateBody) error {
 		return NewResponseError(http.StatusBadRequest, "parameter 'note' cannot be longer than 40 characters")
 	}
 
-	// Validate E2EE envelope fields
+	// Validate E2EE envelope fields, and normalize all base64 to base64url (no padding)
 	if body.RequestEncAlg != protocolv2.TransportAlg {
 		return NewResponseError(http.StatusBadRequest, "unsupported requestEncAlg")
 	}
+
 	err := body.CliEphemeralPublicKey.ValidatePublic()
 	if err != nil {
 		return NewResponseErrorf(http.StatusBadRequest, "invalid cliEphemeralPublicKey: %v", err)
 	}
-	if body.MlkemCiphertext == "" {
-		return NewResponseError(http.StatusBadRequest, "missing mlkemCiphertext")
+
+	mlkemCiphertext, err := utils.DecodeBase64String(body.MlkemCiphertext)
+	if err != nil || mlkemCiphertext == nil {
+		return NewResponseError(http.StatusBadRequest, "mlkemCiphertext is empty or invalid")
 	}
-	_, err = utils.DecodeBase64String(body.MlkemCiphertext)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid mlkemCiphertext format")
+	body.MlkemCiphertext = base64.RawURLEncoding.EncodeToString(mlkemCiphertext)
+
+	encryptedPayloadNonce, err := utils.DecodeBase64String(body.EncryptedPayloadNonce)
+	if err != nil || encryptedPayloadNonce == nil {
+		return NewResponseError(http.StatusBadRequest, "encryptedPayloadNonce is empty or invalid")
 	}
-	if body.EncryptedPayloadNonce == "" {
-		return NewResponseError(http.StatusBadRequest, "missing encryptedPayloadNonce")
+	body.EncryptedPayloadNonce = base64.RawURLEncoding.EncodeToString(encryptedPayloadNonce)
+
+	encryptedPayload, err := utils.DecodeBase64String(body.EncryptedPayload)
+	if err != nil || encryptedPayload == nil {
+		return NewResponseError(http.StatusBadRequest, "encryptedPayload is empty or invalid")
 	}
-	_, err = utils.DecodeBase64String(body.EncryptedPayloadNonce)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid encryptedPayloadNonce format")
-	}
-	if body.EncryptedPayload == "" {
-		return NewResponseError(http.StatusBadRequest, "missing encryptedPayload")
-	}
-	_, err = utils.DecodeBase64String(body.EncryptedPayload)
-	if err != nil {
-		return NewResponseError(http.StatusBadRequest, "invalid encryptedPayload format")
-	}
+	body.EncryptedPayload = base64.RawURLEncoding.EncodeToString(encryptedPayload)
 
 	return nil
 }

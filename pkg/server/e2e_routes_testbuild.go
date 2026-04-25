@@ -5,6 +5,7 @@
 package server
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
@@ -112,7 +113,6 @@ func AddE2ETestRoutes(token string) func(s *Server, r gin.IRouter) {
 				AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "invalid e2e token"))
 				return
 			}
-			c.Next()
 		})
 
 		group.POST("/reset", s.RouteE2EReset)
@@ -136,12 +136,9 @@ func init() {
 	testRoutes = append(testRoutes, AddE2ETestRoutes(token))
 }
 
+// RouteE2EReset is the handler for POST /__e2e__/reset
 func (s *Server) RouteE2EReset(c *gin.Context) {
-	if s.db == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusServiceUnavailable, "database is not configured"))
-		return
-	}
-
+	// Reset the database
 	err := s.db.ResetAllForTests(c.Request.Context())
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -155,10 +152,12 @@ func (s *Server) RouteE2EReset(c *gin.Context) {
 	c.JSON(http.StatusOK, e2eOKResponse{OK: true})
 }
 
+// RouteE2ESeedUser is the handler for POST /__e2e__/seed-user
 func (s *Server) RouteE2ESeedUser(c *gin.Context) {
+	// Parse the request body and validate
 	var req e2eSeedUserRequest
-	err := c.ShouldBindJSON(&req)
-	if err != nil {
+	bindErr := c.ShouldBindJSON(&req)
+	if bindErr != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
@@ -170,90 +169,90 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 		req.State = "ready-no-password"
 	}
 
-	_, err = s.authStore.RegisterUser(c.Request.Context(), db.RegisterUserInput{
-		UserID:         req.UserID,
-		DisplayName:    req.DisplayName,
-		WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("e2e-webauthn-" + req.UserID)),
-		CredentialID:   "e2e-cred-" + req.UserID,
-		PublicKey:      `{}`,
-		SignCount:      1,
-		SessionTTL:     config.Get().SessionTimeout,
-	})
-	if err != nil && !errors.Is(err, db.ErrUserAlreadyExists) {
-		AbortWithErrorJSON(c, err)
-		return
-	}
+	// Execute the rest in a transaction
+	user, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Minute, func(ctx context.Context, tx *db.DbTx) (*db.User, error) {
+		as := tx.AuthStore()
 
-	switch req.State {
-	case "registered-nonready":
-		// Keep the user unfinalized
-	case "ready-no-password", "ready-with-password":
-		user, getUserErr := s.authStore.GetUserByID(c.Request.Context(), req.UserID)
-		if getUserErr != nil {
-			AbortWithErrorJSON(c, getUserErr)
-			return
+		_, err := as.RegisterUser(c.Request.Context(), db.RegisterUserInput{
+			UserID:         req.UserID,
+			DisplayName:    req.DisplayName,
+			WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("e2e-webauthn-" + req.UserID)),
+			CredentialID:   "e2e-cred-" + req.UserID,
+			PublicKey:      `{}`,
+			SignCount:      1,
+			SessionTTL:     config.Get().SessionTimeout,
+		})
+		if err != nil && !errors.Is(err, db.ErrUserAlreadyExists) {
+			return nil, err
+		}
+
+		switch req.State {
+		case "registered-nonready":
+			// Keep the user unfinalized
+		case "ready-no-password", "ready-with-password":
+			user, getUserErr := as.GetUserByID(c.Request.Context(), req.UserID)
+			if getUserErr != nil {
+				return nil, getUserErr
+			}
+			if user == nil {
+				return nil, NewResponseError(http.StatusNotFound, "User not found")
+			}
+
+			if !user.Ready {
+				requestEncPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+				if err != nil {
+					return nil, err
+				}
+				requestEncJWK, err := protocolv2.ECP256PublicJWKFromECDH(requestEncPriv.PublicKey())
+				if err != nil {
+					return nil, err
+				}
+				requestEncJWKJSON, err := json.Marshal(requestEncJWK)
+				if err != nil {
+					return nil, err
+				}
+
+				wrappedKey := ""
+				if req.State == "ready-with-password" {
+					if req.Password == "" {
+						return nil, NewResponseError(http.StatusBadRequest, "password is required for ready-with-password state")
+					}
+					// Store a placeholder wrapped key so the login flow returns it
+					wrappedKey = "e2e-wrapped-key-" + req.UserID
+				}
+
+				_, err = as.FinalizeSignup(
+					c.Request.Context(),
+					db.FinalizeSignupInput{
+						UserID:                req.UserID,
+						WrappedPrimaryKey:     wrappedKey,
+						RequestEncEcdhPubkey:  string(requestEncJWKJSON),
+						RequestEncMlkemPubkey: base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey-" + req.UserID)),
+					},
+				)
+				if err != nil && !errors.Is(err, db.ErrAlreadyFinalized) {
+					return nil, err
+				}
+			}
+		default:
+			return nil, NewResponseError(http.StatusBadRequest, "unsupported seed user state")
+		}
+
+		user, err := as.GetUserByID(c.Request.Context(), req.UserID)
+		if err != nil {
+			return nil, err
 		}
 		if user == nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
-			return
+			return nil, NewResponseError(http.StatusNotFound, "User not found")
 		}
-
-		if !user.Ready {
-			requestEncPriv, keyErr := ecdh.P256().GenerateKey(rand.Reader)
-			if keyErr != nil {
-				AbortWithErrorJSON(c, keyErr)
-				return
-			}
-			requestEncJWK, keyErr := protocolv2.ECP256PublicJWKFromECDH(requestEncPriv.PublicKey())
-			if keyErr != nil {
-				AbortWithErrorJSON(c, keyErr)
-				return
-			}
-			requestEncJWKJSON, keyErr := json.Marshal(requestEncJWK)
-			if keyErr != nil {
-				AbortWithErrorJSON(c, keyErr)
-				return
-			}
-
-			wrappedKey := ""
-			if req.State == "ready-with-password" {
-				if req.Password == "" {
-					AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "password is required for ready-with-password state"))
-					return
-				}
-				// Store a placeholder wrapped key so the login flow returns it
-				wrappedKey = "e2e-wrapped-key-" + req.UserID
-			}
-
-			_, keyErr = s.authStore.FinalizeSignup(
-				c.Request.Context(),
-				db.FinalizeSignupInput{
-					UserID:                req.UserID,
-					WrappedPrimaryKey:     wrappedKey,
-					RequestEncEcdhPubkey:  string(requestEncJWKJSON),
-					RequestEncMlkemPubkey: base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey-" + req.UserID)),
-				},
-			)
-			if keyErr != nil && !errors.Is(keyErr, db.ErrAlreadyFinalized) {
-				AbortWithErrorJSON(c, keyErr)
-				return
-			}
-		}
-	default:
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "unsupported seed user state"))
-		return
-	}
-
-	user, err := s.authStore.GetUserByID(c.Request.Context(), req.UserID)
+		return user, nil
+	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	if user == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
-		return
-	}
 
+	// Send response
 	c.JSON(http.StatusOK, e2eSeedUserResponse{
 		OK:          true,
 		UserID:      user.ID,
@@ -263,10 +262,12 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 	})
 }
 
+// RouteE2ESeedSession is the handler for /__e2e__/seed-session
 func (s *Server) RouteE2ESeedSession(c *gin.Context) {
+	// Parse the request body
 	var req e2eSeedSessionRequest
-	err := c.ShouldBindJSON(&req)
-	if err != nil {
+	bindErr := c.ShouldBindJSON(&req)
+	if bindErr != nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
@@ -275,22 +276,39 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 		return
 	}
 
-	user, err := s.authStore.Login(c.Request.Context(), db.LoginInput{
-		UserID:       req.UserID,
-		CredentialID: "e2e-cred-" + req.UserID,
-		SignCount:    2,
-		SessionTTL:   config.Get().SessionTimeout,
+	user, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Minute, func(ctx context.Context, tx *db.DbTx) (*db.User, error) {
+		as := tx.AuthStore()
+
+		user, err := as.GetUserByID(c.Request.Context(), req.UserID)
+		if err != nil {
+			return nil, err
+		}
+
+		err = as.Login(c.Request.Context(), db.LoginInput{
+			UserID:       req.UserID,
+			CredentialID: "e2e-cred-" + req.UserID,
+			SignCount:    2,
+			SessionTTL:   config.Get().SessionTimeout,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		return user, nil
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
+	// Create a new session token
 	sess, err := newAuthSessionToken(user, config.Get().SessionTimeout)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+
+	// Sign the session token
 	token, err := signAuthSessionToken(sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -304,6 +322,7 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 		cookiePath = "/"
 	}
 
+	// Send response
 	c.JSON(http.StatusOK, e2eSeedSessionResponse{
 		OK:          true,
 		SessionID:   token,
@@ -313,7 +332,9 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 	})
 }
 
+// RouteE2ESeedRequest is the handler for /__e2e__/seed-request
 func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
+	// Read the request body and populate default values if unset
 	var req e2eSeedRequestRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -333,14 +354,14 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 	if req.State == "" {
 		req.State = uuid.NewString()
 	}
-
-	status := strings.TrimSpace(req.Status)
-	if status == "" {
-		status = string(db.V2RequestStatusPending)
+	if req.Status == "" {
+		req.Status = string(db.V2RequestStatusPending)
 	}
 
 	rs := s.db.RequestStore()
 
+	// Note: we are not using a transaction here as this is just test code
+	// Create the request in the database
 	now := time.Now().UTC()
 	encryptedRequest := `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","y":"AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"mlkemCiphertext":"dGVzdC1tbGtlbS1jaXBoZXJ0ZXh0","nonce":"MTIzNDU2Nzg5MDEy","ciphertext":"dGVzdC1yZXF1ZXN0LWNpcGhlcnRleHQifQ}`
 	err = rs.CreateRequest(c.Request.Context(), db.CreateRequestInput{
@@ -360,9 +381,22 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 		return
 	}
 
-	switch status {
+	// Update the request if needed
+	switch req.Status {
 	case string(db.V2RequestStatusPending):
-		// nothing else to do
+		// Publish the pending item
+		s.publishListItem(&db.V2RequestListItem{
+			State:     req.State,
+			Status:    req.Status,
+			Operation: req.Operation,
+			UserID:    req.UserID,
+			KeyLabel:  req.KeyLabel,
+			Algorithm: req.Algorithm,
+			Requestor: req.Requestor,
+			Date:      now.Unix(),
+			Expiry:    now.Add(time.Duration(req.TimeoutSec) * time.Second).Unix(),
+			Note:      req.Note,
+		})
 	case string(db.V2RequestStatusCanceled):
 		_, err = rs.CancelRequest(c.Request.Context(), req.State, req.UserID)
 	case string(db.V2RequestStatusCompleted):
@@ -395,33 +429,20 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 		return
 	}
 
-	if status == string(db.V2RequestStatusPending) {
-		s.publishListItem(&db.V2RequestListItem{
-			State:     req.State,
-			Status:    status,
-			Operation: req.Operation,
-			UserID:    req.UserID,
-			KeyLabel:  req.KeyLabel,
-			Algorithm: req.Algorithm,
-			Requestor: req.Requestor,
-			Date:      now.Unix(),
-			Expiry:    now.Add(time.Duration(req.TimeoutSec) * time.Second).Unix(),
-			Note:      req.Note,
-		})
-	}
-
+	// Send the response
 	c.JSON(http.StatusOK, e2eSeedRequestResponse{
 		OK:     true,
 		State:  req.State,
-		Status: status,
+		Status: req.Status,
 	})
 }
 
+// RouteE2EGetRequest is the handler for /__e2e__/request/:state
 func (s *Server) RouteE2EGetRequest(c *gin.Context) {
 	state := c.Param("state")
-	rs := s.db.RequestStore()
 
-	rec, err := rs.GetRequest(c.Request.Context(), state)
+	// Retrieve the request form the database
+	rec, err := s.db.RequestStore().GetRequest(c.Request.Context(), state)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -431,6 +452,7 @@ func (s *Server) RouteE2EGetRequest(c *gin.Context) {
 		return
 	}
 
+	// Send response
 	c.JSON(http.StatusOK, e2eGetRequestResponse{
 		State:     rec.State,
 		Status:    string(rec.Status),
@@ -443,11 +465,12 @@ func (s *Server) RouteE2EGetRequest(c *gin.Context) {
 	})
 }
 
+// RouteE2EGetRequestResult is the handler for /__e2e__/request/:state/result
 func (s *Server) RouteE2EGetRequestResult(c *gin.Context) {
 	state := c.Param("state")
-	rs := s.db.RequestStore()
 
-	rec, err := rs.GetRequest(c.Request.Context(), state)
+	// Retrieve the request form the database
+	rec, err := s.db.RequestStore().GetRequest(c.Request.Context(), state)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -457,11 +480,7 @@ func (s *Server) RouteE2EGetRequestResult(c *gin.Context) {
 		return
 	}
 
-	var responseEnvelope any
-	if rec.ResponseEnvelope != nil {
-		responseEnvelope = rec.ResponseEnvelope
-	}
-
+	// Send response
 	c.JSON(http.StatusOK, e2eGetRequestResultResponse{
 		State:            rec.State,
 		Status:           string(rec.Status),
@@ -472,7 +491,7 @@ func (s *Server) RouteE2EGetRequestResult(c *gin.Context) {
 		Requestor:        rec.RequestorIP,
 		Note:             rec.Note,
 		EncryptedRequest: json.RawMessage(rec.EncryptedRequest),
-		ResponseEnvelope: responseEnvelope,
+		ResponseEnvelope: rec.ResponseEnvelope,
 	})
 }
 
@@ -481,7 +500,9 @@ type e2eSeedCredentialRequest struct {
 	DisplayName string `json:"displayName"`
 }
 
+// RouteE2ESeedCredential is the handler for /__e2e__/seed-credential
 func (s *Server) RouteE2ESeedCredential(c *gin.Context) {
+	// Parse and validate the request body
 	var req e2eSeedCredentialRequest
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -493,8 +514,9 @@ func (s *Server) RouteE2ESeedCredential(c *gin.Context) {
 		return
 	}
 
+	// Store the credential in the database
 	credID := "e2e-cred-extra-" + uuid.NewString()[:8]
-	err = s.authStore.AddCredential(c.Request.Context(), db.AddCredentialInput{
+	err = s.db.AuthStore().AddCredential(c.Request.Context(), db.AddCredentialInput{
 		UserID:       req.UserID,
 		CredentialID: credID,
 		DisplayName:  req.DisplayName,
@@ -506,6 +528,7 @@ func (s *Server) RouteE2ESeedCredential(c *gin.Context) {
 		return
 	}
 
+	// Send response
 	c.JSON(http.StatusOK, e2eSeedCredentialResponse{
 		OK:           true,
 		CredentialID: credID,
