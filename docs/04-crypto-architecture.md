@@ -232,7 +232,7 @@ For the `sign` operation, the browser derives a deterministic ECDSA P-256 privat
 
 1. HKDF derives 384 bits with `info = "revaulter/v2/signingKey\nalgorithm={algorithm}\nkeyLabel={keyLabel}\nuserId={userId}\nv=1"`
 2. The 384-bit output is reduced to a valid P-256 scalar using the FIPS 186-5 Appendix A.2.1 candidate-reduction method
-3. The scalar is imported as a P-256 ECDSA private key via WebCrypto
+3. The scalar is used directly with `@noble/curves` to sign the 32-byte SHA-256 digest with `prehash: false`, so the signature is over the supplied digest with no additional hashing
 
 Because this info string is distinct from `revaulter/v2/requestEncKey`, `revaulter/v2/requestEncMlkemSeed`, and the symmetric operation info format, signing keys are domain-separated from every other key family — deriving the same scalar as any other key family is computationally infeasible.
 
@@ -481,7 +481,7 @@ This hybrid transport gives the response envelope both conventional ECDH confide
 | Key derivation | HKDF-SHA-256 |
 | Wrapped primary key encryption | AES-256-GCM |
 | Application encrypt/decrypt operation | AES-GCM via WebCrypto |
-| Application sign operation | ECDSA P-256 + SHA-256 (`ES256`) via WebCrypto |
+| Application sign operation | ECDSA P-256 (`ES256`) via `@noble/curves`, signed over the supplied 32-byte SHA-256 digest (prehashed; no re-hashing) |
 | Published signing key ID | RFC 7638 JWK thumbprint (SHA-256, base64url) |
 | Static request key agreement | ECDH P-256 |
 | Response transport KEM | ML-KEM-768 |

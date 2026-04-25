@@ -1,4 +1,5 @@
 import { argon2idAsync } from '@noble/hashes/argon2.js'
+import { p256 } from '@noble/curves/nist.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import type {
@@ -9,7 +10,7 @@ import type {
     V2ResponseEnvelope,
     V2SigningJwk,
 } from '$lib/v2-types'
-import { hashToP256Scalar, importP256ScalarAsEcdhKey, importP256ScalarAsEcdsaKey } from './crypto-p256'
+import { hashToP256Scalar, importP256ScalarAsEcdhKey } from './crypto-p256'
 
 /**
  * Generates an ephemeral ECDH P-256 key pair for transport encryption and exports
@@ -651,7 +652,7 @@ export async function decryptRequestPayload(params: {
 }
 
 /**
- * Derives a deterministic ECDSA P-256 signing key pair from the primary key.
+ * Derives a deterministic ECDSA P-256 signing scalar from the primary key.
  * The derivation is bound to userId, keyLabel, and algorithm, and is domain-separated from request-encryption and symmetric operation keys.
  */
 export async function deriveSigningKeyPair(params: {
@@ -659,7 +660,7 @@ export async function deriveSigningKeyPair(params: {
     keyLabel: string
     algorithm: string
     primaryKey: Uint8Array
-}): Promise<{ privateKey: CryptoKey; publicJwk: V2SigningJwk }> {
+}): Promise<{ scalar: Uint8Array; publicJwk: V2SigningJwk }> {
     if (params.algorithm !== 'ES256') {
         throw new Error(`Unsupported signing algorithm: ${params.algorithm}`)
     }
@@ -675,29 +676,36 @@ export async function deriveSigningKeyPair(params: {
         ikm,
         384
     )
-    const scalarBytes = hashToP256Scalar(new Uint8Array(rawBits))
-    const privateKey = await importP256ScalarAsEcdsaKey(scalarBytes)
+    const scalar = hashToP256Scalar(new Uint8Array(rawBits))
 
-    const jwk = (await crypto.subtle.exportKey('jwk', privateKey)) as JsonWebKey
-    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) {
-        throw new Error('Failed to export signing public key as P-256 JWK')
+    // Derive the uncompressed public point (0x04 || X(32) || Y(32)) from the scalar and split into JWK x/y
+    const pubBytes = p256.getPublicKey(scalar, false)
+    if (pubBytes.length !== 65 || pubBytes[0] !== 0x04) {
+        throw new Error('Failed to derive uncompressed P-256 public key')
     }
+    const x = bytesToBase64Url(pubBytes.subarray(1, 33))
+    const y = bytesToBase64Url(pubBytes.subarray(33, 65))
 
     return {
-        privateKey,
-        publicJwk: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y },
+        scalar,
+        publicJwk: { kty: 'EC', crv: 'P-256', x, y },
     }
 }
 
 /**
- * Signs a 32-byte digest using an ECDSA P-256 private key. Returns the raw r||s concatenation (64 bytes) produced by WebCrypto
+ * Signs a 32-byte digest using an ECDSA P-256 raw private scalar
+ * Uses `@noble/curves` with `prehash: false` so the signature is over the supplied digest directly, matching standard ES256 verification semantics
+ * Returns the raw r||s concatenation (64 bytes)
  */
-export async function signDigestEs256(privateKey: CryptoKey, digest: Uint8Array): Promise<Uint8Array> {
+export async function signDigestEs256(scalar: Uint8Array, digest: Uint8Array): Promise<Uint8Array> {
     if (digest.length !== 32) {
         throw new Error(`Expected 32-byte digest, got ${digest.length}`)
     }
-    const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privateKey, asBuf(digest) as BufferSource)
-    return new Uint8Array(sig)
+    const sig = p256.sign(digest, scalar, { prehash: false, format: 'compact' })
+    if (sig.length !== 64) {
+        throw new Error(`Expected 64-byte compact signature, got ${sig.length}`)
+    }
+    return sig
 }
 
 /**

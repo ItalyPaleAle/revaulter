@@ -1,3 +1,4 @@
+import { p256 } from '@noble/curves/nist.js'
 import { describe, expect, it } from 'vitest'
 import {
     buildRequestEncAAD,
@@ -20,7 +21,7 @@ import {
     unwrapPrimaryKey,
     wrapPrimaryKey,
 } from './crypto'
-import { asBuf, bytesToBase64Url } from './utils'
+import { base64UrlToBytes, bytesToBase64Url } from './utils'
 
 function hexToBytes(hex: string): Uint8Array {
     const bytes = new Uint8Array(hex.length / 2)
@@ -791,8 +792,19 @@ describe('deriveSigningKeyPair', () => {
 })
 
 describe('signDigestEs256', () => {
-    it('produces a 64-byte raw r||s signature that verifies against the public key', async () => {
-        const { privateKey, publicJwk } = await deriveSigningKeyPair({
+    /** Reconstructs the uncompressed P-256 public key bytes (0x04 || X || Y) from the public JWK */
+    function publicKeyBytesFromJwk(jwk: { x: string; y: string }): Uint8Array {
+        const x = base64UrlToBytes(jwk.x)
+        const y = base64UrlToBytes(jwk.y)
+        const out = new Uint8Array(65)
+        out[0] = 0x04
+        out.set(x, 1)
+        out.set(y, 33)
+        return out
+    }
+
+    it('produces a 64-byte raw r||s signature that verifies against the supplied digest', async () => {
+        const { scalar, publicJwk } = await deriveSigningKeyPair({
             userId: 'u',
             keyLabel: 'k',
             algorithm: 'ES256',
@@ -800,30 +812,44 @@ describe('signDigestEs256', () => {
         })
         const digest = new Uint8Array(32)
         crypto.getRandomValues(digest)
-        const sig = await signDigestEs256(privateKey, digest)
+        const sig = await signDigestEs256(scalar, digest)
         expect(sig).toBeInstanceOf(Uint8Array)
         expect(sig.length).toBe(64)
 
-        const pub = await crypto.subtle.importKey(
-            'jwk',
-            { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y, ext: true } as JsonWebKey,
-            { name: 'ECDSA', namedCurve: 'P-256' },
-            true,
-            ['verify']
-        )
-        const ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pub, asBuf(sig), asBuf(digest))
+        // Verify with prehash:false because the browser now signs the digest directly without re-hashing
+        const pubBytes = publicKeyBytesFromJwk(publicJwk)
+        const ok = p256.verify(sig, digest, pubBytes, { prehash: false, format: 'compact' })
         expect(ok).toBe(true)
     })
 
-    it('rejects digests that are not 32 bytes', async () => {
-        const { privateKey } = await deriveSigningKeyPair({
+    it('does not verify when the digest is treated as a message that should be hashed (regression check for the prior bug)', async () => {
+        const { scalar, publicJwk } = await deriveSigningKeyPair({
             userId: 'u',
             keyLabel: 'k',
             algorithm: 'ES256',
             primaryKey: TEST_PRIMARY_KEY,
         })
-        await expect(signDigestEs256(privateKey, new Uint8Array(31))).rejects.toThrow(/32-byte digest/)
-        await expect(signDigestEs256(privateKey, new Uint8Array(33))).rejects.toThrow(/32-byte digest/)
+        const digest = new Uint8Array(32)
+        crypto.getRandomValues(digest)
+        const sig = await signDigestEs256(scalar, digest)
+        const pubBytes = publicKeyBytesFromJwk(publicJwk)
+
+        // Under the old (buggy) WebCrypto path the browser signed SHA-256(digest)
+        // With the fix, signing over the digest directly must NOT verify against SHA-256(digest)
+        const rehashed = new Uint8Array(await crypto.subtle.digest('SHA-256', digest as BufferSource))
+        const okRehashed = p256.verify(sig, rehashed, pubBytes, { prehash: false, format: 'compact' })
+        expect(okRehashed).toBe(false)
+    })
+
+    it('rejects digests that are not 32 bytes', async () => {
+        const { scalar } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        await expect(signDigestEs256(scalar, new Uint8Array(31))).rejects.toThrow(/32-byte digest/)
+        await expect(signDigestEs256(scalar, new Uint8Array(33))).rejects.toThrow(/32-byte digest/)
     })
 })
 

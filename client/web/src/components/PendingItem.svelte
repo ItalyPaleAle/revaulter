@@ -150,13 +150,13 @@ async function buildResponseEnvelope(
                 throw new Error('sign: additionalData must be empty')
             }
 
-            const { privateKey, publicJwk } = await deriveSigningKeyPair({
+            const { scalar, publicJwk } = await deriveSigningKeyPair({
                 userId: req.userId,
                 keyLabel: req.keyLabel,
                 algorithm: req.algorithm,
                 primaryKey,
             })
-            const signature = await signDigestEs256(privateKey, value)
+            const signature = await signDigestEs256(scalar, value)
             const pem = await ecP256JwkToPem(publicJwk)
             publicKey = { jwk: publicJwk, pem }
             resultPlain = new TextEncoder().encode(

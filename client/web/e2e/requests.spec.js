@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, verify } from 'node:crypto'
+import { createPublicKey, verify } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -269,18 +269,15 @@ test('cli sign round-trips and the signature verifies against the browser-derive
         const sigBytes = Buffer.from(signResult.json.signature, 'base64url')
         expect(sigBytes.length).toBe(64)
 
-        // The browser's signDigestEs256 uses WebCrypto subtle.sign with hash:'SHA-256', which hashes the input again
-        // So the signed data is SHA-256(digest) where digest = SHA-256(message). We pass the digest to Node's verify and let it apply SHA-256 once
-        const digest = createHash('sha256').update(message).digest()
+        // The browser signs the 32-byte SHA-256 digest of the message directly (prehashed)
+        // Node's verify with 'sha256' hashes the message once, matching standard ES256 semantics
         const publicKey = createPublicKey({ key: confirmBody.publicKey.jwk, format: 'jwk' })
-        const ok = verify('sha256', digest, { key: publicKey, dsaEncoding: 'ieee-p1363' }, sigBytes)
+        const ok = verify('sha256', message, { key: publicKey, dsaEncoding: 'ieee-p1363' }, sigBytes)
         expect(ok, 'CLI signature must verify against the browser-derived public key').toBe(true)
 
-        // And the same signature must not verify against a tampered digest — sanity check
-        const tamperedDigest = createHash('sha256')
-            .update(Buffer.concat([message, Buffer.from('!')]))
-            .digest()
-        const bad = verify('sha256', tamperedDigest, { key: publicKey, dsaEncoding: 'ieee-p1363' }, sigBytes)
+        // And the same signature must not verify against a tampered message — sanity check
+        const tampered = Buffer.concat([message, Buffer.from('!')])
+        const bad = verify('sha256', tampered, { key: publicKey, dsaEncoding: 'ieee-p1363' }, sigBytes)
         expect(bad, 'signature must not verify against a tampered message').toBe(false)
     } finally {
         rmSync(tmpRoot, { recursive: true, force: true })

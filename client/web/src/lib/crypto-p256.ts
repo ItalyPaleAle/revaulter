@@ -62,18 +62,3 @@ export async function importP256ScalarAsEcdhKey(scalar: Uint8Array): Promise<Cry
     const pkcs8 = buildP256Pkcs8(scalar)
     return crypto.subtle.importKey('pkcs8', asBuf(pkcs8), { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
 }
-
-/**
- * Imports a raw 32-byte P-256 private scalar as an extractable ECDSA CryptoKey via PKCS8 DER encoding.
- * The resulting key is usable for `crypto.subtle.sign` with `{ name: 'ECDSA', hash: 'SHA-256' }` and can be exported as a public JWK.
- */
-export async function importP256ScalarAsEcdsaKey(scalar: Uint8Array): Promise<CryptoKey> {
-    const pkcs8 = buildP256Pkcs8(scalar)
-    const result = await Promise.race([
-        crypto.subtle.importKey('pkcs8', asBuf(pkcs8), { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']),
-        new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('PKCS8 P-256 key import timed out')), 30_000)
-        ),
-    ])
-    return result
-}
