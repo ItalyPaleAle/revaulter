@@ -68,7 +68,9 @@ type Server struct {
 	// Subscribers for pending request list updates
 	pubsub *broker.Broker[*db.V2RequestListItem]
 	// Subscriptions to watch request status changes
-	subs map[string][]chan struct{}
+	// Each state can only have one subscription
+	// If another call tries to subscribe to the same state, it will evict the first call
+	subs map[string]chan struct{}
 
 	// Delayed work for request expiry and record deletion
 	requestExpiryQueue *eventqueue.Processor[string, requestExpiryEvent]
@@ -120,7 +122,7 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		subs:    map[string][]chan struct{}{},
+		subs:    map[string]chan struct{}{},
 		pubsub:  broker.NewBroker[*db.V2RequestListItem](),
 		webhook: opts.Webhook,
 		metrics: opts.Metrics,
