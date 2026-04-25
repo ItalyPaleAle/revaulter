@@ -9,7 +9,7 @@ func (s *Server) publishListItem(item *db.V2RequestListItem) {
 		return
 	}
 
-	go s.pubsub.Publish(item)
+	s.pubsub.Publish(item)
 }
 
 // Adds a subscription to a state by key
