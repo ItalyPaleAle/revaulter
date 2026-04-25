@@ -93,6 +93,61 @@ test('canceling a pending request removes it from the UI and updates state', asy
     }
 })
 
+test('second long-poll subscriber evicts the first and the response is unavailable to the evicted caller', async ({
+    page,
+    request,
+}) => {
+    const auth = await registerAndReachReady(page, 'Subscriber Evict User')
+
+    try {
+        await waitForListStream(page)
+
+        const seeded = await seedPendingRequest(request, {
+            userId: auth.session.userId,
+            operation: 'encrypt',
+            keyLabel: 'evict-key',
+            algorithm: 'A256GCM',
+            requestor: '198.51.100.30',
+        })
+
+        await expect(page.getByText('evict-key')).toBeVisible()
+
+        const url = `/v2/request/${auth.session.requestKey}/result/${seeded.state}`
+
+        // Start subscriber #1 — it should block on the still-pending request
+        const sub1Promise = request.get(url)
+
+        // Give the server a moment to register subscriber #1 before subscriber #2 evicts it
+        await page.waitForTimeout(500)
+
+        // Subscriber #2 takes over the subscription, which evicts subscriber #1
+        const sub2Promise = request.get(url)
+
+        // Evicted subscriber #1 must return 202 pending without receiving any result
+        const sub1Res = await sub1Promise
+        expect(sub1Res.status()).toBe(202)
+        const sub1Body = await sub1Res.json()
+        expect(sub1Body.pending).toBe(true)
+        expect(sub1Body.responseEnvelope).toBeUndefined()
+
+        // Cancel the pending request from the UI so subscriber #2 can observe the terminal state
+        await page.getByRole('button', { name: 'Decline' }).click()
+        await expect(page.getByText('All clear')).toBeVisible()
+
+        // Subscriber #2 receives the terminal response
+        const sub2Res = await sub2Promise
+        expect(sub2Res.status()).toBe(409)
+        const sub2Body = await sub2Res.json()
+        expect(sub2Body.failed).toBe(true)
+
+        // Any further long-poll on the same state must report not-found because the response is consumed
+        const tailRes = await request.get(url)
+        expect(tailRes.status()).toBe(404)
+    } finally {
+        await auth.passkey.dispose()
+    }
+})
+
 test('requests for another user are not shown', async ({ page, request }) => {
     const auth = await registerAndReachReady(page, 'Request User')
     await seedUser(request, {

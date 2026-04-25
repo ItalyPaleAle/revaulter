@@ -307,8 +307,17 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 
 		// Pending: wait for notification or disconnect
 		select {
-		case <-watch:
-			// We got a notification so let's restart the loop to retrieve the current state
+		case _, ok := <-watch:
+			// ok is false when subscribeState closed the channel without sending: another caller took over the subscription, so this caller must return
+			if !ok {
+				c.JSON(http.StatusAccepted, protocolv2.RequestResultResponse{
+					State:   rec.State,
+					Pending: true,
+				})
+				return
+			}
+
+			// ok is true when notifySubscriber sent a value before closing: a real notification, so re-check the state
 			continue
 		case <-c.Request.Context().Done():
 			// Context canceled; usually the client has disconnected

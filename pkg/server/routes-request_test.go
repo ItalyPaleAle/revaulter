@@ -3,15 +3,22 @@
 package server
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 
@@ -203,4 +210,217 @@ func TestValidateV2CreateBodyRejectsInvalidInput(t *testing.T) {
 			require.EqualError(t, err, tt.wantErr)
 		})
 	}
+}
+
+// TestServerV2RequestResultContextCancelClearsSubscription verifies that when the long-poll's request context is canceled, the handler unsubscribes itself
+func TestServerV2RequestResultContextCancelClearsSubscription(t *testing.T) {
+	setTestConfig(t, "v2-result-ctx-cancel.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	_, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	const state = "state-result-ctx-cancel"
+	rs := srv.db.RequestStore()
+	now := time.Now().UTC().Truncate(time.Second)
+	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
+		State:            state,
+		UserID:           aliceUser.ID,
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "alice-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(10 * time.Minute),
+		EncryptedRequest: `{}`,
+	})
+	require.NoError(t, err)
+
+	// Issue a long-poll with a cancelable context so we can simulate the caller disconnecting
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	url := fmt.Sprintf("https://localhost:%d/v2/request/%s/result/%s", testServerPort, aliceUser.RequestKey, state)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	require.NoError(t, err)
+
+	type pollResult struct {
+		res *http.Response
+		err error
+	}
+	resCh := make(chan pollResult, 1)
+	go func() {
+		res, dErr := client.Do(req)
+		resCh <- pollResult{res: res, err: dErr}
+	}()
+
+	// Wait for the subscription to be registered before canceling
+	require.Eventually(t, func() bool {
+		srv.lock.RLock()
+		defer srv.lock.RUnlock()
+		_, ok := srv.subs[state]
+		return ok
+	}, 2*time.Second, 5*time.Millisecond, "subscription was not registered")
+
+	// Cancel the request context
+	cancel()
+
+	// The client receives an error because the connection was aborted; either way the handler must have returned and the subscription must be cleared
+	select {
+	case r := <-resCh:
+		if r.res != nil {
+			_, _ = io.Copy(io.Discard, r.res.Body)
+			r.res.Body.Close()
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the long-poll to return after context cancel")
+	}
+
+	require.Eventually(t, func() bool {
+		srv.lock.RLock()
+		defer srv.lock.RUnlock()
+		_, ok := srv.subs[state]
+		return !ok
+	}, 2*time.Second, 5*time.Millisecond, "subscription was not removed after context cancel")
+}
+
+// TestServerV2RequestResultSecondSubscriberEvictsFirst verifies that opening a second long-poll for the same state evicts the first one
+// The first caller must return a 202 pending response, and after the request transitions to terminal only the second caller receives the result
+func TestServerV2RequestResultSecondSubscriberEvictsFirst(t *testing.T) {
+	setTestConfig(t, "v2-result-evict.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	_, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	const state = "state-result-evict"
+	rs := srv.db.RequestStore()
+	now := time.Now().UTC().Truncate(time.Second)
+	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
+		State:            state,
+		UserID:           aliceUser.ID,
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "alice-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(10 * time.Minute),
+		EncryptedRequest: `{}`,
+	})
+	require.NoError(t, err)
+
+	type pollResult struct {
+		status int
+		body   map[string]any
+		err    error
+	}
+	startPoll := func() <-chan pollResult {
+		ch := make(chan pollResult, 1)
+		go func() {
+			url := fmt.Sprintf("https://localhost:%d/v2/request/%s/result/%s", testServerPort, aliceUser.RequestKey, state)
+			req, rErr := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+			if rErr != nil {
+				ch <- pollResult{err: rErr}
+				return
+			}
+			res, dErr := client.Do(req)
+			if dErr != nil {
+				ch <- pollResult{err: dErr}
+				return
+			}
+			defer func() {
+				_, _ = io.Copy(io.Discard, res.Body)
+				res.Body.Close()
+			}()
+			var body map[string]any
+			_ = json.NewDecoder(res.Body).Decode(&body)
+			ch <- pollResult{status: res.StatusCode, body: body}
+		}()
+		return ch
+	}
+
+	waitForSub := func(prev chan struct{}) chan struct{} {
+		t.Helper()
+		var ch chan struct{}
+		require.Eventually(t, func() bool {
+			srv.lock.RLock()
+			defer srv.lock.RUnlock()
+			ch = srv.subs[state]
+			return ch != nil && ch != prev
+		}, 2*time.Second, 5*time.Millisecond, "expected new subscription channel")
+		return ch
+	}
+
+	// Subscriber #1 starts the long-poll; capture its watch channel via the server's subscription map
+	sub1 := startPoll()
+	ch1 := waitForSub(nil)
+
+	// Subscriber #2 starts and must replace subscriber #1 in the map
+	sub2 := startPoll()
+	ch2 := waitForSub(ch1)
+	require.NotEqual(t, ch1, ch2, "second subscription must replace the first")
+
+	// The first subscriber's channel must already be closed by subscribeState
+	select {
+	case _, ok := <-ch1:
+		require.False(t, ok, "evicted channel must be closed without a value")
+	case <-time.After(time.Second):
+		t.Fatal("evicted channel was not closed by subscribeState")
+	}
+
+	// Subscriber #1 must promptly return 202 pending — its subscription is gone, so it cannot receive the result
+	select {
+	case r := <-sub1:
+		require.NoError(t, r.err)
+		require.Equal(t, http.StatusAccepted, r.status)
+		require.Equal(t, true, r.body["pending"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("evicted subscriber #1 did not return")
+	}
+
+	// Subscriber #2 should still be active in the subscription map; verify it is the same channel we captured
+	srv.lock.RLock()
+	current := srv.subs[state]
+	srv.lock.RUnlock()
+	require.Equal(t, ch2, current, "subscriber #2 must remain the active subscription")
+
+	// Drive the request to a terminal state (cancel) and notify subscribers
+	// We bypass the API confirm endpoint to avoid coupling this test to CSRF / session details
+	rec, err := rs.CancelRequest(t.Context(), state, aliceUser.ID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+
+	srv.lock.Lock()
+	srv.notifySubscriber(state)
+	srv.lock.Unlock()
+
+	// Subscriber #2 receives the terminal response
+	select {
+	case r := <-sub2:
+		require.NoError(t, r.err)
+		require.Equal(t, http.StatusConflict, r.status)
+		require.Equal(t, true, r.body["failed"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber #2 did not receive the terminal response")
+	}
+
+	// The response is consumed; any further long-poll for the same state must be unable to read it
+	url := fmt.Sprintf("https://localhost:%d/v2/request/%s/result/%s", testServerPort, aliceUser.RequestKey, state)
+	extraReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	require.NoError(t, err)
+	extraRes, err := client.Do(extraReq)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, extraRes.Body)
+		extraRes.Body.Close()
+	}()
+	require.Equal(t, http.StatusNotFound, extraRes.StatusCode)
 }
