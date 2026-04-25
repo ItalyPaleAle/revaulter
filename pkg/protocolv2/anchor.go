@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
@@ -49,6 +50,26 @@ type AttestationPayload struct {
 // This is the format stored in the database and sent on the wire
 func (p AttestationPayload) CanonicalBody() string {
 	return canonicalBodyFromTaggedFields(p)
+}
+
+// ValidateCreatedAt rejects attestation payloads whose `createdAt` is outside `[now-skew, now+skew]`
+// The signed `CreatedAt` is one of the few non-replay defenses we have: an attacker who captured a signed attestation could otherwise re-submit it later under the same `(userId, credentialId, hash, epoch)` and have the verifier accept the canonical bytes
+// In practice, attacks of this kind are unlikely, but this offers an extra layer of protection
+func (p AttestationPayload) ValidateCreatedAt(now time.Time, skew time.Duration) error {
+	if skew <= 0 {
+		return errors.New("skew must be positive")
+	}
+	if p.CreatedAt <= 0 {
+		return fmt.Errorf("createdAt is missing or non-positive: %d", p.CreatedAt)
+	}
+
+	created := time.Unix(p.CreatedAt, 0)
+	delta := now.Sub(created)
+	if delta < -skew || delta > skew {
+		return fmt.Errorf("createdAt %d is outside the ±%s acceptance window of server time", p.CreatedAt, skew)
+	}
+
+	return nil
 }
 
 // ParseAttestationPayload parses a canonical body string back into an AttestationPayload

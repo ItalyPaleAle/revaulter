@@ -219,6 +219,10 @@ type v2AuthDeleteCredentialRequest struct {
 //nolint:errname
 var noSessionResponseError = NewResponseError(http.StatusUnauthorized, "No session")
 
+// attestationCreatedAtSkew bounds how far the signed attestation `createdAt` may drift from server now
+// Pinning to ±2 minutes blocks replay of a captured attestation that lingered before submission while still tolerating modest client clock skew
+const attestationCreatedAtSkew = 2 * time.Minute
+
 // RouteV2AuthRegisterBegin is the handler for POST /v2/auth/register/begin
 func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	cfg := config.Get()
@@ -1186,6 +1190,12 @@ func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCreden
 		return addCredentialFinishRes{}, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err)
 	}
 
+	// Pin the signed createdAt to a ±2 minute window of server now so an old captured attestation cannot be replayed
+	err = vals.attestPayload.ValidateCreatedAt(time.Now(), attestationCreatedAtSkew)
+	if err != nil {
+		return addCredentialFinishRes{}, NewResponseErrorf(http.StatusBadRequest, "attestationPayload %v", err)
+	}
+
 	// Verify the challenge belongs to the authenticated user, and that the credential ID, publish key hash, and epoch match expectations
 	if vals.attestPayload.UserID != vals.userID {
 		return addCredentialFinishRes{}, NewResponseError(http.StatusBadRequest, "attestationPayload userId does not match session")
@@ -1580,6 +1590,12 @@ func (s *Server) finalizeSetup(c *gin.Context, tx *db.DbTx, vals finalizeSetupVa
 	err = protocolv2.VerifyHybridAttestation(vals.anchorEs384Pub, vals.mldsa87PubBytes, vals.attestPayload, vals.attestSigEs, vals.attestSigMl)
 	if err != nil {
 		return finalizeSetupRes{}, NewResponseErrorf(http.StatusBadRequest, "attestation signature verification failed: %v", err)
+	}
+
+	// Pin the signed createdAt to a ±2 minute window of server now so an old captured attestation cannot be replayed
+	err = vals.attestPayload.ValidateCreatedAt(time.Now(), attestationCreatedAtSkew)
+	if err != nil {
+		return finalizeSetupRes{}, NewResponseErrorf(http.StatusBadRequest, "attestationPayload %v", err)
 	}
 
 	if vals.attestPayload.UserID != vals.userID {

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/stretchr/testify/require"
@@ -77,6 +78,75 @@ func TestAttestationPayloadCanonicalBody(t *testing.T) {
 		"wrappedKeyEpoch=1\n" +
 		"createdAt=1720000000"
 	require.Equal(t, expected, body)
+}
+
+func TestAttestationPayloadValidateCreatedAt(t *testing.T) {
+	now, _ := time.Parse(time.RFC3339, "2026-01-01T01:00:00Z")
+	skew := 2 * time.Minute
+
+	t.Run("accepts a payload exactly at server now", func(t *testing.T) {
+		p := AttestationPayload{
+			CreatedAt: now.Unix(),
+		}
+		require.NoError(t, p.ValidateCreatedAt(now, skew))
+	})
+
+	t.Run("accepts a payload near the lower bound", func(t *testing.T) {
+		p := AttestationPayload{
+			CreatedAt: now.Add(-skew + time.Second).Unix(),
+		}
+		require.NoError(t, p.ValidateCreatedAt(now, skew))
+	})
+
+	t.Run("accepts a payload near the upper bound", func(t *testing.T) {
+		p := AttestationPayload{
+			CreatedAt: now.Add(skew - time.Second).Unix(),
+		}
+		require.NoError(t, p.ValidateCreatedAt(now, skew))
+	})
+
+	t.Run("rejects a payload older than the window", func(t *testing.T) {
+		p := AttestationPayload{
+			CreatedAt: now.Add(-skew - time.Second).Unix(),
+		}
+		err := p.ValidateCreatedAt(now, skew)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "outside the ±2m0s acceptance window")
+	})
+
+	t.Run("rejects a payload from the future beyond the window", func(t *testing.T) {
+		p := AttestationPayload{
+			CreatedAt: now.Add(skew + time.Second).Unix(),
+		}
+		err := p.ValidateCreatedAt(now, skew)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "outside the ±2m0s acceptance window")
+	})
+
+	t.Run("rejects a missing or non-positive createdAt", func(t *testing.T) {
+		p := AttestationPayload{
+			CreatedAt: 0,
+		}
+		err := p.ValidateCreatedAt(now, skew)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "missing or non-positive")
+
+		p = AttestationPayload{
+			CreatedAt: -1,
+		}
+		err = p.ValidateCreatedAt(now, skew)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "missing or non-positive")
+	})
+
+	t.Run("rejects a non-positive skew (development guard)", func(t *testing.T) {
+		p := AttestationPayload{
+			CreatedAt: now.Unix(),
+		}
+		err := p.ValidateCreatedAt(now, 0)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "skew must be positive")
+	})
 }
 
 func TestParseAttestationPayloadRoundTrip(t *testing.T) {
