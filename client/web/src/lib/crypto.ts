@@ -1,5 +1,4 @@
-import { chacha20poly1305 } from '@awasm/noble'
-import { argon2idAsync } from '@noble/hashes/argon2.js'
+import { argon2id, chacha20poly1305 } from '@awasm/noble'
 import { p256 } from '@noble/curves/nist.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
@@ -244,7 +243,7 @@ export async function deriveWrappingKey(params: {
 
         usedArgon2idSalt = params.argon2idSalt ?? crypto.getRandomValues(new Uint8Array(16))
         usedArgon2idCost = params.argon2idCost
-        stretched = await argon2idAsync(params.password, usedArgon2idSalt, {
+        stretched = await argon2id.async(params.password, usedArgon2idSalt, {
             t: usedArgon2idCost.t,
             m: usedArgon2idCost.m,
             p: usedArgon2idCost.p,

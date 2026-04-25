@@ -1,3 +1,4 @@
+import { argon2id } from '@awasm/noble'
 import { p256 } from '@noble/curves/nist.js'
 import { describe, expect, it } from 'vitest'
 import {
@@ -105,6 +106,28 @@ describe('generatePrimaryKey', () => {
         const pk1 = await generatePrimaryKey()
         const pk2 = await generatePrimaryKey()
         expect(bytesToHex(pk1)).not.toBe(bytesToHex(pk2))
+    })
+})
+
+describe('argon2id (awasm-noble) determinism', () => {
+    // Pinned vector to catch any awasm-noble change that would break existing wrapped-primary-key envelopes
+    // The same (password, salt, t, m, p, dkLen) was verified to produce the same output under @noble/hashes 2.2.0 (RFC 9106 conformant)
+    it('matches the pinned RFC 9106-conformant vector for ASCII inputs', async () => {
+        const password = new TextEncoder().encode('password')
+        const salt = new TextEncoder().encode('saltsalt12345678')
+        const expected = '4599a3b4658f4a3266e49ef7964b36d9dc8cc6b75a30295ac3b02d85539c0072'
+
+        const out = await argon2id.async(password, salt, { t: 2, m: 256, p: 1, dkLen: 32 })
+        expect(bytesToHex(out)).toBe(expected)
+    })
+
+    it('matches the pinned vector for binary salt at low cost (deriveWrappingKey-style inputs)', async () => {
+        const password = new TextEncoder().encode('test-password')
+        const salt = new Uint8Array(16).fill(0x42)
+        const expected = 'd7a02862ff4436f797551af3df85d4ea5951e76a0997ffdb8ca2d38497ec9002'
+
+        const out = await argon2id.async(password, salt, { t: 1, m: 8, p: 1, dkLen: 32 })
+        expect(bytesToHex(out)).toBe(expected)
     })
 })
 
