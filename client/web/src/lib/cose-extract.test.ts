@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { extractCredentialPublicKeyCose } from './cose-extract'
-import { bytesToBase64Url } from './utils'
+
+import { extractCredentialPublicKeyCose } from '$lib/cose-extract'
+import { bytesToBase64Url } from '$lib/utils'
 
 // Shared cross-language fixture: the same raw COSE bytes must hash to the same base64url digest on the browser (this file) and in pkg/protocolv2/credential_pubkey_test.go
 // If these constants change they must change in both places together

@@ -1,62 +1,18 @@
-import { argon2id, chacha20poly1305 } from '@awasm/noble'
+import { argon2id } from '@awasm/noble'
 import { mapHashToField } from '@noble/curves/abstract/modular.js'
 import { p256 } from '@noble/curves/nist.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
+
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import type {
     Argon2idCost,
     EcP256PublicJwk,
-    V2Operation,
     V2RequestPayloadInner,
     V2ResponseEnvelope,
     V2SigningJwk,
 } from '$lib/v2-types'
-
-/**
- * Builds a P-256 public JWK (`{ kty, crv, x, y }`) from a raw 32-byte private scalar
- * Uses `@noble/curves` to derive the uncompressed public point and splits it into x/y
- */
-function ecP256ScalarToPublicJwk(scalar: Uint8Array): EcP256PublicJwk {
-    const pubBytes = p256.getPublicKey(scalar, false)
-    if (pubBytes.length !== 65 || pubBytes[0] !== 0x04) {
-        throw new Error('Failed to derive uncompressed P-256 public key')
-    }
-    return {
-        kty: 'EC',
-        crv: 'P-256',
-        x: bytesToBase64Url(pubBytes.subarray(1, 33)),
-        y: bytesToBase64Url(pubBytes.subarray(33, 65)),
-    }
-}
-
-/**
- * Reconstructs the uncompressed SEC1 public-point bytes (`0x04 || X(32) || Y(32)`) from a P-256 public JWK
- * Used to feed peer keys into `p256.getSharedSecret` without going through `crypto.subtle.importKey`
- */
-function ecP256JwkToPublicBytes(jwk: EcP256PublicJwk): Uint8Array {
-    const x = base64UrlToBytes(jwk.x)
-    const y = base64UrlToBytes(jwk.y)
-    if (x.length !== 32 || y.length !== 32) {
-        throw new Error('Invalid P-256 public JWK: x and y must each be 32 bytes')
-    }
-    const out = new Uint8Array(65)
-    out[0] = 0x04
-    out.set(x, 1)
-    out.set(y, 33)
-    return out
-}
-
-/**
- * Generates an ephemeral ECDH P-256 key pair for transport encryption
- * Returns the raw 32-byte private scalar and the public half as a compact JWK that the CLI consumes
- */
-export function generateTransportKeyPairJwk(): {
-    scalar: Uint8Array
-    publicKeyJwk: EcP256PublicJwk
-} {
-    const scalar = p256.utils.randomSecretKey()
-    return { scalar, publicKeyJwk: ecP256ScalarToPublicJwk(scalar) }
-}
+import { deriveEcdhSharedSecret, ecP256ScalarToPublicJwk, generateTransportKeyPairJwk } from '$lib/crypto-ecdh'
+import { normalizeAeadAlgorithm } from '$lib/crypto-symmetric'
 
 /**
  * Derives the hybrid ECDH + ML-KEM shared secret, then expands it via HKDF into an AES-256-GCM key
@@ -94,17 +50,6 @@ async function deriveTransportAesKeyForDecrypt(
     const mlkemShared = ml_kem768.decapsulate(mlkemCiphertext, mlkemSecretKey)
 
     return deriveHybridAesKey(ecdhShared, mlkemShared, `revaulter/v2/transport/${state}`)
-}
-
-/**
- * Performs ECDH key agreement and returns the raw 32-byte shared secret (the X coordinate of the shared point)
- *
- * `p256.getSharedSecret` returns the compressed shared point (`parity || X`, 33 bytes) by default, so we slice off the parity byte to match the 32-byte X-only output that WebCrypto's `deriveBits(..., 256)` produced
- */
-function deriveEcdhSharedSecret(scalar: Uint8Array, peerPublicJwk: EcP256PublicJwk): Uint8Array {
-    const peerPubBytes = ecP256JwkToPublicBytes(peerPublicJwk)
-    const compressed = p256.getSharedSecret(scalar, peerPubBytes)
-    return compressed.slice(1)
 }
 
 /** Combines ECDH + ML-KEM shared secrets and derives an AES-256-GCM key via HKDF-SHA256 */
@@ -440,25 +385,6 @@ export async function deriveOperationKeyBytes(params: {
     return new Uint8Array(bits)
 }
 
-class TransportAADInfo {
-    private v = 1
-    public state: string
-    public operation: V2Operation
-    public algorithm: string
-
-    constructor(state: string, operation: V2Operation, algorithm: string) {
-        this.state = state
-        this.operation = operation
-        this.algorithm = algorithm
-    }
-
-    public serialize(): string {
-        // Keep the transport AAD format deterministic across browser and CLI implementations
-        // This avoids relying on JSON field ordering when binding the response envelope
-        return `algorithm=${this.algorithm}\noperation=${this.operation}\nstate=${this.state}\nv=${this.v}`
-    }
-}
-
 class InfoObj {
     private v = 1
     public userId: string
@@ -476,151 +402,6 @@ class InfoObj {
         // Fields are sorted alphabetically and separated by newlines; no JSON serialization dependency
         return `algorithm=${this.algorithm}\nkeyLabel=${this.keyLabel}\nuserId=${this.userId}\nv=${this.v}`
     }
-}
-
-/**
- * Builds the canonical AES-GCM additional authenticated data used for transport response envelopes shared between the browser and the CLI
- */
-export function buildTransportAAD(state: string, operation: V2Operation, algorithm: string): Uint8Array {
-    return new TextEncoder().encode(new TransportAADInfo(state, operation, algorithm).serialize())
-}
-
-/**
- * Performs the requested AES-GCM operation with the derived key bytes. For decrypt,
- * callers may pass the authentication tag separately and it will be recombined into
- * the format expected by WebCrypto.
- */
-export async function performAesGcmOperation(params: {
-    mode: 'encrypt' | 'decrypt'
-    keyBytes: Uint8Array
-    value: Uint8Array
-    nonce?: Uint8Array
-    aad?: Uint8Array
-    tag?: Uint8Array
-}): Promise<Uint8Array> {
-    // Import the raw operation key bytes as an AES-GCM CryptoKey
-    const key = await crypto.subtle.importKey('raw', asBuf(params.keyBytes), { name: 'AES-GCM' }, false, [
-        params.mode === 'encrypt' ? 'encrypt' : 'decrypt',
-    ])
-
-    // Use the supplied nonce when present, otherwise generate one for encryption callers
-    const nonce = params.nonce ?? crypto.getRandomValues(new Uint8Array(12))
-
-    if (params.mode === 'encrypt') {
-        // Encrypt the plaintext and bind any additional authenticated data into the tag
-        const res = await crypto.subtle.encrypt(
-            { name: 'AES-GCM', iv: asBuf(nonce), additionalData: asBuf(params.aad) },
-            key,
-            asBuf(params.value)
-        )
-        return new Uint8Array(res)
-    }
-
-    // WebCrypto expects ciphertext and tag in a single buffer, so rebuild that shape when needed
-    const combined =
-        params.tag && params.tag.length > 0
-            ? (() => {
-                  const out = new Uint8Array(params.value.length + params.tag.length)
-                  out.set(params.value, 0)
-                  out.set(params.tag, params.value.length)
-                  return out
-              })()
-            : params.value
-
-    try {
-        // Decrypt and authenticate the combined ciphertext in one WebCrypto call
-        const res = await crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv: asBuf(nonce), additionalData: asBuf(params.aad) },
-            key,
-            asBuf(combined)
-        )
-        return new Uint8Array(res)
-    } catch {
-        throw new Error(
-            'Decryption failed. This normally means that the ciphertext could not be authenticated. Check that the key label, user ID, nonce, tag, and additional data match the original encryption request.'
-        )
-    }
-}
-
-/**
- * Splits a combined AEAD output (ciphertext || tag) into ciphertext and tag segments
- * Works for both AES-GCM and ChaCha20-Poly1305 since both append a 16-byte tag by default
- */
-export function splitAeadCiphertextAndTag(ciphertextWithTag: Uint8Array, tagLen = 16) {
-    if (ciphertextWithTag.length < tagLen) {
-        throw new Error('Ciphertext is too short')
-    }
-
-    return {
-        data: ciphertextWithTag.slice(0, ciphertextWithTag.length - tagLen),
-        tag: ciphertextWithTag.slice(ciphertextWithTag.length - tagLen),
-    }
-}
-
-/**
- * Performs the requested ChaCha20-Poly1305 operation with the supplied raw key bytes
- * Mirrors `performAesGcmOperation`'s parameter shape so callers can branch on algorithm and reuse the same input/output framing
- */
-export async function performChaCha20Poly1305Operation(params: {
-    mode: 'encrypt' | 'decrypt'
-    keyBytes: Uint8Array
-    value: Uint8Array
-    nonce?: Uint8Array
-    aad?: Uint8Array
-    tag?: Uint8Array
-}): Promise<Uint8Array> {
-    // ChaCha20-Poly1305 requires a 12-byte nonce; generate one for encryption callers that don't supply one
-    const nonce = params.nonce ?? crypto.getRandomValues(new Uint8Array(12))
-    const aad = params.aad && params.aad.length > 0 ? params.aad : undefined
-    const cipher = chacha20poly1305(params.keyBytes, nonce, aad)
-
-    if (params.mode === 'encrypt') {
-        return cipher.encrypt(params.value)
-    }
-
-    // The cipher expects ciphertext||tag concatenated, so rebuild that shape when the caller supplied them separately
-    const combined =
-        params.tag && params.tag.length > 0
-            ? (() => {
-                  const out = new Uint8Array(params.value.length + params.tag.length)
-                  out.set(params.value, 0)
-                  out.set(params.tag, params.value.length)
-                  return out
-              })()
-            : params.value
-
-    try {
-        return cipher.decrypt(combined)
-    } catch {
-        throw new Error(
-            'Decryption failed. This normally means that the ciphertext could not be authenticated. Check that the key label, user ID, nonce, tag, and additional data match the original encryption request.'
-        )
-    }
-}
-
-/**
- * Normalizes an algorithm string to the canonical long-form name used for AEAD dispatch
- * Returns `aes-256-gcm` or `chacha20-poly1305`, or `null` if the algorithm is not supported for encrypt/decrypt
- * The set of accepted spellings matches the server-side `IsSupportedEncryptionAlgorithm`
- */
-export function normalizeAeadAlgorithm(algo: string): 'aes-256-gcm' | 'chacha20-poly1305' | null {
-    switch (algo.toLowerCase()) {
-        case 'a256gcm':
-        case 'aes-256-gcm':
-        case 'aes256gcm':
-            return 'aes-256-gcm'
-        case 'c20p':
-        case 'chacha20-poly1305':
-        case 'chacha20poly1305':
-            return 'chacha20-poly1305'
-        default:
-            return null
-    }
-}
-
-/** Reports whether an algorithm string is accepted for browser-side encrypt/decrypt operations (case-insensitive) */
-export function isSupportedAeadAlgorithm(algo: string): boolean {
-    return normalizeAeadAlgorithm(algo) !== null
 }
 
 /**
@@ -675,15 +456,6 @@ export async function deriveRequestEncMlkemKeyPair(params: {
         secretKey,
         encapsulationKeyB64: bytesToBase64Url(publicKey),
     }
-}
-
-/**
- * Builds the canonical AAD used when encrypting/decrypting request payloads.
- * This binds the plaintext metadata to the E2EE ciphertext so tampering with
- * keyLabel, algorithm, or operation causes decryption to fail.
- */
-export function buildRequestEncAAD(algorithm: string, keyLabel: string, operation: string): Uint8Array {
-    return new TextEncoder().encode(`algorithm=${algorithm}\nkeyLabel=${keyLabel}\noperation=${operation}\nv=1`)
 }
 
 /**

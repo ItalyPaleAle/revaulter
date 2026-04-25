@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+
 import {
     type AttestationPayload,
     anchorEs384JwkToString,
@@ -15,8 +16,8 @@ import {
     signPubkeyBundleHybrid,
     unwrapAnchorKey,
     wrapAnchorKey,
-} from './crypto-anchor'
-import { bytesToBase64Url } from './utils'
+} from '$lib/crypto-anchor'
+import { bytesToBase64Url } from '$lib/utils'
 
 // Shared wrapping key for wrap/unwrap round-trip tests.
 const WRAP_KEY = new Uint8Array(32).fill(0x11)

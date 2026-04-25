@@ -6,20 +6,22 @@ import Icon from '$components/Icon.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
 
 import {
-    buildRequestEncAAD,
-    buildTransportAAD,
     decryptRequestPayload,
     deriveOperationKeyBytes,
     deriveSigningKeyPair,
     ecP256JwkToPem,
     encryptTransportEnvelope,
+    signDigestEs256,
+} from '$lib/crypto'
+import {
+    buildRequestEncAAD,
+    buildTransportAAD,
     isSupportedAeadAlgorithm,
     normalizeAeadAlgorithm,
     performAesGcmOperation,
     performChaCha20Poly1305Operation,
-    signDigestEs256,
     splitAeadCiphertextAndTag,
-} from '$lib/crypto'
+} from '$lib/crypto-symmetric'
 import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import { v2Cancel, v2Confirm, v2GetRequest } from '$lib/v2-api'
 import type { V2PendingRequestItem, V2RequestDetail, V2ResponseEnvelope, V2SigningJwk } from '$lib/v2-types'
