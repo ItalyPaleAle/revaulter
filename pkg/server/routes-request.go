@@ -349,13 +349,18 @@ func validateV2CreateBody(op string, body *protocolv2.RequestCreateBody) error {
 		return NewResponseError(http.StatusBadRequest, "Invalid operation")
 	}
 
-	// Check required fields and enforce length limits
+	// Check required fields and enforce the key-label rules
+	// The label is normalized to its canonical lowercase form so it round-trips identically through HKDF info, AAD, and DB rows
 	if body.KeyLabel == "" {
 		return NewResponseError(http.StatusBadRequest, "missing parameter 'keyLabel'")
 	}
-	if len(body.KeyLabel) > 128 {
-		return NewResponseError(http.StatusBadRequest, "parameter 'keyLabel' cannot be longer than 128 characters")
+
+	canonicalKeyLabel, ok := protocolv2.NormalizeAndValidateKeyLabel(body.KeyLabel)
+	if !ok {
+		return NewResponseErrorf(http.StatusBadRequest, "parameter 'keyLabel' must be 1-%d bytes and contain only [A-Za-z0-9_.+-]", protocolv2.MaxKeyLabelLength)
 	}
+	body.KeyLabel = canonicalKeyLabel
+
 	if body.Algorithm == "" {
 		return NewResponseError(http.StatusBadRequest, "missing parameter 'algorithm'")
 	}

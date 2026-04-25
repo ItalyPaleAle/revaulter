@@ -33,9 +33,13 @@ func (req *v2SigningKeyCreateRequest) Validate() (kid string, canonicalJWK []byt
 	if req.KeyLabel == "" {
 		return "", nil, errors.New("missing keyLabel")
 	}
-	if len(req.KeyLabel) > 128 {
-		return "", nil, errors.New("keyLabel too long")
+
+	// Normalize to the canonical (lowercase, restricted-charset) form so the row matches whatever the encrypt/decrypt/sign flow registered for the same label
+	canonicalKeyLabel, ok := protocolv2.NormalizeAndValidateKeyLabel(req.KeyLabel)
+	if !ok {
+		return "", nil, fmt.Errorf("keyLabel must be 1-%d bytes and contain only [A-Za-z0-9_.+-]", protocolv2.MaxKeyLabelLength)
 	}
+	req.KeyLabel = canonicalKeyLabel
 
 	kid, canonicalJWK, err = validateSigningJWKAndPEM(req.JWK, req.PEM)
 	if err != nil {

@@ -128,9 +128,17 @@ func TestValidateV2CreateBodyRejectsInvalidInput(t *testing.T) {
 			name: "key label too long",
 			op:   protocolv2.OperationEncrypt,
 			mutateBody: func(body *protocolv2.RequestCreateBody) {
-				body.KeyLabel = strings.Repeat("k", 129)
+				body.KeyLabel = strings.Repeat("k", protocolv2.MaxKeyLabelLength+1)
 			},
-			wantErr: "parameter 'keyLabel' cannot be longer than 128 characters",
+			wantErr: "parameter 'keyLabel' must be 1-24 bytes and contain only [A-Za-z0-9_.+-]",
+		},
+		{
+			name: "key label has invalid characters",
+			op:   protocolv2.OperationEncrypt,
+			mutateBody: func(body *protocolv2.RequestCreateBody) {
+				body.KeyLabel = "bad label"
+			},
+			wantErr: "parameter 'keyLabel' must be 1-24 bytes and contain only [A-Za-z0-9_.+-]",
 		},
 		{
 			name: "missing algorithm",

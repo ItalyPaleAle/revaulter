@@ -66,6 +66,15 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 
 func (f *v2OperationFlagsBase) Validate() error {
 	f.Server = strings.TrimSuffix(f.Server, "/")
+
+	// Normalize the key label up-front so subsequent reads (and the request body) use the canonical form
+	// The server applies the same rule and would reject anything else with a BadRequest
+	canonicalKeyLabel, ok := protocolv2.NormalizeAndValidateKeyLabel(f.KeyLabel)
+	if !ok {
+		return fmt.Errorf("key-label must be 1-%d bytes and contain only [A-Za-z0-9_.+-]", protocolv2.MaxKeyLabelLength)
+	}
+	f.KeyLabel = canonicalKeyLabel
+
 	return nil
 }
 

@@ -71,6 +71,39 @@ func (r *RequestCreateBody) ValidateNote() bool {
 	return true
 }
 
+// MaxKeyLabelLength is the maximum length of a v2 key label
+// 24 chars is enough for human-readable labels and short enough that the value can be used in tight UI rows or log lines without truncation
+const MaxKeyLabelLength = 24
+
+// NormalizeAndValidateKeyLabel checks that a key label is well-formed and returns its canonical form
+// Allowed: `[A-Za-z0-9_-.+]{1,MaxKeyLabelLength}“
+// The result is lowercased
+func NormalizeAndValidateKeyLabel(label string) (string, bool) {
+	if label == "" || len(label) > MaxKeyLabelLength {
+		return "", false
+	}
+
+	out := make([]byte, len(label))
+	for i := range len(label) {
+		ch := label[i]
+		switch {
+		case ch >= 'a' && ch <= 'z':
+			out[i] = ch
+		case ch >= 'A' && ch <= 'Z':
+			// Fold to lowercase so 'A' and 'a' canonicalize to the same byte
+			out[i] = ch + ('a' - 'A')
+		case ch >= '0' && ch <= '9':
+			out[i] = ch
+		case ch == '_' || ch == '-' || ch == '.' || ch == '+':
+			out[i] = ch
+		default:
+			return "", false
+		}
+	}
+
+	return string(out), true
+}
+
 // GetTimeout returns the request timeout as a time.Duration
 func (r *RequestCreateBody) GetTimeout() time.Duration {
 	if r.Timeout == "" {
