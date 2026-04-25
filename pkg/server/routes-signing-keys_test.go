@@ -418,10 +418,8 @@ func TestServerV2SigningKeyAutoStoreOnSign(t *testing.T) {
 	// Create a sign request; keyLabel is the discriminator the auto-store keys on
 	keyLabel := "auto-sign-label"
 	createBody := newV2CreateRequestBody(keyLabel, protocolv2.SigningAlgES256, clientJWK)
-	status, body := doPost(t, "/v2/request/"+aliceUser.RequestKey+"/sign", createBody)
-	require.Equal(t, http.StatusAccepted, status, "unexpected body: %s", body)
-	var createResp map[string]any
-	require.NoError(t, json.Unmarshal(body, &createResp))
+	createRes, createResp := doRequestKeyJSON(t, client, http.MethodPost, "sign", aliceUser.RequestKey, createBody)
+	require.Equal(t, http.StatusAccepted, createRes.StatusCode, "unexpected body: %v", createResp)
 	state, _ := createResp["state"].(string)
 	require.NotEmpty(t, state)
 
@@ -433,7 +431,7 @@ func TestServerV2SigningKeyAutoStoreOnSign(t *testing.T) {
 	require.NoError(t, err)
 	browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
 	require.NoError(t, err)
-	status, body = doPost(t, "/v2/api/confirm", map[string]any{
+	status, body := doPost(t, "/v2/api/confirm", map[string]any{
 		"state":            state,
 		"confirm":          true,
 		"responseEnvelope": newV2ResponseEnvelope(browserJWK),
@@ -517,19 +515,8 @@ func TestServerV2SigningKeyAutoStoreSkippedOnNonSign(t *testing.T) {
 	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
 	require.NoError(t, err)
 
-	reqBody, err := json.Marshal(newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
-	require.NoError(t, err)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/request/%s/encrypt", testServerPort, aliceUser.RequestKey), bytes.NewReader(reqBody))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	res, err := client.Do(req)
-	require.NoError(t, err)
-	body, err := io.ReadAll(res.Body)
-	res.Body.Close()
-	require.NoError(t, err)
-	require.Equal(t, http.StatusAccepted, res.StatusCode, "unexpected body: %s", body)
-	var createResp map[string]any
-	require.NoError(t, json.Unmarshal(body, &createResp))
+	res, createResp := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
+	require.Equal(t, http.StatusAccepted, res.StatusCode, "unexpected body: %v", createResp)
 	state, _ := createResp["state"].(string)
 	require.NotEmpty(t, state)
 
@@ -550,16 +537,16 @@ func TestServerV2SigningKeyAutoStoreSkippedOnNonSign(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	req, err = http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/api/confirm", testServerPort), bytes.NewReader(confirmBody))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/api/confirm", testServerPort), bytes.NewReader(confirmBody))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(aliceCookie)
-	res, err = client.Do(req)
+	confirmRes, err := client.Do(req)
 	require.NoError(t, err)
-	body, err = io.ReadAll(res.Body)
-	res.Body.Close()
+	body, err := io.ReadAll(confirmRes.Body)
+	confirmRes.Body.Close()
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, res.StatusCode, "unexpected body: %s", body)
+	require.Equal(t, http.StatusOK, confirmRes.StatusCode, "unexpected body: %s", body)
 
 	// No auto-stored row must exist for an encrypt op
 	listReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/api/signing-keys", testServerPort), nil)
@@ -747,10 +734,8 @@ func TestServerV2SigningKeyGetForUser(t *testing.T) {
 	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
 	require.NoError(t, err)
 	createBody := newV2CreateRequestBody("get-auto", protocolv2.SigningAlgES256, clientJWK)
-	status, body = doPost(t, "/v2/request/"+aliceUser.RequestKey+"/sign", createBody)
-	require.Equal(t, http.StatusAccepted, status, "unexpected body: %s", body)
-	var createResp map[string]any
-	require.NoError(t, json.Unmarshal(body, &createResp))
+	createRes, createResp := doRequestKeyJSON(t, client, http.MethodPost, "sign", aliceUser.RequestKey, createBody)
+	require.Equal(t, http.StatusAccepted, createRes.StatusCode, "unexpected body: %v", createResp)
 	state, _ := createResp["state"].(string)
 	require.NotEmpty(t, state)
 

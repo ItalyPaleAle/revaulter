@@ -33,15 +33,15 @@ Returns API version information.
 
 ## Request endpoints (`/v2/request`)
 
-These endpoints are used by the CLI (or custom clients) to submit cryptographic requests and poll for results. They do not require a session — requests are authenticated by the per-user request key in the URL path.
+These endpoints are used by the CLI (or custom clients) to submit cryptographic requests and poll for results. They do not require a session — requests are authenticated by the per-user request key sent in the `Authorization: Bearer <requestKey>` header. Keys carry an `rvk_` prefix so accidental leakage is easy to detect.
 
-### `POST /v2/request/:requestKey/encrypt`
+### `POST /v2/request/encrypt`
 
-### `POST /v2/request/:requestKey/decrypt`
+### `POST /v2/request/decrypt`
 
-### `POST /v2/request/:requestKey/sign`
+### `POST /v2/request/sign`
 
-Submit an encrypt, decrypt, or sign request for approval. The `:requestKey` identifies the user who will approve the request.
+Submit an encrypt, decrypt, or sign request for approval. The request key in the `Authorization` header identifies the user who will approve the request.
 
 The request payload is encrypted end-to-end by the CLI before submission. The server stores the encrypted envelope without being able to read it.
 
@@ -93,11 +93,11 @@ The request payload is encrypted end-to-end by the CLI before submission. The se
 - The inner payload's `nonce`, `tag`, and `additionalData` fields must be empty after the browser decrypts; the browser rejects the request otherwise
 - The `algorithm` field must be `ES256` (ECDSA P-256 + SHA-256 per RFC 7518)
 - ECDSA is non-deterministic by design: signing the same digest twice produces different but equally valid signatures.
-- The approved response carries a detached signature; see `GET /v2/request/:requestKey/result/:state` below
+- The approved response carries a detached signature; see `GET /v2/request/result/:state` below
 
 ---
 
-### `GET /v2/request/:requestKey/pubkey`
+### `GET /v2/request/pubkey`
 
 Get the user's static public encryption keys. The CLI uses these to encrypt request payloads end-to-end.
 
@@ -119,7 +119,7 @@ Returns `412 Precondition Failed` if the user has not completed signup (no encry
 
 ---
 
-### `GET /v2/request/:requestKey/result/:state`
+### `GET /v2/request/result/:state`
 
 Long-poll for the result of a previously submitted request. The server holds the connection until the request is completed, canceled, or the client disconnects.
 

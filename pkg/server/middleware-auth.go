@@ -67,12 +67,11 @@ func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 	}
 }
 
-// MiddlewareRequestKey gets the request key from the params and retrieves the user
+// MiddlewareRequestKey reads the request key from the Authorization header and retrieves the user
 func (s *Server) MiddlewareRequestKey(c *gin.Context) {
-	// Get the request key from the URL parameter
-	requestKey := c.Param("requestKey")
+	requestKey := getBearerToken(c)
 	if requestKey == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing request key"))
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Missing request key"))
 		return
 	}
 

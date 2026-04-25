@@ -41,7 +41,7 @@ type v2RequestPubkeyResponse struct {
 	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
 }
 
-// RouteV2RequestCreate is the handler for POST /v2/request/:requestKey/(encrypt|decrypt|sign)
+// RouteV2RequestCreate is the handler for POST /v2/request/(encrypt|decrypt|sign)
 func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := config.Get()
@@ -175,7 +175,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 	}
 }
 
-// RouteV2RequestPubkey is the handler for /v2/request/:requestKey/pubkey
+// RouteV2RequestPubkey is the handler for /v2/request/pubkey
 func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 	// Retrieve the user (which includes the key) from the context
 	user := getRequestUserFromCtx(c)
@@ -203,7 +203,7 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 	})
 }
 
-// RouteV2RequestResult is the handler for GET /v2/request/:requestKey/result/:state
+// RouteV2RequestResult is the handler for GET /v2/request/result/:state
 func (s *Server) RouteV2RequestResult(c *gin.Context) {
 	state := c.Param("state")
 	if state == "" {

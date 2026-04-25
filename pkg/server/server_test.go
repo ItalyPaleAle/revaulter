@@ -42,6 +42,36 @@ const (
 	bufconnBufSize = 1 << 20 // 1MB
 )
 
+// doRequestKeyJSON sends an HTTP request to /v2/request/<suffix> with the request key in the Authorization header
+func doRequestKeyJSON(t *testing.T, client *http.Client, method, suffix, requestKey string, body any) (*http.Response, map[string]any) {
+	t.Helper()
+
+	var reader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		reader = bytes.NewReader(b)
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), method, fmt.Sprintf("https://localhost:%d/v2/request/%s", testServerPort, suffix), reader)
+	require.NoError(t, err)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+requestKey)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res, out
+}
+
 func TestMain(m *testing.M) {
 	// #nosec G101 -- Hardcoded credentials are test ones
 	_ = config.SetTestConfig(map[string]any{
@@ -120,7 +150,7 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create request
-	res, createResp := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
+	res, createResp := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 	state, _ := createResp["state"].(string)
 	require.NotEmpty(t, state)
@@ -167,14 +197,14 @@ func TestServerV2RequestLifecycle(t *testing.T) {
 	require.Equal(t, true, confirmResp["confirmed"])
 
 	// Result endpoint returns completed envelope
-	res, result := doGetJSON(t, "/v2/request/"+aliceUser.RequestKey+"/result/"+state)
+	res, result := doRequestKeyJSON(t, client, http.MethodGet, "result/"+state, aliceUser.RequestKey, nil)
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, state, result["state"])
 	require.Equal(t, true, result["done"])
 	_, ok = result["responseEnvelope"].(map[string]any)
 	require.True(t, ok)
 
-	res, result = doGetJSON(t, "/v2/request/"+aliceUser.RequestKey+"/result/"+state)
+	res, result = doRequestKeyJSON(t, client, http.MethodGet, "result/"+state, aliceUser.RequestKey, nil)
 	require.Equal(t, http.StatusNotFound, res.StatusCode)
 	require.Contains(t, result["error"], "State not found or expired")
 }
@@ -272,25 +302,8 @@ func TestServerV2APIListScopesToSignedInUser(t *testing.T) {
 	// The handler is API-to-server, so no session cookie is required
 	createRequest := func(t *testing.T, user *db.User, label string) string {
 		t.Helper()
-		payload, mErr := json.Marshal(newV2CreateRequestBody(label, "A256GCM", clientJWK))
-		require.NoError(t, mErr)
-		req, rErr := http.NewRequestWithContext(
-			t.Context(),
-			http.MethodPost,
-			fmt.Sprintf("https://localhost:%d/v2/request/%s/encrypt", testServerPort, user.RequestKey),
-			bytes.NewReader(payload),
-		)
-		require.NoError(t, rErr)
-		req.Header.Set("Content-Type", "application/json")
-		res, dErr := client.Do(req)
-		require.NoError(t, dErr)
-		defer func() {
-			_, _ = io.Copy(io.Discard, res.Body)
-			res.Body.Close()
-		}()
+		res, out := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", user.RequestKey, newV2CreateRequestBody(label, "A256GCM", clientJWK))
 		require.Equal(t, http.StatusAccepted, res.StatusCode)
-		var out map[string]any
-		require.NoError(t, json.NewDecoder(res.Body).Decode(&out))
 		state, _ := out["state"].(string)
 		require.NotEmpty(t, state)
 		return state
@@ -662,25 +675,6 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 		_ = json.NewDecoder(res.Body).Decode(&out)
 		return res, out
 	}
-	doGetJSON := func(t *testing.T, path string, cookies ...*http.Cookie) (*http.Response, map[string]any) {
-		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), nil)
-		require.NoError(t, err)
-		for _, c := range cookies {
-			if c != nil {
-				req.AddCookie(c)
-			}
-		}
-		res, err := client.Do(req)
-		require.NoError(t, err)
-		defer func() {
-			_, _ = io.Copy(io.Discard, res.Body)
-			res.Body.Close()
-		}()
-		var out map[string]any
-		_ = json.NewDecoder(res.Body).Decode(&out)
-		return res, out
-	}
 	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
 
 	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
@@ -695,16 +689,16 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 		"x": clientJWK.X, "y": clientJWK.Y,
 		"d": "forbidden",
 	}
-	res, _ := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", invalidCreateBody)
+	res, _ := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, invalidCreateBody)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
 	invalidNoteBody := newV2CreateRequestBody("disk-key", "A256GCM", clientJWK)
 	invalidNoteBody["note"] = "boot unlock!"
-	res, _ = doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", invalidNoteBody)
+	res, _ = doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, invalidNoteBody)
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
 	// Create a valid request targeted to alice.
-	res, create := doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
+	res, create := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 	state, _ := create["state"].(string)
 	require.NotEmpty(t, state)
@@ -756,16 +750,16 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 	// Expiry path: short timeout should transition to failed/expired on result polling.
 	expiringCreateBody := newV2CreateRequestBody("expiring-key", "A256GCM", clientJWK)
 	expiringCreateBody["timeout"] = "1s"
-	res, create = doPostJSON(t, "/v2/request/"+aliceUser.RequestKey+"/encrypt", expiringCreateBody)
+	res, create = doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, expiringCreateBody)
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 	expState, _ := create["state"].(string)
 	require.NotEmpty(t, expState)
 	time.Sleep(1_500 * time.Millisecond)
-	res, result := doGetJSON(t, "/v2/request/"+aliceUser.RequestKey+"/result/"+expState)
+	res, result := doRequestKeyJSON(t, client, http.MethodGet, "result/"+expState, aliceUser.RequestKey, nil)
 	require.Equal(t, http.StatusConflict, res.StatusCode)
 	require.Equal(t, true, result["failed"])
 
-	res, result = doGetJSON(t, "/v2/request/"+aliceUser.RequestKey+"/result/"+expState)
+	res, result = doRequestKeyJSON(t, client, http.MethodGet, "result/"+expState, aliceUser.RequestKey, nil)
 	require.Equal(t, http.StatusNotFound, res.StatusCode)
 	require.Contains(t, result["error"], "State not found or expired")
 }
@@ -790,9 +784,10 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 	createBody["note"] = "boot unlock"
 	body, err := json.Marshal(createBody)
 	require.NoError(t, err)
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/request/%s/encrypt", testServerPort, aliceUser.RequestKey), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/request/encrypt", testServerPort), bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+aliceUser.RequestKey)
 	res, err := client.Do(req)
 	require.NoError(t, err)
 	defer func() {

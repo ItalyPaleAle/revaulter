@@ -34,13 +34,13 @@ func FileExists(path string) (bool, error) {
 	return !s.IsDir(), nil
 }
 
-const base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+const base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
-// RandomString generates a string with random characters in base58
+// RandomString generates a string with random characters in base62
 func RandomString(strLen int) (string, error) {
 	const (
-		alphabetLength   = byte(len(base58Alphabet))
-		maxAcceptedValue = byte(256 - (256 % len(base58Alphabet)))
+		alphabetLength   = byte(len(base62Alphabet))
+		maxAcceptedValue = byte(256 - (256 % len(base62Alphabet)))
 	)
 
 	// Use rejection sampling to ensure that the string is uniformly random
@@ -58,7 +58,7 @@ func RandomString(strLen int) (string, error) {
 			if b >= maxAcceptedValue {
 				continue
 			}
-			buf[i] = base58Alphabet[b%alphabetLength]
+			buf[i] = base62Alphabet[b%alphabetLength]
 			i++
 			if i == strLen {
 				break

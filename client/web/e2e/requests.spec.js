@@ -112,16 +112,19 @@ test('second long-poll subscriber evicts the first and the response is unavailab
 
         await expect(page.getByText('evict-key')).toBeVisible()
 
-        const url = `/v2/request/${auth.session.requestKey}/result/${seeded.state}`
+        const url = `/v2/request/result/${seeded.state}`
+        const requestOpts = {
+            headers: { Authorization: `Bearer ${auth.session.requestKey}` },
+        }
 
         // Start subscriber #1 — it should block on the still-pending request
-        const sub1Promise = request.get(url)
+        const sub1Promise = request.get(url, requestOpts)
 
         // Give the server a moment to register subscriber #1 before subscriber #2 evicts it
         await page.waitForTimeout(500)
 
         // Subscriber #2 takes over the subscription, which evicts subscriber #1
-        const sub2Promise = request.get(url)
+        const sub2Promise = request.get(url, requestOpts)
 
         // Evicted subscriber #1 must return 202 pending without receiving any result
         const sub1Res = await sub1Promise

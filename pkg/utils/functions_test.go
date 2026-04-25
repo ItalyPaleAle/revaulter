@@ -62,26 +62,27 @@ func TestRandomString(t *testing.T) {
 		require.Empty(t, result)
 	})
 
-	t.Run("returns requested length using base58 alphabet", func(t *testing.T) {
+	t.Run("returns requested length using base62 alphabet", func(t *testing.T) {
 		result, err := RandomString(128)
 		require.NoError(t, err)
 		require.Len(t, result, 128)
 
 		for _, char := range result {
-			require.True(t, strings.ContainsRune(base58Alphabet, char))
+			require.True(t, strings.ContainsRune(base62Alphabet, char))
 		}
 	})
 
 	t.Run("skips bytes rejected by rejection sampling", func(t *testing.T) {
 		previousReader := rand.Reader
-		rand.Reader = bytes.NewReader([]byte{232, 0, 57, 58, 231, 255, 1, 2})
+		// 248 and 251 are above the base62 rejection threshold (256 - 256%62 = 248) and must be skipped
+		rand.Reader = bytes.NewReader([]byte{248, 0, 61, 62, 248, 251, 1, 2})
 		t.Cleanup(func() {
 			rand.Reader = previousReader
 		})
 
 		result, err := RandomString(4)
 		require.NoError(t, err)
-		require.Equal(t, "1z1z", result)
+		require.Equal(t, "0z01", result)
 	})
 
 	t.Run("returns wrapped error when random reader fails", func(t *testing.T) {

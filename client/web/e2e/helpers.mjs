@@ -258,7 +258,9 @@ export async function unlockWithPassword(page, password) {
 }
 
 export async function fetchRequestPubkey(request, requestKey) {
-    const res = await request.get(`/v2/request/${requestKey}/pubkey`)
+    const res = await request.get('/v2/request/pubkey', {
+        headers: { Authorization: `Bearer ${requestKey}` },
+    })
     const text = await res.text()
     return {
         ok: res.ok(),

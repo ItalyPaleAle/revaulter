@@ -24,6 +24,22 @@ type AuthStore struct {
 	kind BackendKind
 }
 
+// RequestKeyPrefix is prepended to newly generated request keys
+// This lets operators grep logs/leaked artifacts for "rvk_" so accidental leakage is easy to detect and redact
+const RequestKeyPrefix = "rvk_"
+
+// requestKeyRandomLength is the number of random base62 characters appended after the prefix
+const requestKeyRandomLength = 20
+
+func newRequestKey() (string, error) {
+	random, err := utils.RandomString(requestKeyRandomLength)
+	if err != nil {
+		return "", err
+	}
+
+	return RequestKeyPrefix + random, nil
+}
+
 type User struct {
 	ID                           string
 	DisplayName                  string
@@ -316,7 +332,7 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Us
 		panic("RegisterUser must be invoked in a transaction")
 	}
 
-	requestKey, err := utils.RandomString(20)
+	requestKey, err := newRequestKey()
 	if err != nil {
 		return nil, err
 	}
@@ -529,7 +545,7 @@ func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowed
 }
 
 func (s *AuthStore) RegenerateRequestKey(ctx context.Context, userID string) (string, error) {
-	requestKey, err := utils.RandomString(20)
+	requestKey, err := newRequestKey()
 	if err != nil {
 		return "", err
 	}

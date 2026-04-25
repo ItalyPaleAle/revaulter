@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -197,7 +198,7 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.flags.GetServer()+"/v2/request/"+o.flags.GetRequestKey()+"/"+o.Operation, bytes.NewReader(body))
+	req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodPost, o.flags.GetServer(), o.flags.GetRequestKey(), o.Operation, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -214,7 +215,7 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 	return res.State, nil
 }
 
-// v2PubkeyResponse mirrors the server's /v2/request/{requestKey}/pubkey shape.
+// v2PubkeyResponse mirrors the server's /v2/request/pubkey shape.
 type v2PubkeyResponse struct {
 	UserID   string          `json:"userId"`
 	EcdhP256 json.RawMessage `json:"ecdhP256"`
@@ -230,7 +231,7 @@ type v2PubkeyResponse struct {
 func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClient *http.Client) (*ecdh.PublicKey, *mlkem.EncapsulationKey768, error) {
 	log := logging.LogFromContext(ctx)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.flags.GetServer()+"/v2/request/"+o.flags.GetRequestKey()+"/pubkey", nil)
+	req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodGet, o.flags.GetServer(), o.flags.GetRequestKey(), "pubkey", nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -448,7 +449,7 @@ func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client,
 			return nil, err
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.flags.GetServer()+"/v2/request/"+o.flags.GetRequestKey()+"/result/"+state, nil)
+		req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodGet, o.flags.GetServer(), o.flags.GetRequestKey(), "result/"+state, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -482,6 +483,18 @@ func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client,
 		}
 		return decryptV2ResponseEnvelope(state, kp, res.ResponseEnvelope, aad)
 	}
+}
+
+// newV2RequestKeyHTTPRequest builds an HTTP request for the v2 request endpoints
+// The key is sent in the Authorization header
+func newV2RequestKeyHTTPRequest(ctx context.Context, method, server, requestKey, pathSuffix string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, server+"/v2/request/"+pathSuffix, body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+requestKey)
+	return req, nil
 }
 
 func doJSONRequest(client *http.Client, req *http.Request, out any) error {

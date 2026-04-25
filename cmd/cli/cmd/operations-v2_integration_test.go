@@ -77,7 +77,8 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/request-key-123/pubkey"):
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/pubkey"):
+			require.Equal(t, "Bearer request-key-123", r.Header.Get("Authorization"))
 			w.Header().Set("Content-Type", "application/json")
 			ecdhJSON, _ := json.Marshal(userStaticEcdhPubJWK)
 			resp := map[string]any{
@@ -90,7 +91,8 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 				return
 			}
 
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/request-key-123/encrypt"):
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/encrypt"):
+			require.Equal(t, "Bearer request-key-123", r.Header.Get("Authorization"))
 			defer r.Body.Close()
 			createSeen.Store(true)
 
@@ -426,7 +428,8 @@ func TestV2OperationCmdSignAndVerify(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/request-key-sign/pubkey"):
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/pubkey"):
+			require.Equal(t, "Bearer request-key-sign", r.Header.Get("Authorization"))
 			w.Header().Set("Content-Type", "application/json")
 			ecdhJSON, _ := json.Marshal(userStaticEcdhPubJWK)
 			resp := map[string]any{
@@ -439,7 +442,8 @@ func TestV2OperationCmdSignAndVerify(t *testing.T) {
 				return
 			}
 
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/request-key-sign/sign"):
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/sign"):
+			require.Equal(t, "Bearer request-key-sign", r.Header.Get("Authorization"))
 			defer r.Body.Close()
 			createSeen.Store(true)
 

@@ -44,7 +44,8 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 		require.NotNil(t, sess)
 		require.Equal(t, "user-1", sess.ID)
 		require.Equal(t, "Alice", sess.DisplayName)
-		require.Len(t, sess.RequestKey, 20)
+		require.True(t, strings.HasPrefix(sess.RequestKey, RequestKeyPrefix))
+		require.Len(t, sess.RequestKey, len(RequestKeyPrefix)+20)
 		require.Empty(t, sess.AllowedIPs)
 
 		gotUser, err := as.GetUserByRequestKey(ctx, sess.RequestKey)
@@ -170,7 +171,8 @@ func TestAuthStoreRegenerateRequestKey(t *testing.T) {
 
 		newKey, err := as.RegenerateRequestKey(ctx, "user-1")
 		require.NoError(t, err)
-		require.Len(t, newKey, 20)
+		require.True(t, strings.HasPrefix(newKey, RequestKeyPrefix))
+		require.Len(t, newKey, len(RequestKeyPrefix)+20)
 		require.NotEqual(t, sess.RequestKey, newKey)
 
 		user, err := as.GetUserByRequestKey(ctx, newKey)

@@ -277,11 +277,11 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	// Request group is API-to-server (not browser-originated), so no CSRF middleware
 	v2RequestGroup := v2RouteGroup.Group("/request")
 	v2RequestGroup.Use(requestRateLimiter, s.MiddlewareRequestKey)
-	v2RequestGroup.POST("/:requestKey/encrypt", s.RouteV2RequestCreate("encrypt"))
-	v2RequestGroup.POST("/:requestKey/decrypt", s.RouteV2RequestCreate("decrypt"))
-	v2RequestGroup.POST("/:requestKey/sign", s.RouteV2RequestCreate("sign"))
-	v2RequestGroup.GET("/:requestKey/pubkey", s.RouteV2RequestPubkey)
-	v2RequestGroup.GET("/:requestKey/result/:state", s.RouteV2RequestResult)
+	v2RequestGroup.POST("/encrypt", s.RouteV2RequestCreate("encrypt"))
+	v2RequestGroup.POST("/decrypt", s.RouteV2RequestCreate("decrypt"))
+	v2RequestGroup.POST("/sign", s.RouteV2RequestCreate("sign"))
+	v2RequestGroup.GET("/pubkey", s.RouteV2RequestPubkey)
+	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
 
 	// Public (unauthenticated) signing key fetch endpoints, rate-limited
 	// Paths carry the format as a dot-extension

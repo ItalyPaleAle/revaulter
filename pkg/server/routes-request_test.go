@@ -291,9 +291,10 @@ func TestServerV2RequestResultContextCancelClearsSubscription(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	url := fmt.Sprintf("https://localhost:%d/v2/request/%s/result/%s", testServerPort, aliceUser.RequestKey, state)
+	url := fmt.Sprintf("https://localhost:%d/v2/request/result/%s", testServerPort, state)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+aliceUser.RequestKey)
 
 	type pollResult struct {
 		res *http.Response
@@ -374,12 +375,15 @@ func TestServerV2RequestResultSecondSubscriberEvictsFirst(t *testing.T) {
 	startPoll := func() <-chan pollResult {
 		ch := make(chan pollResult, 1)
 		go func() {
-			url := fmt.Sprintf("https://localhost:%d/v2/request/%s/result/%s", testServerPort, aliceUser.RequestKey, state)
+			url := fmt.Sprintf("https://localhost:%d/v2/request/result/%s", testServerPort, state)
 			req, rErr := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
 			if rErr != nil {
 				ch <- pollResult{err: rErr}
 				return
 			}
+
+			req.Header.Set("Authorization", "Bearer "+aliceUser.RequestKey)
+
 			res, dErr := client.Do(req)
 			if dErr != nil {
 				ch <- pollResult{err: dErr}
@@ -389,6 +393,7 @@ func TestServerV2RequestResultSecondSubscriberEvictsFirst(t *testing.T) {
 				_, _ = io.Copy(io.Discard, res.Body)
 				res.Body.Close()
 			}()
+
 			var body map[string]any
 			_ = json.NewDecoder(res.Body).Decode(&body)
 			ch <- pollResult{status: res.StatusCode, body: body}
@@ -462,14 +467,18 @@ func TestServerV2RequestResultSecondSubscriberEvictsFirst(t *testing.T) {
 	}
 
 	// The response is consumed; any further long-poll for the same state must be unable to read it
-	url := fmt.Sprintf("https://localhost:%d/v2/request/%s/result/%s", testServerPort, aliceUser.RequestKey, state)
+	url := fmt.Sprintf("https://localhost:%d/v2/request/result/%s", testServerPort, state)
 	extraReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
 	require.NoError(t, err)
+
+	extraReq.Header.Set("Authorization", "Bearer "+aliceUser.RequestKey)
+
 	extraRes, err := client.Do(extraReq)
 	require.NoError(t, err)
 	defer func() {
 		_, _ = io.Copy(io.Discard, extraRes.Body)
 		extraRes.Body.Close()
 	}()
+
 	require.Equal(t, http.StatusNotFound, extraRes.StatusCode)
 }
