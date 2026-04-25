@@ -310,6 +310,13 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 		case _, ok := <-watch:
 			// ok is false when subscribeState closed the channel without sending: another caller took over the subscription, so this caller must return
 			if !ok {
+				// Log the eviction
+				logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
+					"Long-poll subscription evicted by a newer caller for the same state",
+					slog.String("state", state),
+					slog.String("user_id", user.ID),
+					slog.String("client_ip", c.ClientIP()),
+				)
 				c.JSON(http.StatusAccepted, protocolv2.RequestResultResponse{
 					State:   rec.State,
 					Pending: true,
