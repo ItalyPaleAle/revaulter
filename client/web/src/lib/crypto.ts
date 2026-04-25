@@ -1,4 +1,5 @@
 import { argon2id, chacha20poly1305 } from '@awasm/noble'
+import { mapHashToField } from '@noble/curves/abstract/modular.js'
 import { p256 } from '@noble/curves/nist.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
@@ -10,7 +11,7 @@ import type {
     V2ResponseEnvelope,
     V2SigningJwk,
 } from '$lib/v2-types'
-import { hashToP256Scalar, importP256ScalarAsEcdhKey } from './crypto-p256'
+import { importP256ScalarAsEcdhKey } from './crypto-p256'
 
 /**
  * Generates an ephemeral ECDH P-256 key pair for transport encryption and exports
@@ -616,14 +617,14 @@ export async function deriveRequestEncKeyPair(params: {
 
     const info = new TextEncoder().encode(`revaulter/v2/requestEncKey\nuserId=${params.userId}\nv=1`)
 
-    // Derive 48 bytes (384 bits) so hashToP256Scalar has enough input to keep modular bias negligible
+    // Derive 48 bytes (384 bits) so the FIPS 186-5 candidate-reduction in mapHashToField has enough input to keep modular bias negligible
     const rawBits = await crypto.subtle.deriveBits(
         { name: 'HKDF', hash: 'SHA-256', salt: asBuf(new Uint8Array()), info: asBuf(info) },
         ikm,
         384
     )
 
-    const scalarBytes = hashToP256Scalar(new Uint8Array(rawBits))
+    const scalarBytes = mapHashToField(new Uint8Array(rawBits), p256.Point.Fn.ORDER)
     const privateKey = await importP256ScalarAsEcdhKey(scalarBytes)
 
     // Export the public key as JWK
@@ -741,13 +742,13 @@ export async function deriveSigningKeyPair(params: {
         `revaulter/v2/signingKey\nalgorithm=${params.algorithm}\nkeyLabel=${params.keyLabel}\nuserId=${params.userId}\nv=1`
     )
 
-    // Derive 384 bits so hashToP256Scalar has enough input to keep modular bias negligible
+    // Derive 384 bits so the FIPS 186-5 candidate-reduction in mapHashToField has enough input to keep modular bias negligible
     const rawBits = await crypto.subtle.deriveBits(
         { name: 'HKDF', hash: 'SHA-256', salt: asBuf(new Uint8Array()), info: asBuf(info) },
         ikm,
         384
     )
-    const scalar = hashToP256Scalar(new Uint8Array(rawBits))
+    const scalar = mapHashToField(new Uint8Array(rawBits), p256.Point.Fn.ORDER)
 
     // Derive the uncompressed public point (0x04 || X(32) || Y(32)) from the scalar and split into JWK x/y
     const pubBytes = p256.getPublicKey(scalar, false)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hashToP256Scalar, importP256ScalarAsEcdhKey } from './crypto-p256'
+import { importP256ScalarAsEcdhKey } from './crypto-p256'
 
 /** Converts a hex string to Uint8Array. */
 function hexToBytes(hex: string): Uint8Array {
@@ -9,44 +9,6 @@ function hexToBytes(hex: string): Uint8Array {
     }
     return bytes
 }
-
-function bytesToHex(bytes: Uint8Array): string {
-    return Array.from(bytes)
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('')
-}
-
-describe('hashToP256Scalar', () => {
-    it('reduces 48 bytes of 0xFF correctly', () => {
-        const input = new Uint8Array(48).fill(0xff)
-        const result = hashToP256Scalar(input)
-        expect(bytesToHex(result)).toBe('431905529c0166ce652e96b7ccca0a9a679b73e29ad16947f01cf012fc632550')
-    })
-
-    it('reduces 0x01 followed by 47 zero bytes', () => {
-        const input = new Uint8Array(48)
-        input[0] = 1
-        const result = hashToP256Scalar(input)
-        expect(bytesToHex(result)).toBe('ff431904539c0167cd652e96b7ccca0a5791af26dc0b584fb6b62de84c632551')
-    })
-
-    it('always produces a 32-byte output', () => {
-        const input = new Uint8Array(48) // all zeros
-        const result = hashToP256Scalar(input)
-        expect(result.length).toBe(32)
-    })
-
-    it('never produces the zero scalar', () => {
-        // Input of all zeros: (0 mod (n-1)) + 1 = 1
-        const input = new Uint8Array(48)
-        const result = hashToP256Scalar(input)
-        const isZero = result.every((b) => b === 0)
-        expect(isZero).toBe(false)
-        // Should be scalar = 1
-        expect(result[31]).toBe(1)
-        expect(result.slice(0, 31).every((b) => b === 0)).toBe(true)
-    })
-})
 
 describe('importP256ScalarAsEcdhKey', () => {
     it('imports scalar=1 and produces the P-256 generator point', async () => {
