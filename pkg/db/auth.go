@@ -639,22 +639,33 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 		return errors.New("attestationPayload is too large")
 	}
 
+	// Gate the insert on the user being active so future callers cannot attach a credential to a frozen/disabled user
+	// The epoch subquery and the EXISTS guard both filter on status = 'active', mirroring UpdateCredentialWrappedKey
 	now := time.Now().Unix()
-	_, err := s.db.Exec(ctx,
+	affected, err := s.db.Exec(ctx,
 		`INSERT INTO v2_user_credentials (
 				id, user_id, credential_id, display_name, public_key, sign_count,
 				wrapped_primary_key, wrapped_anchor_key,
 				attestation_payload, attestation_signature_es384, attestation_signature_mldsa87,
 				wrapped_key_epoch, created_at, last_used_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, (
-				SELECT wrapped_key_epoch FROM v2_users WHERE id = $2
-			), $12, $12)`,
+			) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, (
+				SELECT wrapped_key_epoch FROM v2_users WHERE id = $2 AND status = 'active'
+			), $12, $12
+			WHERE EXISTS (SELECT 1 FROM v2_users WHERE id = $2 AND status = 'active')`,
 		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount,
 		in.WrappedPrimaryKey, in.WrappedAnchorKey,
 		in.AttestationPayload, in.AttestationSignatureEs384, in.AttestationSignatureMldsa87,
 		now,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if affected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
 }
 
 func (s *AuthStore) AdvanceWrappedKeyEpoch(ctx context.Context, userID string) (int64, error) {
