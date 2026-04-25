@@ -11,49 +11,66 @@ import type {
     V2ResponseEnvelope,
     V2SigningJwk,
 } from '$lib/v2-types'
-import { importP256ScalarAsEcdhKey } from './crypto-p256'
 
 /**
- * Generates an ephemeral ECDH P-256 key pair for transport encryption and exports
- * the public half as a compact JWK to send over the API.
+ * Builds a P-256 public JWK (`{ kty, crv, x, y }`) from a raw 32-byte private scalar
+ * Uses `@noble/curves` to derive the uncompressed public point and splits it into x/y
  */
-export async function generateTransportKeyPairJwk(): Promise<{
-    privateKey: CryptoKey
-    publicKeyJwk: EcP256PublicJwk
-}> {
-    // Generate an extractable ECDH key pair so the public key can be exported as JWK
-    const keyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
-    const jwk = (await crypto.subtle.exportKey('jwk', keyPair.publicKey)) as JsonWebKey
-
-    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) {
-        throw new Error('Failed to export transport public key as P-256 JWK')
+function ecP256ScalarToPublicJwk(scalar: Uint8Array): EcP256PublicJwk {
+    const pubBytes = p256.getPublicKey(scalar, false)
+    if (pubBytes.length !== 65 || pubBytes[0] !== 0x04) {
+        throw new Error('Failed to derive uncompressed P-256 public key')
     }
-
     return {
-        privateKey: keyPair.privateKey,
-        publicKeyJwk: {
-            kty: 'EC',
-            crv: 'P-256',
-            x: jwk.x,
-            y: jwk.y,
-        },
+        kty: 'EC',
+        crv: 'P-256',
+        x: bytesToBase64Url(pubBytes.subarray(1, 33)),
+        y: bytesToBase64Url(pubBytes.subarray(33, 65)),
     }
 }
 
 /**
- * Derives the hybrid ECDH + ML-KEM shared secret, then expands it via HKDF into an AES-256-GCM key.
- * Handles both the encapsulate (encrypt) and decapsulate (decrypt) sides of ML-KEM so callers don't touch ML-KEM directly.
- *
- * The request `state` is mixed into HKDF so the key is scoped to a single pending request.
+ * Reconstructs the uncompressed SEC1 public-point bytes (`0x04 || X(32) || Y(32)`) from a P-256 public JWK
+ * Used to feed peer keys into `p256.getSharedSecret` without going through `crypto.subtle.importKey`
+ */
+function ecP256JwkToPublicBytes(jwk: EcP256PublicJwk): Uint8Array {
+    const x = base64UrlToBytes(jwk.x)
+    const y = base64UrlToBytes(jwk.y)
+    if (x.length !== 32 || y.length !== 32) {
+        throw new Error('Invalid P-256 public JWK: x and y must each be 32 bytes')
+    }
+    const out = new Uint8Array(65)
+    out[0] = 0x04
+    out.set(x, 1)
+    out.set(y, 33)
+    return out
+}
+
+/**
+ * Generates an ephemeral ECDH P-256 key pair for transport encryption
+ * Returns the raw 32-byte private scalar and the public half as a compact JWK that the CLI consumes
+ */
+export function generateTransportKeyPairJwk(): {
+    scalar: Uint8Array
+    publicKeyJwk: EcP256PublicJwk
+} {
+    const scalar = p256.utils.randomSecretKey()
+    return { scalar, publicKeyJwk: ecP256ScalarToPublicJwk(scalar) }
+}
+
+/**
+ * Derives the hybrid ECDH + ML-KEM shared secret, then expands it via HKDF into an AES-256-GCM key
+ * Handles both the encapsulate (encrypt) and decapsulate (decrypt) sides of ML-KEM so callers don't touch ML-KEM directly
+ * The request `state` is mixed into HKDF so the key is scoped to a single pending request
  */
 async function deriveTransportAesKeyForEncrypt(
     state: string,
-    ecdhPrivateKey: CryptoKey,
+    ecdhScalar: Uint8Array,
     peerEcdhPublicJwk: EcP256PublicJwk,
     peerMlkemKeyB64: string
 ): Promise<{ aesKey: CryptoKey; mlkemCiphertext: Uint8Array }> {
     // ECDH shared secret
-    const ecdhShared = await deriveEcdhSharedSecret(ecdhPrivateKey, peerEcdhPublicJwk)
+    const ecdhShared = deriveEcdhSharedSecret(ecdhScalar, peerEcdhPublicJwk)
 
     // ML-KEM encapsulation
     const mlkemPubBytes = base64UrlToBytes(peerMlkemKeyB64)
@@ -65,13 +82,13 @@ async function deriveTransportAesKeyForEncrypt(
 
 async function deriveTransportAesKeyForDecrypt(
     state: string,
-    ecdhPrivateKey: CryptoKey,
+    ecdhScalar: Uint8Array,
     peerEcdhPublicJwk: EcP256PublicJwk,
     mlkemSecretKey: Uint8Array,
     mlkemCiphertext: Uint8Array
 ): Promise<CryptoKey> {
     // ECDH shared secret
-    const ecdhShared = await deriveEcdhSharedSecret(ecdhPrivateKey, peerEcdhPublicJwk)
+    const ecdhShared = deriveEcdhSharedSecret(ecdhScalar, peerEcdhPublicJwk)
 
     // ML-KEM decapsulation
     const mlkemShared = ml_kem768.decapsulate(mlkemCiphertext, mlkemSecretKey)
@@ -79,16 +96,15 @@ async function deriveTransportAesKeyForDecrypt(
     return deriveHybridAesKey(ecdhShared, mlkemShared, `revaulter/v2/transport/${state}`)
 }
 
-/** Performs ECDH key agreement and returns the raw 32-byte shared secret */
-async function deriveEcdhSharedSecret(privateKey: CryptoKey, peerPublicJwk: EcP256PublicJwk): Promise<Uint8Array> {
-    const peerKey = await crypto.subtle.importKey(
-        'jwk',
-        peerPublicJwk as JsonWebKey,
-        { name: 'ECDH', namedCurve: 'P-256' },
-        false,
-        []
-    )
-    return new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: peerKey }, privateKey, 256))
+/**
+ * Performs ECDH key agreement and returns the raw 32-byte shared secret (the X coordinate of the shared point)
+ *
+ * `p256.getSharedSecret` returns the compressed shared point (`parity || X`, 33 bytes) by default, so we slice off the parity byte to match the 32-byte X-only output that WebCrypto's `deriveBits(..., 256)` produced
+ */
+function deriveEcdhSharedSecret(scalar: Uint8Array, peerPublicJwk: EcP256PublicJwk): Uint8Array {
+    const peerPubBytes = ecP256JwkToPublicBytes(peerPublicJwk)
+    const compressed = p256.getSharedSecret(scalar, peerPubBytes)
+    return compressed.slice(1)
 }
 
 /** Combines ECDH + ML-KEM shared secrets and derives an AES-256-GCM key via HKDF-SHA256 */
@@ -127,10 +143,10 @@ export async function encryptTransportEnvelope(
     plaintext: Uint8Array,
     aad?: Uint8Array
 ): Promise<V2ResponseEnvelope> {
-    const eph = await generateTransportKeyPairJwk()
+    const eph = generateTransportKeyPairJwk()
     const { aesKey, mlkemCiphertext } = await deriveTransportAesKeyForEncrypt(
         state,
-        eph.privateKey,
+        eph.scalar,
         clientTransportEcdhKey,
         clientTransportMlkemKey
     )
@@ -157,12 +173,14 @@ export async function encryptTransportEnvelope(
 }
 
 /**
- * Decrypts a transport envelope using hybrid ECDH + ML-KEM.
- * The same request `state` must be supplied so HKDF derives the matching AES key.
+ * Decrypts a transport envelope using hybrid ECDH + ML-KEM
+ * The same request `state` must be supplied so HKDF derives the matching AES key
+ *
+ * `ecdhScalar` is the raw 32-byte P-256 private scalar of the local transport key (the same shape `generateTransportKeyPairJwk` returns)
  */
 export async function decryptTransportEnvelope(
     state: string,
-    ecdhPrivateKey: CryptoKey,
+    ecdhScalar: Uint8Array,
     mlkemSecretKey: Uint8Array,
     env: V2ResponseEnvelope,
     aad?: Uint8Array
@@ -170,7 +188,7 @@ export async function decryptTransportEnvelope(
     const mlkemCT = base64UrlToBytes(env.mlkemCiphertext)
     const aesKey = await deriveTransportAesKeyForDecrypt(
         state,
-        ecdhPrivateKey,
+        ecdhScalar,
         env.browserEphemeralPublicKey,
         mlkemSecretKey,
         mlkemCT
@@ -608,11 +626,13 @@ export function isSupportedAeadAlgorithm(algo: string): boolean {
 /**
  * Derives a deterministic ECDH P-256 key pair from the primary key for request payload encryption
  * The browser stores this key's public half on the server so the CLI can encrypt request payloads
+ *
+ * Returns the raw 32-byte private scalar and the corresponding public JWK
  */
 export async function deriveRequestEncKeyPair(params: {
     userId: string
     primaryKey: Uint8Array
-}): Promise<{ privateKey: CryptoKey; publicKeyJwk: EcP256PublicJwk }> {
+}): Promise<{ scalar: Uint8Array; publicKeyJwk: EcP256PublicJwk }> {
     const ikm = await crypto.subtle.importKey('raw', asBuf(params.primaryKey), 'HKDF', false, ['deriveBits'])
 
     const info = new TextEncoder().encode(`revaulter/v2/requestEncKey\nuserId=${params.userId}\nv=1`)
@@ -624,19 +644,8 @@ export async function deriveRequestEncKeyPair(params: {
         384
     )
 
-    const scalarBytes = mapHashToField(new Uint8Array(rawBits), p256.Point.Fn.ORDER)
-    const privateKey = await importP256ScalarAsEcdhKey(scalarBytes)
-
-    // Export the public key as JWK
-    const jwk = (await crypto.subtle.exportKey('jwk', privateKey)) as JsonWebKey
-    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) {
-        throw new Error('Failed to export request encryption public key as P-256 JWK')
-    }
-
-    return {
-        privateKey,
-        publicKeyJwk: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y },
-    }
+    const scalar = mapHashToField(new Uint8Array(rawBits), p256.Point.Fn.ORDER)
+    return { scalar, publicKeyJwk: ecP256ScalarToPublicJwk(scalar) }
 }
 
 /**
@@ -689,8 +698,8 @@ export async function decryptRequestPayload(params: {
     ciphertext: string
     aad: Uint8Array
 }): Promise<V2RequestPayloadInner> {
-    // Derive the static ECDH private key
-    const { privateKey: ecdhPrivKey } = await deriveRequestEncKeyPair({
+    // Derive the static ECDH private scalar
+    const { scalar: ecdhScalar } = await deriveRequestEncKeyPair({
         userId: params.userId,
         primaryKey: params.primaryKey,
     })
@@ -702,7 +711,7 @@ export async function decryptRequestPayload(params: {
     })
 
     // ECDH shared secret
-    const ecdhShared = await deriveEcdhSharedSecret(ecdhPrivKey, params.cliEphemeralPublicKey)
+    const ecdhShared = deriveEcdhSharedSecret(ecdhScalar, params.cliEphemeralPublicKey)
 
     // ML-KEM decapsulation
     const mlkemCT = base64UrlToBytes(params.mlkemCiphertext)

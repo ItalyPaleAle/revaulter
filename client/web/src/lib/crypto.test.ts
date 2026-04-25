@@ -855,20 +855,21 @@ describe('splitAeadCiphertextAndTag', () => {
 })
 
 describe('generateTransportKeyPairJwk', () => {
-    it('returns a P-256 ECDH key pair', async () => {
-        const { privateKey, publicKeyJwk } = await generateTransportKeyPairJwk()
-        expect(privateKey.type).toBe('private')
-        expect(privateKey.algorithm).toMatchObject({ name: 'ECDH', namedCurve: 'P-256' })
+    it('returns a P-256 ECDH key pair as raw scalar bytes plus public JWK', () => {
+        const { scalar, publicKeyJwk } = generateTransportKeyPairJwk()
+        expect(scalar).toBeInstanceOf(Uint8Array)
+        expect(scalar.length).toBe(32)
         expect(publicKeyJwk.kty).toBe('EC')
         expect(publicKeyJwk.crv).toBe('P-256')
         expect(publicKeyJwk.x).toBeTruthy()
         expect(publicKeyJwk.y).toBeTruthy()
     })
 
-    it('produces different key pairs each call', async () => {
-        const kp1 = await generateTransportKeyPairJwk()
-        const kp2 = await generateTransportKeyPairJwk()
+    it('produces different key pairs each call', () => {
+        const kp1 = generateTransportKeyPairJwk()
+        const kp2 = generateTransportKeyPairJwk()
         expect(kp1.publicKeyJwk.x).not.toBe(kp2.publicKeyJwk.x)
+        expect(bytesToHex(kp1.scalar)).not.toBe(bytesToHex(kp2.scalar))
     })
 })
 
@@ -904,11 +905,16 @@ describe('deriveRequestEncKeyPair', () => {
         expect(publicKeyJwk.y.length).toBeGreaterThan(0)
     })
 
-    it('private key is usable for ECDH', async () => {
-        const { privateKey } = await deriveRequestEncKeyPair({ userId: 'u', primaryKey: TEST_PRIMARY_KEY })
-        const peer = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits'])
-        const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: peer.publicKey }, privateKey, 256)
-        expect(shared.byteLength).toBe(32)
+    it('private scalar is usable for ECDH against a peer', async () => {
+        const { scalar } = await deriveRequestEncKeyPair({ userId: 'u', primaryKey: TEST_PRIMARY_KEY })
+        expect(scalar).toBeInstanceOf(Uint8Array)
+        expect(scalar.length).toBe(32)
+
+        // Pair with a peer generated via noble and confirm getSharedSecret returns the expected 33-byte compressed shared point
+        const peer = p256.utils.randomSecretKey()
+        const peerPub = p256.getPublicKey(peer, false)
+        const shared = p256.getSharedSecret(scalar, peerPub)
+        expect(shared.length).toBe(33)
     })
 })
 
@@ -949,18 +955,24 @@ describe('deriveRequestEncMlkemKeyPair', () => {
 })
 
 describe('transport envelope encrypt/decrypt round-trip', () => {
-    it('encrypts and decrypts with hybrid ECDH + ML-KEM', async () => {
-        // Simulate CLI: generate transport key pairs
-        const ecdhKP = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
-        const ecdhPubJwk = (await crypto.subtle.exportKey('jwk', ecdhKP.publicKey)) as JsonWebKey
-        if (!ecdhPubJwk.x || !ecdhPubJwk.y) {
-            throw new Error('Invalid ECDH key imported: missing x or y parameters')
+    /** Reconstructs the public JWK from a P-256 scalar so test code can hand it to encryptTransportEnvelope */
+    function publicJwkFromScalar(scalar: Uint8Array) {
+        const pub = p256.getPublicKey(scalar, false)
+        return {
+            kty: 'EC' as const,
+            crv: 'P-256' as const,
+            x: bytesToBase64Url(pub.subarray(1, 33)),
+            y: bytesToBase64Url(pub.subarray(33, 65)),
         }
+    }
+
+    it('encrypts and decrypts with hybrid ECDH + ML-KEM', async () => {
+        // Simulate CLI: generate transport key pairs as raw scalar/public-key bytes
+        const ecdhScalar = p256.utils.randomSecretKey()
 
         // ML-KEM key pair for transport
         const { ml_kem768 } = await import('@noble/post-quantum/ml-kem.js')
         const mlkemKP = ml_kem768.keygen(crypto.getRandomValues(new Uint8Array(64)))
-        const { bytesToBase64Url } = await import('./utils')
         const mlkemPubB64 = bytesToBase64Url(mlkemKP.publicKey)
 
         const plaintext = new TextEncoder().encode('secret response data')
@@ -969,7 +981,7 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
         // Browser encrypts the response envelope
         const envelope = await encryptTransportEnvelope(
             'test-state',
-            { kty: 'EC', crv: 'P-256', x: ecdhPubJwk.x, y: ecdhPubJwk.y },
+            publicJwkFromScalar(ecdhScalar),
             mlkemPubB64,
             plaintext,
             aad
@@ -981,42 +993,29 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
         expect(envelope.ciphertext).toBeTruthy()
 
         // CLI decrypts the response envelope
-        const decrypted = await decryptTransportEnvelope(
-            'test-state',
-            ecdhKP.privateKey,
-            mlkemKP.secretKey,
-            envelope,
-            aad
-        )
+        const decrypted = await decryptTransportEnvelope('test-state', ecdhScalar, mlkemKP.secretKey, envelope, aad)
 
         expect(new TextDecoder().decode(decrypted)).toBe('secret response data')
     })
 
     it('rejects envelope with wrong state', async () => {
-        const ecdhKP = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])
-        const ecdhPubJwk = (await crypto.subtle.exportKey('jwk', ecdhKP.publicKey)) as JsonWebKey
-        if (!ecdhPubJwk.x || !ecdhPubJwk.y) {
-            throw new Error('Invalid ECDH key imported: missing x or y parameters')
-        }
+        const ecdhScalar = p256.utils.randomSecretKey()
 
         const { ml_kem768 } = await import('@noble/post-quantum/ml-kem.js')
         const mlkemKP = ml_kem768.keygen(crypto.getRandomValues(new Uint8Array(64)))
-        const { bytesToBase64Url } = await import('./utils')
         const mlkemPubB64 = bytesToBase64Url(mlkemKP.publicKey)
 
         const plaintext = new TextEncoder().encode('data')
 
         const envelope = await encryptTransportEnvelope(
             'state-A',
-            { kty: 'EC', crv: 'P-256', x: ecdhPubJwk.x, y: ecdhPubJwk.y },
+            publicJwkFromScalar(ecdhScalar),
             mlkemPubB64,
             plaintext
         )
 
         // Decrypt with a different state — HKDF produces a different key, so decryption fails
-        await expect(
-            decryptTransportEnvelope('state-B', ecdhKP.privateKey, mlkemKP.secretKey, envelope)
-        ).rejects.toThrow()
+        await expect(decryptTransportEnvelope('state-B', ecdhScalar, mlkemKP.secretKey, envelope)).rejects.toThrow()
     })
 })
 
