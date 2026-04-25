@@ -13,9 +13,12 @@ import {
     deriveSigningKeyPair,
     ecP256JwkToPem,
     encryptTransportEnvelope,
+    isSupportedAeadAlgorithm,
+    normalizeAeadAlgorithm,
     performAesGcmOperation,
+    performChaCha20Poly1305Operation,
     signDigestEs256,
-    splitAesGcmCiphertextAndTag,
+    splitAeadCiphertextAndTag,
 } from '$lib/crypto'
 import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import { v2Cancel, v2Confirm, v2GetRequest } from '$lib/v2-api'
@@ -107,7 +110,7 @@ async function buildResponseEnvelope(
 
         case 'encrypt':
         case 'decrypt':
-            if (req.algorithm !== 'A256GCM') {
+            if (!isSupportedAeadAlgorithm(req.algorithm)) {
                 throw new Error(`Unsupported algorithm: ${req.algorithm}`)
             }
             break
@@ -180,15 +183,16 @@ async function buildResponseEnvelope(
             })
 
             const nonce = input.nonce ? base64UrlToBytes(input.nonce) : crypto.getRandomValues(new Uint8Array(12))
-            const combined = await performAesGcmOperation({
-                mode: 'encrypt',
-                keyBytes: operationKey,
-                value,
-                nonce,
-                aad,
-            })
 
-            const split = splitAesGcmCiphertextAndTag(combined)
+            // Dispatch on the normalized algorithm; the validation switch above already gated unsupported values
+            const primitive = normalizeAeadAlgorithm(req.algorithm)
+            const opParams = { mode: 'encrypt' as const, keyBytes: operationKey, value, nonce, aad }
+            const combined =
+                primitive === 'chacha20-poly1305'
+                    ? await performChaCha20Poly1305Operation(opParams)
+                    : await performAesGcmOperation(opParams)
+
+            const split = splitAeadCiphertextAndTag(combined)
 
             resultPlain = new TextEncoder().encode(
                 JSON.stringify({
@@ -222,14 +226,12 @@ async function buildResponseEnvelope(
                 throw new Error('Missing authentication tag for decrypt')
             }
 
-            const plain = await performAesGcmOperation({
-                mode: 'decrypt',
-                keyBytes: operationKey,
-                value,
-                nonce,
-                aad,
-                tag,
-            })
+            const primitive = normalizeAeadAlgorithm(req.algorithm)
+            const opParams = { mode: 'decrypt' as const, keyBytes: operationKey, value, nonce, aad, tag }
+            const plain =
+                primitive === 'chacha20-poly1305'
+                    ? await performChaCha20Poly1305Operation(opParams)
+                    : await performAesGcmOperation(opParams)
 
             resultPlain = new TextEncoder().encode(
                 JSON.stringify({

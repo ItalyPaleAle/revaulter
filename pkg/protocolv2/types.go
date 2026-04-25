@@ -3,6 +3,7 @@ package protocolv2
 import (
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/italypaleale/revaulter/pkg/utils"
@@ -23,6 +24,18 @@ const SigningAlgES256 = "ES256"
 // IsSupportedSigningAlgorithm reports whether alg is a signing algorithm supported by the server for the "sign" operation
 func IsSupportedSigningAlgorithm(alg string) bool {
 	return alg == SigningAlgES256
+}
+
+// IsSupportedEncryptionAlgorithm reports whether alg is an encryption algorithm accepted by the server for the "encrypt" / "decrypt" operations
+// The check is case-insensitive on the dashes and uppercase forms; comparison happens after lowercasing the input
+func IsSupportedEncryptionAlgorithm(alg string) bool {
+	switch strings.ToLower(alg) {
+	case "a256gcm", "aes-256-gcm", "aes256gcm",
+		"c20p", "chacha20-poly1305", "chacha20poly1305":
+		return true
+	default:
+		return false
+	}
 }
 
 type RequestCreateBody struct {

@@ -42,13 +42,16 @@ The browser uses WebCrypto for the following operations:
 Outside WebCrypto, the browser currently uses:
 
 - WebAuthn with the PRF extension to get `prfSecret`
-- [`hash-wasm`](https://github.com/Daninet/hash-wasm) Argon2id to stretch the optional password
-- [`mlkem-wasm`](https://github.com/dchest/mlkem-wasm) for ML-KEM-768 encapsulation and decapsulation in the hybrid transport path
+- [`@awasm/noble`](https://github.com/paulmillr/awasm-noble) for Argon2id (password stretching) and ChaCha20-Poly1305 (application encrypt/decrypt operations)
+- [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum) for ML-KEM-768 encapsulation and decapsulation in the hybrid transport path
+- [`@noble/curves`](https://github.com/paulmillr/noble-curves) for ECDSA P-256 signing over a prehashed 32-byte SHA-256 digest
 
 The split matters:
 
-- WebCrypto covers the symmetric crypto, HKDF, and ECDH pieces with the browser's native cryptographic implementation
-- Argon2id and ML-KEM are currently provided by WASM libraries because they are not generally exposed by WebCrypto
+- WebCrypto covers AES-GCM, HKDF, and ECDH with the browser's native cryptographic implementation
+- ChaCha20-Poly1305 is provided by `@awasm/noble` because it is not exposed by WebCrypto
+- ECDSA P-256 signing uses `@noble/curves` so the browser can sign a pre-hashed 32-byte SHA-256 digest directly, without WebCrypto re-hashing it (matches standard ES256 verification semantics)
+- Argon2id and ML-KEM are provided by WASM libraries (`@awasm/noble` for Argon2id, `@noble/post-quantum` for ML-KEM-768) because they are not exposed by WebCrypto
 
 ## WebCrypto security notes
 
@@ -218,13 +221,19 @@ These two static public keys let the CLI encrypt request payloads end-to-end to 
 
 ### Operation keys
 
-For each actual requested encryption or decryption operation, the browser derives a 256-bit AES key from the `primaryKey` using:
+For each actual requested encryption or decryption operation, the browser derives a 256-bit operation key from the `primaryKey` using:
 
 ```text
 info = "algorithm={algorithm}\nkeyLabel={keyLabel}\nuserId={userId}\nv=1"
 ```
 
 This means the same account root key can deterministically produce distinct operation keys for different labels and algorithms.
+
+The browser accepts both JOSE-style (`A256GCM`, `C20P`) and long-form (`aes-256-gcm`, `chacha20-poly1305`) algorithm names, case-insensitive on both sides. The server applies the same set in `IsSupportedEncryptionAlgorithm`.
+
+Before being bound into HKDF info, the algorithm string is canonicalized to its long-form name (`aes-256-gcm` or `chacha20-poly1305`). Encrypt and decrypt may therefore use any accepted spelling — both forms derive the same operation key. AAD strings (transport AAD and request-encryption AAD) are still bound verbatim, so the CLI and browser must use matching spellings within a single request.
+
+AES-256-GCM is provided by WebCrypto; ChaCha20-Poly1305 is provided by `@awasm/noble`.
 
 ### Signing keys
 
@@ -480,7 +489,7 @@ This hybrid transport gives the response envelope both conventional ECDH confide
 | Password stretching | Argon2id (`m=128 MiB`, `t=4`, `p=1`, `hashLen=32`) |
 | Key derivation | HKDF-SHA-256 |
 | Wrapped primary key encryption | AES-256-GCM |
-| Application encrypt/decrypt operation | AES-GCM via WebCrypto |
+| Application encrypt/decrypt operation | AES-256-GCM (via WebCrypto) or ChaCha20-Poly1305 (via `@awasm/noble`); accepted as JOSE-style (`A256GCM`, `C20P`) or long-form (`aes-256-gcm`, `chacha20-poly1305`) names — case-insensitive. The response transport AEAD remains AES-256-GCM only |
 | Application sign operation | ECDSA P-256 (`ES256`) via `@noble/curves`, signed over the supplied 32-byte SHA-256 digest (prehashed; no re-hashing) |
 | Published signing key ID | RFC 7638 JWK thumbprint (SHA-256, base64url) |
 | Static request key agreement | ECDH P-256 |

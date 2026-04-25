@@ -65,6 +65,45 @@ func TestValidateV2CreateBodyValidSign(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestValidateV2CreateBodyAcceptedEncryptionAlgorithms(t *testing.T) {
+	// Both the JOSE-style and long-form names are accepted on encrypt/decrypt, case-insensitive
+	algorithms := []string{
+		"A256GCM",
+		"a256gcm",
+		"aes-256-gcm",
+		"AES-256-GCM",
+		"aes256gcm",
+		"C20P",
+		"c20p",
+		"chacha20-poly1305",
+		"ChaCha20-Poly1305",
+		"chacha20poly1305",
+	}
+	ops := []string{protocolv2.OperationEncrypt, protocolv2.OperationDecrypt}
+
+	for _, op := range ops {
+		for _, alg := range algorithms {
+			t.Run(op+"/"+alg, func(t *testing.T) {
+				body := newTestRequestCreateBody(t)
+				body.Algorithm = alg
+				err := validateV2CreateBody(op, &body)
+				require.NoError(t, err)
+			})
+		}
+	}
+}
+
+func TestValidateV2CreateBodyRejectsUnknownEncryptionAlgorithm(t *testing.T) {
+	for _, op := range []string{protocolv2.OperationEncrypt, protocolv2.OperationDecrypt} {
+		t.Run(op, func(t *testing.T) {
+			body := newTestRequestCreateBody(t)
+			body.Algorithm = "rsa-oaep"
+			err := validateV2CreateBody(op, &body)
+			require.EqualError(t, err, `unsupported encryption algorithm "rsa-oaep"`)
+		})
+	}
+}
+
 func TestValidateV2CreateBodyRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name       string

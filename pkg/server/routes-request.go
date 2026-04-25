@@ -361,6 +361,11 @@ func validateV2CreateBody(op string, body *protocolv2.RequestCreateBody) error {
 		return NewResponseErrorf(http.StatusBadRequest, "unsupported signing algorithm %q", body.Algorithm)
 	}
 
+	// For encrypt/decrypt operations, restrict algorithm to the supported AEAD primitives (case-insensitive)
+	if (op == protocolv2.OperationEncrypt || op == protocolv2.OperationDecrypt) && !protocolv2.IsSupportedEncryptionAlgorithm(body.Algorithm) {
+		return NewResponseErrorf(http.StatusBadRequest, "unsupported encryption algorithm %q", body.Algorithm)
+	}
+
 	// Validate optional note
 	if body.Note != "" && !body.ValidateNote() {
 		return NewResponseError(http.StatusBadRequest, "parameter 'note' contains invalid characters")

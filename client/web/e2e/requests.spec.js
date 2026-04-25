@@ -285,49 +285,53 @@ test('cli sign round-trips and the signature verifies against the browser-derive
     }
 })
 
-test('cli encrypt then decrypt round-trips hello world', async ({ page }) => {
-    const auth = await registerAndReachReady(page, 'CLI Crypto User')
+// Cover all four accepted name forms — both the JOSE-style and long-form name pair for AES-GCM and ChaCha20-Poly1305
+// Encrypt and decrypt must use the SAME spelling because the algorithm string is bound into HKDF info and AAD verbatim
+for (const algorithm of ['A256GCM', 'aes-256-gcm', 'C20P', 'chacha20-poly1305']) {
+    test(`cli encrypt then decrypt round-trips hello world (algorithm=${algorithm})`, async ({ page }) => {
+        const auth = await registerAndReachReady(page, `CLI Crypto User ${algorithm}`)
 
-    try {
-        await waitForListStream(page)
+        try {
+            await waitForListStream(page)
 
-        const encryptRun = startCLIRequest({
-            operation: 'encrypt',
-            requestKey: auth.session.requestKey,
-            keyLabel: 'disk-key',
-            algorithm: 'A256GCM',
-            note: 'cli round trip encrypt',
-            value: 'hello world',
-        })
+            const encryptRun = startCLIRequest({
+                operation: 'encrypt',
+                requestKey: auth.session.requestKey,
+                keyLabel: 'disk-key',
+                algorithm,
+                note: 'cli round trip encrypt',
+                value: 'hello world',
+            })
 
-        await expect(page.getByText('cli round trip encrypt')).toBeVisible()
-        await page.getByRole('button', { name: 'Confirm' }).click()
+            await expect(page.getByText('cli round trip encrypt')).toBeVisible()
+            await page.getByRole('button', { name: 'Confirm' }).click()
 
-        const encryptResult = await encryptRun.done
-        expect(encryptResult.json.operation).toBe('encrypt')
-        expect(typeof encryptResult.json.value).toBe('string')
-        expect(typeof encryptResult.json.nonce).toBe('string')
-        expect(typeof encryptResult.json.tag).toBe('string')
+            const encryptResult = await encryptRun.done
+            expect(encryptResult.json.operation).toBe('encrypt')
+            expect(typeof encryptResult.json.value).toBe('string')
+            expect(typeof encryptResult.json.nonce).toBe('string')
+            expect(typeof encryptResult.json.tag).toBe('string')
 
-        const decryptRun = startCLIRequest({
-            operation: 'decrypt',
-            requestKey: auth.session.requestKey,
-            keyLabel: 'disk-key',
-            algorithm: 'A256GCM',
-            note: 'cli round trip decrypt',
-            value: encryptResult.json.value,
-            nonce: encryptResult.json.nonce,
-            tag: encryptResult.json.tag,
-            aad: encryptResult.json.additionalData,
-        })
+            const decryptRun = startCLIRequest({
+                operation: 'decrypt',
+                requestKey: auth.session.requestKey,
+                keyLabel: 'disk-key',
+                algorithm,
+                note: 'cli round trip decrypt',
+                value: encryptResult.json.value,
+                nonce: encryptResult.json.nonce,
+                tag: encryptResult.json.tag,
+                aad: encryptResult.json.additionalData,
+            })
 
-        await expect(page.getByText('cli round trip decrypt')).toBeVisible()
-        await page.getByRole('button', { name: 'Confirm' }).click()
+            await expect(page.getByText('cli round trip decrypt')).toBeVisible()
+            await page.getByRole('button', { name: 'Confirm' }).click()
 
-        const decryptResult = await decryptRun.done
-        expect(decryptResult.json.operation).toBe('decrypt')
-        expect(decryptResult.json.decodedValue).toBe('hello world')
-    } finally {
-        await auth.passkey.dispose()
-    }
-})
+            const decryptResult = await decryptRun.done
+            expect(decryptResult.json.operation).toBe('decrypt')
+            expect(decryptResult.json.decodedValue).toBe('hello world')
+        } finally {
+            await auth.passkey.dispose()
+        }
+    })
+}

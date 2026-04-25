@@ -1,3 +1,4 @@
+import { chacha20poly1305 } from '@awasm/noble'
 import { argon2idAsync } from '@noble/hashes/argon2.js'
 import { p256 } from '@noble/curves/nist.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
@@ -393,8 +394,10 @@ export async function unwrapPrimaryKey(params: {
 
 /**
  * Derives the logical operation key bytes used for application crypto such as
- * AES-GCM encryption/decryption
+ * AES-GCM and ChaCha20-Poly1305 encryption/decryption
  * The derived key is bound to the user ID, key label, and algorithm
+ *
+ * Known AEAD algorithm names are canonicalized via `normalizeAeadAlgorithm` before binding into HKDF info, so encrypt and decrypt may use different accepted spellings (e.g. `A256GCM` and `aes-256-gcm`) and still produce the same operation key. Unrecognized algorithm strings fall through verbatim.
  */
 export async function deriveOperationKeyBytes(params: {
     userId: string
@@ -403,7 +406,8 @@ export async function deriveOperationKeyBytes(params: {
     primaryKey: Uint8Array
 }): Promise<Uint8Array> {
     const ikm = await crypto.subtle.importKey('raw', asBuf(params.primaryKey), 'HKDF', false, ['deriveBits'])
-    const infoObj = new InfoObj(params.userId, params.keyLabel, params.algorithm)
+    const canonical = normalizeAeadAlgorithm(params.algorithm) ?? params.algorithm
+    const infoObj = new InfoObj(params.userId, params.keyLabel, canonical)
 
     const bits = await crypto.subtle.deriveBits(
         {
@@ -520,17 +524,85 @@ export async function performAesGcmOperation(params: {
     }
 }
 
-/** Splits WebCrypto's combined AES-GCM output into ciphertext and tag segments. */
-export function splitAesGcmCiphertextAndTag(ciphertextWithTag: Uint8Array, tagLen = 16) {
+/**
+ * Splits a combined AEAD output (ciphertext || tag) into ciphertext and tag segments
+ * Works for both AES-GCM and ChaCha20-Poly1305 since both append a 16-byte tag by default
+ */
+export function splitAeadCiphertextAndTag(ciphertextWithTag: Uint8Array, tagLen = 16) {
     if (ciphertextWithTag.length < tagLen) {
         throw new Error('Ciphertext is too short')
     }
 
-    // AES-GCM appends the authentication tag to the end of the ciphertext
     return {
         data: ciphertextWithTag.slice(0, ciphertextWithTag.length - tagLen),
         tag: ciphertextWithTag.slice(ciphertextWithTag.length - tagLen),
     }
+}
+
+/**
+ * Performs the requested ChaCha20-Poly1305 operation with the supplied raw key bytes
+ * Mirrors `performAesGcmOperation`'s parameter shape so callers can branch on algorithm and reuse the same input/output framing
+ */
+export async function performChaCha20Poly1305Operation(params: {
+    mode: 'encrypt' | 'decrypt'
+    keyBytes: Uint8Array
+    value: Uint8Array
+    nonce?: Uint8Array
+    aad?: Uint8Array
+    tag?: Uint8Array
+}): Promise<Uint8Array> {
+    // ChaCha20-Poly1305 requires a 12-byte nonce; generate one for encryption callers that don't supply one
+    const nonce = params.nonce ?? crypto.getRandomValues(new Uint8Array(12))
+    const aad = params.aad && params.aad.length > 0 ? params.aad : undefined
+    const cipher = chacha20poly1305(params.keyBytes, nonce, aad)
+
+    if (params.mode === 'encrypt') {
+        return cipher.encrypt(params.value)
+    }
+
+    // The cipher expects ciphertext||tag concatenated, so rebuild that shape when the caller supplied them separately
+    const combined =
+        params.tag && params.tag.length > 0
+            ? (() => {
+                  const out = new Uint8Array(params.value.length + params.tag.length)
+                  out.set(params.value, 0)
+                  out.set(params.tag, params.value.length)
+                  return out
+              })()
+            : params.value
+
+    try {
+        return cipher.decrypt(combined)
+    } catch {
+        throw new Error(
+            'Decryption failed. This normally means that the ciphertext could not be authenticated. Check that the key label, user ID, nonce, tag, and additional data match the original encryption request.'
+        )
+    }
+}
+
+/**
+ * Normalizes an algorithm string to the canonical long-form name used for AEAD dispatch
+ * Returns `aes-256-gcm` or `chacha20-poly1305`, or `null` if the algorithm is not supported for encrypt/decrypt
+ * The set of accepted spellings matches the server-side `IsSupportedEncryptionAlgorithm`
+ */
+export function normalizeAeadAlgorithm(algo: string): 'aes-256-gcm' | 'chacha20-poly1305' | null {
+    switch (algo.toLowerCase()) {
+        case 'a256gcm':
+        case 'aes-256-gcm':
+        case 'aes256gcm':
+            return 'aes-256-gcm'
+        case 'c20p':
+        case 'chacha20-poly1305':
+        case 'chacha20poly1305':
+            return 'chacha20-poly1305'
+        default:
+            return null
+    }
+}
+
+/** Reports whether an algorithm string is accepted for browser-side encrypt/decrypt operations (case-insensitive) */
+export function isSupportedAeadAlgorithm(algo: string): boolean {
+    return normalizeAeadAlgorithm(algo) !== null
 }
 
 /**
