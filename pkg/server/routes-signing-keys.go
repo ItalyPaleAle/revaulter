@@ -322,7 +322,7 @@ func (s *Server) RouteV2SigningKeyPublic(c *gin.Context) {
 	}
 
 	// Override the cache-control as this route is cacheable
-	c.Header("Cache-Control", "public, max-age=3600")
+	c.Header("Cache-Control", "public, max-age=600")
 
 	switch wantPEM {
 	case true:

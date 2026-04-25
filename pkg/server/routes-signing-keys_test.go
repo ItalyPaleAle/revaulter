@@ -142,7 +142,7 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 	// Unauthenticated JWK fetch works and includes required metadata
 	status, header, body := doGet(t, "/v2/signing-keys/"+km.ID+".jwk")
 	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
-	require.Equal(t, "public, max-age=3600", header.Get("Cache-Control"))
+	require.Equal(t, "public, max-age=600", header.Get("Cache-Control"))
 	var jwkResp map[string]any
 	require.NoError(t, json.Unmarshal(body, &jwkResp))
 	require.Equal(t, km.ID, jwkResp["id"])
@@ -161,7 +161,7 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 	// Unauthenticated PEM fetch returns the stored bytes verbatim as application/x-pem-file
 	status, header, body = doGet(t, "/v2/signing-keys/"+km.ID+".pem")
 	require.Equal(t, http.StatusOK, status)
-	require.Equal(t, "public, max-age=3600", header.Get("Cache-Control"))
+	require.Equal(t, "public, max-age=600", header.Get("Cache-Control"))
 	require.Contains(t, header.Get("Content-Type"), "application/x-pem-file")
 	require.Equal(t, km.PEM, string(body), "PEM must be byte-for-byte the submitted PEM")
 

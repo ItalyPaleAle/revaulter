@@ -793,7 +793,7 @@ Returns `404 Not Found` when the ID doesn't match a row belonging to the authent
 
 These endpoints take only the opaque key ID. There is no listing or enumeration endpoint, clients must know the key ID out of band.
 
-Both endpoints are rate-limited and return `Cache-Control: public, max-age=3600`. Unknown IDs return `404 Not Found`.
+Both endpoints are rate-limited and return `Cache-Control: public, max-age=600`. Unknown IDs return `404 Not Found`.
 
 #### `GET /v2/signing-keys/:id.jwk`
 
