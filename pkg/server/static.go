@@ -119,12 +119,10 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 
 // safeRedirectLocation emits a 301 redirect whose Location is guaranteed to be a host-relative URL starting with a single "/"
 // This prevents user-controlled path segments from producing protocol-relative Locations such as "//evil.com" that would navigate the browser to a different origin
+// The original request's query string is NOT forwarded to prevent certain attacks (static-file directory redirects don't need a query string anyways)
 func safeRedirectLocation(c *gin.Context, reqPath string) {
 	// reqPath has already been normalized by serveStaticFiles, so this just reattaches the leading slash and appends the trailing slash for the redirect
 	redirect := "/" + reqPath + "/"
-	if c.Request.URL.RawQuery != "" {
-		redirect += "?" + c.Request.URL.RawQuery
-	}
 	c.Header("Location", redirect)
 	c.Status(http.StatusMovedPermanently)
 }
