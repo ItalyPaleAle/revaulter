@@ -1057,9 +1057,9 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		return
 	}
 
-	// Enforce max length on the wrapped primary key
-	if req.WrappedPrimaryKey != "" && len(req.WrappedPrimaryKey) > 512 {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "wrappedPrimaryKey is too large"))
+	// Require the wrapped primary key on every add-credential
+	if req.WrappedPrimaryKey == "" || len(req.WrappedPrimaryKey) > 512 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid wrappedPrimaryKey"))
 		return
 	}
 
