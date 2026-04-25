@@ -270,20 +270,25 @@ func (s *AuthStore) BeginChallenge(ctx context.Context, kind string, userID stri
 	return rec, nil
 }
 
-func (s *AuthStore) ConsumeChallenge(ctx context.Context, id string, kind string, out any) error {
+// ConsumeChallenge atomically marks the challenge row as used and returns its payload
+// When userID is non-empty, the consume succeeds only if the row's user_id matches; this prevents an attacker who learned a challenge ID from consuming a challenge that belongs to a different user (which would let them DoS the legitimate ceremony)
+// Pass userID = "" for flows where no authenticated user is bound to the challenge yet (register, login)
+func (s *AuthStore) ConsumeChallenge(ctx context.Context, id string, kind string, userID string, out any) error {
 	now := time.Now().Unix()
 
 	// Atomically mark the challenge as used and retrieve the payload
+	// When $4 is empty the user-binding clause is a no-op so register/login challenges still consume normally
 	var payload sql.NullString
 	err := s.db.
 		QueryRow(ctx, `UPDATE v2_auth_challenges
 			SET used_at = $1
 			WHERE id = $2 AND kind = $3 AND used_at IS NULL AND expires_at >= $1
+				AND ($4 = '' OR user_id = $4)
 			RETURNING (
 				SELECT session_data
 				FROM v2_auth_challenge_payloads
 				WHERE challenge_id = v2_auth_challenges.id
-			)`, now, id, kind).
+			)`, now, id, kind, userID).
 		Scan(&payload)
 	if s.db.IsNoRowsError(err) {
 		return ErrInvalidChallenge

@@ -1116,15 +1116,16 @@ type addCredentialFinishRes struct{}
 func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCredentialFinishVals) (addCredentialFinishRes, error) {
 	as := tx.AuthStore()
 
+	// Bind the consume to the authenticated user's ID at the SQL layer so an attacker who learned a different user's challenge ID cannot consume it
+	// The post-consume payload.UserID equality check below remains as defense in depth
 	var payload v2AddCredentialChallengePayload
-	err := as.ConsumeChallenge(c.Request.Context(), vals.req.ChallengeID, "add-credential", &payload)
+	err := as.ConsumeChallenge(c.Request.Context(), vals.req.ChallengeID, "add-credential", vals.userID, &payload)
 	if errors.Is(err, db.ErrInvalidChallenge) {
 		return addCredentialFinishRes{}, NewResponseError(http.StatusConflict, "Challenge is invalid or expired")
 	} else if err != nil {
 		return addCredentialFinishRes{}, err
 	}
 
-	// Verify the challenge belongs to the authenticated user
 	if payload.UserID != vals.userID {
 		return addCredentialFinishRes{}, NewResponseError(http.StatusForbidden, "Challenge does not belong to this user")
 	}
@@ -1326,8 +1327,9 @@ func (s *Server) registerFinish(c *gin.Context, tx *db.DbTx, req v2AuthRegisterF
 	as := tx.AuthStore()
 
 	// Consume the challenge in the database and retrieve the payload
+	// Register has no authenticated user yet, so the consume isn't bound to a userID
 	var payload v2RegisterChallengePayload
-	err := as.ConsumeChallenge(c.Request.Context(), req.ChallengeID, "register", &payload)
+	err := as.ConsumeChallenge(c.Request.Context(), req.ChallengeID, "register", "", &payload)
 	if errors.Is(err, db.ErrInvalidChallenge) {
 		return registerFinishRes{}, NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
 	} else if err != nil {
@@ -1394,8 +1396,9 @@ func (s *Server) loginFinish(c *gin.Context, tx *db.DbTx, req v2AuthLoginFinishR
 	ctx := c.Request.Context()
 
 	// Consume the challenge in the database and retrieve the payload
+	// Login has no authenticated user yet (the credential assertion is what authenticates), so the consume isn't bound to a userID
 	var payload v2LoginChallengePayload
-	err := as.ConsumeChallenge(ctx, req.ChallengeID, "login", &payload)
+	err := as.ConsumeChallenge(ctx, req.ChallengeID, "login", "", &payload)
 	if errors.Is(err, db.ErrInvalidChallenge) {
 		return loginFinishRes{}, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
 	} else if err != nil {

@@ -28,7 +28,7 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, ch.Challenge)
 
-		err = as.ConsumeChallenge(ctx, ch.ID, "register", nil)
+		err = as.ConsumeChallenge(ctx, ch.ID, "register", "", nil)
 		require.NoError(t, err)
 
 		sess, err := as.RegisterUser(ctx, RegisterUserInput{
@@ -54,7 +54,7 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 
 		loginCh, err := as.BeginChallenge(ctx, "login", "", createChallenge(t), time.Now().Add(time.Minute), nil)
 		require.NoError(t, err)
-		err = as.ConsumeChallenge(ctx, loginCh.ID, "login", nil)
+		err = as.ConsumeChallenge(ctx, loginCh.ID, "login", "", nil)
 		require.NoError(t, err)
 
 		err = as.Login(ctx, LoginInput{
@@ -277,7 +277,7 @@ func TestAuthStoreDeleteExpiredAuthChallenge(t *testing.T) {
 		freshChallenge, err := as.BeginChallenge(ctx, "login", "", "fresh-challenge", now.Add(5*time.Minute), nil)
 		require.NoError(t, err)
 
-		err = as.ConsumeChallenge(ctx, usedChallenge.ID, "login", nil)
+		err = as.ConsumeChallenge(ctx, usedChallenge.ID, "login", "", nil)
 		require.NoError(t, err)
 
 		err = as.DeleteExpiredAuthChallenge(ctx, expiredChallenge.ID, now)
@@ -287,13 +287,13 @@ func TestAuthStoreDeleteExpiredAuthChallenge(t *testing.T) {
 		err = as.DeleteExpiredAuthChallenge(ctx, freshChallenge.ID, now)
 		require.NoError(t, err)
 
-		err = as.ConsumeChallenge(ctx, expiredChallenge.ID, "login", nil)
+		err = as.ConsumeChallenge(ctx, expiredChallenge.ID, "login", "", nil)
 		require.ErrorIs(t, err, ErrInvalidChallenge)
 
-		err = as.ConsumeChallenge(ctx, usedChallenge.ID, "login", nil)
+		err = as.ConsumeChallenge(ctx, usedChallenge.ID, "login", "", nil)
 		require.ErrorIs(t, err, ErrInvalidChallenge)
 
-		err = as.ConsumeChallenge(ctx, freshChallenge.ID, "login", nil)
+		err = as.ConsumeChallenge(ctx, freshChallenge.ID, "login", "", nil)
 		require.NoError(t, err)
 
 		return nil, nil
@@ -321,20 +321,48 @@ func TestAuthStoreConsumeChallengePayload(t *testing.T) {
 		require.NoError(t, err)
 
 		var got challengePayload
-		err = as.ConsumeChallenge(ctx, challenge.ID, "login", &got)
+		err = as.ConsumeChallenge(ctx, challenge.ID, "login", "", &got)
 		require.NoError(t, err)
 		require.Equal(t, expected, got)
 
-		err = as.ConsumeChallenge(ctx, challenge.ID, "login", nil)
+		err = as.ConsumeChallenge(ctx, challenge.ID, "login", "", nil)
 		require.ErrorIs(t, err, ErrInvalidChallenge)
 
 		challengeNoPayload, err := as.BeginChallenge(ctx, "register", "user-2", "no-payload-challenge", time.Now().Add(time.Minute), nil)
 		require.NoError(t, err)
 
 		got = challengePayload{}
-		err = as.ConsumeChallenge(ctx, challengeNoPayload.ID, "register", &got)
+		err = as.ConsumeChallenge(ctx, challengeNoPayload.ID, "register", "", &got)
 		require.NoError(t, err)
 		require.Equal(t, challengePayload{}, got)
+
+		return nil, nil
+	})
+}
+
+func TestAuthStoreConsumeChallengeUserBinding(t *testing.T) {
+	conn := newTestDatabase(t)
+
+	require.NoError(t, RunMigrations(t.Context(), conn, nil))
+
+	_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+		as := tx.AuthStore()
+
+		// A challenge bound to user-1
+		ch, err := as.BeginChallenge(ctx, "add-credential", "user-1", "user-bound-challenge", time.Now().Add(time.Minute), nil)
+		require.NoError(t, err)
+
+		// Consuming with the wrong userID must fail and must not mark the row as used
+		err = as.ConsumeChallenge(ctx, ch.ID, "add-credential", "user-2", nil)
+		require.ErrorIs(t, err, ErrInvalidChallenge)
+
+		// The legitimate owner can still consume it
+		err = as.ConsumeChallenge(ctx, ch.ID, "add-credential", "user-1", nil)
+		require.NoError(t, err)
+
+		// And only once — a second consume even by the rightful owner returns ErrInvalidChallenge
+		err = as.ConsumeChallenge(ctx, ch.ID, "add-credential", "user-1", nil)
+		require.ErrorIs(t, err, ErrInvalidChallenge)
 
 		return nil, nil
 	})
@@ -374,7 +402,7 @@ func TestAuthStoreHasPendingChallenge(t *testing.T) {
 		require.False(t, pending)
 
 		// Once consumed the challenge is no longer pending
-		err = as.ConsumeChallenge(ctx, freshAdd.ID, "add-credential", nil)
+		err = as.ConsumeChallenge(ctx, freshAdd.ID, "add-credential", "user-1", nil)
 		require.NoError(t, err)
 
 		pending, err = as.HasPendingChallenge(ctx, "user-1", "add-credential")
