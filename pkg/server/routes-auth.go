@@ -440,13 +440,6 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	// Set the session cookie
-	err = setSessionCookie(c, res.sess)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
 	// Remove the challenge from the cleanup queue
 	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
 	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
@@ -484,6 +477,13 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		resp.WrappedPrimaryKey = res.cred.WrappedPrimaryKey
 		resp.WrappedAnchorKey = res.cred.WrappedAnchorKey
 		logMsg = "User logged in and delivered wrapped primary key"
+	}
+
+	// Set the session cookie only after the rate-limit gate has passed
+	err = setSessionCookie(c, res.sess)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
 	}
 
 	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), logMsg,
