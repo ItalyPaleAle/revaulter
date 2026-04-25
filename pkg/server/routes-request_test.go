@@ -254,6 +254,8 @@ func TestServerV2RequestResultContextCancelClearsSubscription(t *testing.T) {
 	}
 	resCh := make(chan pollResult, 1)
 	go func() {
+		// Body is closed below
+		//nolint:bodyclose
 		res, dErr := client.Do(req)
 		resCh <- pollResult{res: res, err: dErr}
 	}()
