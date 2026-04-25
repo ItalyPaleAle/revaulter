@@ -89,6 +89,49 @@ func (s *SigningKeyStore) Create(ctx context.Context, in InsertSigningKeyInput) 
 	return rec, nil
 }
 
+// AutoStoreUnpublished stores an unpublished signing key from the auto-store path that runs after a successful sign
+// If a row already exists for (user_id, algorithm, key_label):
+//   - and it is NOT published, the row is replaced with the new key (different thumbprint id, jwk, pem, updated_at); created_at is preserved
+//   - and it IS published, the call is a no-op and ErrSigningKeyAlreadyExists is returned: a published key represents an explicit user decision and must not be silently demoted
+//
+// The replacement-while-unpublished semantics close a first-write-wins gap: a malicious script that submits an attacker-controlled JWK on the very first sign can no longer permanently claim the slot, because the next legitimate sign overwrites it. Once the user publishes a key the slot is locked
+func (s *SigningKeyStore) AutoStoreUnpublished(ctx context.Context, in InsertSigningKeyInput) (*PublishedSigningKey, error) {
+	if in.Published {
+		// AutoStore must never write a published row; that's reserved for explicit user action via Create + SetPublished
+		return nil, errors.New("auto-stored keys must not be marked published")
+	}
+
+	now := time.Now().Unix()
+	rec := &PublishedSigningKey{}
+	var createdAt, updatedAt int64
+	err := s.db.
+		QueryRow(ctx,
+			`INSERT INTO v2_published_signing_keys
+				(id, user_id, algorithm, key_label, jwk, pem, published, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, false, $7, $7)
+				ON CONFLICT (user_id, algorithm, key_label) DO UPDATE
+					SET id = EXCLUDED.id,
+						jwk = EXCLUDED.jwk,
+						pem = EXCLUDED.pem,
+						updated_at = EXCLUDED.updated_at
+					WHERE v2_published_signing_keys.published = false
+				RETURNING id, user_id, algorithm, key_label, jwk, pem, published, created_at, updated_at`,
+			in.ID, in.UserID, in.Algorithm, in.KeyLabel, in.JWK, in.PEM, now,
+		).
+		Scan(&rec.ID, &rec.UserID, &rec.Algorithm, &rec.KeyLabel, &rec.JWK, &rec.PEM, &rec.Published, &createdAt, &updatedAt)
+	if s.db.IsNoRowsError(err) {
+		// The conflict matched a published row, so the WHERE filter on the UPDATE skipped it
+		return nil, ErrSigningKeyAlreadyExists
+	} else if err != nil {
+		return nil, err
+	}
+
+	rec.CreatedAt = time.Unix(createdAt, 0)
+	rec.UpdatedAt = time.Unix(updatedAt, 0)
+
+	return rec, nil
+}
+
 func (s *SigningKeyStore) GetByID(ctx context.Context, id string) (*PublishedSigningKey, error) {
 	rec := &PublishedSigningKey{}
 	var createdAt, updatedAt int64

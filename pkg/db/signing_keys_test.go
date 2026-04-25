@@ -531,3 +531,137 @@ func TestSigningKeyStoreSetPublishedPromotesAutoStored(t *testing.T) {
 		return nil, nil
 	})
 }
+
+func TestSigningKeyStoreAutoStoreUnpublishedReplacesExistingUnpublished(t *testing.T) {
+	conn := newTestDatabase(t)
+	require.NoError(t, RunMigrations(t.Context(), conn, nil))
+
+	_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+		as := tx.AuthStore()
+		sks := tx.SigningKeyStore()
+
+		newSigningKeyTestUser(t, as, "lara")
+
+		// Simulate the "first sign was hostile" scenario: a row lands under an attacker thumbprint, unpublished
+		first, err := sks.AutoStoreUnpublished(ctx, InsertSigningKeyInput{
+			ID:        "id-attacker",
+			UserID:    "lara",
+			Algorithm: "ES256",
+			KeyLabel:  "shared-label",
+			JWK:       `{"attacker":true}`,
+			PEM:       "attacker-pem",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, first)
+		require.Equal(t, "id-attacker", first.ID)
+		createdAt := first.CreatedAt.Unix()
+
+		// Sleep past the 1-second unix-time resolution so updated_at moves on the replace
+		time.Sleep(1_100 * time.Millisecond)
+
+		// A subsequent legitimate sign must replace the unpublished row with the legit thumbprint, jwk, and pem
+		replaced, err := sks.AutoStoreUnpublished(ctx, InsertSigningKeyInput{
+			ID:        "id-legit",
+			UserID:    "lara",
+			Algorithm: "ES256",
+			KeyLabel:  "shared-label",
+			JWK:       `{"legit":true}`,
+			PEM:       "legit-pem",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, replaced)
+		require.Equal(t, "id-legit", replaced.ID)
+		require.Equal(t, `{"legit":true}`, replaced.JWK)
+		require.Equal(t, "legit-pem", replaced.PEM)
+		require.False(t, replaced.Published)
+
+		// created_at must be preserved on replace; updated_at must move forward
+		require.Equal(t, createdAt, replaced.CreatedAt.Unix(), "created_at must be preserved when replacing an unpublished row")
+		require.Greater(t, replaced.UpdatedAt.Unix(), createdAt, "updated_at must move forward on replace")
+
+		// The old attacker row must be gone — its id is no longer addressable
+		old, err := sks.GetByID(ctx, "id-attacker")
+		require.NoError(t, err)
+		require.Nil(t, old, "the previous unpublished row must have been replaced, not duplicated")
+
+		// The replacement is the row that is now indexable by its new id
+		current, err := sks.GetByID(ctx, "id-legit")
+		require.NoError(t, err)
+		require.NotNil(t, current)
+		require.Equal(t, `{"legit":true}`, current.JWK)
+
+		return nil, nil
+	})
+}
+
+func TestSigningKeyStoreAutoStoreUnpublishedLeavesPublishedAlone(t *testing.T) {
+	conn := newTestDatabase(t)
+	require.NoError(t, RunMigrations(t.Context(), conn, nil))
+
+	_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+		as := tx.AuthStore()
+		sks := tx.SigningKeyStore()
+
+		newSigningKeyTestUser(t, as, "mary")
+
+		// Publish a row first
+		_, err := sks.Create(ctx, InsertSigningKeyInput{
+			ID:        "id-pub",
+			UserID:    "mary",
+			Algorithm: "ES256",
+			KeyLabel:  "locked-label",
+			JWK:       `{"pub":true}`,
+			PEM:       "pub-pem",
+			Published: true,
+		})
+		require.NoError(t, err)
+
+		// AutoStoreUnpublished must not silently demote or replace a published row
+		// It returns ErrSigningKeyAlreadyExists so the caller treats it as a no-op
+		replaced, err := sks.AutoStoreUnpublished(ctx, InsertSigningKeyInput{
+			ID:        "id-auto",
+			UserID:    "mary",
+			Algorithm: "ES256",
+			KeyLabel:  "locked-label",
+			JWK:       `{"auto":true}`,
+			PEM:       "auto-pem",
+		})
+		require.ErrorIs(t, err, ErrSigningKeyAlreadyExists)
+		require.Nil(t, replaced)
+
+		rec, err := sks.GetByID(ctx, "id-pub")
+		require.NoError(t, err)
+		require.NotNil(t, rec)
+		require.True(t, rec.Published, "published row must remain published")
+		require.Equal(t, `{"pub":true}`, rec.JWK, "published material must not be overwritten by an auto-store")
+
+		return nil, nil
+	})
+}
+
+func TestSigningKeyStoreAutoStoreUnpublishedRejectsPublishedInput(t *testing.T) {
+	conn := newTestDatabase(t)
+	require.NoError(t, RunMigrations(t.Context(), conn, nil))
+
+	_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+		as := tx.AuthStore()
+		sks := tx.SigningKeyStore()
+
+		newSigningKeyTestUser(t, as, "nina")
+
+		// Defense-in-depth: AutoStoreUnpublished must refuse callers that pass Published=true
+		// Promotion to published is reserved for Create + SetPublished
+		_, err := sks.AutoStoreUnpublished(ctx, InsertSigningKeyInput{
+			ID:        "id",
+			UserID:    "nina",
+			Algorithm: "ES256",
+			KeyLabel:  "lbl",
+			JWK:       `{}`,
+			PEM:       "pem",
+			Published: true,
+		})
+		require.Error(t, err)
+
+		return nil, nil
+	})
+}

@@ -270,8 +270,9 @@ func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V
 	}
 
 	// Auto-stored keys always land as Published=false so they appear in the settings UI but aren't served from the public fetch endpoint until the user publishes them
+	// AutoStoreUnpublished overwrites an existing unpublished slot for the same (user, algorithm, keyLabel) so a single hostile sign cannot permanently claim the slot under an attacker-controlled thumbprint; once the user publishes a key, the slot is locked and this call is a silent no-op
 	sks := s.db.SigningKeyStore()
-	inserted, err := sks.Create(c.Request.Context(), db.InsertSigningKeyInput{
+	inserted, err := sks.AutoStoreUnpublished(c.Request.Context(), db.InsertSigningKeyInput{
 		ID:        id,
 		UserID:    rec.UserID,
 		Algorithm: rec.Algorithm,
@@ -281,8 +282,7 @@ func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V
 		Published: false,
 	})
 	if errors.Is(err, db.ErrSigningKeyAlreadyExists) {
-		// Conflict on (user, algorithm, keyLabel)
-		// In this case, we ignore the error
+		// The slot is already published, so the auto-store path leaves it alone
 		return
 	} else if err != nil {
 		// Log the error as warning but do not abort the request
