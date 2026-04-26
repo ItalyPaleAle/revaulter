@@ -138,3 +138,44 @@ test('logout returns the user to sign-in', async ({ page }) => {
         await auth.passkey.dispose()
     }
 })
+
+test('signing key can be derived, published, and re-published with stored proof', async ({ page, request }) => {
+    const auth = await registerAndReachReady(page, 'Signing Key User')
+
+    try {
+        await openSettingsTab(page, 'Signing keys')
+        await page.locator('input#signing-key-label').fill('e2e-publish')
+        await page.getByRole('button', { name: 'Derive key' }).click()
+
+        // The derived key card surfaces the key id; capture it for the public-fetch assertion below
+        await expect(page.getByText('Derived key')).toBeVisible()
+        const keyIdLocator = page.locator('div.mono.mt-1.break-all').first()
+        const keyId = (await keyIdLocator.textContent())?.trim()
+        if (!keyId) {
+            throw new Error('Could not read derived key id from the settings UI')
+        }
+
+        // Publish the derived key — this signs the publication payload with the session anchor
+        // The derived-key publish button has accessible name "Publish Publish" (icon title + label); the stored-key list uses aria-label "Publish key", so we target the exact form
+        await page.getByRole('button', { name: 'Publish Publish', exact: true }).click()
+        await expect(page.getByText('Published', { exact: true })).toBeVisible()
+
+        // Public .jwk response carries the proof + anchor pubkeys; .pem stays raw PEM
+        const jwkRes = await request.get(`/v2/signing-keys/${keyId}.jwk`)
+        expect(jwkRes.status()).toBe(200)
+        const jwk = await jwkRes.json()
+        expect(jwk.publicationPayload).toBeTruthy()
+        expect(jwk.publicationSignatureEs384).toBeTruthy()
+        expect(jwk.publicationSignatureMldsa87).toBeTruthy()
+        expect(jwk.anchorEs384PublicKey).toBeTruthy()
+        expect(jwk.anchorMldsa87PublicKey).toBeTruthy()
+
+        const pemRes = await request.get(`/v2/signing-keys/${keyId}.pem`)
+        expect(pemRes.status()).toBe(200)
+        const pemText = await pemRes.text()
+        expect(pemText).toContain('-----BEGIN PUBLIC KEY-----')
+        expect(pemText).not.toContain('publicationPayload')
+    } finally {
+        await auth.passkey.dispose()
+    }
+})

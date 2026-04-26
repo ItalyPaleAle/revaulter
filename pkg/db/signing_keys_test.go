@@ -170,9 +170,13 @@ func TestSigningKeyStoreSetPublished(t *testing.T) {
 		newSigningKeyTestUser(t, as, "erin")
 		newSigningKeyTestUser(t, as, "mallory")
 
+		// Create a proven published row so GetPublishedByID surfaces it after re-publishing
 		_, err := sks.Create(ctx, InsertSigningKeyInput{
 			ID: "id-e", UserID: "erin", Algorithm: "ES256", KeyLabel: "k",
 			JWK: `{}`, PEM: "pem", Published: true,
+			PublicationPayload:          "payload-bytes",
+			PublicationSignatureEs384:   "es-sig",
+			PublicationSignatureMldsa87: "ml-sig",
 		})
 		require.NoError(t, err)
 
@@ -515,6 +519,8 @@ func TestSigningKeyStoreSetPublishedPromotesAutoStored(t *testing.T) {
 		require.ErrorIs(t, err, ErrSigningKeyAlreadyExists, "Insert must not overwrite an existing auto-stored row under the same label")
 		require.Nil(t, inserted)
 
+		// Even with Published=true, GetPublishedByID must hide rows that lack a stored publication proof
+		// Promoting an unproven row to public requires StorePublicationProof + SetPublished(true)
 		updated, err := sks.SetPublished(ctx, "kate", "id-k", true)
 		require.NoError(t, err)
 		require.NotNil(t, updated)
@@ -522,11 +528,20 @@ func TestSigningKeyStoreSetPublishedPromotesAutoStored(t *testing.T) {
 		recAfter, err := sks.GetByID(ctx, "id-k")
 		require.NoError(t, err)
 		require.NotNil(t, recAfter)
-		require.True(t, recAfter.Published, "SetPublished must promote an auto-stored row to published=true")
+		require.True(t, recAfter.Published, "SetPublished must flip the flag even on unproven rows")
+
+		pubBeforeProof, err := sks.GetPublishedByID(ctx, "id-k")
+		require.NoError(t, err)
+		require.Nil(t, pubBeforeProof, "GetPublishedByID must hide a row that has no stored proof, even when Published=true")
+
+		// After storing a publication proof, the row surfaces from GetPublishedByID
+		_, err = sks.StorePublicationProof(ctx, "kate", "id-k", "payload-bytes", "es-sig", "ml-sig")
+		require.NoError(t, err)
 
 		pubAfter, err := sks.GetPublishedByID(ctx, "id-k")
 		require.NoError(t, err)
-		require.NotNil(t, pubAfter, "after SetPublished the row must be visible from GetPublishedByID")
+		require.NotNil(t, pubAfter, "after StorePublicationProof + SetPublished the row must be visible from GetPublishedByID")
+		require.True(t, pubAfter.HasPublicationProof())
 
 		return nil, nil
 	})
@@ -661,6 +676,227 @@ func TestSigningKeyStoreAutoStoreUnpublishedRejectsPublishedInput(t *testing.T) 
 			Published: true,
 		})
 		require.Error(t, err)
+
+		return nil, nil
+	})
+}
+
+func TestSigningKeyStoreAutoStoreUnpublishedRejectsProofInput(t *testing.T) {
+	conn := newTestDatabase(t)
+	require.NoError(t, RunMigrations(t.Context(), conn, nil))
+
+	_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+		as := tx.AuthStore()
+		sks := tx.SigningKeyStore()
+
+		newSigningKeyTestUser(t, as, "olive")
+
+		// Defense-in-depth: an auto-store call must never carry a publication proof
+		// Proofs are an explicit user decision, never a side-effect of a sign
+		_, err := sks.AutoStoreUnpublished(ctx, InsertSigningKeyInput{
+			ID:                          "id",
+			UserID:                      "olive",
+			Algorithm:                   "ES256",
+			KeyLabel:                    "lbl",
+			JWK:                         `{}`,
+			PEM:                         "pem",
+			PublicationPayload:          "payload",
+			PublicationSignatureEs384:   "es",
+			PublicationSignatureMldsa87: "ml",
+		})
+		require.Error(t, err)
+
+		return nil, nil
+	})
+}
+
+func TestSigningKeyStoreAutoStoreUnpublishedLeavesProvenUnpublishedAlone(t *testing.T) {
+	conn := newTestDatabase(t)
+	require.NoError(t, RunMigrations(t.Context(), conn, nil))
+
+	_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+		as := tx.AuthStore()
+		sks := tx.SigningKeyStore()
+
+		newSigningKeyTestUser(t, as, "petra")
+
+		// First the user creates a proven but unpublished row (Create with proof, Published=false)
+		_, err := sks.Create(ctx, InsertSigningKeyInput{
+			ID:                          "id-proven",
+			UserID:                      "petra",
+			Algorithm:                   "ES256",
+			KeyLabel:                    "locked-by-proof",
+			JWK:                         `{"proven":true}`,
+			PEM:                         "proven-pem",
+			Published:                   false,
+			PublicationPayload:          "payload-bytes",
+			PublicationSignatureEs384:   "es-sig",
+			PublicationSignatureMldsa87: "ml-sig",
+		})
+		require.NoError(t, err)
+
+		// AutoStoreUnpublished must skip the slot because the existing row carries a proof, even though Published=false
+		replaced, err := sks.AutoStoreUnpublished(ctx, InsertSigningKeyInput{
+			ID:        "id-attacker",
+			UserID:    "petra",
+			Algorithm: "ES256",
+			KeyLabel:  "locked-by-proof",
+			JWK:       `{"attacker":true}`,
+			PEM:       "attacker-pem",
+		})
+		require.ErrorIs(t, err, ErrSigningKeyAlreadyExists)
+		require.Nil(t, replaced)
+
+		rec, err := sks.GetByID(ctx, "id-proven")
+		require.NoError(t, err)
+		require.NotNil(t, rec)
+		require.Equal(t, `{"proven":true}`, rec.JWK, "proven material must not be overwritten by an auto-store")
+		require.True(t, rec.HasPublicationProof())
+
+		return nil, nil
+	})
+}
+
+func TestSigningKeyStoreStorePublicationProofAddsProof(t *testing.T) {
+	conn := newTestDatabase(t)
+	require.NoError(t, RunMigrations(t.Context(), conn, nil))
+
+	_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+		as := tx.AuthStore()
+		sks := tx.SigningKeyStore()
+
+		newSigningKeyTestUser(t, as, "quinn")
+
+		_, err := sks.Create(ctx, InsertSigningKeyInput{
+			ID:        "id-q",
+			UserID:    "quinn",
+			Algorithm: "ES256",
+			KeyLabel:  "k",
+			JWK:       `{}`,
+			PEM:       "pem",
+			Published: false,
+		})
+		require.NoError(t, err)
+
+		// Without proof, GetPublishedByID must hide the row even after SetPublished(true)
+		_, err = sks.SetPublished(ctx, "quinn", "id-q", true)
+		require.NoError(t, err)
+		pub, err := sks.GetPublishedByID(ctx, "id-q")
+		require.NoError(t, err)
+		require.Nil(t, pub)
+
+		// Adding the proof flips the row to publicly fetchable
+		updated, err := sks.StorePublicationProof(ctx, "quinn", "id-q", "payload", "es-sig", "ml-sig")
+		require.NoError(t, err)
+		require.NotNil(t, updated)
+		require.True(t, updated.HasPublicationProof())
+
+		pub, err = sks.GetPublishedByID(ctx, "id-q")
+		require.NoError(t, err)
+		require.NotNil(t, pub)
+		require.Equal(t, "payload", pub.PublicationPayload)
+
+		// Cross-user updates are rejected
+		_, err = sks.StorePublicationProof(ctx, "stranger", "id-q", "p", "e", "m")
+		require.ErrorIs(t, err, ErrSigningKeyNotFound)
+
+		// Empty proof fields are rejected (defense-in-depth)
+		_, err = sks.StorePublicationProof(ctx, "quinn", "id-q", "", "e", "m")
+		require.Error(t, err)
+
+		return nil, nil
+	})
+}
+
+func TestSigningKeyStoreSetPublishedPreservesProof(t *testing.T) {
+	conn := newTestDatabase(t)
+	require.NoError(t, RunMigrations(t.Context(), conn, nil))
+
+	_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+		as := tx.AuthStore()
+		sks := tx.SigningKeyStore()
+
+		newSigningKeyTestUser(t, as, "ruth")
+
+		// Create a proven published row, then unpublish + re-publish; the proof must round-trip unchanged
+		_, err := sks.Create(ctx, InsertSigningKeyInput{
+			ID:                          "id-r",
+			UserID:                      "ruth",
+			Algorithm:                   "ES256",
+			KeyLabel:                    "k",
+			JWK:                         `{}`,
+			PEM:                         "pem",
+			Published:                   true,
+			PublicationPayload:          "payload-bytes",
+			PublicationSignatureEs384:   "es-sig",
+			PublicationSignatureMldsa87: "ml-sig",
+		})
+		require.NoError(t, err)
+
+		_, err = sks.SetPublished(ctx, "ruth", "id-r", false)
+		require.NoError(t, err)
+
+		rec, err := sks.GetByID(ctx, "id-r")
+		require.NoError(t, err)
+		require.NotNil(t, rec)
+		require.Equal(t, "payload-bytes", rec.PublicationPayload, "SetPublished must preserve the stored proof")
+		require.False(t, rec.Published)
+
+		_, err = sks.SetPublished(ctx, "ruth", "id-r", true)
+		require.NoError(t, err)
+
+		recAfter, err := sks.GetByID(ctx, "id-r")
+		require.NoError(t, err)
+		require.NotNil(t, recAfter)
+		require.Equal(t, "payload-bytes", recAfter.PublicationPayload)
+		require.True(t, recAfter.Published)
+
+		return nil, nil
+	})
+}
+
+func TestSigningKeyStoreListForUserExposesProofFlag(t *testing.T) {
+	conn := newTestDatabase(t)
+	require.NoError(t, RunMigrations(t.Context(), conn, nil))
+
+	_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+		as := tx.AuthStore()
+		sks := tx.SigningKeyStore()
+
+		newSigningKeyTestUser(t, as, "sam")
+
+		// Auto-stored row, no proof
+		_, err := sks.AutoStoreUnpublished(ctx, InsertSigningKeyInput{
+			ID: "id-1", UserID: "sam", Algorithm: "ES256", KeyLabel: "auto",
+			JWK: `{}`, PEM: "pem",
+		})
+		require.NoError(t, err)
+
+		// User-created row with proof
+		_, err = sks.Create(ctx, InsertSigningKeyInput{
+			ID: "id-2", UserID: "sam", Algorithm: "ES256", KeyLabel: "proven",
+			JWK: `{}`, PEM: "pem", Published: true,
+			PublicationPayload:          "payload",
+			PublicationSignatureEs384:   "es",
+			PublicationSignatureMldsa87: "ml",
+		})
+		require.NoError(t, err)
+
+		items, err := sks.ListForUser(ctx, "sam")
+		require.NoError(t, err)
+		require.Len(t, items, 2)
+
+		var auto, proven PublishedSigningKeyListItem
+		for _, item := range items {
+			switch item.KeyLabel {
+			case "auto":
+				auto = item
+			case "proven":
+				proven = item
+			}
+		}
+		require.False(t, auto.HasProof, "auto-stored row must list HasProof=false")
+		require.True(t, proven.HasProof, "proven row must list HasProof=true")
 
 		return nil, nil
 	})

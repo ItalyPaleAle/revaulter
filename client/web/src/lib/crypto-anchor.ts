@@ -6,9 +6,14 @@
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 
-// Domain-separation prefixes — must match pkg/protocolv2/anchor.go exactly.
+// Domain-separation prefixes — must match pkg/protocolv2/anchor.go and signing-key-publication.go exactly
 const CRED_ATTEST_PREFIX = 'revaulter/v2/cred-attest\n'
 const PUBKEY_BUNDLE_PREFIX = 'revaulter/v2/pubkey-bundle\n'
+const SIGNING_KEY_PUBLICATION_PREFIX = 'revaulter/v2/signing-key-publication\n'
+
+// Version mirrored from pkg/protocolv2.SigningKeyPublicationVersion
+// Bump only when the canonical body shape changes in a backwards-incompatible way
+export const SIGNING_KEY_PUBLICATION_VERSION = 1
 
 // Fixed sizes mirrored from pkg/protocolv2.
 const P384_COORD_SIZE = 48
@@ -54,6 +59,18 @@ export type PubkeyBundlePayload = {
     anchorEs384Y: string
     anchorMldsa87PublicKey: string
     wrappedKeyEpoch: number
+}
+
+// SigningKeyPublicationPayload mirrors pkg/protocolv2.SigningKeyPublicationPayload
+// keyId is the JWK thumbprint already used as the row id, so the proof binds to a single canonical identifier
+export type SigningKeyPublicationPayload = {
+    userId: string
+    algorithm: string
+    keyLabel: string
+    keyId: string
+    wrappedKeyEpoch: number
+    createdAt: number
+    v: number
 }
 
 /**
@@ -352,6 +369,41 @@ export async function signPubkeyBundleHybrid(
 ): Promise<{ sigEs384: string; sigMldsa87: string }> {
     const msg = canonicalPubkeyBundleMessage(pubkeyBundlePayloadCanonicalBody(payload))
     return signHybrid(anchor, msg)
+}
+
+/**
+ * Serialize the signing-key-publication payload as ordered `key=value` lines separated by `\n`, with no trailing newline
+ * Field order must exactly match pkg/protocolv2.SigningKeyPublicationPayload canonical body
+ */
+export function signingKeyPublicationPayloadCanonicalBody(payload: SigningKeyPublicationPayload): string {
+    return [
+        `userId=${payload.userId}`,
+        `algorithm=${payload.algorithm}`,
+        `keyLabel=${payload.keyLabel}`,
+        `keyId=${payload.keyId}`,
+        `wrappedKeyEpoch=${payload.wrappedKeyEpoch}`,
+        `createdAt=${payload.createdAt}`,
+        `v=${payload.v}`,
+    ].join('\n')
+}
+
+function canonicalSigningKeyPublicationMessage(body: string): Uint8Array {
+    return new TextEncoder().encode(SIGNING_KEY_PUBLICATION_PREFIX + body)
+}
+
+/**
+ * Hybrid-sign a signing-key-publication payload. Both legs MUST succeed; the server's verifier rejects unless both ES384 and ML-DSA-87 check out
+ *
+ * Returns the canonical body string alongside the signatures so the caller can transmit the exact same bytes that were signed
+ */
+export async function signSigningKeyPublicationHybrid(
+    anchor: AnchorKeyPair,
+    payload: SigningKeyPublicationPayload
+): Promise<{ canonicalBody: string; sigEs384: string; sigMldsa87: string }> {
+    const canonicalBody = signingKeyPublicationPayloadCanonicalBody(payload)
+    const msg = canonicalSigningKeyPublicationMessage(canonicalBody)
+    const sig = await signHybrid(anchor, msg)
+    return { canonicalBody, ...sig }
 }
 
 async function signHybrid(anchor: AnchorKeyPair, msg: Uint8Array): Promise<{ sigEs384: string; sigMldsa87: string }> {

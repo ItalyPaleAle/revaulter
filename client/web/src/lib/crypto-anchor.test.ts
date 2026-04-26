@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
     type AttestationPayload,
+    SIGNING_KEY_PUBLICATION_VERSION,
+    type SigningKeyPublicationPayload,
     anchorEs384JwkToString,
     anchorFingerprint,
     anchorMldsa87PubToString,
@@ -14,6 +16,8 @@ import {
     serializeAnchorSecret,
     signCredentialAttestationHybrid,
     signPubkeyBundleHybrid,
+    signSigningKeyPublicationHybrid,
+    signingKeyPublicationPayloadCanonicalBody,
     unwrapAnchorKey,
     wrapAnchorKey,
 } from '$lib/crypto-anchor'
@@ -160,6 +164,44 @@ describe('hybrid attestation signatures', () => {
     it('serializes an ES384 JWK as alphabetical key=value lines', () => {
         const jwk = { kty: 'EC', crv: 'P-384', x: 'aaa', y: 'bbb' } as const
         expect(anchorEs384JwkToString(jwk)).toBe(['crv=P-384', 'kty=EC', 'x=aaa', 'y=bbb'].join('\n'))
+    })
+
+    it('signs publication payloads with both legs', async () => {
+        const kp = await generateAnchorKeyPair()
+        const sig = await signSigningKeyPublicationHybrid(kp, {
+            userId: 'u-1',
+            algorithm: 'ES256',
+            keyLabel: 'release-signing',
+            keyId: '0123456789abcdef',
+            wrappedKeyEpoch: 1,
+            createdAt: 1700000000,
+            v: SIGNING_KEY_PUBLICATION_VERSION,
+        })
+        expect(sig.sigEs384.length).toBeGreaterThan(120)
+        expect(sig.sigMldsa87.length).toBeGreaterThan(6000)
+    })
+
+    it('produces a stable canonical publication body matching the Go fixture', () => {
+        // This must byte-match the expected body in pkg/protocolv2/signing-key-publication_test.go::TestSigningKeyPublicationCanonicalBody
+        const payload: SigningKeyPublicationPayload = {
+            userId: 'user-pub-1',
+            algorithm: 'ES256',
+            keyLabel: 'release-signing',
+            keyId: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            wrappedKeyEpoch: 1,
+            createdAt: 1730000000,
+            v: 1,
+        }
+        const expected = [
+            'userId=user-pub-1',
+            'algorithm=ES256',
+            'keyLabel=release-signing',
+            'keyId=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            'wrappedKeyEpoch=1',
+            'createdAt=1730000000',
+            'v=1',
+        ].join('\n')
+        expect(signingKeyPublicationPayloadCanonicalBody(payload)).toBe(expected)
     })
 })
 

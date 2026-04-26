@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -27,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
@@ -43,6 +45,7 @@ const (
 )
 
 // doRequestKeyJSON sends an HTTP request to /v2/request/<suffix> with the request key in the Authorization header
+// The helper drains and closes the response body before returning, but the bodyclose linter can't see through the wrapper, so callers add `//nolint:bodyclose`
 func doRequestKeyJSON(t *testing.T, client *http.Client, method, suffix, requestKey string, body any) (*http.Response, map[string]any) {
 	t.Helper()
 
@@ -302,6 +305,8 @@ func TestServerV2APIListScopesToSignedInUser(t *testing.T) {
 	// The handler is API-to-server, so no session cookie is required
 	createRequest := func(t *testing.T, user *db.User, label string) string {
 		t.Helper()
+		// Body is drained and closed inside doRequestKeyJSON; the linter can't follow the wrapper
+		//nolint:bodyclose
 		res, out := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", user.RequestKey, newV2CreateRequestBody(label, "A256GCM", clientJWK))
 		require.Equal(t, http.StatusAccepted, res.StatusCode)
 		state, _ := out["state"].(string)
@@ -1059,6 +1064,94 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 		Value: token,
 		Path:  "/",
 	}, user
+}
+
+// testAnchorKeyPair holds the private halves of a hybrid anchor pair plus the wire-format pubkeys that match what FinalizeSignup stores
+// Used by tests that need to forge anchor-signed proofs (publication, attestation, ...) for an existing user
+type testAnchorKeyPair struct {
+	Es384Priv        *ecdsa.PrivateKey
+	Mldsa87Priv      *mldsa87.PrivateKey
+	Mldsa87Pub       *mldsa87.PublicKey
+	Mldsa87PubBytes  []byte
+	Es384JWKBody     string
+	Mldsa87PubBase64 string
+}
+
+// seedV2AnchorForUser provisions a hybrid anchor pair on an existing user (already created via seedV2SessionCookie)
+// Returns the priv keys so tests can sign publication or attestation proofs against the pinned anchor
+func seedV2AnchorForUser(t *testing.T, srv *Server, userID string) *testAnchorKeyPair {
+	t.Helper()
+
+	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	mlPubBytes, err := mlPub.MarshalBinary()
+	require.NoError(t, err)
+
+	es384JWK, err := protocolv2.ECP384PublicJWKFromECDSA(&esPriv.PublicKey)
+	require.NoError(t, err)
+	es384Body := es384JWK.CanonicalBody()
+	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPubBytes)
+
+	// Update the user record directly so tests can layer an anchor on top of seedV2SessionCookie without rerunning the full signup flow
+	_, err = srv.db.Exec(t.Context(),
+		`UPDATE v2_users SET anchor_es384_public_key = $1, anchor_mldsa87_public_key = $2 WHERE id = $3`,
+		es384Body, mlPubB64, userID,
+	)
+	require.NoError(t, err)
+
+	return &testAnchorKeyPair{
+		Es384Priv:        esPriv,
+		Mldsa87Priv:      mlPriv,
+		Mldsa87Pub:       mlPub,
+		Mldsa87PubBytes:  mlPubBytes,
+		Es384JWKBody:     es384Body,
+		Mldsa87PubBase64: mlPubB64,
+	}
+}
+
+// buildSigningKeyPublicationProof assembles a payload at server-now and signs it under the supplied anchor
+// Tests pass in the user ID, algorithm, key label, JWK thumbprint id, and current epoch — the server's verifier will compare each against its own copy
+func buildSigningKeyPublicationProof(t *testing.T, anchor *testAnchorKeyPair, userID, algorithm, keyLabel, keyID string, epoch int64) (payload, sigEsB64, sigMlB64 string) {
+	t.Helper()
+
+	return signSigningKeyPublication(t, anchor, &protocolv2.SigningKeyPublicationPayload{
+		UserID:          userID,
+		Algorithm:       algorithm,
+		KeyLabel:        keyLabel,
+		KeyID:           keyID,
+		WrappedKeyEpoch: epoch,
+		CreatedAt:       time.Now().Unix(),
+		V:               protocolv2.SigningKeyPublicationVersion,
+	})
+}
+
+// signSigningKeyPublication produces canonical-body + base64url ES384 + base64url ML-DSA-87 signatures for a publication payload
+// Tests use this to assemble a proof that the server's verifier will accept
+func signSigningKeyPublication(t *testing.T, anchor *testAnchorKeyPair, payload *protocolv2.SigningKeyPublicationPayload) (canonicalBody, sigEsB64, sigMlB64 string) {
+	t.Helper()
+
+	canonicalBody = payload.CanonicalBody()
+	msg := protocolv2.CanonicalSigningKeyPublicationMessage(payload)
+
+	digest := sha512.Sum384(msg)
+	r, s, err := ecdsa.Sign(rand.Reader, anchor.Es384Priv, digest[:])
+	require.NoError(t, err)
+	sig := make([]byte, protocolv2.ES384SignatureSize)
+	const half = protocolv2.ES384SignatureSize / 2
+	rBytes := r.Bytes()
+	sBytes := s.Bytes()
+	copy(sig[half-len(rBytes):half], rBytes)
+	copy(sig[protocolv2.ES384SignatureSize-len(sBytes):], sBytes)
+	sigEsB64 = base64.RawURLEncoding.EncodeToString(sig)
+
+	mlSig := make([]byte, protocolv2.MLDSA87SignatureSize)
+	err = mldsa87.SignTo(anchor.Mldsa87Priv, msg, nil, false, mlSig)
+	require.NoError(t, err)
+	sigMlB64 = base64.RawURLEncoding.EncodeToString(mlSig)
+
+	return canonicalBody, sigEsB64, sigMlB64
 }
 
 func startTestServer(t *testing.T, srv *Server) {

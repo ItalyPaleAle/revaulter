@@ -63,7 +63,8 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
-	aliceCookie, _ := seedV2SessionCookie(t, srv, "user-sign-1", "Alice")
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-sign-1", "Alice")
+	aliceAnchor := seedV2AnchorForUser(t, srv, aliceUser.ID)
 
 	doPost := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (int, http.Header, []byte) {
 		t.Helper()
@@ -103,23 +104,45 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 
 	km := newSigningKeyMaterial(t)
 
+	// Helper that builds a fresh proof bound to the specific (user, algorithm, label, keyId, epoch) tuple
+	buildProofFor := func(label, kid string) (string, string, string) {
+		return buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, label, kid, aliceUser.WrappedKeyEpoch)
+	}
+	mainPayload, mainSigEs, mainSigMl := buildProofFor("main", km.ID)
+
 	// Unauthenticated publish is rejected
 	status, _, _ := doPost(t, "/v2/api/signing-keys", map[string]any{
-		"algorithm": protocolv2.SigningAlgES256,
-		"keyLabel":  "main",
-		"jwk":       km.JWKJSON,
-		"pem":       km.PEM,
-		"published": true,
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "main",
+		"jwk":                         km.JWKJSON,
+		"pem":                         km.PEM,
+		"published":                   true,
+		"publicationPayload":          mainPayload,
+		"publicationSignatureEs384":   mainSigEs,
+		"publicationSignatureMldsa87": mainSigMl,
 	})
 	require.Equal(t, http.StatusUnauthorized, status)
 
-	// Successful create — returns 201 Created
+	// Publishing without a proof is rejected at the create handler
 	status, _, body := doPost(t, "/v2/api/signing-keys", map[string]any{
 		"algorithm": protocolv2.SigningAlgES256,
 		"keyLabel":  "main",
 		"jwk":       km.JWKJSON,
 		"pem":       km.PEM,
 		"published": true,
+	}, aliceCookie)
+	require.Equal(t, http.StatusBadRequest, status, "publishing without a proof must be rejected: %s", body)
+
+	// Successful create — returns 201 Created
+	status, _, body = doPost(t, "/v2/api/signing-keys", map[string]any{
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "main",
+		"jwk":                         km.JWKJSON,
+		"pem":                         km.PEM,
+		"published":                   true,
+		"publicationPayload":          mainPayload,
+		"publicationSignatureEs384":   mainSigEs,
+		"publicationSignatureMldsa87": mainSigMl,
 	}, aliceCookie)
 	require.Equal(t, http.StatusCreated, status, "unexpected body: %s", body)
 	var pubResp map[string]any
@@ -130,12 +153,16 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 	require.Equal(t, true, pubResp["published"])
 
 	// A second create for the same (algorithm, keyLabel) is rejected with 409 — insert-only semantics
+	dupPayload, dupSigEs, dupSigMl := buildProofFor("main", km.ID)
 	status, _, body = doPost(t, "/v2/api/signing-keys", map[string]any{
-		"algorithm": protocolv2.SigningAlgES256,
-		"keyLabel":  "main",
-		"jwk":       km.JWKJSON,
-		"pem":       km.PEM,
-		"published": true,
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "main",
+		"jwk":                         km.JWKJSON,
+		"pem":                         km.PEM,
+		"published":                   true,
+		"publicationPayload":          dupPayload,
+		"publicationSignatureEs384":   dupSigEs,
+		"publicationSignatureMldsa87": dupSigMl,
 	}, aliceCookie)
 	require.Equal(t, http.StatusConflict, status, "unexpected body: %s", body)
 
@@ -157,6 +184,12 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 	require.NoError(t, json.Unmarshal(km.JWKJSON, &origJWK))
 	require.NoError(t, json.Unmarshal(jwkOut, &returnedJWK))
 	require.Equal(t, origJWK, returnedJWK)
+	// The public JSON also carries the publication proof and the user's anchor pubkeys so external clients can verify the binding
+	require.Equal(t, mainPayload, jwkResp["publicationPayload"])
+	require.Equal(t, mainSigEs, jwkResp["publicationSignatureEs384"])
+	require.Equal(t, mainSigMl, jwkResp["publicationSignatureMldsa87"])
+	require.Equal(t, aliceAnchor.Es384JWKBody, jwkResp["anchorEs384PublicKey"])
+	require.Equal(t, aliceAnchor.Mldsa87PubBase64, jwkResp["anchorMldsa87PublicKey"])
 
 	// Unauthenticated PEM fetch returns the stored bytes verbatim as application/x-pem-file
 	status, header, body = doGet(t, "/v2/signing-keys/"+km.ID+".pem")
@@ -277,12 +310,16 @@ func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, status)
 
 	// After delete, Alice can re-create under the same (algorithm, keyLabel)
+	rePayload, reSigEs, reSigMl := buildProofFor("main", km.ID)
 	status, _, body = doPost(t, "/v2/api/signing-keys", map[string]any{
-		"algorithm": protocolv2.SigningAlgES256,
-		"keyLabel":  "main",
-		"jwk":       km.JWKJSON,
-		"pem":       km.PEM,
-		"published": true,
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "main",
+		"jwk":                         km.JWKJSON,
+		"pem":                         km.PEM,
+		"published":                   true,
+		"publicationPayload":          rePayload,
+		"publicationSignatureEs384":   reSigEs,
+		"publicationSignatureMldsa87": reSigMl,
 	}, aliceCookie)
 	require.Equal(t, http.StatusCreated, status, "unexpected body: %s", body)
 }
@@ -361,6 +398,7 @@ func TestServerV2SigningKeyAutoStoreOnSign(t *testing.T) {
 	client := clientForListener(srv.appListener)
 
 	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-auto-sign", "Alice")
+	aliceAnchor := seedV2AnchorForUser(t, srv, aliceUser.ID)
 
 	doPost := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (int, []byte) {
 		t.Helper()
@@ -418,6 +456,8 @@ func TestServerV2SigningKeyAutoStoreOnSign(t *testing.T) {
 	// Create a sign request; keyLabel is the discriminator the auto-store keys on
 	keyLabel := "auto-sign-label"
 	createBody := newV2CreateRequestBody(keyLabel, protocolv2.SigningAlgES256, clientJWK)
+	// Body is drained and closed inside doRequestKeyJSON; the linter can't follow the wrapper
+	//nolint:bodyclose
 	createRes, createResp := doRequestKeyJSON(t, client, http.MethodPost, "sign", aliceUser.RequestKey, createBody)
 	require.Equal(t, http.StatusAccepted, createRes.StatusCode, "unexpected body: %v", createResp)
 	state, _ := createResp["state"].(string)
@@ -462,17 +502,31 @@ func TestServerV2SigningKeyAutoStoreOnSign(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, status)
 
 	// Posting the same material via create is rejected with 409 under insert-only semantics — promotion is done via SetPublished on the :id route
+	dupPayload, dupSigEs, dupSigMl := buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, keyLabel, km.ID, aliceUser.WrappedKeyEpoch)
 	status, body = doPost(t, "/v2/api/signing-keys", map[string]any{
-		"algorithm": protocolv2.SigningAlgES256,
-		"keyLabel":  keyLabel,
-		"jwk":       km.JWKJSON,
-		"pem":       km.PEM,
-		"published": true,
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    keyLabel,
+		"jwk":                         km.JWKJSON,
+		"pem":                         km.PEM,
+		"published":                   true,
+		"publicationPayload":          dupPayload,
+		"publicationSignatureEs384":   dupSigEs,
+		"publicationSignatureMldsa87": dupSigMl,
 	}, aliceCookie)
 	require.Equal(t, http.StatusConflict, status, "unexpected body: %s", body)
 
-	// Promote the auto-stored row via POST /v2/api/signing-keys/:id with {published:true}
-	status, body = doPost(t, "/v2/api/signing-keys/"+km.ID, map[string]any{"published": true}, aliceCookie)
+	// Promoting the unproven auto-stored row to published requires a fresh proof on the request
+	bareStatus, _ := doPost(t, "/v2/api/signing-keys/"+km.ID, map[string]any{"published": true}, aliceCookie)
+	require.Equal(t, http.StatusBadRequest, bareStatus, "POST /:id without proof must be rejected when the row has none")
+
+	// Promote the auto-stored row via POST /v2/api/signing-keys/:id with {published:true} + a publication proof
+	promotePayload, promoteSigEs, promoteSigMl := buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, keyLabel, km.ID, aliceUser.WrappedKeyEpoch)
+	status, body = doPost(t, "/v2/api/signing-keys/"+km.ID, map[string]any{
+		"published":                   true,
+		"publicationPayload":          promotePayload,
+		"publicationSignatureEs384":   promoteSigEs,
+		"publicationSignatureMldsa87": promoteSigMl,
+	}, aliceCookie)
 	require.Equal(t, http.StatusOK, status, "unexpected body: %s", body)
 	var pubResp map[string]any
 	require.NoError(t, json.Unmarshal(body, &pubResp))
@@ -515,6 +569,8 @@ func TestServerV2SigningKeyAutoStoreSkippedOnNonSign(t *testing.T) {
 	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
 	require.NoError(t, err)
 
+	// Body is drained and closed inside doRequestKeyJSON; the linter can't follow the wrapper
+	//nolint:bodyclose
 	res, createResp := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
 	require.Equal(t, http.StatusAccepted, res.StatusCode, "unexpected body: %v", createResp)
 	state, _ := createResp["state"].(string)
@@ -573,19 +629,24 @@ func TestServerV2SigningKeyUniqueLabelRejectsDuplicate(t *testing.T) {
 	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
-	aliceCookie, _ := seedV2SessionCookie(t, srv, "duplicate-user", "Alice")
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "duplicate-user", "Alice")
+	aliceAnchor := seedV2AnchorForUser(t, srv, aliceUser.ID)
 
 	km1 := newSigningKeyMaterial(t)
 	km2 := newSigningKeyMaterial(t)
 	require.NotEqual(t, km1.ID, km2.ID)
 
 	create := func(km testSigningKeyMaterial) int {
+		payload, sigEs, sigMl := buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, "shared", km.ID, aliceUser.WrappedKeyEpoch)
 		body, err := json.Marshal(map[string]any{
-			"algorithm": protocolv2.SigningAlgES256,
-			"keyLabel":  "shared",
-			"jwk":       km.JWKJSON,
-			"pem":       km.PEM,
-			"published": true,
+			"algorithm":                   protocolv2.SigningAlgES256,
+			"keyLabel":                    "shared",
+			"jwk":                         km.JWKJSON,
+			"pem":                         km.PEM,
+			"published":                   true,
+			"publicationPayload":          payload,
+			"publicationSignatureEs384":   sigEs,
+			"publicationSignatureMldsa87": sigMl,
 		})
 		require.NoError(t, err)
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/api/signing-keys", testServerPort), bytes.NewReader(body))
@@ -649,6 +710,7 @@ func TestServerV2SigningKeyGetForUser(t *testing.T) {
 	client := clientForListener(srv.appListener)
 
 	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-get-sign", "Alice")
+	aliceAnchor := seedV2AnchorForUser(t, srv, aliceUser.ID)
 	eveCookie, _ := seedV2SessionCookie(t, srv, "user-get-sign-eve", "Eve")
 
 	doGet := func(t *testing.T, path string, cookies ...*http.Cookie) (int, []byte) {
@@ -689,12 +751,16 @@ func TestServerV2SigningKeyGetForUser(t *testing.T) {
 
 	// A fresh created key must be fetchable via the authenticated GET endpoint
 	published := newSigningKeyMaterial(t)
+	pubPayload, pubSigEs, pubSigMl := buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, "get-published", published.ID, aliceUser.WrappedKeyEpoch)
 	status, body := doPost(t, "/v2/api/signing-keys", map[string]any{
-		"algorithm": protocolv2.SigningAlgES256,
-		"keyLabel":  "get-published",
-		"jwk":       published.JWKJSON,
-		"pem":       published.PEM,
-		"published": true,
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "get-published",
+		"jwk":                         published.JWKJSON,
+		"pem":                         published.PEM,
+		"published":                   true,
+		"publicationPayload":          pubPayload,
+		"publicationSignatureEs384":   pubSigEs,
+		"publicationSignatureMldsa87": pubSigMl,
 	}, aliceCookie)
 	require.Equal(t, http.StatusCreated, status, "unexpected body: %s", body)
 
@@ -734,6 +800,8 @@ func TestServerV2SigningKeyGetForUser(t *testing.T) {
 	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
 	require.NoError(t, err)
 	createBody := newV2CreateRequestBody("get-auto", protocolv2.SigningAlgES256, clientJWK)
+	// Body is drained and closed inside doRequestKeyJSON; the linter can't follow the wrapper
+	//nolint:bodyclose
 	createRes, createResp := doRequestKeyJSON(t, client, http.MethodPost, "sign", aliceUser.RequestKey, createBody)
 	require.Equal(t, http.StatusAccepted, createRes.StatusCode, "unexpected body: %v", createResp)
 	state, _ := createResp["state"].(string)
@@ -766,4 +834,269 @@ func TestServerV2SigningKeyGetForUser(t *testing.T) {
 	// Eve cannot reach the auto-stored row either
 	status, _ = doGet(t, "/v2/api/signing-keys/"+auto.ID, eveCookie)
 	require.Equal(t, http.StatusNotFound, status)
+}
+
+// TestServerV2SigningKeyProofRejectsTampered confirms that the proof verifier rejects payloads bound to mismatched fields, stale createdAt, and bad signatures
+func TestServerV2SigningKeyProofRejectsTampered(t *testing.T) {
+	setTestConfig(t, "v2-signing-keys-proof-rejects.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-proof-rej", "Alice")
+	aliceAnchor := seedV2AnchorForUser(t, srv, aliceUser.ID)
+
+	doPost := func(t *testing.T, body any) (int, []byte) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/api/signing-keys", testServerPort), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(aliceCookie)
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer res.Body.Close()
+		raw, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		return res.StatusCode, raw
+	}
+
+	km := newSigningKeyMaterial(t)
+
+	// Build a wrong-keyId payload (signed but for a different thumbprint)
+	other := newSigningKeyMaterial(t)
+	wrongKidPayload, wrongKidSigEs, wrongKidSigMl := buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, "rej", other.ID, aliceUser.WrappedKeyEpoch)
+	status, body := doPost(t, map[string]any{
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "rej",
+		"jwk":                         km.JWKJSON,
+		"pem":                         km.PEM,
+		"published":                   true,
+		"publicationPayload":          wrongKidPayload,
+		"publicationSignatureEs384":   wrongKidSigEs,
+		"publicationSignatureMldsa87": wrongKidSigMl,
+	})
+	require.Equal(t, http.StatusBadRequest, status, "wrong keyId must be rejected: %s", body)
+
+	// Stale createdAt (outside ±2 min window): handcraft a payload + signature
+	stalePayload := &protocolv2.SigningKeyPublicationPayload{
+		UserID:          aliceUser.ID,
+		Algorithm:       protocolv2.SigningAlgES256,
+		KeyLabel:        "rej",
+		KeyID:           km.ID,
+		WrappedKeyEpoch: aliceUser.WrappedKeyEpoch,
+		CreatedAt:       time.Now().Add(-10 * time.Minute).Unix(),
+		V:               protocolv2.SigningKeyPublicationVersion,
+	}
+	staleBody, staleEs, staleMl := signSigningKeyPublication(t, aliceAnchor, stalePayload)
+	status, body = doPost(t, map[string]any{
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "rej",
+		"jwk":                         km.JWKJSON,
+		"pem":                         km.PEM,
+		"published":                   true,
+		"publicationPayload":          staleBody,
+		"publicationSignatureEs384":   staleEs,
+		"publicationSignatureMldsa87": staleMl,
+	})
+	require.Equal(t, http.StatusBadRequest, status, "stale createdAt must be rejected: %s", body)
+
+	// Tampered signature: mutate one byte after signing
+	goodPayload, goodSigEs, _ := buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, "rej", km.ID, aliceUser.WrappedKeyEpoch)
+	status, body = doPost(t, map[string]any{
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "rej",
+		"jwk":                         km.JWKJSON,
+		"pem":                         km.PEM,
+		"published":                   true,
+		"publicationPayload":          goodPayload,
+		"publicationSignatureEs384":   goodSigEs,
+		"publicationSignatureMldsa87": "AAAA",
+	})
+	require.Equal(t, http.StatusBadRequest, status, "bad ML-DSA signature must be rejected: %s", body)
+}
+
+// TestServerV2SigningKeyEpochRotationKeepsExistingProof confirms the published-toggle invariant across rotations:
+//   - storing a proof and publishing succeeds at epoch N
+//   - after AdvanceWrappedKeyEpoch, SetPublished still works without re-signing (the stored proof is trusted once persisted)
+//   - after rotation, a new key requires a proof signed against the new epoch
+func TestServerV2SigningKeyEpochRotationKeepsExistingProof(t *testing.T) {
+	setTestConfig(t, "v2-signing-keys-epoch.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-epoch", "Alice")
+	aliceAnchor := seedV2AnchorForUser(t, srv, aliceUser.ID)
+
+	doPost := func(t *testing.T, path string, body any) (int, []byte) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(aliceCookie)
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer res.Body.Close()
+		raw, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		return res.StatusCode, raw
+	}
+	doGet := func(t *testing.T, path string) (int, []byte) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), nil)
+		require.NoError(t, err)
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer res.Body.Close()
+		raw, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		return res.StatusCode, raw
+	}
+
+	km := newSigningKeyMaterial(t)
+	payload, sigEs, sigMl := buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, "epoch-key", km.ID, aliceUser.WrappedKeyEpoch)
+
+	status, body := doPost(t, "/v2/api/signing-keys", map[string]any{
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "epoch-key",
+		"jwk":                         km.JWKJSON,
+		"pem":                         km.PEM,
+		"published":                   true,
+		"publicationPayload":          payload,
+		"publicationSignatureEs384":   sigEs,
+		"publicationSignatureMldsa87": sigMl,
+	})
+	require.Equal(t, http.StatusCreated, status, "unexpected body: %s", body)
+
+	// Rotate the user's epoch directly via the AuthStore — a real rotation happens on credential add or wrapped-key update
+	_, err := srv.db.AuthStore().AdvanceWrappedKeyEpoch(t.Context(), aliceUser.ID)
+	require.NoError(t, err)
+
+	// SetPublished(false) → SetPublished(true) on the proven row must keep working — the stored proof was verified at insert time and is no longer re-checked
+	status, body = doPost(t, "/v2/api/signing-keys/"+km.ID, map[string]any{"published": false})
+	require.Equal(t, http.StatusOK, status, "unpublishing a proven row must not re-verify the proof: %s", body)
+
+	status, body = doPost(t, "/v2/api/signing-keys/"+km.ID, map[string]any{"published": true})
+	require.Equal(t, http.StatusOK, status, "re-publishing a proven row must not re-verify the proof: %s", body)
+
+	status, _ = doGet(t, "/v2/signing-keys/"+km.ID+".jwk")
+	require.Equal(t, http.StatusOK, status, "public endpoint must still serve the proven row across rotations")
+
+	// Creating a brand-new row now requires a proof signed against the new epoch (the old epoch is not accepted)
+	other := newSigningKeyMaterial(t)
+	oldEpochPayload, oldEpochSigEs, oldEpochSigMl := buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, "after-rotation", other.ID, aliceUser.WrappedKeyEpoch)
+	status, _ = doPost(t, "/v2/api/signing-keys", map[string]any{
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "after-rotation",
+		"jwk":                         other.JWKJSON,
+		"pem":                         other.PEM,
+		"published":                   true,
+		"publicationPayload":          oldEpochPayload,
+		"publicationSignatureEs384":   oldEpochSigEs,
+		"publicationSignatureMldsa87": oldEpochSigMl,
+	})
+	require.Equal(t, http.StatusBadRequest, status, "a fresh row needs a proof signed against the new epoch")
+
+	// Sign with the new epoch and the create succeeds
+	newEpoch := aliceUser.WrappedKeyEpoch + 1
+	newPayload, newSigEs, newSigMl := buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, "after-rotation", other.ID, newEpoch)
+	status, body = doPost(t, "/v2/api/signing-keys", map[string]any{
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "after-rotation",
+		"jwk":                         other.JWKJSON,
+		"pem":                         other.PEM,
+		"published":                   true,
+		"publicationPayload":          newPayload,
+		"publicationSignatureEs384":   newSigEs,
+		"publicationSignatureMldsa87": newSigMl,
+	})
+	require.Equal(t, http.StatusCreated, status, "unexpected body: %s", body)
+}
+
+// TestServerV2SigningKeyAutoStoreCannotOverwriteProvenUnpublished mirrors the DB-layer test at the HTTP boundary
+// A proven-but-unpublished row must lock the slot just as effectively as a published row
+func TestServerV2SigningKeyAutoStoreCannotOverwriteProvenUnpublished(t *testing.T) {
+	setTestConfig(t, "v2-signing-keys-proven-unpublished.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-proven-unpub", "Alice")
+	aliceAnchor := seedV2AnchorForUser(t, srv, aliceUser.ID)
+
+	doPost := func(t *testing.T, path string, body any) (int, []byte) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(aliceCookie)
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer res.Body.Close()
+		raw, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		return res.StatusCode, raw
+	}
+
+	km := newSigningKeyMaterial(t)
+	payload, sigEs, sigMl := buildSigningKeyPublicationProof(t, aliceAnchor, aliceUser.ID, protocolv2.SigningAlgES256, "locked", km.ID, aliceUser.WrappedKeyEpoch)
+
+	// Create as proven-but-unpublished
+	status, body := doPost(t, "/v2/api/signing-keys", map[string]any{
+		"algorithm":                   protocolv2.SigningAlgES256,
+		"keyLabel":                    "locked",
+		"jwk":                         km.JWKJSON,
+		"pem":                         km.PEM,
+		"published":                   false,
+		"publicationPayload":          payload,
+		"publicationSignatureEs384":   sigEs,
+		"publicationSignatureMldsa87": sigMl,
+	})
+	require.Equal(t, http.StatusCreated, status, "unexpected body: %s", body)
+
+	// Now exercise the auto-store path with a hostile thumbprint and confirm it cannot overwrite the proven row
+	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
+	require.NoError(t, err)
+
+	createBody := newV2CreateRequestBody("locked", protocolv2.SigningAlgES256, clientJWK)
+	// Body is drained and closed inside doRequestKeyJSON; the linter can't follow the wrapper
+	//nolint:bodyclose
+	createRes, createResp := doRequestKeyJSON(t, client, http.MethodPost, "sign", aliceUser.RequestKey, createBody)
+	require.Equal(t, http.StatusAccepted, createRes.StatusCode, "unexpected body: %v", createResp)
+	state, _ := createResp["state"].(string)
+	require.NotEmpty(t, state)
+
+	hostile := newSigningKeyMaterial(t)
+	browserPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
+	require.NoError(t, err)
+	confirmStatus, confirmBody := doPost(t, "/v2/api/confirm", map[string]any{
+		"state":            state,
+		"confirm":          true,
+		"responseEnvelope": newV2ResponseEnvelope(browserJWK),
+		"publicKey": map[string]any{
+			"jwk": hostile.JWKJSON,
+			"pem": hostile.PEM,
+		},
+	})
+	require.Equal(t, http.StatusOK, confirmStatus, "unexpected body: %s", confirmBody)
+
+	// The proven slot must still hold the original material — the hostile thumbprint never made it in
+	getStatus, getBody := doPost(t, "/v2/api/signing-keys/"+km.ID, map[string]any{"published": true})
+	require.Equal(t, http.StatusOK, getStatus, "unexpected body: %s", getBody)
 }

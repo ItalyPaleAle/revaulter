@@ -86,8 +86,17 @@ export type V2PublishedSigningKey = {
     algorithm: string
     keyLabel: string
     published: boolean
+    hasProof: boolean
     createdAt: string
     updatedAt: string
+}
+
+// Optional fields the client sends to authorize publishing a signing key
+// All three fields are required together; partial sets are rejected by the server
+export type V2SigningKeyPublicationProof = {
+    publicationPayload: string
+    publicationSignatureEs384: string
+    publicationSignatureMldsa87: string
 }
 
 export type DerivedSigningKey = {

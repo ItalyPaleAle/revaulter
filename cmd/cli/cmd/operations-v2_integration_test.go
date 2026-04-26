@@ -78,7 +78,11 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/pubkey"):
-			require.Equal(t, "Bearer request-key-123", r.Header.Get("Authorization"))
+			authHeader := r.Header.Get("Authorization")
+			if authHeader != "Bearer request-key-123" {
+				http.Error(w, "missing or wrong Authorization header: "+authHeader, http.StatusUnauthorized)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			ecdhJSON, _ := json.Marshal(userStaticEcdhPubJWK)
 			resp := map[string]any{
@@ -92,7 +96,11 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 			}
 
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/encrypt"):
-			require.Equal(t, "Bearer request-key-123", r.Header.Get("Authorization"))
+			authHeader := r.Header.Get("Authorization")
+			if authHeader != "Bearer request-key-123" {
+				http.Error(w, "missing or wrong Authorization header: "+authHeader, http.StatusUnauthorized)
+				return
+			}
 			defer r.Body.Close()
 			createSeen.Store(true)
 
@@ -429,7 +437,11 @@ func TestV2OperationCmdSignAndVerify(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/pubkey"):
-			require.Equal(t, "Bearer request-key-sign", r.Header.Get("Authorization"))
+			authHeader := r.Header.Get("Authorization")
+			if authHeader != "Bearer request-key-sign" {
+				http.Error(w, "missing or wrong Authorization header: "+authHeader, http.StatusUnauthorized)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			ecdhJSON, _ := json.Marshal(userStaticEcdhPubJWK)
 			resp := map[string]any{
@@ -443,7 +455,11 @@ func TestV2OperationCmdSignAndVerify(t *testing.T) {
 			}
 
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/sign"):
-			require.Equal(t, "Bearer request-key-sign", r.Header.Get("Authorization"))
+			authHeader := r.Header.Get("Authorization")
+			if authHeader != "Bearer request-key-sign" {
+				http.Error(w, "missing or wrong Authorization header: "+authHeader, http.StatusUnauthorized)
+				return
+			}
 			defer r.Body.Close()
 			createSeen.Store(true)
 

@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS v2_published_signing_keys (
 	jwk TEXT NOT NULL,
 	pem TEXT NOT NULL,
 	published INTEGER NOT NULL DEFAULT 0,
+	publication_payload TEXT NOT NULL DEFAULT '',
+	publication_signature_es384 TEXT NOT NULL DEFAULT '',
+	publication_signature_mldsa87 TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );

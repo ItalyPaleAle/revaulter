@@ -20,12 +20,14 @@ import {
 } from '$lib/crypto'
 import {
     type AnchorKeyPair,
+    SIGNING_KEY_PUBLICATION_VERSION,
     anchorEs384JwkToString,
     anchorMldsa87PubToString,
     generateAnchorKeyPair,
     serializeAnchorSecret,
     signCredentialAttestationHybrid,
     signPubkeyBundleHybrid,
+    signSigningKeyPublicationHybrid,
     unwrapAnchorKey,
     wrapAnchorKey,
 } from '$lib/crypto-anchor'
@@ -674,10 +676,38 @@ async function doPublishSigningKey(derived: DerivedSigningKey) {
     settingsError = null
     settingsSuccess = null
     try {
-        // If the row already exists (auto-stored on derive or from a prior sign), flip the flag without resubmitting the key material
+        if (!sessionAnchor || !session) {
+            throw new Error('Anchor key is not available — please sign in again to publish a signing key.')
+        }
+
+        // The publication proof binds the canonical body the server stores to the anchor pinned at registration
+        // We always sign at publish time (and on re-publish if the row has no stored proof), so the server can verify the binding without trusting the browser
         const known = signingKeys.find((k) => k.id === derived.id)
+        const needsFreshProof = !known || !known.hasProof
+
+        let proof:
+            | { publicationPayload: string; publicationSignatureEs384: string; publicationSignatureMldsa87: string }
+            | undefined
+        if (needsFreshProof) {
+            const signed = await signSigningKeyPublicationHybrid(sessionAnchor, {
+                userId: session.userId,
+                algorithm: derived.algorithm,
+                keyLabel: derived.keyLabel,
+                keyId: derived.id,
+                wrappedKeyEpoch: session.wrappedKeyEpoch,
+                createdAt: Math.floor(Date.now() / 1000),
+                v: SIGNING_KEY_PUBLICATION_VERSION,
+            })
+            proof = {
+                publicationPayload: signed.canonicalBody,
+                publicationSignatureEs384: signed.sigEs384,
+                publicationSignatureMldsa87: signed.sigMldsa87,
+            }
+        }
+
         if (known) {
-            await v2SetSigningKeyPublished(derived.id, true)
+            // Existing row: send proof only when it is missing one — otherwise the toggle is a flag flip
+            await v2SetSigningKeyPublished(derived.id, true, proof)
         } else {
             await v2CreateSigningKey({
                 algorithm: derived.algorithm,
@@ -685,6 +715,7 @@ async function doPublishSigningKey(derived: DerivedSigningKey) {
                 jwk: derived.jwk,
                 pem: derived.pem,
                 published: true,
+                proof,
             })
         }
         await doLoadSigningKeys()

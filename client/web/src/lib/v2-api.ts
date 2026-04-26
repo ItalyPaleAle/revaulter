@@ -14,6 +14,7 @@ import type {
     V2ResponseEnvelope,
     V2SessionResponse,
     V2SigningJwk,
+    V2SigningKeyPublicationProof,
 } from '$lib/v2-types'
 
 /** Starts the public registration flow and returns the WebAuthn challenge/options payload */
@@ -245,6 +246,7 @@ export async function v2GetSigningKey(id: string) {
 /** Creates a new signing key for the current user
  * The server rejects the request with 409 Conflict if a key already exists for the same `(algorithm, keyLabel)`
  * `published=true` exposes the key via the public endpoint; `published=false` stores it but keeps the public endpoint hidden
+ * A publication proof is required when `published=true` and optional otherwise; the proof locks the slot for later promotion without re-signing
  */
 export async function v2CreateSigningKey(args: {
     algorithm: string
@@ -252,17 +254,22 @@ export async function v2CreateSigningKey(args: {
     jwk: V2SigningJwk
     pem: string
     published: boolean
+    proof?: V2SigningKeyPublicationProof
 }) {
+    const { proof, ...rest } = args
     const res = await Request<V2PublishedSigningKey>('/v2/api/signing-keys', {
-        postData: args,
+        postData: { ...rest, ...(proof ?? {}) },
     })
     return res.data
 }
 
-/** Flips the published flag on an existing signing key without resubmitting the key material */
-export async function v2SetSigningKeyPublished(id: string, published: boolean) {
+/** Flips the published flag on an existing signing key
+ * If the row already has a stored publication proof, no fresh proof is required to re-publish
+ * If the row has no stored proof, publishing requires a fresh proof in `proof`
+ */
+export async function v2SetSigningKeyPublished(id: string, published: boolean, proof?: V2SigningKeyPublicationProof) {
     const res = await Request<V2PublishedSigningKey>(`/v2/api/signing-keys/${encodeURIComponent(id)}`, {
-        postData: { published },
+        postData: { published, ...(proof ?? {}) },
     })
     return res.data
 }
