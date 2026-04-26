@@ -309,6 +309,15 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 		return
 	}
 
+	// Honour the session JWT's expiry: once the deadline elapses we close the stream so the client reconnects, hits the session middleware, and gets a 401 that drives it back to sign-in
+	// Without this, a long-lived NDJSON connection would keep streaming forever even after the JWT it was opened with expired
+	sessionTTL := c.GetInt(contextKeySessionTTL)
+	if sessionTTL <= 0 {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Session expired"))
+		return
+	}
+	sessionDeadline := time.After(time.Duration(sessionTTL) * time.Second)
+
 	// List currently-pending items
 	rs := s.db.RequestStore()
 	list, err := rs.ListPending(c.Request.Context(), userID)
@@ -394,6 +403,10 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 				hasData = false
 			}
 			flushCh = nil
+
+		case <-sessionDeadline:
+			// Session expired mid-stream — close so the client reconnects and gets 401 from the session middleware
+			return
 
 		case <-c.Request.Context().Done():
 			// Request is done
