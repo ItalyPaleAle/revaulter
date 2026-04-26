@@ -77,9 +77,9 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
 	cmd.Flags().BoolVar(&f.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 
-	cmd.Flags().StringVar(&f.RequestKey, "request-key", "", "Per-user request key used to route the request")
+	cmd.Flags().StringVarP(&f.RequestKey, "request-key", "k", "", "Per-user request key used to route the request")
 	_ = cmd.MarkFlagRequired("request-key")
-	cmd.Flags().StringVar(&f.KeyLabel, "key-label", "", "Logical key label used for v2 key derivation")
+	cmd.Flags().StringVarP(&f.KeyLabel, "key-label", "l", "", "Logical key label used for v2 key derivation")
 	_ = cmd.MarkFlagRequired("key-label")
 	cmd.Flags().StringVarP(&f.Algorithm, "algorithm", "a", "", "algorithm identifier")
 	_ = cmd.MarkFlagRequired("algorithm")
@@ -160,8 +160,8 @@ type v2OperationFlagsEncrypt struct {
 func (f *v2OperationFlagsEncrypt) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
 	cmd.Flag("format").Usage = "Output format: 'json' (only)"
-	cmd.Flags().StringVar(&f.Message, "message", "", "The message to encrypt as a raw string (UTF-8). Mutually exclusive with --input and --json")
-	cmd.Flags().StringVar(&f.Input, "input", "", "Path to the message file to encrypt; use '-' to read from stdin. Mutually exclusive with --message and --json")
+	cmd.Flags().StringVarP(&f.Message, "message", "m", "", "The message to encrypt as a raw string (UTF-8). Mutually exclusive with --input and --json")
+	cmd.Flags().StringVarP(&f.Input, "input", "i", "", "Path to the message file to encrypt; use '-' to read from stdin. Mutually exclusive with --message and --json")
 	cmd.Flags().StringVar(&f.JSON, "json", "", `Path to a JSON file (use '-' to read from stdin) of shape {"value":"<base64url>","additionalData":"<base64url>"}. Mutually exclusive with --message, --input, and --aad`)
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data, base64-encoded (when not using --json)")
 	cmd.MarkFlagsMutuallyExclusive("message", "input", "json")
@@ -307,11 +307,11 @@ type v2OperationFlagsDecrypt struct {
 func (f *v2OperationFlagsDecrypt) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
 	cmd.Flag("format").Usage = "Output format: 'json' (default: JSON envelope) or 'raw' (write the decrypted plaintext as raw bytes)"
-	cmd.Flags().Var(&f.Value, "value", "The message to decrypt, base64-encoded (when not using --json)")
-	cmd.Flags().Var(&f.Tag, "tag", "Authentication tag, base64-encoded (when not using --json)")
+	cmd.Flags().VarP(&f.Value, "value", "m", "The message to decrypt, base64-encoded (when not using --json)")
+	cmd.Flags().VarP(&f.Tag, "tag", "g", "Authentication tag, base64-encoded (when not using --json)")
 	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce/IV, base64-encoded (when not using --json)")
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data, base64-encoded (when not using --json)")
-	cmd.Flags().StringVar(&f.JSON, "json", "", `Path to a JSON file (use '-' to read from stdin) in the shape produced by "encrypt": {"value":"<base64url>","nonce":"<base64url>","tag":"<base64url>","additionalData":"<base64url>"}. Mutually exclusive with --value, --tag, --nonce, and --aad`)
+	cmd.Flags().StringVarP(&f.JSON, "json", "j", "", `Path to a JSON file (use '-' to read from stdin) in the shape produced by "encrypt": {"value":"<base64url>","nonce":"<base64url>","tag":"<base64url>","additionalData":"<base64url>"}. Mutually exclusive with --value, --tag, --nonce, and --aad`)
 	cmd.MarkFlagsMutuallyExclusive("json", "value")
 	cmd.MarkFlagsMutuallyExclusive("json", "tag")
 	cmd.MarkFlagsMutuallyExclusive("json", "nonce")
@@ -428,8 +428,8 @@ type v2OperationFlagsSign struct {
 func (f *v2OperationFlagsSign) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
 	cmd.Flag("format").Usage = "Output format: 'json' (default: JSON envelope with base64url r||s signature), 'jws' (compact JWS string), or 'raw' (64-byte r||s signature). 'jws' requires --input"
-	cmd.Flags().StringVar(&f.Input, "input", "", "Path to the message file to sign; use '-' to read from stdin")
-	cmd.Flags().StringVar(&f.Digest, "digest", "", "Pre-computed SHA-256 digest (hex or base64url, 32 bytes)")
+	cmd.Flags().StringVarP(&f.Input, "input", "i", "", "Path to the message file to sign; use '-' to read from stdin")
+	cmd.Flags().StringVarP(&f.Digest, "digest", "d", "", "Pre-computed SHA-256 digest (hex or base64url, 32 bytes)")
 	cmd.Flags().StringVar(&f.JwsHeader, "jws-header", "", "Optional JSON fragment merged into the default protected header when building a JWS from --input")
 	cmd.MarkFlagsMutuallyExclusive("input", "digest")
 }

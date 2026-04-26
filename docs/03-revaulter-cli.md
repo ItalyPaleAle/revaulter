@@ -40,11 +40,11 @@ revaulter-cli encrypt [flags]
 | Flag | Short | Required | Description |
 |------|-------|----------|-------------|
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
-| `--request-key` | | Yes | Per-user request key (shown in the web UI after registration) |
-| `--key-label` | | Yes | Logical key label used for key derivation |
+| `--request-key` | `-k` | Yes | Per-user request key (shown in the web UI after registration) |
+| `--key-label` | `-l` | Yes | Logical key label used for key derivation |
 | `--algorithm` | `-a` | Yes | AEAD algorithm identifier: `A256GCM` (alias `aes-256-gcm`) or `C20P` (alias `chacha20-poly1305`) |
-| `--message` | | One of `--message`, `--input`, or `--json` is required | The message to encrypt as a raw UTF-8 string. |
-| `--input` | | One of `--message`, `--input`, or `--json` is required | Path to a file whose bytes will be encrypted; use `-` to read from stdin |
+| `--message` | `-m` | One of `--message`, `--input`, or `--json` is required | The message to encrypt as a raw UTF-8 string. |
+| `--input` | `-i` | One of `--message`, `--input`, or `--json` is required | Path to a file whose bytes will be encrypted; use `-` to read from stdin |
 | `--json` | | One of `--message`, `--input`, or `--json` is required | Path to a JSON file (or `-` to read from stdin) of shape `{"value":"<base64url>","additionalData":"<base64url>"}` (`additionaldata` is optional) |
 | `--aad` | | No | Additional authenticated data (base64-encoded). Not allowed with `--json` |
 | `--timeout` | `-t` | No | Timeout for the operation (number of seconds or Go duration, e.g. `5m`, `300`) |
@@ -102,14 +102,14 @@ revaulter-cli decrypt [flags]
 | Flag | Short | Required | Description |
 |------|-------|----------|-------------|
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
-| `--request-key` | | Yes | Per-user request key (shown in the web UI after registration) |
-| `--key-label` | | Yes | Logical key label used for key derivation |
+| `--request-key` | `-k` | Yes | Per-user request key (shown in the web UI after registration) |
+| `--key-label` | `-l` | Yes | Logical key label used for key derivation |
 | `--algorithm` | `-a` | Yes | AEAD algorithm identifier: `A256GCM` (alias `aes-256-gcm`) or `C20P` (alias `chacha20-poly1305`). Must match what was used at encryption time |
-| `--value` | | One of `--value` or `--json` is required | The ciphertext to decrypt, base64-encoded |
-| `--tag` | | Required when not using `--json` | Authentication tag, base64-encoded |
+| `--value` | `-m` | One of `--value` or `--json` is required | The ciphertext to decrypt, base64-encoded |
+| `--tag` | `-g` | Required when not using `--json` | Authentication tag, base64-encoded |
 | `--nonce` | | Required when not using `--json` | Nonce/IV, base64-encoded |
 | `--aad` | | No | Additional authenticated data, base64-encoded (only allowed not using `--json`) |
-| `--json` | | One of `--value` or `--json` is required | Path to a JSON file (or `-` to read from stdin) in the shape produced by `encrypt` (`{"value":"<base64url>","nonce":"<base64url>","tag":"<base64url>","additionalData":"<base64url>"}`). Mutually exclusive with `--value`, `--tag`, `--nonce`, and `--aad` |
+| `--json` | `-j` | One of `--value` or `--json` is required | Path to a JSON file (or `-` to read from stdin) in the shape produced by `encrypt` (`{"value":"<base64url>","nonce":"<base64url>","tag":"<base64url>","additionalData":"<base64url>"}`). Mutually exclusive with `--value`, `--tag`, `--nonce`, and `--aad` |
 | `--timeout` | `-t` | No | Timeout for the operation (number of seconds or Go duration, e.g. `5m`, `300`) |
 | `--note` | `-n` | No | Message displayed alongside the request (up to 40 chars, alphanumeric and `. / _ -` only) |
 | `--output` | `-o` | No | Write the result to a file instead of stdout (mode 0600, refuses symlinks) |
@@ -172,11 +172,11 @@ revaulter-cli sign [flags]
 | Flag | Short | Required | Description |
 |------|-------|----------|-------------|
 | `--server` | `-s` | Yes | Address of the Revaulter server |
-| `--request-key` | | Yes | Per-user request key |
-| `--key-label` | | Yes | Logical key label used for signing-key derivation |
+| `--request-key` | `-k` | Yes | Per-user request key |
+| `--key-label` | `-l` | Yes | Logical key label used for signing-key derivation |
 | `--algorithm` | `-a` | Yes | Signing algorithm identifier (currently `ES256`) |
-| `--input` | | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. The CLI hashes the file contents with SHA-256 |
-| `--digest` | | One of `--input` or `--digest` is required | A pre-computed 32-byte SHA-256 digest, encoded as hex or base64url. Mutually exclusive with `--format jws` |
+| `--input` | `-i` | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. The CLI hashes the file contents with SHA-256 |
+| `--digest` | `-d` | One of `--input` or `--digest` is required | A pre-computed 32-byte SHA-256 digest, encoded as hex or base64url. Mutually exclusive with `--format jws` |
 | `--format` | | No | Output format: `json` (default — JSON envelope with base64url `r \|\| s` signature), `jws` (compact JWS string), or `raw` (the 64-byte `r \|\| s` signature). `jws` requires `--input` |
 | `--jws-header` | | No | JSON fragment merged into the default protected header when building a JWS from `--input`. The `alg` field is always forced to `ES256`; other fields like `kid` or `typ` can be supplied |
 | `--timeout` | `-t` | No | Timeout for the operation |
