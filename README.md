@@ -53,16 +53,32 @@ For example, you can use Revaulter together with age to encrypt large files: [se
 
 ### Unlock encrypted disks at boot
 
-Integrate Revaulter into your boot process to unlock LUKS/dm-crypt volumes. A script calls `revaulter-cli decrypt` to retrieve the disk encryption key, and an admin authenticates with their passkey to release it. No unattended keys on disk. [See full example](./docs/06-examples.md#unlocking-luks-encrypted-drives-at-boot) in the docs
+Integrate Revaulter into your boot process to unlock LUKS/dm-crypt volumes. A script calls `revaulter-cli decrypt` to retrieve the disk encryption key, and an admin authenticates with their passkey to release it. No unattended keys on disk. [See full example](./docs/06-examples.md#unlocking-luks-encrypted-drives-at-boot) in the docs.
+
+### Wrap restic backup repository passwords
+
+Wrap your [restic](https://restic.net) repository password with Revaulter and hook it into restic's `--password-command`. The backup script gets the password only after a passkey holder approves — even a fully compromised backup host can't restore the repository on its own. [See full example](./docs/06-examples.md#backing-up-with-restic) in the docs.
+
+### Sign release binaries from CI
+
+Run `revaulter-cli sign` from a GitHub Actions workflow to produce a signature over a release artifact. The signing key never touches the runner, the workflow pauses while a maintainer approves the request from their phone, and the resulting `.sig` is a 64-byte raw `r || s` ECDSA signature that any ECDSA library can verify. [See full example](./docs/06-examples.md#signing-a-release-binary-from-github-actions) in the docs.
+
+### Issue passkey-approved JWTs
+
+Mint long-lived ES256 JWTs (service-to-service tokens, installer licenses, break-glass credentials) where every issuance is reviewed in-browser before signing. The output is a standard compact JWS verifiable by any JOSE library. [See full example](./docs/06-examples.md#issuing-a-long-lived-jwt) in the docs.
+
+### Verify signatures with a published key
+
+Revaulter publishes the public half of every signing key on a cacheable, unauthenticated endpoint as both PEM and JWK. Verifiers fetch it once, pin it, and run fully offline from then on: there's no runtime dependency on Revaulter. [See full example](./docs/06-examples.md#fetching-a-public-key-to-verify-a-signature) in the docs.
 
 ## Key features
 
 - **Passkey-derived keys** — encryption keys are derived from WebAuthn passkeys (with PRF) directly in the browser; the server never has access to them
-- **End-to-end encryption** — all cryptographic operations happen in the user's browser using WebCrypto; the server stores only opaque, encrypted envelopes
-- **Self-hosted** — runs on your infrastructure; you own your data and keys
+- **End-to-end encryption** — all cryptographic operations happen in the user's browser using WebCrypto, the server stores only opaque, encrypted envelopes
+- **Self-hosted** — runs on your infrastructure, you own your data and keys
 - **Webhook notifications** — get notified on Discord, Slack, or any webhook endpoint when a request is waiting
-- **Lightweight** — single binary, single container; requires only a database (SQLite or PostgreSQL)
-- **Strong cryptography** — includes support for quantum-resistant asymmetric cryptography
+- **Lightweight** — single binary, requires only a database (SQLite or PostgreSQL)
+- **Strong cryptography** — includes support for hybrid, quantum-resistant asymmetric cryptography
 
 ## Quick start
 
@@ -99,7 +115,7 @@ Then start the server, open the web UI, and create your first account.
 - [Using the CLI](./docs/03-revaulter-cli.md) — commands, flags, and examples
 - [Cryptography architecture](./docs/04-crypto-architecture.md) — key layers, wrapping, derivation, transport encryption
 - [REST API reference](./docs/05-rest-api-reference.md) — all endpoints with request/response schemas
-- [Examples](./docs/06-examples.md) — LUKS disk unlock at boot, encrypting files with age
+- [Examples](./docs/06-examples.md) — LUKS disk unlock at boot, encrypting files with age, restic backups, signing release manifests / binaries / JWTs, fetching a public key to verify a signature
 
 ## License
 
