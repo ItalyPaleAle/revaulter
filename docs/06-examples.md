@@ -21,7 +21,7 @@ You can use Revaulter to protect the encryption key for a LUKS volume. Instead o
       --request-key AbCdEf0123456789GhIj \
       --key-label boot-disk \
       --algorithm A256GCM \
-      --value "$(cat /tmp/disk-key.txt)"
+      --input /tmp/disk-key.txt
     ```
 
 3. Approve the request in the Revaulter web UI. The CLI outputs a JSON envelope with the ciphertext, nonce, and tag. Save this output (for example, in `/etc/revaulter/boot-disk.json`).
@@ -112,7 +112,7 @@ WantedBy=local-fs.target
       --request-key AbCdEf0123456789GhIj \
       --key-label age-key \
       --algorithm A256GCM \
-      --value "$(base64 < age-key.txt)"
+      --input age-key.txt
     ```
 
 3. Approve the request in the Revaulter web UI. Save the CLI output (ciphertext, nonce, tag) to a file, for example `age-key-wrapped.json`.

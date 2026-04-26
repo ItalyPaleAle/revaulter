@@ -209,6 +209,14 @@ async function buildResponseEnvelope(
         }
 
         case 'encrypt': {
+            // Encrypt always generates a fresh random nonce; a CLI-supplied nonce would risk reuse under the same key, breaking AEAD security
+            if (input.nonce) {
+                throw new Error('encrypt: nonce must be empty')
+            }
+            if (input.tag) {
+                throw new Error('encrypt: tag must be empty')
+            }
+
             const operationKey = await deriveOperationKeyBytes({
                 userId: req.userId,
                 keyLabel: req.keyLabel,
@@ -216,7 +224,7 @@ async function buildResponseEnvelope(
                 primaryKey,
             })
 
-            const nonce = input.nonce ? base64UrlToBytes(input.nonce) : crypto.getRandomValues(new Uint8Array(12))
+            const nonce = crypto.getRandomValues(new Uint8Array(12))
 
             // Dispatch on the normalized algorithm; the validation switch above already gated unsupported values
             const primitive = normalizeAeadAlgorithm(req.algorithm)

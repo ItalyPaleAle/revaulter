@@ -269,10 +269,6 @@ export async function fetchRequestPubkey(request, requestKey) {
     }
 }
 
-function encodeBase64UrlUtf8(value) {
-    return Buffer.from(value, 'utf8').toString('base64url')
-}
-
 function decodeBase64UrlUtf8(value) {
     return Buffer.from(value, 'base64url').toString('utf8')
 }
@@ -397,7 +393,8 @@ export function startCLIRequest(args) {
     ]
 
     if (args.operation === 'encrypt') {
-        cliArgs.push('--value', encodeBase64UrlUtf8(args.value))
+        // --message takes a raw UTF-8 string; the CLI handles base64url-encoding before submitting
+        cliArgs.push('--message', args.value)
         if (args.aad) {
             cliArgs.push('--aad', Buffer.from(args.aad, 'utf8').toString('base64url'))
         }

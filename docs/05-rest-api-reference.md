@@ -69,7 +69,7 @@ The request payload is encrypted end-to-end by the CLI before submission. The se
 | Field | Required | Description |
 |-------|----------|-------------|
 | `keyLabel` | Yes | Logical key label for key derivation (max 128 chars) |
-| `algorithm` | Yes | Algorithm identifier: `A256GCM` for encrypt/decrypt, `ES256` for sign (max 64 chars) |
+| `algorithm` | Yes | Algorithm identifier (max 64 chars). Encrypt/decrypt accept `A256GCM` (alias `aes-256-gcm`) and `C20P` (alias `chacha20-poly1305`); sign accepts `ES256` |
 | `timeout` | No | Request timeout as seconds or Go duration (default: server `requestTimeout`, max: 24h) |
 | `note` | No | Human-readable note displayed in the web UI (max 40 chars, alphanumeric and `. / _ -`) |
 | `requestEncAlg` | Yes | Must be `ecdh-p256+mlkem768+a256gcm` |
@@ -87,12 +87,44 @@ The request payload is encrypted end-to-end by the CLI before submission. The se
 }
 ```
 
+### Inner payload
+
+The `encryptedPayload` field carries a JSON object that has been encrypted end-to-end with the user's static keys; the server cannot read it. The browser decrypts and validates it after the user approves.
+
+The shape varies per operation. All `value`/`nonce`/`tag`/`additionalData` fields are base64url-encoded.
+
+```json
+{
+  "value": "<base64url>",
+  "nonce": "<base64url>",
+  "tag": "<base64url>",
+  "additionalData": "<base64url>",
+  "clientTransportEcdhKey": { "kty": "EC", "crv": "P-256", "x": "<base64url>", "y": "<base64url>" },
+  "clientTransportMlkemKey": "<base64url>"
+}
+```
+
+`clientTransportEcdhKey` and `clientTransportMlkemKey` are required on every operation: they are the per-request ephemeral public keys the browser uses to encrypt the response back to the caller.
+
+**Encrypt-specific behavior:**
+
+- `algorithm` must be one of the AEAD primitives accepted by the server: `A256GCM` or `C20P` (or an alias)
+- `value` carries the plaintext bytes to encrypt (base64url); `additionalData` is optional
+- `nonce` and `tag` must be empty
+- The approved response envelope carries the ciphertext, nonce, and tag. See `GET /v2/request/result/:state` below
+
+**Decrypt-specific behavior:**
+
+- `algorithm` must be one of the AEAD primitives accepted by the server: `A256GCM` or `C20P` (or an alias). It must match what was used at encryption time
+- `value`, `nonce`, and `tag` carry the ciphertext, nonce, and authentication tag respectively (base64url); `additionalData` must match what was used at encryption time
+- The approved response envelope carries the recovered plaintext
+
 **Sign-specific behavior:**
 
+- `algorithm` must be `ES256` (ECDSA P-256 + SHA-256 per RFC 7518)
 - Callers must pre-hash the message with SHA-256 and place only the 32-byte digest in the inner payload (base64url under the `value` field). The server and the browser never see the raw message
-- The inner payload's `nonce`, `tag`, and `additionalData` fields must be empty after the browser decrypts; the browser rejects the request otherwise
-- The `algorithm` field must be `ES256` (ECDSA P-256 + SHA-256 per RFC 7518)
-- ECDSA is non-deterministic by design: signing the same digest twice produces different but equally valid signatures.
+- `nonce`, `tag`, and `additionalData` must be empty
+- ECDSA is non-deterministic by design: signing the same digest twice produces different but equally valid signatures
 - The approved response carries a detached signature; see `GET /v2/request/result/:state` below
 
 ---

@@ -125,18 +125,28 @@ type v2OperationFlags interface {
 type v2OperationFlagsEncrypt struct {
 	v2OperationFlagsBase
 
-	Value          stringValue
-	Nonce          stringValue
+	// Plaintext sources: exactly one of Message, Input, or JSON must be set
+	Message string
+	Input   string
+	JSON    string
+
 	AdditionalData stringValue
+
+	// Resolved state populated by Validate() and consumed by InnerPayload()
+	// Both are base64url-encoded so they can travel verbatim through the inner payload to the browser
+	resolvedValueB64 string
+	resolvedAADB64   string
 }
 
 func (f *v2OperationFlagsEncrypt) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
 	cmd.Flag("format").Usage = "Output format: 'json' (only)"
-	cmd.Flags().Var(&f.Value, "value", "The message to encrypt (base64-encoded)")
-	_ = cmd.MarkFlagRequired("value")
-	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce/IV for the operation (base64-encoded)")
-	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data (base64-encoded)")
+	cmd.Flags().StringVar(&f.Message, "message", "", "The message to encrypt as a raw string (UTF-8). Mutually exclusive with --input and --json")
+	cmd.Flags().StringVar(&f.Input, "input", "", "Path to the message file to encrypt; use '-' to read from stdin. Mutually exclusive with --message and --json")
+	cmd.Flags().StringVar(&f.JSON, "json", "", `Path to a JSON file (use '-' to read from stdin) of shape {"value":"<base64url>","additionalData":"<base64url>"}. Mutually exclusive with --message, --input, and --aad`)
+	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data, base64-encoded (when not using --json)")
+	cmd.MarkFlagsMutuallyExclusive("message", "input", "json")
+	cmd.MarkFlagsMutuallyExclusive("aad", "json")
 }
 
 func (f *v2OperationFlagsEncrypt) Validate() error {
@@ -147,17 +157,75 @@ func (f *v2OperationFlagsEncrypt) Validate() error {
 	if f.Format != "json" {
 		return fmt.Errorf("invalid --format %q: encrypt only supports 'json'", f.Format)
 	}
+
+	// Exactly one of --message, --input, --json must be supplied
+	sourceCount := 0
+	if f.Message != "" {
+		sourceCount++
+	}
+	if f.Input != "" {
+		sourceCount++
+	}
+	if f.JSON != "" {
+		sourceCount++
+	}
+	if sourceCount == 0 {
+		return errors.New("one of --message, --input, or --json is required")
+	}
+
+	switch {
+	case f.JSON != "":
+		// Inner payload comes pre-encoded from the JSON file
+		raw, rErr := readMaybeStdin(f.JSON)
+		if rErr != nil {
+			return fmt.Errorf("failed to read --json: %w", rErr)
+		}
+
+		// Parse the JSON message
+		var parsed encryptJSONInput
+		uErr := json.Unmarshal(raw, &parsed)
+		if uErr != nil {
+			return fmt.Errorf("invalid --json: %w", uErr)
+		}
+		if parsed.Value == "" {
+			return errors.New("--json: 'value' field is required")
+		}
+
+		f.resolvedValueB64 = parsed.Value
+		f.resolvedAADB64 = parsed.AdditionalData
+
+	case f.Input != "":
+		raw, rErr := readMaybeStdin(f.Input)
+		if rErr != nil {
+			return fmt.Errorf("failed to read --input: %w", rErr)
+		}
+
+		f.resolvedValueB64 = base64.RawURLEncoding.EncodeToString(raw)
+		f.resolvedAADB64 = f.AdditionalData.String()
+
+	case f.Message != "":
+		// --message takes a raw UTF-8 string; the browser decodes the inner Value field as base64url, so we encode here
+		f.resolvedValueB64 = base64.RawURLEncoding.EncodeToString([]byte(f.Message))
+		f.resolvedAADB64 = f.AdditionalData.String()
+	}
+
 	return nil
 }
 
 func (f *v2OperationFlagsEncrypt) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
-		Value:                   f.Value.String(),
-		Nonce:                   f.Nonce.String(),
-		AdditionalData:          f.AdditionalData.String(),
+		Value:                   f.resolvedValueB64,
+		AdditionalData:          f.resolvedAADB64,
 		ClientTransportEcdhKey:  clientTransportEcdhKey,
 		ClientTransportMlkemKey: clientTransportMlkemKey,
 	}
+}
+
+// encryptJSONInput is the shape accepted by `encrypt --json`
+// Both fields are base64url-encoded
+type encryptJSONInput struct {
+	Value          string `json:"value"`
+	AdditionalData string `json:"additionalData"`
 }
 
 type v2OperationFlagsDecrypt struct {
@@ -167,16 +235,30 @@ type v2OperationFlagsDecrypt struct {
 	Tag            stringValue
 	Nonce          stringValue
 	AdditionalData stringValue
+
+	// JSON points to a file (or stdin via "-") whose contents match the JSON envelope produced by `encrypt`
+	// When set, the individual --value/--tag/--nonce/--aad flags must be empty
+	JSON string
+
+	// Resolved fields populated by Validate() so InnerPayload doesn't need to re-parse
+	resolvedValueB64 string
+	resolvedTagB64   string
+	resolvedNonceB64 string
+	resolvedAADB64   string
 }
 
 func (f *v2OperationFlagsDecrypt) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
 	cmd.Flag("format").Usage = "Output format: 'json' (default: JSON envelope) or 'raw' (write the decrypted plaintext as raw bytes)"
-	cmd.Flags().Var(&f.Value, "value", "The message to decrypt (base64-encoded)")
-	_ = cmd.MarkFlagRequired("value")
-	cmd.Flags().Var(&f.Tag, "tag", "Authentication tag (base64-encoded)")
-	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce/IV (base64-encoded)")
-	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data (base64-encoded)")
+	cmd.Flags().Var(&f.Value, "value", "The message to decrypt, base64-encoded (when not using --json)")
+	cmd.Flags().Var(&f.Tag, "tag", "Authentication tag, base64-encoded (when not using --json)")
+	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce/IV, base64-encoded (when not using --json)")
+	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data, base64-encoded (when not using --json)")
+	cmd.Flags().StringVar(&f.JSON, "json", "", `Path to a JSON file (use '-' to read from stdin) in the shape produced by "encrypt": {"value":"<base64url>","nonce":"<base64url>","tag":"<base64url>","additionalData":"<base64url>"}. Mutually exclusive with --value, --tag, --nonce, and --aad`)
+	cmd.MarkFlagsMutuallyExclusive("json", "value")
+	cmd.MarkFlagsMutuallyExclusive("json", "tag")
+	cmd.MarkFlagsMutuallyExclusive("json", "nonce")
+	cmd.MarkFlagsMutuallyExclusive("json", "aad")
 }
 
 func (f *v2OperationFlagsDecrypt) Validate() error {
@@ -187,18 +269,59 @@ func (f *v2OperationFlagsDecrypt) Validate() error {
 	if f.Format != "json" && f.Format != "raw" {
 		return fmt.Errorf("invalid --format %q: decrypt supports 'json' or 'raw'", f.Format)
 	}
+
+	if f.JSON != "" {
+		raw, rErr := readMaybeStdin(f.JSON)
+		if rErr != nil {
+			return fmt.Errorf("failed to read --json: %w", rErr)
+		}
+
+		var parsed decryptJSONInput
+		uErr := json.Unmarshal(raw, &parsed)
+		if uErr != nil {
+			return fmt.Errorf("invalid --json: %w", uErr)
+		}
+		if parsed.Value == "" {
+			return errors.New("--json: 'value' field is required")
+		}
+
+		f.resolvedValueB64 = parsed.Value
+		f.resolvedTagB64 = parsed.Tag
+		f.resolvedNonceB64 = parsed.Nonce
+		f.resolvedAADB64 = parsed.AdditionalData
+		return nil
+	}
+
+	if f.Value.String() == "" {
+		return errors.New("either --value or --json is required")
+	}
+
+	f.resolvedValueB64 = f.Value.String()
+	f.resolvedTagB64 = f.Tag.String()
+	f.resolvedNonceB64 = f.Nonce.String()
+	f.resolvedAADB64 = f.AdditionalData.String()
+
 	return nil
 }
 
 func (f *v2OperationFlagsDecrypt) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
-		Value:                   f.Value.String(),
-		Tag:                     f.Tag.String(),
-		Nonce:                   f.Nonce.String(),
-		AdditionalData:          f.AdditionalData.String(),
+		Value:                   f.resolvedValueB64,
+		Tag:                     f.resolvedTagB64,
+		Nonce:                   f.resolvedNonceB64,
+		AdditionalData:          f.resolvedAADB64,
 		ClientTransportEcdhKey:  clientTransportEcdhKey,
 		ClientTransportMlkemKey: clientTransportMlkemKey,
 	}
+}
+
+// decryptJSONInput is the shape accepted by `decrypt --json`
+// It mirrors the JSON envelope produced by `encrypt`; extra fields like state/operation/algorithm are ignored
+type decryptJSONInput struct {
+	Value          string `json:"value"`
+	Tag            string `json:"tag"`
+	Nonce          string `json:"nonce"`
+	AdditionalData string `json:"additionalData"`
 }
 
 // v2OperationFlagsSign carries flags specific to the `sign` operation
@@ -207,7 +330,6 @@ type v2OperationFlagsSign struct {
 	v2OperationFlagsBase
 
 	Input     string
-	File      string
 	Digest    string
 	JwsHeader string
 
@@ -221,11 +343,10 @@ type v2OperationFlagsSign struct {
 func (f *v2OperationFlagsSign) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
 	cmd.Flag("format").Usage = "Output format: 'json' (default: JSON envelope with base64url r||s signature), 'jws' (compact JWS string), or 'raw' (64-byte r||s signature). 'jws' requires --input"
-	cmd.Flags().StringVar(&f.Input, "input", "", "Path to the message file to sign; use '-' for stdin. Aliased by --file")
-	cmd.Flags().StringVar(&f.File, "file", "", "Alias for --input")
+	cmd.Flags().StringVar(&f.Input, "input", "", "Path to the message file to sign; use '-' to read from stdin")
 	cmd.Flags().StringVar(&f.Digest, "digest", "", "Pre-computed SHA-256 digest (hex or base64url, 32 bytes)")
 	cmd.Flags().StringVar(&f.JwsHeader, "jws-header", "", "Optional JSON fragment merged into the default protected header when building a JWS from --input")
-	cmd.MarkFlagsMutuallyExclusive("input", "file")
+	cmd.MarkFlagsMutuallyExclusive("input", "digest")
 }
 
 func (f *v2OperationFlagsSign) Validate() error {
@@ -236,11 +357,6 @@ func (f *v2OperationFlagsSign) Validate() error {
 
 	if f.Algorithm != protocolv2.SigningAlgES256 {
 		return fmt.Errorf("unsupported signing algorithm %q (only %q is supported in v1)", f.Algorithm, protocolv2.SigningAlgES256)
-	}
-
-	// --file is an alias for --input; cobra enforces mutual exclusion, so only one is non-empty here
-	if f.File != "" {
-		f.Input = f.File
 	}
 
 	// Exactly one of --input, --digest must be set
@@ -280,17 +396,21 @@ func (f *v2OperationFlagsSign) Validate() error {
 	return nil
 }
 
+// readMaybeStdin reads bytes from a file path or, when path is "-", from stdin
+// Used by --input and --json on encrypt/sign so the same `-` convention works everywhere
+func readMaybeStdin(path string) ([]byte, error) {
+	if path == "-" {
+		return io.ReadAll(os.Stdin)
+	}
+
+	// #nosec G304 - user-supplied input path is intentional
+	return os.ReadFile(path)
+}
+
 // resolveFromInput reads the message file (or stdin) and computes its SHA-256
 // When the output format is JWS, a protected header is constructed so the signing input is "<header>.<payload>" in JWS compact form
 func (f *v2OperationFlagsSign) resolveFromInput() error {
-	var data []byte
-	var err error
-	if f.Input == "-" {
-		data, err = io.ReadAll(os.Stdin)
-	} else {
-		// #nosec G304 - user-supplied input path is intentional
-		data, err = os.ReadFile(f.Input)
-	}
+	data, err := readMaybeStdin(f.Input)
 	if err != nil {
 		return fmt.Errorf("failed to read input: %w", err)
 	}
