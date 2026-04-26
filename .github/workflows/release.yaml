@@ -151,7 +151,7 @@ jobs:
 
       - name: Install cosign
         if: steps.sign_gate.outputs.should_sign == 'true'
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.1
 
       - name: Build integrity manifest
         if: steps.sign_gate.outputs.should_sign == 'true'
