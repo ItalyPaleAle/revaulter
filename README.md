@@ -14,7 +14,7 @@ Revaulter uses WebAuthn passkeys to protect cryptographic operations. Data is en
 4. On approval, the browser derives the key from the passkey and performs the crypto operation locally
 5. The CLI receives the encrypted result and decrypts it locally
 
-The Revaulter server is just a relay. Encryption keys are derived from the passkey in the browser, they never leave the user's device. The server stores only opaque, end-to-end encrypted envelopes.
+The Revaulter server is just a relay. Encryption keys are derived from the passkey in the browser (leveraging the PRF extension), they never leave the user's device. The server stores only opaque, end-to-end encrypted envelopes.
 
 ## Usage examples
 
