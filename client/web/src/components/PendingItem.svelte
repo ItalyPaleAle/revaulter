@@ -27,18 +27,20 @@ import { v2Cancel, v2Confirm, v2GetRequest } from '$lib/v2-api'
 import type { V2PendingRequestItem, V2RequestDetail, V2ResponseEnvelope, V2SigningJwk } from '$lib/v2-types'
 
 interface Props {
+    bulkAction?: { id: number; action: 'confirm' | 'cancel' } | null
     item: V2PendingRequestItem
     primaryKey: Uint8Array
     onRemoved?: (state: string) => void
 }
 
-let { item, primaryKey, onRemoved }: Props = $props()
+let { bulkAction = null, item, primaryKey, onRemoved }: Props = $props()
 
 let working = $state(false)
 let localStatus = $state<string>('pending')
 let error = $state<string | null>(null)
 let detail = $state<V2RequestDetail | null>(null)
 let removeTimer: ReturnType<typeof setTimeout> | null = null
+let handledBulkActionId = $state(0)
 
 $effect(() => {
     if (
@@ -61,6 +63,9 @@ async function ensureDetail() {
 }
 
 async function doCancel() {
+    if (working || (localStatus !== 'pending' && localStatus !== '_failed')) {
+        return
+    }
     error = null
     working = true
     localStatus = '_processing'
@@ -80,6 +85,9 @@ async function doCancel() {
 }
 
 async function doConfirm() {
+    if (working || (localStatus !== 'pending' && localStatus !== '_failed')) {
+        return
+    }
     error = null
     working = true
     localStatus = '_processing'
@@ -108,6 +116,20 @@ function scheduleRemoval() {
         onRemoved?.(item.state)
     }, 1100)
 }
+
+$effect(() => {
+    if (!bulkAction || handledBulkActionId === bulkAction.id) {
+        return
+    }
+    handledBulkActionId = bulkAction.id
+
+    if (bulkAction.action === 'confirm') {
+        void doConfirm()
+        return
+    }
+
+    void doCancel()
+})
 
 async function buildResponseEnvelope(
     req: V2RequestDetail

@@ -74,6 +74,8 @@ let {
 }: Props = $props()
 
 let settingsModalOpen = $state(false)
+let bulkAction = $state<{ id: number; action: 'confirm' | 'cancel' } | null>(null)
+let bulkActionId = 0
 
 function toggleSettingsModal() {
     settingsModalOpen = !settingsModalOpen
@@ -81,6 +83,16 @@ function toggleSettingsModal() {
 
 function closeSettingsModal() {
     settingsModalOpen = false
+}
+
+function approveAll() {
+    bulkActionId += 1
+    bulkAction = { id: bulkActionId, action: 'confirm' }
+}
+
+function rejectAll() {
+    bulkActionId += 1
+    bulkAction = { id: bulkActionId, action: 'cancel' }
 }
 </script>
 
@@ -159,10 +171,28 @@ function closeSettingsModal() {
         </div>
     {:else}
         <div class="overflow-hidden rounded-xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+            {#if pendingItems.length > 1}
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/70">
+                    <div class="text-xs font-medium text-neutral-500 dark:text-neutral-400">
+                        {pendingItems.length} pending approvals
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <Button variant="primary" size="sm" onclick={approveAll}>
+                            <Icon icon="check" title="" size="3.5" />
+                            Confirm all
+                        </Button>
+                        <Button variant="ghost" size="sm" onclick={rejectAll}>
+                            <Icon icon="x" title="" size="3.5" />
+                            Decline all
+                        </Button>
+                    </div>
+                </div>
+            {/if}
             {#each pendingItems as item, idx (item.state)}
                 {#if primaryKey}
                     <div class={idx === 0 ? '' : 'border-t border-neutral-200 dark:border-neutral-800'}>
                         <PendingItem
+                            {bulkAction}
                             {item}
                             {primaryKey}
                             onRemoved={onRemoveItem}
