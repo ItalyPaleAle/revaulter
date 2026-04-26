@@ -1,5 +1,5 @@
 import ndjson from '$lib/ndjson'
-import { Request } from '$lib/request'
+import { Request, ResponseNotOkError } from '$lib/request'
 import type {
     EcP256PublicJwk,
     V2AddCredentialBeginResponse,
@@ -315,7 +315,10 @@ export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | nul
         signal: controller.signal,
     })
     if (!res.ok || !res.body) {
-        throw new Error(`Failed list stream: ${res.status}`)
+        // Throw a ResponseNotOkError so callers can branch on .statusCode (e.g. 401 → redirect to sign-in)
+        const err = new ResponseNotOkError(`Failed list stream: ${res.status}`)
+        err.statusCode = res.status
+        throw err
     }
 
     // Decode the response body as a stream of newline-delimited JSON objects
