@@ -70,10 +70,14 @@ func newTestPostgresDB(t *testing.T, baseDSN string) *DB {
 	t.Cleanup(func() {
 		_ = conn.Close(t.Context())
 
+		// We need to reconnect to the database using the base DSN (without search_path set)
+		// Parse the configuration
 		dropCfg, err := pgxpool.ParseConfig(baseDSN)
 		if err != nil {
 			return
 		}
+
+		// Connect to the database
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		dropPool, err := pgxpool.NewWithConfig(ctx, dropCfg)
@@ -81,6 +85,8 @@ func newTestPostgresDB(t *testing.T, baseDSN string) *DB {
 			return
 		}
 		defer dropPool.Close()
+
+		// Drop the schema
 		_, _ = dropPool.Exec(ctx, "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE")
 	})
 
