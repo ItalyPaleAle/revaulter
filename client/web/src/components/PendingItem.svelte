@@ -278,7 +278,7 @@ const OP_META = {
     },
     sign: {
         label: 'Sign',
-        icon: 'signature',
+        icon: 'user-round-pen',
         colorClass: 'text-amber-700 dark:text-amber-400',
         bgClass: 'bg-amber-50 dark:bg-amber-950/40',
     },
