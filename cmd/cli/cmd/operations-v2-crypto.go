@@ -24,8 +24,8 @@ func buildTransportAAD(state, operation, algorithm string) []byte {
 	return fmt.Appendf(nil, "algorithm=%s\noperation=%s\nstate=%s\nv=1", algorithm, operation, state)
 }
 
-// buildRequestEncAAD constructs the AAD used when encrypting/decrypting request payloads.
-// It binds the plaintext metadata to the E2EE ciphertext.
+// buildRequestEncAAD constructs the AAD used when encrypting/decrypting request payloads
+// It binds the plaintext metadata to the E2EE ciphertext
 func buildRequestEncAAD(algorithm, keyLabel, operation string) []byte {
 	return fmt.Appendf(nil, "algorithm=%s\nkeyLabel=%s\noperation=%s\nv=1", algorithm, keyLabel, operation)
 }
@@ -68,6 +68,7 @@ func decryptV2ResponseEnvelope(state string, kp *v2TransportKeyPair, env *protoc
 	combined = append(combined, ecdhShared...)
 	combined = append(combined, mlkemShared...)
 
+	// Derive the transport key
 	key, err := deriveV2TransportKey(combined, state)
 	if err != nil {
 		return nil, err

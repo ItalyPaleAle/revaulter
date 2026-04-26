@@ -34,14 +34,19 @@ type v2OperationFlagsBase struct {
 	Output string
 	Raw    bool
 
-	// Trust store: the CLI pins the server's hybrid anchor (ES384 + ML-DSA-87)
-	// on first contact and refuses to proceed on mismatch. --trust-store picks
-	// the file; --no-trust-store disables both pinning and verification.
+	// Trust store: the CLI pins the server's hybrid anchor (ES384 + ML-DSA-87) on first contact and refuses to proceed on mismatch
+	// --trust-store picks the file; --no-trust-store disables both pinning and verification.
 	TrustStorePath string
 	NoTrustStore   bool
 }
 
 func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
+	defaultPath, _ := defaultTrustStorePath()
+	var trustStoreDefault string
+	if defaultPath != "" {
+		trustStoreDefault = " (defaults to " + defaultPath + ")"
+	}
+
 	cmd.Flags().StringVarP(&f.Server, "server", "s", "", "Address of the Revaulter server")
 	_ = cmd.MarkFlagRequired("server")
 	cmd.Flags().BoolVar(&f.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
@@ -60,7 +65,7 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&f.Output, "output", "o", "", "Write the result to this file path instead of stdout (mode 0600, refuses symlinks)")
 	cmd.Flags().BoolVar(&f.Raw, "raw", false, "Write the decrypted plaintext as raw bytes instead of the default JSON envelope")
 
-	cmd.Flags().StringVar(&f.TrustStorePath, "trust-store", "", "Path to the anchor trust store (defaults to $XDG_CONFIG_HOME/revaulter-cli/trust.json)")
+	cmd.Flags().StringVar(&f.TrustStorePath, "trust-store", "", "Path to the anchor trust store"+trustStoreDefault)
 	cmd.Flags().BoolVar(&f.NoTrustStore, "no-trust-store", false, "Skip anchor pinning and hybrid bundle verification (equivalent to SSH StrictHostKeyChecking=no)")
 }
 
@@ -332,13 +337,18 @@ type v2SignResponsePayload struct {
 }
 
 // FormatResult shapes the decrypted plaintext depending on the selected output format
-// --format jws emits "<header>.<payload>.<sig>", --raw emits the 64 raw r||s bytes, and the default emits the JSON envelope indented for stdout
+// - `--format jws` emits `<header>.<payload>.<sig>`
+// - `--raw` emits the 64 raw `r||s` bytes
+// - the default emits the JSON envelope indented for stdout
 func (f *v2OperationFlagsSign) FormatResult(state string, plain []byte, raw bool) ([]byte, error) {
+	// Parse the JSON response
 	var resp v2SignResponsePayload
 	err := json.Unmarshal(plain, &resp)
 	if err != nil {
 		return nil, fmt.Errorf("invalid sign response JSON: %w", err)
 	}
+
+	// Validate the response
 	if resp.State != state {
 		return nil, errors.New("sign response state mismatch")
 	}

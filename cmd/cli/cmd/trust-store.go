@@ -35,18 +35,18 @@ func trustStoreKey(server, userID string) string {
 	return server + "|" + userID
 }
 
-// defaultTrustStorePath returns the default path for the trust store, creating
-// the parent directory if needed.
+// defaultTrustStorePath returns the default path for the trust store, creating the parent directory if needed
 func defaultTrustStorePath() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to locate user config dir: %w", err)
 	}
+
 	return filepath.Join(base, "revaulter-cli", "trust.json"), nil
 }
 
-// loadTrustStore reads the trust store from disk. A missing file returns an
-// empty store; any other error (including invalid JSON) is returned.
+// loadTrustStore reads the trust store from disk
+// A missing file returns an empty store; any other error (including invalid JSON) is returned
 func loadTrustStore(path string) (*trustStore, error) {
 	ts := &trustStore{Entries: make(map[string]trustStoreEntry)}
 	// #nosec G304 -- path is controlled by the user via --trust-store or defaultTrustStorePath
@@ -57,13 +57,16 @@ func loadTrustStore(path string) (*trustStore, error) {
 		}
 		return nil, fmt.Errorf("failed to read trust store %q: %w", path, err)
 	}
+
 	err = json.Unmarshal(b, ts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse trust store %q: %w", path, err)
 	}
+
 	if ts.Entries == nil {
 		ts.Entries = make(map[string]trustStoreEntry)
 	}
+
 	return ts, nil
 }
 

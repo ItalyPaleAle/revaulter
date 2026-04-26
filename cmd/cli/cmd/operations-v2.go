@@ -335,7 +335,7 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 	return ecdhPub, mlkemPub, nil
 }
 
-// loadOrInitTrustStore resolves the trust store path and loads its contents.
+// loadOrInitTrustStore resolves the trust store path and loads its contents
 func (o *v2OperationCmd) loadOrInitTrustStore() (*trustStore, string, error) {
 	path := o.flags.GetTrustStorePath()
 	if path == "" {
@@ -352,9 +352,8 @@ func (o *v2OperationCmd) loadOrInitTrustStore() (*trustStore, string, error) {
 	return ts, path, nil
 }
 
-// terminalConfirmer returns a prompt function that asks the user on stderr to
-// accept a TOFU pin. If stdin or stderr is not a TTY, it returns nil so the
-// caller fails closed.
+// terminalConfirmer returns a prompt function that asks the user on stderr to accept a TOFU pin
+// If stdin or stderr is not a TTY, it returns nil so the caller fails closed
 func (o *v2OperationCmd) terminalConfirmer() func(fingerprint string) (bool, error) {
 	// File descriptors on supported platforms always fit in int; the uintptr from Fd is just an OS handle representation
 	stdinFd := int(os.Stdin.Fd())   // #nosec G115
@@ -377,7 +376,7 @@ func (o *v2OperationCmd) terminalConfirmer() func(fingerprint string) (bool, err
 	}
 }
 
-// parseAnchorPubkeysFromWire decodes the CLI-facing wire form of the hybrid anchor.
+// parseAnchorPubkeysFromWire decodes the CLI-facing wire form of the hybrid anchor
 func parseAnchorPubkeysFromWire(es384JWK string, mldsa87PubB64 string) (*ecdsa.PublicKey, []byte, error) {
 	jwk, err := protocolv2.ParseECP384PublicJWKCanonicalBody(es384JWK)
 	if err != nil {
@@ -401,8 +400,7 @@ func parseAnchorPubkeysFromWire(es384JWK string, mldsa87PubB64 string) (*ecdsa.P
 	return ecdsaPub, mldsa87PubBytes, nil
 }
 
-// decodeHybridSignatures decodes base64url-encoded ES384 + ML-DSA-87 signatures
-// and validates their sizes.
+// decodeHybridSignatures decodes base64url-encoded ES384 + ML-DSA-87 signatures and validates their sizes
 func decodeHybridSignatures(es384B64, mldsa87B64 string) (sigEs, sigMl []byte, err error) {
 	sigEs, err = protocolv2.DecodeBase64Signature(es384B64, protocolv2.ES384SignatureSize)
 	if err != nil {
