@@ -69,6 +69,9 @@ import { webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
 
 type UIState = 'boot' | 'signin' | 'signup' | 'password-login' | 'password-setup' | 'ready'
 
+const missingPrfError = 'Authenticator did not return PRF output'
+const signupMissingPrfError = 'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Sign up with a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
+
 let uiState = $state<UIState>('boot')
 let authBusy = $state(false)
 let authError = $state<string | null>(null)
@@ -248,7 +251,7 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
         throw new Error('Login did not complete')
     }
     if (!assertion.prfSecret || assertion.prfSecret.length === 0) {
-        throw new Error('Authenticator did not return PRF output')
+        throw new Error(missingPrfError)
     }
 
     session = toSessionResponse(finish.session)
@@ -415,7 +418,7 @@ async function doRegister() {
             authError = err.message || 'Account creation is disabled on this server.'
             uiState = 'signin'
         } else {
-            authError = err instanceof Error ? err.message : String(err)
+            authError = err instanceof Error && err.message === missingPrfError ? signupMissingPrfError : err instanceof Error ? err.message : String(err)
         }
     } finally {
         authBusy = false

@@ -47,7 +47,7 @@ jobs:
           cache-dependency-path: 'client/web/pnpm-lock.yaml'
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Lowercase REPO_OWNER which is required for containers
       - name: Set lowercase REPO_OWNER
@@ -131,7 +131,7 @@ jobs:
 
       # Integrity manifest: signs the web client dist/ contents with cosign keyless
       # Always runs on tag releases; on configured release-branch pushes, only when the head commit
-      # carries a `Sign-Web-Client` trailer (parsed via `git interpret-trailers`)
+      # carries a `Sign-Web-Client: yes` trailer (parsed via `git interpret-trailers`)
       - name: Decide whether to sign web client
         id: sign_gate
         run: |
@@ -151,7 +151,7 @@ jobs:
 
       - name: Install cosign
         if: steps.sign_gate.outputs.should_sign == 'true'
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4
 
       - name: Build integrity manifest
         if: steps.sign_gate.outputs.should_sign == 'true'

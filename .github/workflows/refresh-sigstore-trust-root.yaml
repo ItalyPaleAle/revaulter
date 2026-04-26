@@ -85,7 +85,7 @@ jobs:
 
       - name: Open pull request
         if: steps.diff.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: chore/refresh-sigstore-trust-root
           commit-message: "chore: refresh Sigstore trust root"
