@@ -185,20 +185,6 @@ func TestSignValidateFormatJwsRejectsDigest(t *testing.T) {
 	require.Contains(t, err.Error(), "requires --input")
 }
 
-func TestSignValidateFormatJwsRejectsRaw(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "msg.bin")
-	require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
-
-	f := newSignFlagsWithRequired(t)
-	f.Input = path
-	f.Format = "jws"
-	f.Raw = true
-	err := f.Validate()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "--raw cannot be combined with --format jws")
-}
-
 func TestSignValidateFormatUnknownRejected(t *testing.T) {
 	f := newSignFlagsWithRequired(t)
 	f.Digest = strings.Repeat("aa", 32)
@@ -249,19 +235,19 @@ func TestSignFormatResultRawEmitsRawBytes(t *testing.T) {
 		sig[i] = byte(i)
 	}
 	plain := newSignResponse(t, "state-1", f.KeyLabel, sig)
-	out, err := f.FormatResult("state-1", plain, true)
+	out, err := f.FormatResult("state-1", plain, "raw")
 	require.NoError(t, err)
-	require.Equal(t, sig, out, "--raw must emit the 64 r||s bytes verbatim")
+	require.Equal(t, sig, out, "--format raw must emit the 64 r||s bytes verbatim")
 }
 
-func TestSignFormatResultDefaultEmitsIndentedJSON(t *testing.T) {
+func TestSignFormatResultJSONEmitsIndentedEnvelope(t *testing.T) {
 	f := newSignFlagsWithRequired(t)
 	f.Digest = strings.Repeat("00", 32)
 	require.NoError(t, f.Validate())
 
 	sig := make([]byte, 64)
 	plain := newSignResponse(t, "state-1", f.KeyLabel, sig)
-	out, err := f.FormatResult("state-1", plain, false)
+	out, err := f.FormatResult("state-1", plain, "json")
 	require.NoError(t, err)
 	require.Contains(t, string(out), "\n \"state\": \"state-1\"")
 	require.True(t, strings.HasSuffix(string(out), "\n"), "default output must end with newline")
@@ -284,7 +270,7 @@ func TestSignFormatResultJwsEmitsCompactJWS(t *testing.T) {
 		sig[i] = byte(i + 1)
 	}
 	plain := newSignResponse(t, "state-jws", f.KeyLabel, sig)
-	out, err := f.FormatResult("state-jws", plain, false)
+	out, err := f.FormatResult("state-jws", plain, "jws")
 	require.NoError(t, err)
 
 	line := strings.TrimRight(string(out), "\n")
@@ -297,6 +283,17 @@ func TestSignFormatResultJwsEmitsCompactJWS(t *testing.T) {
 	require.Equal(t, sig, sigBytes)
 }
 
+func TestSignFormatResultUnknownFormat(t *testing.T) {
+	f := newSignFlagsWithRequired(t)
+	f.Digest = strings.Repeat("00", 32)
+	require.NoError(t, f.Validate())
+
+	plain := newSignResponse(t, "state-x", f.KeyLabel, make([]byte, 64))
+	_, err := f.FormatResult("state-x", plain, "bogus")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported format")
+}
+
 func TestSignFormatResultValidatesResponseFields(t *testing.T) {
 	f := newSignFlagsWithRequired(t)
 	f.Digest = strings.Repeat("00", 32)
@@ -306,7 +303,7 @@ func TestSignFormatResultValidatesResponseFields(t *testing.T) {
 
 	t.Run("state mismatch", func(t *testing.T) {
 		plain := newSignResponse(t, "state-b", f.KeyLabel, sig)
-		_, err := f.FormatResult("state-a", plain, false)
+		_, err := f.FormatResult("state-a", plain, "json")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "state mismatch")
 	})
@@ -320,7 +317,7 @@ func TestSignFormatResultValidatesResponseFields(t *testing.T) {
 			"signature": base64.RawURLEncoding.EncodeToString(sig),
 		})
 		require.NoError(t, err)
-		_, err = f.FormatResult("state-x", b, false)
+		_, err = f.FormatResult("state-x", b, "json")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unexpected operation")
 	})
@@ -334,21 +331,21 @@ func TestSignFormatResultValidatesResponseFields(t *testing.T) {
 			"signature": base64.RawURLEncoding.EncodeToString(sig),
 		})
 		require.NoError(t, err)
-		_, err = f.FormatResult("state-x", b, false)
+		_, err = f.FormatResult("state-x", b, "json")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "unexpected algorithm")
 	})
 
 	t.Run("keyLabel mismatch", func(t *testing.T) {
 		plain := newSignResponse(t, "state-x", "other-label", sig)
-		_, err := f.FormatResult("state-x", plain, false)
+		_, err := f.FormatResult("state-x", plain, "json")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "keyLabel")
 	})
 
 	t.Run("signature wrong length", func(t *testing.T) {
 		plain := newSignResponse(t, "state-x", f.KeyLabel, make([]byte, 63))
-		_, err := f.FormatResult("state-x", plain, false)
+		_, err := f.FormatResult("state-x", plain, "json")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "signature length")
 	})
@@ -361,7 +358,7 @@ func TestSignFormatResultValidatesResponseFields(t *testing.T) {
 			"keyLabel":  f.KeyLabel,
 		})
 		require.NoError(t, err)
-		_, err = f.FormatResult("state-x", b, false)
+		_, err = f.FormatResult("state-x", b, "json")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "missing signature")
 	})

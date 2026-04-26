@@ -49,7 +49,7 @@ revaulter-cli encrypt [flags]
 | `--timeout` | `-t` | No | Timeout for the operation (number of seconds or Go duration, e.g. `5m`, `300`) |
 | `--note` | `-n` | No | Message displayed alongside the request (up to 40 chars, alphanumeric and `. / _ -` only) |
 | `--output` | `-o` | No | Write the result to a file instead of stdout (mode 0600, refuses symlinks) |
-| `--raw` | | No | Output raw decrypted bytes instead of the default JSON envelope |
+| `--format` | | No | Output format: `json` (only). Encrypt always emits the JSON envelope on stdout |
 | `--insecure` | | No | Skip TLS certificate validation |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
 | `--verbose` | `-V` | No | Show debug-level logs |
@@ -89,7 +89,7 @@ revaulter-cli decrypt [flags]
 | `--timeout` | `-t` | No | Timeout for the operation (number of seconds or Go duration, e.g. `5m`, `300`) |
 | `--note` | `-n` | No | Message displayed alongside the request (up to 40 chars, alphanumeric and `. / _ -` only) |
 | `--output` | `-o` | No | Write the result to a file instead of stdout (mode 0600, refuses symlinks) |
-| `--raw` | | No | Output raw decrypted bytes instead of the default JSON envelope |
+| `--format` | | No | Output format: `json` (default — JSON envelope) or `raw` (write the decrypted plaintext as raw bytes) |
 | `--insecure` | | No | Skip TLS certificate validation |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
 | `--verbose` | `-V` | No | Show debug-level logs |
@@ -119,7 +119,7 @@ revaulter-cli decrypt \
   --nonce <base64-nonce> \
   --tag <base64-tag> \
   --output /tmp/decrypted.bin \
-  --raw
+  --format raw
 ```
 
 ---
@@ -140,12 +140,11 @@ revaulter-cli sign [flags]
 | `--algorithm` | `-a` | Yes | Signing algorithm identifier (currently `ES256`) |
 | `--input` / `--file` | | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. The CLI hashes the file contents with SHA-256 |
 | `--digest` | | One of `--input` or `--digest` is required | A pre-computed 32-byte SHA-256 digest, encoded as hex or base64url. Mutually exclusive with `--format jws` |
-| `--format` | | No | Output format: `raw` (default — JSON envelope with base64url `r || s` signature) or `jws` (emit a compact JWS string). `jws` is not supported with `--digest` and with `--raw` |
+| `--format` | | No | Output format: `json` (default — JSON envelope with base64url `r \|\| s` signature), `jws` (compact JWS string), or `raw` (the 64-byte `r \|\| s` signature). `jws` requires `--input` |
 | `--jws-header` | | No | JSON fragment merged into the default protected header when building a JWS from `--input`. The `alg` field is always forced to `ES256`; other fields like `kid` or `typ` can be supplied |
 | `--timeout` | `-t` | No | Timeout for the operation |
 | `--note` | `-n` | No | Message displayed alongside the request |
 | `--output` | `-o` | No | Write the result to a file instead of stdout |
-| `--raw` | | No | Emit the raw 64-byte signature instead of the JSON envelope. Incompatible with `--format jws` |
 | `--insecure` | | No | Skip TLS certificate validation |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
 | `--verbose` | `-V` | No | Show debug-level logs |
@@ -207,7 +206,7 @@ revaulter-cli sign \
   --key-label release-signing \
   --algorithm ES256 \
   --input manifest.json \
-  --raw \
+  --format raw \
   --output manifest.sig
 ```
 
@@ -258,7 +257,7 @@ The server never has access to the plaintext request or response data.
 
 ## Output
 
-By default, the CLI writes a JSON envelope to stdout after decrypting the response:
+By default, the CLI writes a JSON envelope (`--format json`) to stdout after decrypting the response:
 
 ```json
 {
@@ -266,7 +265,8 @@ By default, the CLI writes a JSON envelope to stdout after decrypting the respon
 }
 ```
 
-With `--raw`, it writes the decrypted plaintext as raw bytes — useful for piping into other commands or writing binary data to a file with `--output`.
+- For `decrypt`: `--format raw` writes the decrypted plaintext as raw bytes — useful for piping into other commands or writing binary data to a file with `--output`.
+- For `sign`: `--format` also accepts `jws` (compact JWS) and `raw` (the 64-byte `r || s` signature).
 
 ## Exit codes
 

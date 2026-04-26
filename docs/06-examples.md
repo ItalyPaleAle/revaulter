@@ -59,7 +59,7 @@ PLAINTEXT_KEY=$(revaulter-cli decrypt \
   --value "$CIPHERTEXT" \
   --nonce "$NONCE" \
   --tag "$TAG" \
-  --raw \
+  --format raw \
   --note "boot unlock" \
   --timeout 10m)
 
@@ -163,7 +163,7 @@ revaulter-cli decrypt \
   --value "$CIPHERTEXT" \
   --nonce "$NONCE" \
   --tag "$TAG" \
-  --raw \
+  --format raw \
   --output /dev/stdin \
   --note "age decrypt" \
   2>/dev/null \

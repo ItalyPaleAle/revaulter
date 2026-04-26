@@ -32,7 +32,13 @@ type v2OperationFlagsBase struct {
 	Note    string
 
 	Output string
-	Raw    bool
+
+	// Format selects how the result is written out
+	// Each operation accepts a different subset of values, validated in its own Validate()
+	// - encrypt: only "json" (default)
+	// - decrypt: "json" (default) or "raw" (write decrypted plaintext as raw bytes)
+	// - sign:    "json" (default: JSON envelope), "jws" (compact JWS string), or "raw" (64-byte r||s signature)
+	Format string
 
 	// Trust store: the CLI pins the server's hybrid anchor (ES384 + ML-DSA-87) on first contact and refuses to proceed on mismatch
 	// --trust-store picks the file; --no-trust-store disables both pinning and verification.
@@ -63,7 +69,9 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&f.Note, "note", "n", "", "Optional message displayed alongside the request (up to 40 characters)")
 
 	cmd.Flags().StringVarP(&f.Output, "output", "o", "", "Write the result to this file path instead of stdout (mode 0600, refuses symlinks)")
-	cmd.Flags().BoolVar(&f.Raw, "raw", false, "Write the decrypted plaintext as raw bytes instead of the default JSON envelope")
+
+	// Each operation overrides the Usage string after BindBase to spell out its allowed values
+	cmd.Flags().StringVar(&f.Format, "format", "json", "Output format")
 
 	cmd.Flags().StringVar(&f.TrustStorePath, "trust-store", "", "Path to the anchor trust store"+trustStoreDefault)
 	cmd.Flags().BoolVar(&f.NoTrustStore, "no-trust-store", false, "Skip anchor pinning and hybrid bundle verification (equivalent to SSH StrictHostKeyChecking=no)")
@@ -92,7 +100,7 @@ func (f *v2OperationFlagsBase) GetTimeoutDuration() time.Duration  { return time
 func (f *v2OperationFlagsBase) GetNote() string                    { return f.Note }
 func (f *v2OperationFlagsBase) GetConnectionOptions() (bool, bool) { return f.Insecure, f.NoH2C }
 func (f *v2OperationFlagsBase) GetOutput() string                  { return f.Output }
-func (f *v2OperationFlagsBase) GetRaw() bool                       { return f.Raw }
+func (f *v2OperationFlagsBase) GetFormat() string                  { return f.Format }
 func (f *v2OperationFlagsBase) GetTrustStorePath() string          { return f.TrustStorePath }
 func (f *v2OperationFlagsBase) GetNoTrustStore() bool              { return f.NoTrustStore }
 
@@ -109,7 +117,7 @@ type v2OperationFlags interface {
 	GetNote() string
 	GetConnectionOptions() (insecure bool, noh2c bool)
 	GetOutput() string
-	GetRaw() bool
+	GetFormat() string
 	GetTrustStorePath() string
 	GetNoTrustStore() bool
 }
@@ -124,10 +132,22 @@ type v2OperationFlagsEncrypt struct {
 
 func (f *v2OperationFlagsEncrypt) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
+	cmd.Flag("format").Usage = "Output format: 'json' (only)"
 	cmd.Flags().Var(&f.Value, "value", "The message to encrypt (base64-encoded)")
 	_ = cmd.MarkFlagRequired("value")
 	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce/IV for the operation (base64-encoded)")
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data (base64-encoded)")
+}
+
+func (f *v2OperationFlagsEncrypt) Validate() error {
+	err := f.v2OperationFlagsBase.Validate()
+	if err != nil {
+		return err
+	}
+	if f.Format != "json" {
+		return fmt.Errorf("invalid --format %q: encrypt only supports 'json'", f.Format)
+	}
+	return nil
 }
 
 func (f *v2OperationFlagsEncrypt) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
@@ -151,11 +171,23 @@ type v2OperationFlagsDecrypt struct {
 
 func (f *v2OperationFlagsDecrypt) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
+	cmd.Flag("format").Usage = "Output format: 'json' (default: JSON envelope) or 'raw' (write the decrypted plaintext as raw bytes)"
 	cmd.Flags().Var(&f.Value, "value", "The message to decrypt (base64-encoded)")
 	_ = cmd.MarkFlagRequired("value")
 	cmd.Flags().Var(&f.Tag, "tag", "Authentication tag (base64-encoded)")
 	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce/IV (base64-encoded)")
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data (base64-encoded)")
+}
+
+func (f *v2OperationFlagsDecrypt) Validate() error {
+	err := f.v2OperationFlagsBase.Validate()
+	if err != nil {
+		return err
+	}
+	if f.Format != "json" && f.Format != "raw" {
+		return fmt.Errorf("invalid --format %q: decrypt supports 'json' or 'raw'", f.Format)
+	}
+	return nil
 }
 
 func (f *v2OperationFlagsDecrypt) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
@@ -177,7 +209,6 @@ type v2OperationFlagsSign struct {
 	Input     string
 	File      string
 	Digest    string
-	Format    string
 	JwsHeader string
 
 	// Resolved state after Validate()
@@ -189,10 +220,10 @@ type v2OperationFlagsSign struct {
 
 func (f *v2OperationFlagsSign) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
+	cmd.Flag("format").Usage = "Output format: 'json' (default: JSON envelope with base64url r||s signature), 'jws' (compact JWS string), or 'raw' (64-byte r||s signature). 'jws' requires --input"
 	cmd.Flags().StringVar(&f.Input, "input", "", "Path to the message file to sign; use '-' for stdin. Aliased by --file")
 	cmd.Flags().StringVar(&f.File, "file", "", "Alias for --input")
 	cmd.Flags().StringVar(&f.Digest, "digest", "", "Pre-computed SHA-256 digest (hex or base64url, 32 bytes)")
-	cmd.Flags().StringVar(&f.Format, "format", "raw", "Output format: 'raw' (JSON envelope with base64url r||s signature) or 'jws' (compact JWS string)")
 	cmd.Flags().StringVar(&f.JwsHeader, "jws-header", "", "Optional JSON fragment merged into the default protected header when building a JWS from --input")
 	cmd.MarkFlagsMutuallyExclusive("input", "file")
 }
@@ -228,19 +259,16 @@ func (f *v2OperationFlagsSign) Validate() error {
 	}
 
 	switch f.Format {
-	case "raw":
+	case "json", "raw":
 		f.jwsOutput = false
 	case "jws":
 		f.jwsOutput = true
 	default:
-		return fmt.Errorf("invalid --format %q: expected 'raw' or 'jws'", f.Format)
+		return fmt.Errorf("invalid --format %q: sign supports 'json', 'jws', or 'raw'", f.Format)
 	}
 
 	if f.jwsOutput && f.Digest != "" {
 		return errors.New("--format jws requires --input (digest alone is not enough to reconstruct the JWS signing input)")
-	}
-	if f.jwsOutput && f.Raw {
-		return errors.New("--raw cannot be combined with --format jws")
 	}
 
 	switch {
@@ -337,10 +365,10 @@ type v2SignResponsePayload struct {
 }
 
 // FormatResult shapes the decrypted plaintext depending on the selected output format
-// - `--format jws` emits `<header>.<payload>.<sig>`
-// - `--raw` emits the 64 raw `r||s` bytes
-// - the default emits the JSON envelope indented for stdout
-func (f *v2OperationFlagsSign) FormatResult(state string, plain []byte, raw bool) ([]byte, error) {
+// - `json` (default) emits the indented JSON envelope produced by the browser
+// - `jws` emits `<header>.<payload>.<sig>`
+// - `raw` emits the 64 raw `r||s` bytes
+func (f *v2OperationFlagsSign) FormatResult(state string, plain []byte, format string) ([]byte, error) {
 	// Parse the JSON response
 	var resp v2SignResponsePayload
 	err := json.Unmarshal(plain, &resp)
@@ -375,8 +403,8 @@ func (f *v2OperationFlagsSign) FormatResult(state string, plain []byte, raw bool
 		return nil, fmt.Errorf("unexpected signature length: got %d bytes, want 64", len(sigBytes))
 	}
 
-	switch {
-	case f.jwsOutput:
+	switch format {
+	case "jws":
 		if f.jwsHeaderSegment == "" || f.jwsPayloadSegment == "" {
 			return nil, errors.New("missing JWS header/payload segments")
 		}
@@ -384,10 +412,10 @@ func (f *v2OperationFlagsSign) FormatResult(state string, plain []byte, raw bool
 		out := f.jwsHeaderSegment + "." + f.jwsPayloadSegment + "." + sigSeg + "\n"
 		return []byte(out), nil
 
-	case raw:
+	case "raw":
 		return sigBytes, nil
 
-	default:
+	case "json":
 		// Pretty-print the JSON envelope for stdout friendliness, preserving field order produced by the browser
 		var buf bytes.Buffer
 		err = json.Indent(&buf, plain, "", " ")
@@ -396,5 +424,8 @@ func (f *v2OperationFlagsSign) FormatResult(state string, plain []byte, raw bool
 		}
 		buf.WriteByte('\n')
 		return buf.Bytes(), nil
+
+	default:
+		return nil, fmt.Errorf("unsupported format %q", format)
 	}
 }
