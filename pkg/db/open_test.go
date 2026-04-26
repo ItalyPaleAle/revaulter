@@ -3,12 +3,18 @@ package db
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
 func newTestDatabase(t *testing.T) *DB {
+	baseDSN := os.Getenv("TEST_DATABASE_DSN")
+	if baseDSN != "" {
+		return newTestPostgresDB(t, baseDSN)
+	}
+
 	// Use a unique name for the database to use different ones
 	h := sha256.Sum256([]byte(t.Name()))
 	dbName := hex.EncodeToString(h[:12])
