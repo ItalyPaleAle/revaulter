@@ -4,7 +4,7 @@
 
 Revaulter uses WebAuthn passkeys to protect cryptographic operations. Data is encrypted end-to-end: your encryption keys live in the browser, derived from your passkey, and the server never sees the key or the plaintext. When a CLI or script needs to encrypt or decrypt something, the passkey holder confirms the operation from a web app, and the browser performs the crypto locally.
 
-![Example of a notification sent by Revaulter (to a Discord chat)](/notification-example.png)
+![Screenshot of Revaulter, showing 3 requests pending approval: one for encrypting, one for signing, one for decrypting](./screenshot.webp)
 
 ## How it works
 
@@ -14,7 +14,9 @@ Revaulter uses WebAuthn passkeys to protect cryptographic operations. Data is en
 4. On approval, the browser derives the key from the passkey and performs the crypto operation locally
 5. The CLI receives the encrypted result and decrypts it locally
 
-The Revaulter server is just a relay. Encryption keys are derived from the passkey in the browser (leveraging the PRF extension), they never leave the user's device. The server stores only opaque, end-to-end encrypted envelopes.
+Encryption keys are derived from the passkey in the browser (leveraging the PRF extension), they never leave the user's device. The Revaulter server is just a relay: it temporarily stores only opaque, end-to-end encrypted envelopes.
+
+![Example of a notification sent by Revaulter to a Discord channel](./notification-example.webp)
 
 ## Usage examples
 
@@ -55,7 +57,7 @@ Integrate Revaulter into your boot process to unlock LUKS/dm-crypt volumes. A sc
 
 ## Key features
 
-- **Passkey-derived keys** — encryption keys are derived from WebAuthn passkeys (with PRF support) directly in the browser; the server never has access to them
+- **Passkey-derived keys** — encryption keys are derived from WebAuthn passkeys (with PRF) directly in the browser; the server never has access to them
 - **End-to-end encryption** — all cryptographic operations happen in the user's browser using WebCrypto; the server stores only opaque, encrypted envelopes
 - **Self-hosted** — runs on your infrastructure; you own your data and keys
 - **Webhook notifications** — get notified on Discord, Slack, or any webhook endpoint when a request is waiting
