@@ -20,10 +20,26 @@ jobs:
     name: CI tests
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: revaulter_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
       CGO_ENABLED: "0"
       GOLANGCI_LINT_VERSION: "v2.11.4"
       GOEXPERIMENT: jsonv2
+      TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/revaulter_test?sslmode=disable
 
     steps:
       - name: Check out code
@@ -69,7 +85,13 @@ jobs:
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
 
-      - name: Run backend tests
+      - name: Run backend tests (SQLite)
+        run: |
+          make test
+
+      - name: Run backend tests (Postgres)
+        env:
+          TEST_DATABASE_DSN: ${{ env.TEST_POSTGRES_DSN }}
         run: |
           make test
 
@@ -83,7 +105,19 @@ jobs:
         run: |
           pnpm run test
 
-      - name: Run E2E tests
+      - name: Build E2E server binary
         working-directory: client/web
         run: |
-          pnpm run e2e
+          pnpm run e2e:build-server
+
+      - name: Run E2E tests (SQLite)
+        working-directory: client/web
+        run: |
+          pnpm exec playwright test
+
+      - name: Run E2E tests (Postgres)
+        working-directory: client/web
+        env:
+          E2E_DATABASE_DSN: ${{ env.TEST_POSTGRES_DSN }}
+        run: |
+          pnpm exec playwright test

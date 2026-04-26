@@ -31,6 +31,7 @@ const tempDir = mkdtempSync(join(tmpdir(), 'revaulter-playwright-'))
 const configPath = join(tempDir, 'config.yaml')
 const databasePath = join(tempDir, 'revaulter-e2e.db')
 const logPath = join(tempDir, 'server.log')
+const databaseDSN = process.env.E2E_DATABASE_DSN || databasePath
 const secretKey = Buffer.alloc(32, 7).toString('base64')
 const e2eToken = process.env.REVAULTER_E2E_TOKEN || 'playwright-e2e-token-fixed'
 
@@ -41,7 +42,7 @@ writeFileSync(
         `baseUrl: "http://localhost:${port}"`,
         'bind: "127.0.0.1"',
         `port: ${port}`,
-        `databaseDSN: "${databasePath}"`,
+        `databaseDSN: "${databaseDSN}"`,
         `secretKey: "${secretKey}"`,
         'webauthnRpId: "localhost"',
         `webauthnOrigins: ["http://localhost:${port}"]`,
