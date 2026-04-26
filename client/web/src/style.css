@@ -73,6 +73,15 @@ samp {
     }
 }
 
+/* 1Password tags inputs it has filled with `data-com-onepassword-filled="light"` or `"dark"` based on its own theme detection
+Their detector mis-classifies pages that use oklch as light, so a dark-themed page ends up with the light treatment (pale-blue field background, dark text) — see https://www.1password.community/discussions/developers/1pw-extension-bug-autofill-theme-detection-fails-when-using-oklch-color-scheme/161487
+When the user's OS is in dark mode, force the dark-mode field background and text regardless of which value 1Password picked */
+@media (prefers-color-scheme: dark) {
+    input[data-com-onepassword-filled="light"] {
+        color: #171717;
+    }
+}
+
 @keyframes spin {
     to {
         transform: rotate(360deg);
