@@ -22,8 +22,20 @@ const (
 const SigningAlgES256 = "ES256"
 
 // IsSupportedSigningAlgorithm reports whether alg is a signing algorithm supported by the server for the "sign" operation
+// Comparison is case-insensitive; callers that need the canonical (uppercase) form should use NormalizeSigningAlgorithm
 func IsSupportedSigningAlgorithm(alg string) bool {
-	return alg == SigningAlgES256
+	return strings.ToUpper(alg) == SigningAlgES256
+}
+
+// NormalizeSigningAlgorithm returns the canonical form of a supported signing algorithm and reports whether the input was supported
+// All downstream consumers (HKDF info, AAD, JWS headers) should use the canonical form so the same string flows through every layer
+func NormalizeSigningAlgorithm(alg string) (canonical string, ok bool) {
+	switch strings.ToUpper(alg) {
+	case SigningAlgES256:
+		return SigningAlgES256, true
+	default:
+		return "", false
+	}
 }
 
 // IsSupportedEncryptionAlgorithm reports whether alg is an encryption algorithm accepted by the server for the "encrypt" / "decrypt" operations

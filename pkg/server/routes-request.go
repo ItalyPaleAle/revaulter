@@ -369,8 +369,14 @@ func validateV2CreateBody(op string, body *protocolv2.RequestCreateBody) error {
 	}
 
 	// For sign operations, restrict algorithm to supported signing algorithms
-	if op == protocolv2.OperationSign && !protocolv2.IsSupportedSigningAlgorithm(body.Algorithm) {
-		return NewResponseErrorf(http.StatusBadRequest, "unsupported signing algorithm %q", body.Algorithm)
+	// The match is case-insensitive but the stored value is canonical so downstream consumers (HKDF info, AAD, JWS headers) all see the same bytes
+	if op == protocolv2.OperationSign {
+		canonical, ok := protocolv2.NormalizeSigningAlgorithm(body.Algorithm)
+		if !ok {
+			return NewResponseErrorf(http.StatusBadRequest, "unsupported signing algorithm %q", body.Algorithm)
+		}
+
+		body.Algorithm = canonical
 	}
 
 	// For encrypt/decrypt operations, restrict algorithm to the supported AEAD primitives (case-insensitive)

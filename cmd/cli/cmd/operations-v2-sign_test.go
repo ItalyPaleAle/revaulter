@@ -40,6 +40,19 @@ func TestSignValidateRejectsUnsupportedAlgorithm(t *testing.T) {
 	require.Contains(t, err.Error(), "unsupported signing algorithm")
 }
 
+func TestSignValidateAlgorithmCaseInsensitive(t *testing.T) {
+	for _, alg := range []string{"es256", "Es256", "ES256", "eS256"} {
+		t.Run(alg, func(t *testing.T) {
+			f := newSignFlagsWithRequired(t)
+			f.Algorithm = alg
+			f.Digest = strings.Repeat("aa", 32)
+			require.NoError(t, f.Validate())
+			// Validate normalizes to the canonical form so AAD computed locally matches the canonical string the server stores
+			require.Equal(t, protocolv2.SigningAlgES256, f.Algorithm)
+		})
+	}
+}
+
 func TestSignValidateRequiresExactlyOneInput(t *testing.T) {
 	t.Run("none", func(t *testing.T) {
 		f := newSignFlagsWithRequired(t)
