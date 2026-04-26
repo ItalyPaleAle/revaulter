@@ -144,7 +144,7 @@ test('second long-poll subscriber evicts the first and the response is unavailab
         expect(sub2Body.failed).toBe(true)
 
         // Any further long-poll on the same state must report not-found because the response is consumed
-        const tailRes = await request.get(url)
+        const tailRes = await request.get(url, requestOpts)
         expect(tailRes.status()).toBe(404)
     } finally {
         await auth.passkey.dispose()
