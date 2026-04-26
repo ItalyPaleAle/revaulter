@@ -157,8 +157,10 @@ test('signing key can be derived, published, and re-published with stored proof'
 
         // Publish the derived key — this signs the publication payload with the session anchor
         // The derived-key publish button has accessible name "Publish Publish" (icon title + label); the stored-key list uses aria-label "Publish key", so we target the exact form
-        await page.getByRole('button', { name: 'Publish Publish', exact: true }).click()
-        await expect(page.getByText('Published', { exact: true })).toBeVisible()
+        const publishButton = page.getByRole('button', { name: 'Publish Publish', exact: true })
+        await publishButton.click()
+        // After publishing the button is replaced with a "Published" status badge; "Published" also appears as a tooltip title inside the badge's check icon, so we wait for the publish button to disappear instead
+        await expect(publishButton).toBeHidden()
 
         // Public .jwk response carries the proof + anchor pubkeys; .pem stays raw PEM
         const jwkRes = await request.get(`/v2/signing-keys/${keyId}.jwk`)
