@@ -38,6 +38,7 @@ let working = $state(false)
 let localStatus = $state<string>('pending')
 let error = $state<string | null>(null)
 let detail = $state<V2RequestDetail | null>(null)
+let removeTimer: ReturnType<typeof setTimeout> | null = null
 
 $effect(() => {
     if (
@@ -69,7 +70,7 @@ async function doCancel() {
             throw new Error('Cancel failed')
         }
         localStatus = 'canceled'
-        onRemoved?.(item.state)
+        scheduleRemoval()
     } catch (err) {
         localStatus = '_failed'
         error = err instanceof Error ? err.message : String(err)
@@ -90,13 +91,22 @@ async function doConfirm() {
             throw new Error('Confirm failed')
         }
         localStatus = 'confirmed'
-        onRemoved?.(item.state)
+        scheduleRemoval()
     } catch (err) {
         localStatus = '_failed'
         error = err instanceof Error ? err.message : String(err)
     } finally {
         working = false
     }
+}
+
+function scheduleRemoval() {
+    if (removeTimer) {
+        clearTimeout(removeTimer)
+    }
+    removeTimer = setTimeout(() => {
+        onRemoved?.(item.state)
+    }, 1100)
 }
 
 async function buildResponseEnvelope(
@@ -380,18 +390,28 @@ let meta = $derived(OP_META[item.operation])
 let confirmed = $derived(localStatus === 'confirmed')
 let canceled = $derived(localStatus === 'canceled')
 let terminal = $derived(confirmed || canceled)
+
+$effect(() => {
+    return () => {
+        if (removeTimer) {
+            clearTimeout(removeTimer)
+        }
+    }
+})
 </script>
 
 <div
-    class={`px-6 py-5 transition-colors ${confirmed ? 'bg-emerald-50/60 dark:bg-emerald-950/20' : canceled ? 'bg-rose-50/60 dark:bg-rose-950/20' : ''} ${terminal ? 'opacity-70' : ''}`}
+    class={`operation-card px-6 py-5 transition-colors ${confirmed ? 'operation-card-complete bg-emerald-50/60 dark:bg-emerald-950/20' : canceled ? 'operation-card-canceled bg-rose-50/60 dark:bg-rose-950/20' : ''} ${terminal ? 'opacity-70' : ''}`}
 >
     <div class="flex items-start gap-4">
         <!-- Icon puck -->
         <div
-            class={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${meta.bgClass} ${meta.colorClass}`}
+            class={`operation-puck mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${meta.bgClass} ${meta.colorClass} ${confirmed ? `operation-complete operation-${item.operation}` : ''}`}
             title={item.algorithm}
         >
-            <Icon icon={meta.icon} title={meta.label} size="4" />
+            <span class="operation-icon">
+                <Icon icon={meta.icon} title={meta.label} size="5" />
+            </span>
         </div>
 
         <!-- Main -->
@@ -503,3 +523,166 @@ let terminal = $derived(confirmed || canceled)
         </div>
     </div>
 </div>
+
+<style>
+    .operation-card {
+        will-change: transform, opacity;
+    }
+
+    .operation-card-complete {
+        animation: card-complete-slide 980ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    .operation-card-canceled {
+        animation: card-canceled-slide 980ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    .operation-puck {
+        position: relative;
+        overflow: visible;
+    }
+
+    .operation-puck::after {
+        content: '';
+        position: absolute;
+        inset: -3px;
+        border-radius: 0.75rem;
+        border: 1px solid currentColor;
+        opacity: 0;
+        transform: scale(0.78);
+    }
+
+    .operation-icon {
+        display: inline-flex;
+    }
+
+    .operation-complete {
+        animation: complete-puck 680ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    .operation-complete::after {
+        animation: complete-ring 760ms ease-out both;
+    }
+
+    .operation-complete.operation-encrypt .operation-icon {
+        animation: encrypt-seal 680ms ease-out both;
+    }
+
+    .operation-complete.operation-decrypt .operation-icon {
+        animation: decrypt-open 680ms ease-out both;
+    }
+
+    .operation-complete.operation-sign .operation-icon {
+        animation: sign-stamp 720ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    }
+
+    @keyframes card-complete-slide {
+        0% {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        28% {
+            transform: translateX(10px);
+            opacity: 1;
+        }
+        100% {
+            transform: translateX(56px);
+            opacity: 0;
+        }
+    }
+
+    @keyframes card-canceled-slide {
+        0% {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        28% {
+            transform: translateX(-10px);
+            opacity: 1;
+        }
+        100% {
+            transform: translateX(-56px);
+            opacity: 0;
+        }
+    }
+
+    @keyframes complete-puck {
+        0% {
+            transform: scale(1);
+        }
+        38% {
+            transform: scale(1.12);
+        }
+        100% {
+            transform: scale(1);
+        }
+    }
+
+    @keyframes complete-ring {
+        0% {
+            opacity: 0.42;
+            transform: scale(0.82);
+        }
+        100% {
+            opacity: 0;
+            transform: scale(1.55);
+        }
+    }
+
+    @keyframes encrypt-seal {
+        0% {
+            transform: translateY(-1px) scale(0.92);
+            opacity: 0.7;
+        }
+        42% {
+            transform: translateY(1px) scale(1.12);
+            opacity: 1;
+        }
+        100% {
+            transform: translateY(0) scale(1);
+        }
+    }
+
+    @keyframes decrypt-open {
+        0% {
+            transform: rotate(-10deg) scale(0.92);
+            opacity: 0.7;
+        }
+        45% {
+            transform: rotate(10deg) scale(1.12);
+            opacity: 1;
+        }
+        100% {
+            transform: rotate(0) scale(1);
+        }
+    }
+
+    @keyframes sign-stamp {
+        0% {
+            transform: translateY(-5px) rotate(-5deg) scale(1.08);
+            opacity: 0.78;
+        }
+        42% {
+            transform: translateY(2px) rotate(0) scale(0.94);
+            opacity: 1;
+        }
+        72% {
+            transform: translateY(-1px) scale(1.05);
+        }
+        100% {
+            transform: translateY(0) scale(1);
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .operation-complete,
+        .operation-complete::after,
+        .operation-card-complete,
+        .operation-card-canceled,
+        .operation-complete.operation-encrypt .operation-icon,
+        .operation-complete.operation-decrypt .operation-icon,
+        .operation-complete.operation-sign .operation-icon {
+            animation: none;
+        }
+    }
+</style>
