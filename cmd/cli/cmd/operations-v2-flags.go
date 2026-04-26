@@ -19,6 +19,25 @@ import (
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 
+// maxInputBytes caps the plaintext bytes the CLI is willing to send through encrypt/decrypt/sign to 100KB
+// The server enforces a 1 MiB limit on the outer request body (where the input is encoded as base64 in JSON, then encrypted)
+const maxInputBytes = 100 << 10
+
+// ensureWithinInputLimit rejects oversize inputs before they hit the wire
+// The reported size is the count of plaintext bytes (i.e. before base64 encoding) so the error matches the documented limit
+func ensureWithinInputLimit(field string, sizeBytes int) error {
+	if sizeBytes > maxInputBytes {
+		return fmt.Errorf("%s exceeds the maximum allowed size of %d KB (got %.1f KB)", field, maxInputBytes>>10, (float64(sizeBytes) / 1024))
+	}
+	return nil
+}
+
+// decodedSizeFromBase64 returns the approximate byte length of a base64 string after decoding
+// Uses base64.StdEncoding.DecodedLen, which may slightly over-report for unpadded input but is well within tolerance for size enforcement
+func decodedSizeFromBase64(b64 string) int {
+	return base64.StdEncoding.DecodedLen(len(b64))
+}
+
 type v2OperationFlagsBase struct {
 	Server   string
 	Insecure bool
@@ -183,12 +202,23 @@ func (f *v2OperationFlagsEncrypt) Validate() error {
 
 		// Parse the JSON message
 		var parsed encryptJSONInput
-		uErr := json.Unmarshal(raw, &parsed)
-		if uErr != nil {
-			return fmt.Errorf("invalid --json: %w", uErr)
+		rErr = json.Unmarshal(raw, &parsed)
+		if rErr != nil {
+			return fmt.Errorf("invalid --json: %w", rErr)
 		}
 		if parsed.Value == "" {
 			return errors.New("--json: 'value' field is required")
+		}
+
+		// Size-check the decoded fields against the documented limit
+		rErr = ensureWithinInputLimit("--json value", decodedSizeFromBase64(parsed.Value))
+		if rErr != nil {
+			return rErr
+		}
+
+		rErr = ensureWithinInputLimit("--json additionalData", decodedSizeFromBase64(parsed.AdditionalData))
+		if rErr != nil {
+			return rErr
 		}
 
 		f.resolvedValueB64 = parsed.Value
@@ -200,16 +230,43 @@ func (f *v2OperationFlagsEncrypt) Validate() error {
 			return fmt.Errorf("failed to read --input: %w", rErr)
 		}
 
+		rErr = ensureWithinInputLimit("--input", len(raw))
+		if rErr != nil {
+			return rErr
+		}
+		aErr := f.checkAADSize()
+		if aErr != nil {
+			return aErr
+		}
+
 		f.resolvedValueB64 = base64.RawURLEncoding.EncodeToString(raw)
 		f.resolvedAADB64 = f.AdditionalData.String()
 
 	case f.Message != "":
 		// --message takes a raw UTF-8 string; the browser decodes the inner Value field as base64url, so we encode here
+		rErr := ensureWithinInputLimit("--message", len(f.Message))
+		if rErr != nil {
+			return rErr
+		}
+		aErr := f.checkAADSize()
+		if aErr != nil {
+			return aErr
+		}
+
 		f.resolvedValueB64 = base64.RawURLEncoding.EncodeToString([]byte(f.Message))
 		f.resolvedAADB64 = f.AdditionalData.String()
 	}
 
 	return nil
+}
+
+// checkAADSize verifies that the (base64-encoded) --aad fits within the limit after decoding
+// Empty --aad is a no-op
+func (f *v2OperationFlagsEncrypt) checkAADSize() error {
+	return ensureWithinInputLimit(
+		"--aad",
+		decodedSizeFromBase64(f.AdditionalData.String()),
+	)
 }
 
 func (f *v2OperationFlagsEncrypt) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
@@ -277,12 +334,17 @@ func (f *v2OperationFlagsDecrypt) Validate() error {
 		}
 
 		var parsed decryptJSONInput
-		uErr := json.Unmarshal(raw, &parsed)
-		if uErr != nil {
-			return fmt.Errorf("invalid --json: %w", uErr)
+		rErr = json.Unmarshal(raw, &parsed)
+		if rErr != nil {
+			return fmt.Errorf("invalid --json: %w", rErr)
 		}
 		if parsed.Value == "" {
 			return errors.New("--json: 'value' field is required")
+		}
+
+		rErr = checkDecryptInputSizes(parsed.Value, parsed.AdditionalData, "--json")
+		if rErr != nil {
+			return rErr
 		}
 
 		f.resolvedValueB64 = parsed.Value
@@ -296,12 +358,35 @@ func (f *v2OperationFlagsDecrypt) Validate() error {
 		return errors.New("either --value or --json is required")
 	}
 
+	rErr := checkDecryptInputSizes(f.Value.String(), f.AdditionalData.String(), "")
+	if rErr != nil {
+		return rErr
+	}
+
 	f.resolvedValueB64 = f.Value.String()
 	f.resolvedTagB64 = f.Tag.String()
 	f.resolvedNonceB64 = f.Nonce.String()
 	f.resolvedAADB64 = f.AdditionalData.String()
 
 	return nil
+}
+
+// checkDecryptInputSizes enforces the input ceiling on the (base64-encoded) ciphertext and AAD
+// `prefix` is prepended to the field name in the error message so callers can disambiguate --json fields from individual flags
+func checkDecryptInputSizes(valueB64, aadB64, prefix string) error {
+	valueLabel := "--value"
+	aadLabel := "--aad"
+	if prefix != "" {
+		valueLabel = prefix + " value"
+		aadLabel = prefix + " additionalData"
+	}
+
+	err := ensureWithinInputLimit(valueLabel, decodedSizeFromBase64(valueB64))
+	if err != nil {
+		return err
+	}
+
+	return ensureWithinInputLimit(aadLabel, decodedSizeFromBase64(aadB64))
 }
 
 func (f *v2OperationFlagsDecrypt) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {

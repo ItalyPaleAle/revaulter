@@ -206,3 +206,95 @@ func TestDecryptRequiresValueOrJSON(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "either --value or --json is required")
 }
+
+func TestEncryptMessageRejectsOversizeInput(t *testing.T) {
+	// One byte over the limit: keeps the test fast and cheap while still tripping the size guard
+	oversize := make([]byte, maxInputBytes+1)
+	for i := range oversize {
+		oversize[i] = 'a'
+	}
+
+	f := newEncryptFlagsWithRequired(t)
+	f.Message = string(oversize)
+	err := f.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--message exceeds the maximum allowed size")
+}
+
+func TestEncryptMessageAcceptsExactlyMaxSize(t *testing.T) {
+	// Exactly maxInputBytes is allowed; only strictly greater trips the guard
+	exact := make([]byte, maxInputBytes)
+	for i := range exact {
+		exact[i] = 'a'
+	}
+
+	f := newEncryptFlagsWithRequired(t)
+	f.Message = string(exact)
+	require.NoError(t, f.Validate())
+}
+
+func TestEncryptInputRejectsOversizeFile(t *testing.T) {
+	oversize := make([]byte, maxInputBytes+1)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.bin")
+	require.NoError(t, os.WriteFile(path, oversize, 0o600))
+
+	f := newEncryptFlagsWithRequired(t)
+	f.Message = ""
+	f.Input = path
+	err := f.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--input exceeds the maximum allowed size")
+}
+
+func TestEncryptJSONRejectsOversizeValue(t *testing.T) {
+	// 200 KiB of base64 decodes to ~150 KiB, which is over the 100 KiB cap
+	oversizeB64 := base64.StdEncoding.EncodeToString(make([]byte, maxInputBytes+1))
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.json")
+	body := []byte(`{"value":"` + oversizeB64 + `"}`)
+	require.NoError(t, os.WriteFile(path, body, 0o600))
+
+	f := newEncryptFlagsWithRequired(t)
+	f.Message = ""
+	f.JSON = path
+	err := f.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--json value exceeds the maximum allowed size")
+}
+
+func TestEncryptAADRejectsOversize(t *testing.T) {
+	// Use a 1 KiB margin so the size check trips even after stringValue.Set re-encodes as RawURLEncoding (no padding) and the StdEncoding-based DecodedLen rounds down
+	oversizeB64 := base64.StdEncoding.EncodeToString(make([]byte, maxInputBytes+1024))
+
+	f := newEncryptFlagsWithRequired(t)
+	require.NoError(t, f.AdditionalData.Set(oversizeB64))
+	err := f.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--aad exceeds the maximum allowed size")
+}
+
+func TestDecryptValueRejectsOversize(t *testing.T) {
+	oversizeB64 := base64.StdEncoding.EncodeToString(make([]byte, maxInputBytes+1024))
+
+	f := newDecryptFlagsWithRequired(t)
+	require.NoError(t, f.Value.Set(oversizeB64))
+	err := f.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--value exceeds the maximum allowed size")
+}
+
+func TestDecryptJSONRejectsOversizeValue(t *testing.T) {
+	oversizeB64 := base64.StdEncoding.EncodeToString(make([]byte, maxInputBytes+1))
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.json")
+	body := []byte(`{"value":"` + oversizeB64 + `"}`)
+	require.NoError(t, os.WriteFile(path, body, 0o600))
+
+	f := newDecryptFlagsWithRequired(t)
+	f.Value = ""
+	f.JSON = path
+	err := f.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--json value exceeds the maximum allowed size")
+}
