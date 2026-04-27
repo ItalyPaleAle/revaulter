@@ -171,6 +171,19 @@ function rejectAll() {
             <div class="mx-auto max-w-xs text-sm text-neutral-500 dark:text-neutral-400">
                 New approvals will appear here as soon as they are assigned to you.
             </div>
+            <div class="mx-auto mt-8 max-w-sm border-t border-neutral-200 pt-6 text-sm text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
+                New to Revaulter? Visit the
+                <a
+                    href="https://github.com/ItalyPaleAle/revaulter"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex items-center gap-1 font-medium text-neutral-900 underline-offset-2 hover:underline dark:text-neutral-100"
+                >
+                    project on GitHub
+                    <Icon icon="arrow-right" title="" size="3.5" />
+                </a>
+                for getting started guides and documentation.
+            </div>
         </div>
     {:else}
         <div class="overflow-hidden rounded-xl border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
