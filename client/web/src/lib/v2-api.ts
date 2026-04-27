@@ -295,9 +295,19 @@ function isV2PendingRequestItem(v: unknown): v is V2PendingRequestItem {
  * Streams pending request list updates over NDJSON. The server emits full list items
  * incrementally so the UI can update in real time without polling.
  */
-export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | null, void, unknown> {
+export async function* v2ListStream(
+    options: { signal?: AbortSignal } = {}
+): AsyncGenerator<V2PendingRequestItem | null, void, unknown> {
     // Abort the streaming connection after 5 minutes of inactivity to prevent hanging connections from leaking resources
     const controller = new AbortController()
+    const abortFromCaller = () => {
+        controller.abort()
+    }
+    if (options.signal?.aborted) {
+        controller.abort()
+    } else {
+        options.signal?.addEventListener('abort', abortFromCaller, { once: true })
+    }
     const connectionTimeout = 5 * 60 * 1000 // 5 minutes
     let timer = setTimeout(() => controller.abort(), connectionTimeout)
 
@@ -307,23 +317,25 @@ export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | nul
         timer = setTimeout(() => controller.abort(), connectionTimeout)
     }
 
-    // Request the streaming list endpoint explicitly as NDJSON and keep credentials attached.
-    const res = await fetch('/v2/api/list', {
-        headers: new Headers({ accept: 'application/x-ndjson' }),
-        credentials: 'same-origin',
-        cache: 'no-store',
-        signal: controller.signal,
-    })
-    if (!res.ok || !res.body) {
-        // Throw a ResponseNotOkError so callers can branch on .statusCode (e.g. 401 → redirect to sign-in)
-        const err = new ResponseNotOkError(`Failed list stream: ${res.status}`)
-        err.statusCode = res.status
-        throw err
-    }
-
-    // Decode the response body as a stream of newline-delimited JSON objects
-    const gen = ndjson<V2PendingRequestItem>(res.body.getReader(), isV2PendingRequestItem)
+    let reader: ReadableStreamDefaultReader | null = null
     try {
+        // Request the streaming list endpoint explicitly as NDJSON and keep credentials attached
+        const res = await fetch('/v2/api/list', {
+            headers: new Headers({ accept: 'application/x-ndjson' }),
+            credentials: 'same-origin',
+            cache: 'no-store',
+            signal: controller.signal,
+        })
+        if (!res.ok || !res.body) {
+            // Throw a ResponseNotOkError so callers can branch on .statusCode (e.g. 401 -> redirect to sign-in)
+            const err = new ResponseNotOkError(`Failed list stream: ${res.status}`)
+            err.statusCode = res.status
+            throw err
+        }
+
+        // Decode the response body as a stream of newline-delimited JSON objects
+        reader = res.body.getReader()
+        const gen = ndjson<V2PendingRequestItem>(reader, isV2PendingRequestItem)
         while (true) {
             const { done, value } = await gen.next()
             if (done) {
@@ -337,6 +349,9 @@ export async function* v2ListStream(): AsyncGenerator<V2PendingRequestItem | nul
             yield value ?? null
         }
     } finally {
+        options.signal?.removeEventListener('abort', abortFromCaller)
         clearTimeout(timer)
+        controller.abort()
+        await reader?.cancel().catch(() => {})
     }
 }

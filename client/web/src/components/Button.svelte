@@ -7,6 +7,7 @@ interface Props {
     class?: string
     disabled?: boolean
     onclick?: (event: MouseEvent) => void
+    ref?: HTMLButtonElement
     size?: 'sm' | 'md' | 'lg' | 'icon' | 'none'
     title?: string
     type?: 'button' | 'submit' | 'reset'
@@ -20,6 +21,7 @@ let {
     class: className = '',
     disabled = false,
     onclick,
+    ref = $bindable(),
     size = 'md',
     title,
     type = 'button',
@@ -68,6 +70,7 @@ function widthClass(value: typeof width) {
 </script>
 
 <button
+    bind:this={ref}
     {type}
     {disabled}
     {title}

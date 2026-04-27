@@ -552,6 +552,79 @@ func TestServerV2APIListStreamScopesToSignedInUser(t *testing.T) {
 	require.Equal(t, aliceUser.ID, item["userId"])
 }
 
+func TestServerV2APIListStreamSuppressesDuplicateInitialEvents(t *testing.T) {
+	setTestConfig(t, "v2-list-stream-dup.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	rs := srv.db.RequestStore()
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice-stream-dup", "Alice")
+	now := time.Now().UTC().Truncate(time.Second)
+	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
+		State:            "alice-stream-dup-state",
+		UserID:           aliceUser.ID,
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "alice-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(10 * time.Minute),
+		EncryptedRequest: `{}`,
+	})
+	require.NoError(t, err)
+
+	// Note stream is closed with a cleanup function
+	//nolint:bodyclose
+	res, lines := openListStream(t, client, aliceCookie)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+
+	select {
+	case line, ok := <-lines:
+		require.True(t, ok, "stream closed before delivering initial item")
+		var item map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &item))
+		require.Equal(t, "alice-stream-dup-state", item["state"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial stream item")
+	}
+
+	// A live publish for a state already replayed by the initial list should not duplicate the item
+	srv.publishListItem(&db.V2RequestListItem{
+		State:  "alice-stream-dup-state",
+		Status: string(db.V2RequestStatusPending),
+		UserID: aliceUser.ID,
+	})
+	select {
+	case dup, ok := <-lines:
+		if ok {
+			t.Fatalf("unexpected duplicate stream row: %s", dup)
+		}
+	case <-time.After(400 * time.Millisecond):
+		// Expected because duplicate pending item was suppressed
+	}
+
+	// Removal events for an initial state must still be delivered so the UI can clear the item
+	srv.publishListItem(&db.V2RequestListItem{
+		State:  "alice-stream-dup-state",
+		Status: "removed",
+		UserID: aliceUser.ID,
+	})
+	select {
+	case line, ok := <-lines:
+		require.True(t, ok, "stream closed before delivering removal")
+		var item map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &item))
+		require.Equal(t, "alice-stream-dup-state", item["state"])
+		require.Equal(t, "removed", item["status"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for removal stream item")
+	}
+}
+
 func TestServerV2FinalizeSignupRefreshesSessionForReadyAPI(t *testing.T) {
 	setTestConfig(t, "v2-finalize-refresh.db")
 

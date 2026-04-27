@@ -74,6 +74,7 @@ let {
 }: Props = $props()
 
 let settingsModalOpen = $state(false)
+let settingsButton: HTMLButtonElement | undefined = $state()
 let bulkAction = $state<{ id: number; action: 'confirm' | 'cancel' } | null>(null)
 let bulkActionId = 0
 
@@ -83,6 +84,7 @@ function toggleSettingsModal() {
 
 function closeSettingsModal() {
     settingsModalOpen = false
+    settingsButton?.focus()
 }
 
 function approveAll() {
@@ -114,6 +116,7 @@ function rejectAll() {
             <div class="flex items-center gap-2">
                 <span class="group relative">
                     <Button
+                        bind:ref={settingsButton}
                         variant="icon"
                         size="icon"
                         ariaLabel="Open settings"

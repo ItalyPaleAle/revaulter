@@ -1,4 +1,6 @@
 <script lang="ts">
+import { tick } from 'svelte'
+
 import { formatDistanceToNowStrict } from 'date-fns'
 
 import Button from '$components/Button.svelte'
@@ -92,6 +94,17 @@ let confirmingDeleteId = $state<string | null>(null)
 let publishingStoredId = $state<string | null>(null)
 let downloadMenuOpenId = $state<string | null>(null)
 let downloadingStoredId = $state<string | null>(null)
+let dialogElement: HTMLElement | undefined = $state()
+let closeButton: HTMLButtonElement | undefined = $state()
+
+const focusableSelector = [
+    'a[href]',
+    'button:not([disabled])',
+    'textarea:not([disabled])',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])',
+].join(',')
 
 $effect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -101,6 +114,34 @@ $effect(() => {
                 return
             }
             onClose()
+            return
+        }
+
+        if (event.key !== 'Tab' || !dialogElement) {
+            return
+        }
+
+        const focusable = Array.from(dialogElement.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+            (element) => {
+                return element.offsetParent !== null || element === document.activeElement
+            }
+        )
+        if (focusable.length === 0) {
+            event.preventDefault()
+            dialogElement.focus()
+            return
+        }
+
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault()
+            last.focus()
+            return
+        }
+        if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault()
+            first.focus()
         }
     }
 
@@ -109,6 +150,13 @@ $effect(() => {
     return () => {
         document.removeEventListener('keydown', handleKeyDown)
     }
+})
+
+$effect(() => {
+    void (async () => {
+        await tick()
+        closeButton?.focus()
+    })()
 })
 
 $effect(() => {
@@ -377,14 +425,22 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
 
 <div class="fixed inset-0 z-40 bg-neutral-950/50 backdrop-blur-sm"></div>
 <section class="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
-    <div class="flex h-[95vh] md:h-[88vh] w-[95vw] md:w-[88vw] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
+    <div
+        bind:this={dialogElement}
+        class="flex h-[95vh] md:h-[88vh] w-[95vw] md:w-[88vw] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-900"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        tabindex="-1"
+    >
         <!-- Header -->
         <div class="flex items-center justify-between gap-4 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
-            <div class="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+            <div id="settings-title" class="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
                 <Icon icon="settings" title="Settings" size="4" />
                 Settings
             </div>
             <Button
+                bind:ref={closeButton}
                 variant="icon"
                 size="icon"
                 ariaLabel="Close settings"

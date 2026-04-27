@@ -31,6 +31,33 @@ test('settings modal opens with all tabs', async ({ page }) => {
     }
 })
 
+test('settings modal traps focus and restores it to the opener', async ({ page }) => {
+    const auth = await registerAndReachReady(page, 'Settings User')
+
+    try {
+        const opener = page.getByRole('button', { name: 'Open settings' })
+        await opener.click()
+
+        const dialog = page.getByRole('dialog', { name: 'Settings' })
+        await expect(dialog).toBeVisible()
+        await expect(page.getByRole('button', { name: 'Close settings' })).toBeFocused()
+
+        await page.keyboard.press('Shift+Tab')
+        expect(
+            await page.evaluate(() => {
+                const dialogElement = document.querySelector('[role="dialog"]')
+                return dialogElement?.contains(document.activeElement)
+            })
+        ).toBe(true)
+
+        await page.keyboard.press('Escape')
+        await expect(dialog).toBeHidden()
+        await expect(opener).toBeFocused()
+    } finally {
+        await auth.passkey.dispose()
+    }
+})
+
 test('settings panel opens and request key can be regenerated', async ({ page }) => {
     const auth = await registerAndReachReady(page, 'Settings User')
 

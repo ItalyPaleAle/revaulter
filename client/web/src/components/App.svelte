@@ -109,7 +109,7 @@ let pendingCredentialPublicKeyHash = $state<string | null>(null)
 
 let items = $state<Record<string, V2PendingRequestItem>>({})
 let listConnected = $state(false)
-let stopStream: (() => void) | null = null
+let stopStream: (() => Promise<void>) | null = null
 let awaitingReadySessionRefresh = $state(false)
 
 onMount(() => {
@@ -160,14 +160,17 @@ function setPrfSecret(v: Uint8Array) {
     prfSecret = v
 }
 
-function teardownListStream() {
-    stopStream?.()
+async function teardownListStream() {
+    const stop = stopStream
+    if (stop) {
+        await stop()
+    }
     stopStream = null
     listConnected = false
 }
 
 function clearLocalAuthState() {
-    teardownListStream()
+    void teardownListStream()
     session = null
     prfSecret = null
     primaryKey = null
@@ -577,7 +580,7 @@ async function doSetPassword() {
 }
 
 async function doLogout() {
-    teardownListStream()
+    void teardownListStream()
     try {
         await v2Logout()
     } catch {
@@ -971,16 +974,20 @@ function startListStream() {
     }
 
     let stopped = false
-    stopStream = () => {
+    const streamController = new AbortController()
+    const stream = v2ListStream({ signal: streamController.signal })
+    stopStream = async () => {
         stopped = true
         stopStream = null
         listConnected = false
+        streamController.abort()
+        await stream.return(undefined)
     }
 
     void (async () => {
         listConnected = false
         try {
-            for await (const item of v2ListStream()) {
+            for await (const item of stream) {
                 if (stopped) {
                     return
                 }

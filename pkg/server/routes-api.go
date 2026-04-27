@@ -318,13 +318,22 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 	}
 	sessionDeadline := time.After(time.Duration(sessionTTL) * time.Second)
 
-	// List currently-pending items
+	// Start a subscription to watch for new items
+	events, err := s.pubsub.Subscribe()
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	defer s.pubsub.Unsubscribe(events)
+
+	// List currently-pending items after subscribing so requests created during stream setup are either replayed by the list query or delivered as live broker messages
 	rs := s.db.RequestStore()
 	list, err := rs.ListPending(c.Request.Context(), userID)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+	seen := make(map[string]struct{}, len(list))
 
 	// Set the ndJSON content type and send the headers
 	c.Header("Content-Type", ndJSONContentType)
@@ -336,21 +345,13 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 	// Send out the list of items already pending
 	if len(list) > 0 {
 		for _, item := range list {
+			seen[item.State] = struct{}{}
 			_ = enc.Encode(item)
 		}
 	} else {
 		// Send an empty message if we haven't sent anything
 		_, _ = c.Writer.Write([]byte("{}\n"))
 	}
-
-	// Start a subscription to watch for new items
-	// Note that items that were received between the time we queried the database and when we subscribe may not show up and will require the user to reload the page; we consider that an acceptable UX
-	events, err := s.pubsub.Subscribe()
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	defer s.pubsub.Unsubscribe(events)
 
 	// Flush to the writer right away
 	c.Writer.Flush()
@@ -385,6 +386,16 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 			// Every broker message must carry a UserID, and it must match the session user
 			if msg.UserID == "" || msg.UserID != userID {
 				continue
+			}
+
+			// Filter messages that have already been "seen"
+			_, alreadySeen := seen[msg.State]
+			if alreadySeen && msg.Status != "removed" {
+				continue
+			}
+			seen[msg.State] = struct{}{}
+			if msg.Status == "removed" {
+				delete(seen, msg.State)
 			}
 
 			// Send the message
