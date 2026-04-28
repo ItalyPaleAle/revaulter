@@ -1,5 +1,5 @@
 <script lang="ts">
-import { formatDistanceToNowStrict } from 'date-fns'
+import { formatDistanceStrict } from 'date-fns'
 
 import Button from '$components/Button.svelte'
 import Icon from '$components/Icon.svelte'
@@ -29,11 +29,12 @@ import type { V2PendingRequestItem, V2RequestDetail, V2ResponseEnvelope, V2Signi
 interface Props {
     bulkAction?: { id: number; action: 'confirm' | 'cancel' } | null
     item: V2PendingRequestItem
+    now: number
     primaryKey: Uint8Array
     onRemoved?: (state: string) => void
 }
 
-let { bulkAction = null, item, primaryKey, onRemoved }: Props = $props()
+let { bulkAction = null, item, now, primaryKey, onRemoved }: Props = $props()
 
 let working = $state(false)
 let localStatus = $state<string>('pending')
@@ -381,23 +382,11 @@ $effect(() => {
     })()
 })
 
-/** Ticking clock so age/expiry labels stay live */
-let now = $state(Date.now())
-$effect(() => {
-    const id = setInterval(() => {
-        now = Date.now()
-    }, 1000)
-    return () => clearInterval(id)
-})
-
 function expiresIn(item: V2PendingRequestItem) {
-    // Touch `now` so this re-computes every tick
-    void now
-    return formatDistanceToNowStrict(new Date(item.expiry * 1000), { addSuffix: true })
+    return formatDistanceStrict(new Date(item.expiry * 1000), new Date(now), { addSuffix: true })
 }
 
 function ttlPercent(item: V2PendingRequestItem) {
-    void now
     const total = (item.expiry - item.date) * 1000
     if (total <= 0) {
         return 0
@@ -407,13 +396,11 @@ function ttlPercent(item: V2PendingRequestItem) {
 }
 
 function ttlIsLow(item: V2PendingRequestItem) {
-    void now
     return item.expiry * 1000 - now < 120_000
 }
 
 function ageLabel(item: V2PendingRequestItem) {
-    void now
-    return formatDistanceToNowStrict(new Date(item.date * 1000), { addSuffix: true })
+    return formatDistanceStrict(new Date(item.date * 1000), new Date(now), { addSuffix: true })
 }
 
 let meta = $derived(OP_META[item.operation])

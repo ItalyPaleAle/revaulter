@@ -76,7 +76,15 @@ let {
 let settingsModalOpen = $state(false)
 let settingsButton: HTMLButtonElement | undefined = $state()
 let bulkAction = $state<{ id: number; action: 'confirm' | 'cancel' } | null>(null)
+let now = $state(Date.now())
 let bulkActionId = 0
+
+$effect(() => {
+    const id = setInterval(() => {
+        now = Date.now()
+    }, 5000)
+    return () => clearInterval(id)
+})
 
 function toggleSettingsModal() {
     settingsModalOpen = !settingsModalOpen
@@ -210,6 +218,7 @@ function rejectAll() {
                         <PendingItem
                             {bulkAction}
                             {item}
+                            {now}
                             {primaryKey}
                             onRemoved={onRemoveItem}
                         />
