@@ -12,7 +12,7 @@
     "noImplicitReturns": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "types": ["svelte", "vite/client"],
+    "types": ["svelte", "vite/client", "node"],
     /* Path aliases */
     "paths": {
       "$lib/*": ["./src/lib/*"],
