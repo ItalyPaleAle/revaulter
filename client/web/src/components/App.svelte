@@ -20,10 +20,10 @@ import {
 } from '$lib/crypto'
 import {
     type AnchorKeyPair,
-    SIGNING_KEY_PUBLICATION_VERSION,
     anchorEs384JwkToString,
     anchorMldsa87PubToString,
     generateAnchorKeyPair,
+    SIGNING_KEY_PUBLICATION_VERSION,
     serializeAnchorSecret,
     signCredentialAttestationHybrid,
     signPubkeyBundleHybrid,

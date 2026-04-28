@@ -1,7 +1,6 @@
 <script lang="ts">
-import { tick } from 'svelte'
-
 import { formatDistanceToNowStrict } from 'date-fns'
+import { tick } from 'svelte'
 
 import Button from '$components/Button.svelte'
 import Icon from '$components/Icon.svelte'

@@ -3,6 +3,8 @@ import { mapHashToField } from '@noble/curves/abstract/modular.js'
 import { p256 } from '@noble/curves/nist.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 
+import { deriveEcdhSharedSecret, ecP256ScalarToPublicJwk, generateTransportKeyPairJwk } from '$lib/crypto-ecdh'
+import { normalizeAeadAlgorithm } from '$lib/crypto-symmetric'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import type {
     Argon2idCost,
@@ -11,8 +13,6 @@ import type {
     V2ResponseEnvelope,
     V2SigningJwk,
 } from '$lib/v2-types'
-import { deriveEcdhSharedSecret, ecP256ScalarToPublicJwk, generateTransportKeyPairJwk } from '$lib/crypto-ecdh'
-import { normalizeAeadAlgorithm } from '$lib/crypto-symmetric'
 
 /**
  * Derives the hybrid ECDH + ML-KEM shared secret, then expands it via HKDF into an AES-256-GCM key

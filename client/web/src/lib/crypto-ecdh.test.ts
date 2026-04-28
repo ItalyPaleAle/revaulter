@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
 import { bytesToHex, hexToBytes } from '@noble/curves/utils.js'
+import { describe, expect, it } from 'vitest'
 
 import { ecP256JwkToPublicBytes, ecP256ScalarToPublicJwk, generateTransportKeyPairJwk } from '$lib/crypto-ecdh'
 

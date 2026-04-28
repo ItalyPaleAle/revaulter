@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
     type AttestationPayload,
-    SIGNING_KEY_PUBLICATION_VERSION,
-    type SigningKeyPublicationPayload,
     anchorEs384JwkToString,
     anchorFingerprint,
     anchorMldsa87PubToString,
@@ -13,11 +11,13 @@ import {
     parseAnchorSecret,
     parseWrappedAnchorEnvelope,
     pubkeyBundlePayloadCanonicalBody,
+    SIGNING_KEY_PUBLICATION_VERSION,
+    type SigningKeyPublicationPayload,
     serializeAnchorSecret,
     signCredentialAttestationHybrid,
+    signingKeyPublicationPayloadCanonicalBody,
     signPubkeyBundleHybrid,
     signSigningKeyPublicationHybrid,
-    signingKeyPublicationPayloadCanonicalBody,
     unwrapAnchorKey,
     wrapAnchorKey,
 } from '$lib/crypto-anchor'

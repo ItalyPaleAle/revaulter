@@ -1,7 +1,7 @@
 import { chacha20poly1305 } from '@awasm/noble'
 
-import type { V2Operation } from '$lib/v2-types'
 import { asBuf } from '$lib/utils'
+import type { V2Operation } from '$lib/v2-types'
 
 /**
  * Performs the requested AES-GCM operation with the derived key bytes. For decrypt,
