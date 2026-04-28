@@ -60,6 +60,11 @@ jobs:
           cache: "pnpm"
           cache-dependency-path: "client/web/pnpm-lock.yaml"
 
+      - name: Check Go dependency minimum age
+        run: |
+          go install github.com/fchimpan/gomod-age@09005169a4792ad1a4824e1fc6d85785d91cea36
+          gomod-age -base origin/${{ github.base_ref }}
+
       - name: Install client dependencies
         working-directory: client/web
         run: |
