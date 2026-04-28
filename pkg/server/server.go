@@ -514,6 +514,13 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to cleanup expired auth records at startup: %w", err)
 		}
+
+		// Seed the recurring audit-log prune
+		// The handler re-enqueues itself, so a single boot-time enqueue keeps the chain running
+		err = s.enqueueAuditPrune(time.Now())
+		if err != nil {
+			return fmt.Errorf("failed to seed audit prune: %w", err)
+		}
 	}
 	return nil
 }

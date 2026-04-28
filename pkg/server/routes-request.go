@@ -100,17 +100,43 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
-		err = s.db.RequestStore().CreateRequest(c.Request.Context(), db.CreateRequestInput{
-			State:            state,
-			UserID:           user.ID,
-			Operation:        operation,
-			RequestorIP:      c.ClientIP(),
-			KeyLabel:         body.KeyLabel,
-			Algorithm:        body.Algorithm,
-			Note:             body.Note,
-			CreatedAt:        now,
-			ExpiresAt:        now.Add(timeout),
-			EncryptedRequest: string(encEnvelopeJSON),
+		// Needs to be executed in a transaction for consistency
+		_, err = db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
+			// Store the request in the database
+			rErr := tx.RequestStore().CreateRequest(ctx, db.CreateRequestInput{
+				State:            state,
+				UserID:           user.ID,
+				Operation:        operation,
+				RequestorIP:      c.ClientIP(),
+				KeyLabel:         body.KeyLabel,
+				Algorithm:        body.Algorithm,
+				Note:             body.Note,
+				CreatedAt:        now,
+				ExpiresAt:        now.Add(timeout),
+				EncryptedRequest: string(encEnvelopeJSON),
+			})
+			if rErr != nil {
+				return struct{}{}, rErr
+			}
+
+			// Create the audit log event
+			rErr = s.auditEventTx(c, tx, auditFields{
+				EventType:    db.AuditRequestCreate,
+				Outcome:      db.AuditOutcomeSuccess,
+				AuthMethod:   db.AuditAuthMethodRequestKey,
+				ActorUserID:  user.ID,
+				RequestState: state,
+				Metadata: jsonMetadata(map[string]any{
+					"operation": operation,
+					"algorithm": body.Algorithm,
+					"keyLabel":  body.KeyLabel,
+				}),
+			})
+			if rErr != nil {
+				return struct{}{}, rErr
+			}
+
+			return struct{}{}, nil
 		})
 		if err != nil {
 			AbortWithErrorJSON(c, err)

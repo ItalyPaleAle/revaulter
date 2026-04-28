@@ -88,3 +88,26 @@ CREATE TABLE IF NOT EXISTS v2_published_signing_keys (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_published_signing_keys_user_alg_label ON v2_published_signing_keys(user_id, algorithm, key_label);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+	id uuid PRIMARY KEY,
+	created_at bigint NOT NULL,
+	event_type text NOT NULL,
+	outcome text NOT NULL,
+	auth_method text NOT NULL,
+	actor_user_id text,
+	target_user_id text,
+	signing_key_id text,
+	credential_id text,
+	request_state text,
+	http_request_id text,
+	client_ip text,
+	user_agent text,
+	metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_actor_id ON audit_events(actor_user_id, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_type_id ON audit_events(event_type, id DESC);

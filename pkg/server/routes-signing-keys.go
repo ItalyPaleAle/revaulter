@@ -195,7 +195,7 @@ func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 			}
 		}
 
-		vRec, rErr := tx.SigningKeyStore().Create(ctx, db.InsertSigningKeyInput{
+		rRec, rErr := tx.SigningKeyStore().Create(ctx, db.InsertSigningKeyInput{
 			ID:                          kid,
 			UserID:                      userID,
 			Algorithm:                   req.Algorithm,
@@ -214,7 +214,24 @@ func (s *Server) RouteV2APISigningKeyCreate(c *gin.Context) {
 			return nil, rErr
 		}
 
-		return vRec, nil
+		rErr = s.auditEventTx(c, tx, auditFields{
+			EventType:    db.AuditSigningKeyCreate,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   db.AuditAuthMethodSession,
+			ActorUserID:  userID,
+			SigningKeyID: rRec.ID,
+			Metadata: jsonMetadata(map[string]any{
+				"algorithm": rRec.Algorithm,
+				"keyLabel":  rRec.KeyLabel,
+				"published": rRec.Published,
+				"hasProof":  rRec.HasPublicationProof(),
+			}),
+		})
+		if rErr != nil {
+			return nil, rErr
+		}
+
+		return rRec, nil
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -283,6 +300,26 @@ func (s *Server) RouteV2APISigningKeyUpdate(c *gin.Context) {
 		}
 
 		updated, rErr := sks.SetPublished(ctx, userID, id, req.Published)
+		if rErr != nil {
+			return nil, rErr
+		}
+
+		auditEventType := db.AuditSigningKeyUnpublish
+		if req.Published {
+			auditEventType = db.AuditSigningKeyPublish
+		}
+		rErr = s.auditEventTx(c, tx, auditFields{
+			EventType:    auditEventType,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   db.AuditAuthMethodSession,
+			ActorUserID:  userID,
+			SigningKeyID: updated.ID,
+			Metadata: jsonMetadata(map[string]any{
+				"algorithm": updated.Algorithm,
+				"keyLabel":  updated.KeyLabel,
+				"published": updated.Published,
+			}),
+		})
 		if rErr != nil {
 			return nil, rErr
 		}
@@ -362,16 +399,38 @@ func (s *Server) RouteV2APISigningKeyDelete(c *gin.Context) {
 		return
 	}
 
-	// Delete from the database
-	sks := s.db.SigningKeyStore()
-	ok, err := sks.Delete(c.Request.Context(), userID, id)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-	if !ok {
-		// Key doesn't exist or doesn't belong to the current user
+	// Delete the row and write the audit row in the same transaction
+	_, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (*db.PublishedSigningKey, error) {
+		// Returns the deleted row
+		deleted, rErr := tx.SigningKeyStore().Delete(ctx, userID, id)
+		if rErr != nil {
+			return nil, rErr
+		}
+
+		// Store the audit log event
+		rErr = s.auditEventTx(c, tx, auditFields{
+			EventType:    db.AuditSigningKeyDelete,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   db.AuditAuthMethodSession,
+			ActorUserID:  userID,
+			SigningKeyID: deleted.ID,
+			Metadata: jsonMetadata(map[string]any{
+				"algorithm": deleted.Algorithm,
+				"keyLabel":  deleted.KeyLabel,
+				"published": deleted.Published,
+			}),
+		})
+		if rErr != nil {
+			return nil, rErr
+		}
+
+		return deleted, nil
+	})
+	if errors.Is(err, db.ErrSigningKeyNotFound) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "not found"))
+		return
+	} else if err != nil {
+		AbortWithErrorJSON(c, err)
 		return
 	}
 

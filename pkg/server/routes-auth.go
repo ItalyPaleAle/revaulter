@@ -338,6 +338,14 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "User registration failed",
 			slog.String("client_ip", c.ClientIP()),
 		)
+
+		// The transaction rolled back, so the in-tx success row never landed; record the failure outside the tx
+		s.auditEvent(c, auditFields{
+			EventType:  db.AuditAuthRegisterFinish,
+			Outcome:    db.AuditOutcomeFailure,
+			AuthMethod: db.AuditAuthMethodNone,
+		})
+
 		AbortWithErrorJSON(c, err)
 		return
 	}
@@ -440,6 +448,14 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Login failed",
 			slog.String("client_ip", c.ClientIP()),
 		)
+
+		// The transaction rolled back, so any in-tx success row never landed; record the failure outside the tx
+		s.auditEvent(c, auditFields{
+			EventType:  db.AuditAuthLoginFinish,
+			Outcome:    db.AuditOutcomeFailure,
+			AuthMethod: db.AuditAuthMethodNone,
+		})
+
 		AbortWithErrorJSON(c, err)
 		return
 	}
@@ -663,8 +679,30 @@ func (s *Server) RouteV2AuthAllowedIPs(c *gin.Context) {
 		return
 	}
 
-	// Update in the database
-	allowedIPs, err := s.db.AuthStore().UpdateAllowedIPs(c.Request.Context(), userID, req.AllowedIPs)
+	// Update the IPs and write the audit row atomically
+	allowedIPs, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) ([]string, error) {
+		ips, rErr := tx.AuthStore().UpdateAllowedIPs(ctx, userID, req.AllowedIPs)
+		if rErr != nil {
+			return nil, rErr
+		}
+
+		rErr = s.auditEventTx(c, tx, auditFields{
+			EventType:    db.AuditAuthAllowedIPsChange,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   db.AuditAuthMethodSession,
+			ActorUserID:  userID,
+			TargetUserID: userID,
+			Metadata: jsonMetadata(map[string]any{
+				"newCount": len(ips),
+				"oldCount": len(req.AllowedIPs),
+			}),
+		})
+		if rErr != nil {
+			return nil, rErr
+		}
+
+		return ips, nil
+	})
 	if errors.Is(err, db.ErrInvalidIP) || errors.Is(err, db.ErrInvalidCIDR) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, err.Error()))
 		return
@@ -689,8 +727,26 @@ func (s *Server) RouteV2AuthRequestKeyRegenerate(c *gin.Context) {
 		return
 	}
 
-	// Rotate the request key
-	requestKey, err := s.db.AuthStore().RegenerateRequestKey(c.Request.Context(), userID)
+	// Rotate the request key and write the audit row atomically
+	requestKey, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (string, error) {
+		key, rErr := tx.AuthStore().RegenerateRequestKey(ctx, userID)
+		if rErr != nil {
+			return "", rErr
+		}
+
+		rErr = s.auditEventTx(c, tx, auditFields{
+			EventType:    db.AuditAuthRequestKeyRegen,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   db.AuditAuthMethodSession,
+			ActorUserID:  userID,
+			TargetUserID: userID,
+		})
+		if rErr != nil {
+			return "", rErr
+		}
+
+		return key, nil
+	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -743,6 +799,7 @@ func (s *Server) RouteV2AuthSession(c *gin.Context) {
 
 // RouteV2AuthLogout is the handler for POST /v2/auth/logout
 // Note that the logout sends cookies to clear existing sessions, but doesn't invalidate issued session tokens
+// This is acceptable since most session tokens have a very short lifetime anyways
 func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 	userID := c.GetString(contextKeyUserID)
 
@@ -750,6 +807,15 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 		slog.String("user_id", userID),
 		slog.String("client_ip", c.ClientIP()),
 	)
+
+	// Save the event in the audit log
+	s.auditEvent(c, auditFields{
+		EventType:    db.AuditAuthLogout,
+		Outcome:      db.AuditOutcomeSuccess,
+		AuthMethod:   db.AuditAuthMethodSession,
+		ActorUserID:  userID,
+		TargetUserID: userID,
+	})
 
 	// Clear both possible cookie names so a scheme change between login and logout (e.g. a proxy switching https→http) cannot leave a stray session cookie behind
 	// __Host- is only legal on Secure cookies, so we must emit each with the secure flag that matches its prefix
@@ -782,8 +848,26 @@ func (s *Server) RouteV2AuthUpdateDisplayName(c *gin.Context) {
 	}
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
 
-	// Update the name in the database
-	err = s.db.AuthStore().UpdateDisplayName(c.Request.Context(), userID, req.DisplayName)
+	// Update the name and write the audit row atomically
+	_, err = db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
+		rErr := tx.AuthStore().UpdateDisplayName(ctx, userID, req.DisplayName)
+		if rErr != nil {
+			return struct{}{}, rErr
+		}
+
+		rErr = s.auditEventTx(c, tx, auditFields{
+			EventType:    db.AuditAuthDisplayNameChange,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   db.AuditAuthMethodSession,
+			ActorUserID:  userID,
+			TargetUserID: userID,
+		})
+		if rErr != nil {
+			return struct{}{}, rErr
+		}
+
+		return struct{}{}, nil
+	})
 	switch {
 	case errors.Is(err, db.ErrDisplayNameTooLong):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Display name is too long"))
@@ -836,7 +920,7 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 
 	// Rest of the method must run in a transaction
 	_, err = db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
-		return struct{}{}, s.updateWrappedKey(ctx, tx, userID, &req)
+		return struct{}{}, s.updateWrappedKey(c, tx, userID, &req)
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -849,7 +933,8 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 	})
 }
 
-func (s *Server) updateWrappedKey(ctx context.Context, tx *db.DbTx, userID string, req *v2AuthUpdateWrappedKeyRequest) error {
+func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, req *v2AuthUpdateWrappedKeyRequest) error {
+	ctx := c.Request.Context()
 	as := tx.AuthStore()
 
 	// Refuse the update while an add-credential WebAuthn ceremony is in flight for this user
@@ -876,6 +961,22 @@ func (s *Server) updateWrappedKey(ctx context.Context, tx *db.DbTx, userID strin
 		return NewResponseError(http.StatusNotFound, "Credential not found")
 	} else if err != nil {
 		return NewResponseError(http.StatusBadRequest, err.Error())
+	}
+
+	// Save the audit log entry
+	err = s.auditEventTx(c, tx, auditFields{
+		EventType:    db.AuditAuthWrappedKeyUpdate,
+		Outcome:      db.AuditOutcomeSuccess,
+		AuthMethod:   db.AuditAuthMethodSession,
+		ActorUserID:  userID,
+		TargetUserID: userID,
+		CredentialID: req.CredentialID,
+		Metadata: jsonMetadata(map[string]any{
+			"advanceEpoch": req.AdvanceEpoch,
+		}),
+	})
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -1232,6 +1333,19 @@ func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCreden
 		return addCredentialFinishRes{}, err
 	}
 
+	// Save the audit log entry
+	err = s.auditEventTx(c, tx, auditFields{
+		EventType:    db.AuditAuthCredentialAdd,
+		Outcome:      db.AuditOutcomeSuccess,
+		AuthMethod:   db.AuditAuthMethodSession,
+		ActorUserID:  vals.userID,
+		TargetUserID: vals.userID,
+		CredentialID: credID,
+	})
+	if err != nil {
+		return addCredentialFinishRes{}, err
+	}
+
 	return addCredentialFinishRes{}, nil
 }
 
@@ -1256,8 +1370,22 @@ func (s *Server) RouteV2AuthRenameCredential(c *gin.Context) {
 		return
 	}
 
-	// Rename the credential in the database
-	err = s.db.AuthStore().RenameCredential(c.Request.Context(), req.ID, userID, req.DisplayName)
+	// Rename and write the audit row atomically
+	_, err = db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
+		rErr := tx.AuthStore().RenameCredential(ctx, req.ID, userID, req.DisplayName)
+		if rErr != nil {
+			return struct{}{}, rErr
+		}
+		rErr = s.auditEventTx(c, tx, auditFields{
+			EventType:    db.AuditAuthCredentialRename,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   db.AuditAuthMethodSession,
+			ActorUserID:  userID,
+			TargetUserID: userID,
+			CredentialID: req.ID,
+		})
+		return struct{}{}, rErr
+	})
 	switch {
 	case errors.Is(err, db.ErrDisplayNameTooLong):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Display name is too long"))
@@ -1297,8 +1425,27 @@ func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
 		return
 	}
 
-	// Delete the credential from the database
-	err = s.db.AuthStore().DeleteCredential(c.Request.Context(), req.ID, userID)
+	// Delete and write the audit row atomically
+	_, err = db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
+		rErr := tx.AuthStore().DeleteCredential(ctx, req.ID, userID)
+		if rErr != nil {
+			return struct{}{}, rErr
+		}
+
+		rErr = s.auditEventTx(c, tx, auditFields{
+			EventType:    db.AuditAuthCredentialDelete,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   db.AuditAuthMethodSession,
+			ActorUserID:  userID,
+			TargetUserID: userID,
+			CredentialID: req.ID,
+		})
+		if rErr != nil {
+			return struct{}{}, rErr
+		}
+
+		return struct{}{}, nil
+	})
 	switch {
 	case errors.Is(err, db.ErrLastCredential):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Cannot delete the last credential"))
@@ -1385,6 +1532,18 @@ func (s *Server) registerFinish(c *gin.Context, tx *db.DbTx, req v2AuthRegisterF
 
 	// Get a session token
 	sess, err := newAuthSessionToken(user, config.Get().SessionTimeout)
+	if err != nil {
+		return registerFinishRes{}, err
+	}
+
+	// Save the audit log entry
+	err = s.auditEventTx(c, tx, auditFields{
+		EventType:    db.AuditAuthRegisterFinish,
+		Outcome:      db.AuditOutcomeSuccess,
+		AuthMethod:   db.AuditAuthMethodSession,
+		ActorUserID:  user.ID,
+		TargetUserID: user.ID,
+	})
 	if err != nil {
 		return registerFinishRes{}, err
 	}
@@ -1492,6 +1651,19 @@ func (s *Server) loginFinish(c *gin.Context, tx *db.DbTx, req v2AuthLoginFinishR
 
 	// Return the session token object
 	sess, err := newAuthSessionToken(discoveredDBUser, config.Get().SessionTimeout)
+	if err != nil {
+		return loginFinishRes{}, err
+	}
+
+	// Save the audit log entry
+	err = s.auditEventTx(c, tx, auditFields{
+		EventType:    db.AuditAuthLoginFinish,
+		Outcome:      db.AuditOutcomeSuccess,
+		AuthMethod:   db.AuditAuthMethodSession,
+		ActorUserID:  discoveredDBUser.ID,
+		TargetUserID: discoveredDBUser.ID,
+		CredentialID: credentialID,
+	})
 	if err != nil {
 		return loginFinishRes{}, err
 	}
@@ -1637,6 +1809,18 @@ func (s *Server) finalizeSetup(c *gin.Context, tx *db.DbTx, vals finalizeSetupVa
 
 	if user == nil || user.Status != "active" || !user.Ready {
 		return finalizeSetupRes{}, noSessionResponseError
+	}
+
+	// Save the audit log entry
+	err = s.auditEventTx(c, tx, auditFields{
+		EventType:    db.AuditAuthFinalizeSignup,
+		Outcome:      db.AuditOutcomeSuccess,
+		AuthMethod:   db.AuditAuthMethodSession,
+		ActorUserID:  user.ID,
+		TargetUserID: user.ID,
+	})
+	if err != nil {
+		return finalizeSetupRes{}, err
 	}
 
 	return finalizeSetupRes{

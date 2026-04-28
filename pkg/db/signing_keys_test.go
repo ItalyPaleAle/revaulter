@@ -241,28 +241,31 @@ func TestSigningKeyStoreDelete(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Cross-user delete fails silently — row still there
-		ok, err := sks.Delete(ctx, "peggy", "id-o")
-		require.NoError(t, err)
-		require.False(t, ok)
+		// Cross-user delete returns ErrSigningKeyNotFound — the row is unchanged
+		deleted, err := sks.Delete(ctx, "peggy", "id-o")
+		require.ErrorIs(t, err, ErrSigningKeyNotFound)
+		require.Nil(t, deleted)
 
 		rec, err := sks.GetByID(ctx, "id-o")
 		require.NoError(t, err)
 		require.NotNil(t, rec)
 
-		// Owen deletes her own row
-		ok, err = sks.Delete(ctx, "owen", "id-o")
+		// Owen deletes their own row — returned record carries the deleted row's content
+		deleted, err = sks.Delete(ctx, "owen", "id-o")
 		require.NoError(t, err)
-		require.True(t, ok)
+		require.NotNil(t, deleted)
+		require.Equal(t, "id-o", deleted.ID)
+		require.Equal(t, "owen", deleted.UserID)
+		require.Equal(t, "ES256", deleted.Algorithm)
 
 		rec, err = sks.GetByID(ctx, "id-o")
 		require.NoError(t, err)
 		require.Nil(t, rec, "Delete must hard-delete the row")
 
-		// Second delete is a no-op
-		ok, err = sks.Delete(ctx, "owen", "id-o")
-		require.NoError(t, err)
-		require.False(t, ok)
+		// Second delete returns ErrSigningKeyNotFound
+		deleted, err = sks.Delete(ctx, "owen", "id-o")
+		require.ErrorIs(t, err, ErrSigningKeyNotFound)
+		require.Nil(t, deleted)
 
 		// After delete, a fresh Insert under the same (user, algorithm, label) must succeed
 		inserted, err := sks.Create(ctx, InsertSigningKeyInput{

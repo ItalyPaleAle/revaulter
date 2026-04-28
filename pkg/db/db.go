@@ -200,3 +200,26 @@ func Open(ctx context.Context, connString string) (*DB, error) {
 		}, nil
 	}
 }
+
+func nullableString(p *string) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func nullStringToPtr(v sql.NullString) *string {
+	if !v.Valid {
+		return nil
+	}
+	s := v.String
+	return &s
+}
+
+func clonePtr(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}

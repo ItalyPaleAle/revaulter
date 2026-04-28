@@ -236,18 +236,29 @@ func (s *SigningKeyStore) ListForUser(ctx context.Context, userID string) ([]Pub
 	return out, rows.Err()
 }
 
-// Delete removes a signing key row belonging to the given user
-// Returns true if a row was removed, false if no matching row exists
-func (s *SigningKeyStore) Delete(ctx context.Context, userID, id string) (bool, error) {
-	affected, err := s.db.Exec(ctx,
-		`DELETE FROM v2_published_signing_keys WHERE user_id = $1 AND id = $2`,
-		userID, id,
-	)
-	if err != nil {
-		return false, err
+// Delete removes a signing key row belonging to the given user and returns the deleted row
+// Returns ErrSigningKeyNotFound when no matching row exists
+func (s *SigningKeyStore) Delete(ctx context.Context, userID, id string) (*PublishedSigningKey, error) {
+	rec := &PublishedSigningKey{}
+	var createdAt, updatedAt int64
+	err := s.db.
+		QueryRow(ctx,
+			`DELETE FROM v2_published_signing_keys
+				WHERE user_id = $1 AND id = $2
+				RETURNING id, user_id, algorithm, key_label, jwk, pem, published, publication_payload, publication_signature_es384, publication_signature_mldsa87, created_at, updated_at`,
+			userID, id,
+		).
+		Scan(&rec.ID, &rec.UserID, &rec.Algorithm, &rec.KeyLabel, &rec.JWK, &rec.PEM, &rec.Published, &rec.PublicationPayload, &rec.PublicationSignatureEs384, &rec.PublicationSignatureMldsa87, &createdAt, &updatedAt)
+	if s.db.IsNoRowsError(err) {
+		return nil, ErrSigningKeyNotFound
+	} else if err != nil {
+		return nil, err
 	}
 
-	return affected > 0, nil
+	rec.CreatedAt = time.Unix(createdAt, 0)
+	rec.UpdatedAt = time.Unix(updatedAt, 0)
+
+	return rec, nil
 }
 
 // SetPublished toggles the published flag on an existing signing key belonging to the given user and returns the updated row

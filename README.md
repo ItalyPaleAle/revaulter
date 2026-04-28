@@ -116,6 +116,7 @@ Then start the server, open the web UI, and create your first account.
 - [Cryptography architecture](./docs/04-crypto-architecture.md) — key layers, wrapping, derivation, transport encryption
 - [REST API reference](./docs/05-rest-api-reference.md) — all endpoints with request/response schemas
 - [Examples](./docs/06-examples.md) — LUKS disk unlock at boot, encrypting files with age, restic backups, signing release manifests / binaries / JWTs, fetching a public key to verify a signature
+- [Audit events](./docs/07-audit-events.md) — durable, queryable record of security-relevant actions; schema, event types, retention, sample SQL
 
 ## License
 

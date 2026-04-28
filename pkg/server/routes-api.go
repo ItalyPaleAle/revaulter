@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -149,13 +150,34 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
-	rs := s.db.RequestStore()
-
 	// Handle cancellation requests
 	if req.Cancel {
-		// Cancel the request in the database
-		// Returns ErrRequestNotModifiable if the request can't be found, if it's not pending, or if it doesn't belong to the current user
-		rec, err := rs.CancelRequest(c.Request.Context(), req.State, userID)
+		// Cancel the request and write the audit row in the same transaction
+		rec, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (*db.V2RequestRecord, error) {
+			// Returns ErrRequestNotModifiable if the request can't be found, if it's not pending, or if it doesn't belong to the current user
+			rRec, rErr := tx.RequestStore().CancelRequest(ctx, req.State, userID)
+			if rErr != nil {
+				return nil, rErr
+			}
+
+			rErr = s.auditEventTx(c, tx, auditFields{
+				EventType:    db.AuditRequestCancel,
+				Outcome:      db.AuditOutcomeSuccess,
+				AuthMethod:   db.AuditAuthMethodSession,
+				ActorUserID:  userID,
+				TargetUserID: rRec.UserID,
+				RequestState: req.State,
+				Metadata: jsonMetadata(map[string]any{
+					"operation": rRec.Operation,
+					"algorithm": rRec.Algorithm,
+				}),
+			})
+			if rErr != nil {
+				return nil, rErr
+			}
+
+			return rRec, nil
+		})
 		if errors.Is(err, db.ErrRequestNotModifiable) {
 			AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be canceled"))
 			return
@@ -208,9 +230,32 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 		return
 	}
 
-	// Complete the request
+	// Complete the request and write the audit row atomically
 	// Returns ErrRequestNotModifiable if the request can't be found, if it's not pending, or if it doesn't belong to the current user
-	rec, err := rs.CompleteRequest(c.Request.Context(), req.State, userID, *req.ResponseEnvelope)
+	rec, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (*db.V2RequestRecord, error) {
+		vRec, rErr := tx.RequestStore().CompleteRequest(ctx, req.State, userID, *req.ResponseEnvelope)
+		if rErr != nil {
+			return nil, rErr
+		}
+
+		rErr = s.auditEventTx(c, tx, auditFields{
+			EventType:    db.AuditRequestConfirm,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   db.AuditAuthMethodSession,
+			ActorUserID:  userID,
+			TargetUserID: vRec.UserID,
+			RequestState: req.State,
+			Metadata: jsonMetadata(map[string]any{
+				"operation": vRec.Operation,
+				"algorithm": vRec.Algorithm,
+			}),
+		})
+		if rErr != nil {
+			return nil, rErr
+		}
+
+		return vRec, nil
+	})
 	if errors.Is(err, db.ErrRequestNotModifiable) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Request cannot be confirmed"))
 		return
@@ -299,6 +344,20 @@ func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V
 		slog.String("key_label", rec.KeyLabel),
 		slog.String("algorithm", rec.Algorithm),
 	)
+
+	// Save the audit log entry
+	s.auditEvent(c, auditFields{
+		EventType:    db.AuditSigningKeyAutoStore,
+		Outcome:      db.AuditOutcomeSuccess,
+		AuthMethod:   db.AuditAuthMethodSession,
+		ActorUserID:  rec.UserID,
+		SigningKeyID: inserted.ID,
+		RequestState: rec.State,
+		Metadata: jsonMetadata(map[string]any{
+			"algorithm": rec.Algorithm,
+			"keyLabel":  rec.KeyLabel,
+		}),
+	})
 }
 
 func (s *Server) routeV2APIListStream(c *gin.Context) {
