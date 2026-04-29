@@ -3,62 +3,132 @@ package server
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/italypaleale/revaulter/pkg/db"
 )
 
 const (
-	headerSessionTTL             = "x-session-ttl"
-	contextKeySessionAccessToken = "sessionAccessToken"
-	contextKeySessionExpiration  = "sessionExpiration"
+	contextKeySessionTTL      = "SessionTTL"
+	sessionCookieNameSecure   = "__Host-_s"
+	sessionCookieNameInsecure = "_s"
+	contextKeyUserID          = "UserID"
+	contextKeyRequestUser     = "RequestUser"
 )
 
-type AccessTokenMiddlewareOpts struct {
-	// If true, the request fails if the token is not present
-	Required bool
-	// If true, allows reading an access token directly from the Authorization header, as a Bearer token
-	// This is an access token with permissions on Azure Key Vault directly
-	AllowAccessTokenInHeader bool
+// sessionCookieFor returns the appropriate cookie name and path for the connection
+// __Host- prefix enforces Secure, no Domain, Path=/ — prevents cookie tossing from subdomains
+// On insecure connections (incl. development), fall back to the unprefixed name
+func sessionCookieFor(c *gin.Context) (name, path string) {
+	if secureCookie(c) {
+		return sessionCookieNameSecure, "/"
+	}
+
+	return sessionCookieNameInsecure, "/v2"
 }
 
-// AccessTokenMiddleware is a middleware that requires the user to be authenticated and present a cookie with the access token for Azure Key Vault
-// Note that this middleware doesn't validate the access token in any way (not even making sure it's a valid JWT), it just ensures the token is present; it's Azure Key Vault's responsibility to validate the token
-// This injects the token in the request's context if it exists and it's valid
-func (s *Server) AccessTokenMiddleware(opts AccessTokenMiddlewareOpts) func(c *gin.Context) {
+func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// First, check if there's an Authorization header with a bearer token, if that's allowed for this request
-		if opts.AllowAccessTokenInHeader {
-			authHeader := c.GetHeader("Authorization")
-			// Require the "bearer" prefix
-			if len(authHeader) > 7 && strings.ToLower(authHeader[0:7]) == "bearer " {
-				// Set the access token in the context
-				// Set the expiration to an arbitrary 5 minutes from now, as that's relevant for the SDK only
-				c.Set(contextKeySessionAccessToken, authHeader[7:])
-				c.Set(contextKeySessionExpiration, time.Now().Add(5*time.Minute))
+		// Try bearer token first, then fall back to cookie
+		token := getBearerToken(c)
+		if token == "" {
+			cookieName, _ := sessionCookieFor(c)
+			var err error
+			token, err = c.Cookie(cookieName)
+			if err != nil || token == "" {
+				AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User is not authenticated"))
 				return
 			}
 		}
 
-		// Get the cookie and parse it
-		at, ttl, err := getSecureCookieEncryptedeAzureADAccessToken(c, atCookieName)
-		if err != nil || at == "" {
+		// Parse the session token and validate it
+		sess, err := parseAuthSessionToken(token)
+		if err != nil || sess == nil {
 			if err != nil {
-				_ = c.Error(fmt.Errorf("cookie error: %w", err))
+				_ = c.Error(fmt.Errorf("session token parse error: %w", err))
 			}
-			if opts.Required {
-				AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User is not authenticated or there's no access token in the cookies"))
-			}
+			AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "User session is invalid or expired"))
 			return
 		}
 
-		// Set the TTL in the header
-		c.Header(headerSessionTTL, strconv.Itoa(int(ttl.Seconds())))
+		// If we require the user to be ready, enforce that
+		if requireReady && !sess.Ready {
+			_ = c.Error(fmt.Errorf("session not ready for %s %s user=%s ready=%t", c.Request.Method, c.Request.URL.Path, sess.UserID, sess.Ready))
+			AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "User account setup is not complete"))
+			return
+		}
 
-		// Set the values in the context
-		c.Set(contextKeySessionAccessToken, at)
-		c.Set(contextKeySessionExpiration, time.Now().Add(ttl))
+		ttl := int(max(time.Until(sess.ExpiresAt), 0).Seconds())
+		c.Set(contextKeySessionTTL, ttl)
+		c.Set(contextKeyUserID, sess.UserID)
 	}
+}
+
+// MiddlewareRequestKey reads the request key from the Authorization header and retrieves the user
+func (s *Server) MiddlewareRequestKey(c *gin.Context) {
+	requestKey := getBearerToken(c)
+	if requestKey == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Missing request key"))
+		return
+	}
+
+	// Get the user matching the request key from the database
+	// Note: this is not performed in a transaction because we can't easily make a transaction that spans this middleware and the handlers that use it
+	// However, handlers that use this middleware do not modify the auth store
+	user, err := s.db.AuthStore().GetUserByRequestKey(c.Request.Context(), requestKey)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if user == nil || user.Status != "active" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request key not found"))
+		return
+	}
+
+	// User must be ready
+	if !user.Ready {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusPreconditionFailed, "User account setup is not complete"))
+		return
+	}
+
+	// Check if the client IP is allowed (if there's an allowlist)
+	if !clientIPAllowed(c, user.AllowedIPs) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "This client's IP is not allowed to perform this request"))
+		return
+	}
+
+	// Set the user in the context
+	c.Set(contextKeyRequestUser, user)
+}
+
+func getRequestUserFromCtx(c *gin.Context) *db.User {
+	val, ok := c.Get(contextKeyRequestUser)
+	if !ok {
+		return nil
+	}
+
+	user, ok := val.(*db.User)
+	if !ok {
+		return nil
+	}
+
+	return user
+}
+
+// getBearerToken extracts a bearer token from the Authorization header.
+// Returns empty string if no bearer token is present.
+func getBearerToken(c *gin.Context) string {
+	const bearerPrefix = "bearer "
+
+	h := c.GetHeader("Authorization")
+
+	// Remove the bearer prefix
+	if len(h) > len(bearerPrefix) && strings.ToLower(h[0:len(bearerPrefix)]) == bearerPrefix {
+		return h[len(bearerPrefix):]
+	}
+
+	return ""
 }

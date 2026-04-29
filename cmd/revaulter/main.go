@@ -15,6 +15,7 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/db"
 	revaultermetrics "github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/server"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
@@ -22,9 +23,6 @@ import (
 )
 
 func main() {
-	// Set Gin to Release mode
-	gin.SetMode(gin.ReleaseMode)
-
 	// Init a logger used for initialization only, to report initialization errors
 	initLogger := slog.Default().
 		With(slog.String("app", buildinfo.AppName)).
@@ -33,8 +31,8 @@ func main() {
 	// Load config
 	err := loadConfig()
 	if err != nil {
-		var lce *loadConfigError
-		if errors.As(err, &lce) {
+		lce, ok := errors.AsType[*loadConfigError](err)
+		if ok {
 			lce.LogFatal(initLogger)
 		} else {
 			slogkit.FatalError(initLogger, "Failed to load configuration", err)
@@ -42,6 +40,15 @@ func main() {
 		}
 	}
 	conf := config.Get()
+
+	// Handle the "migrate" subcommand before any server setup
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		runMigrate(initLogger)
+		return
+	}
+
+	// Set Gin to Release mode
+	gin.SetMode(gin.ReleaseMode)
 
 	// Shutdown functions
 	shutdownFns := make([]servicerunner.Service, 0, 3)
@@ -74,6 +81,25 @@ func main() {
 	// Init the webhook object
 	webhook := webhook.NewWebhook()
 
+	// Initialize the database
+	connCtx, connCancel := context.WithTimeout(ctx, 20*time.Second)
+	dbConn, err := db.Open(connCtx, conf.DatabaseDSN)
+	connCancel()
+	if err != nil {
+		slogkit.FatalError(log, "Failed to open database", err)
+		return
+	}
+
+	// Run DB migrations
+	err = db.RunMigrations(ctx, dbConn, log)
+	if err != nil {
+		_ = dbConn.Close(ctx)
+		slogkit.FatalError(log, "Failed to run database migrations", err)
+		return
+	}
+
+	shutdownFns = append(shutdownFns, dbConn.Close)
+
 	// Init metrics
 	metrics, metricsShutdownFn, err := revaultermetrics.NewRevaulterMetrics(ctx, log)
 	if err != nil {
@@ -102,6 +128,7 @@ func main() {
 		Webhook:       webhook,
 		Metrics:       metrics,
 		TraceExporter: traceExporter,
+		DB:            dbConn,
 	})
 	if err != nil {
 		slogkit.FatalError(log, "Cannot initialize the server", err)
@@ -128,4 +155,31 @@ func main() {
 	if err != nil {
 		log.Error("Error shutting down services", slog.Any("error", err))
 	}
+}
+
+// runMigrate loads the configuration, opens the database, runs migrations, and exits
+func runMigrate(log *slog.Logger) {
+	conf := config.Get()
+	if conf.DatabaseDSN == "" {
+		slogkit.FatalError(log, "Database DSN is not configured", errors.New("databaseDSN is required"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	dbConn, err := db.Open(ctx, conf.DatabaseDSN)
+	if err != nil {
+		slogkit.FatalError(log, "Failed to open database", err)
+		return
+	}
+	defer dbConn.Close(ctx)
+
+	err = db.RunMigrations(ctx, dbConn, log)
+	if err != nil {
+		slogkit.FatalError(log, "Failed to run database migrations", err)
+		return
+	}
+
+	log.Info("Database migrations completed successfully")
 }

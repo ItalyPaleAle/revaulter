@@ -2,44 +2,19 @@ package config
 
 import (
 	"crypto/hkdf"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
+	"net/url"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v2/jwk"
-
-	"github.com/italypaleale/revaulter/pkg/keyvault"
+	"github.com/lestrrat-go/jwx/v4/jwk"
 )
 
 // Config is the struct containing configuration
 type Config struct {
-	// Client ID of the Azure AD application
-	// +required
-	AzureClientId string `env:"AZURECLIENTID" yaml:"azureClientId"`
-
-	// Tenant ID of the Azure AD application.
-	// +required
-	AzureTenantId string `env:"AZURETENANTID" yaml:"azureTenantId"`
-
-	// Client secret of the Azure AD application, for using confidential clients.
-	// This is optional, but recommended when not using Federated Identity Credentials.
-	AzureClientSecret string `env:"AZURECLIENTSECRET" yaml:"azureClientSecret"`
-
-	// Enables the usage of Federated Identity Credentials to obtain assertions for confidential clients for Azure AD applications.
-	// This is an alternative to using client secrets, when the application is running in Azure in an environment that supports Managed Identity, or in an environment that supports Workload Identity Federation with Azure AD.
-	// Currently, these values are supported:
-	//
-	// - `ManagedIdentity`: uses a system-assigned managed identity
-	// - `ManagedIdentity=client-id`: uses a user-assigned managed identity with client id "client-id" (e.g. "ManagedIdentity=00000000-0000-0000-0000-000000000000")
-	// - `WorkloadIdentity`: uses workload identity, e.g. for Kubernetes
-	AzureFederatedIdentity string `env:"AZUREFEDERATEDIDENTITY" yaml:"azureFederatedIdentity"`
-
 	// Endpoint of the webhook, where notifications are sent to.
 	// +required
 	WebhookUrl string `env:"WEBHOOKURL" yaml:"webhookUrl"`
@@ -53,7 +28,10 @@ type Config struct {
 	// +default "plain"
 	WebhookFormat string `env:"WEBHOOKFORMAT" yaml:"webhookFormat"`
 
-	// Value for the Authorization header send with the webhook request. Set this if your webhook requires it.
+	// Value sent verbatim as the `Authorization` header on webhook requests
+	// Revaulter does NOT add an authentication scheme prefix, so include one yourself if your downstream expects it
+	// For example, set this to `Bearer abc123` for bearer-token auth, or `Basic dXNlcjpwYXNz` for HTTP Basic
+	// Leave unset to omit the header entirely
 	WebhookKey string `env:"WEBHOOKKEY" yaml:"webhookKey"`
 
 	// The URL your application can be reached at. This is used in the links that are sent in webhook notifications.
@@ -80,53 +58,53 @@ type Config struct {
 	// Full, PEM-encoded TLS key. Using `tlsCertPEM` and `tlsKeyPEM` is an alternative method of passing TLS certificates than using `tlsPath`.
 	TLSKeyPEM string `env:"TLSKEYPEM" yaml:"tlsKeyPEM"`
 
-	// If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.
-	// Note that this value is used to restrict connections to the `/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
-	AllowedIPs []string `env:"ALLOWEDIPS" yaml:"allowedIps"`
+	// Connection string for the database. The backend is inferred from the DSN (for example: `postgres://`, `postgresql://`, `sqlite://`).
+	// If no scheme is present, the value is treated as a local SQLite file path.
+	// +required
+	DatabaseDSN string `env:"DATABASEDSN" yaml:"databaseDSN"`
 
-	// If set, clients need to provide this shared key in calls made to the `/request` endpoints, in the `Authorization` header.
-	// Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
-	RequestKey string `env:"REQUESTKEY" yaml:"requestKey"`
-
-	// If set, allows requests targeting only the Azure Key Vaults named in the list.
-	// Values can be formatted as:
+	// Instance-wide secret to derive encryption keys.
+	// It's recommended to generate with `openssl rand -base64 32`.
 	//
-	// - The address of the vault, such as "https://<name>.vault.azure.net" (could be a different format if using different clouds or private endpoints)
-	// - The FQDN of the vault, such as "<name>.vault.azure.net" (or another domain if using different clouds or private endpoints)
-	// - Only the name of the vault, which will be formatted for "vault.azure.net"
-	AllowedVaults []string `env:"ALLOWEDVAULTS" yaml:"allowedVaults"`
+	// IMPORTANT: rotating `secretKey` changes the PRF salt for every user effectively bricks every existing account. Treat this value as immutable for the lifetime of the instance; if you must rotate it, plan on every user re-registering from scratch.
+	//
+	// Note: this value is NOT used to encrypt anything server-side: all request payloads and responses are end-to-end encrypted in the browser, and the server only stores opaque envelopes.
+	// +required
+	SecretKey string `env:"SECRETKEY" yaml:"secretKey"`
 
-	// Lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
-	// +default equal to the value of `baseUrl`
-	Origins []string `env:"ORIGINS" yaml:"origins"`
+	// WebAuthn RP ID for authentication.
+	// If empty, derived from `baseUrl`.
+	WebAuthnRPID string `env:"WEBAUTHNRPID" yaml:"webauthnRpId"`
 
-	// Timeout for sessions before having to authenticate again, as a Go duration. This cannot be more than 1 hour.
+	// WebAuthn RP display name for authentication.
+	// +default "Revaulter"
+	WebAuthnRPName string `env:"WEBAUTHNRPNAME" yaml:"webauthnRpName"`
+
+	// Allowed origins for WebAuthn auth.
+	// If empty, falls back to `baseUrl`
+	WebAuthnOrigins []string `env:"WEBAUTHNORIGINS" yaml:"webauthnOrigins"`
+
+	// Disable creation of new user accounts.
+	// +default false
+	DisableSignup bool `env:"DISABLESIGNUP" yaml:"disableSignup"`
+
+	// Timeout for sessions before having to authenticate again, as a Go duration.
+	// This cannot be more than 1 hour.
 	// +default 5m
 	SessionTimeout time.Duration `env:"SESSIONTIMEOUT" yaml:"sessionTimeout"`
 
-	// Default timeout for wrap and unwrap requests, as a Go duration. This is the default value, and can be overridden in each request.
+	// Default timeout for request operations, as a Go duration.
+	// This is the default value, and can be overridden in each request.
 	// +default 5m
 	RequestTimeout time.Duration `env:"REQUESTTIMEOUT" yaml:"requestTimeout"`
 
-	// String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Vault is served through a proxy service and/or CDN.
-	// This option should not be set if the application is exposed directly, without a proxy or CDN.
-	// Common values include:
-	//
-	// - `X-Forwarded-For,X-Real-Ip`: `X-Forwarded-For` is the [de-facto standard](https://http.dev/x-forwarded-for) set by proxies; some set `X-Real-Ip`
-	// - `CF-Connecting-IP`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/reference/http-request-headers/#cf-connecting-ip)
-	TrustedForwardedIPHeader string `env:"TRUSTEDFORWARDEDIPHEADER" yaml:"trustedForwardedIPHeader"`
+	// List of IPs or CIDRs of trusted proxies, which enables trusting the X-Forwarded-* headers
+	// For example, `10.0.0.0/8`
+	TrustedProxies []string `env:"TRUSTEDPROXIES" yaml:"trustedProxies"`
 
 	// If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
 	// +default false
 	OmitHealthCheckLogs bool `env:"OMITHEALTHCHECKLOGS" yaml:"omitHealthCheckLogs"`
-
-	// String used as key to sign state tokens. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
-	// +default randomly-generated when the application starts
-	TokenSigningKey string `env:"TOKENSIGNINGKEY" yaml:"tokenSigningKey"`
-
-	// String used as key to encrypt cookies. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
-	// +default randomly-generated when the application starts
-	CookieEncryptionKey string `env:"COOKIEENCRYPTIONKEY" yaml:"cookieEncryptionKey"`
 
 	// String with the name of a header to trust as ID of each request. The ID is included in logs and in responses as `X-Request-ID` header.
 	// Common values can include:
@@ -160,34 +138,34 @@ type Config struct {
 
 // Dev includes options using during development only
 type Dev struct {
-	ClientProxyServer string
-
 	// If true, disables caching on the client
 	DisableClientCache bool
+	// If true, disables serving the client-side app
+	DisableClientServing bool
 }
 
 // Internal properties
 type internal struct {
-	instanceID                string
-	configFileLoaded          string // Path to the config file that was loaded
-	tokenSigningKeyParsed     []byte
-	cookieEncryptionKeyParsed jwk.Key
-	cookieSigningKeyParsed    jwk.Key
+	instanceID string
+
+	// Path to the config file that was loaded
+	configFileLoaded string
+
+	// Session token signing key
+	tokenSigningKey jwk.SymmetricKey
+
+	// Base64-encoded PRF salt
+	prfSalt string
 }
 
-// GetTokenSigningKey returns the (parsed) token signing key
-func (c *Config) GetTokenSigningKey() []byte {
-	return c.internal.tokenSigningKeyParsed
+// GetPRFSalt returns the PRF salt
+func (c *Config) GetPRFSalt() string {
+	return c.internal.prfSalt
 }
 
-// GetCookieEncryptionKey returns the (parsed) cookie encryption key
-func (c *Config) GetCookieEncryptionKey() jwk.Key {
-	return c.internal.cookieEncryptionKeyParsed
-}
-
-// GetCookieSigningKey returns the (parsed) cookie signing key
-func (c *Config) GetCookieSigningKey() jwk.Key {
-	return c.internal.cookieSigningKeyParsed
+// TokenSigningKey returns the derived signing key used for JWT sessions
+func (c *Config) TokenSigningKey() jwk.SymmetricKey {
+	return c.internal.tokenSigningKey
 }
 
 // GetLoadedConfigPath returns the path to the config file that was loaded
@@ -208,14 +186,28 @@ func (c *Config) GetInstanceID() string {
 // Validate the configuration and performs some sanitization
 func (c *Config) Validate(logger *slog.Logger) error {
 	// Check required variables
-	if c.AzureClientId == "" {
-		return errors.New("config entry key 'azureClientId' missing")
-	}
-	if c.AzureTenantId == "" {
-		return errors.New("config entry key 'azureTenantId' missing")
-	}
 	if c.WebhookUrl == "" {
 		return errors.New("config entry key 'webhookUrl' missing")
+	}
+	if c.DatabaseDSN == "" {
+		return errors.New("config entry key 'databaseDSN' missing")
+	}
+	if c.SecretKey == "" {
+		return errors.New("config entry key 'secretKey' missing")
+	}
+
+	// Validate the webhook URL
+	parsedWebhook, err := url.Parse(c.WebhookUrl)
+	if err != nil {
+		return fmt.Errorf("config entry key 'webhookUrl' is invalid: %w", err)
+	}
+	if parsedWebhook.Scheme != "http" && parsedWebhook.Scheme != "https" {
+		return fmt.Errorf("config entry key 'webhookUrl' has disallowed scheme %q: only http and https are permitted", parsedWebhook.Scheme)
+	}
+
+	// Ensure that the secret key is at least 20-character long (although ideally it's 32 or more, but enforcing some minimum standard)
+	if len(c.SecretKey) < 20 {
+		return errors.New("secret key is too short: must be at least 20 characters")
 	}
 
 	// Check for invalid values
@@ -225,111 +217,41 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	if c.RequestTimeout < time.Second {
 		return errors.New("config entry key 'requestTimeout' is invalid: must be greater than 1s")
 	}
-	if c.AzureClientSecret != "" && c.AzureFederatedIdentity != "" {
-		return errors.New("cannot specify 'azureClientSecret' in config when 'azureFederatedIdentity' is configured")
-	}
-
-	// Format URLs in the Key Vault allowlist
-	for i := range c.AllowedVaults {
-		c.AllowedVaults[i] = keyvault.VaultUrl(c.AllowedVaults[i])
-	}
-
-	// Show warnings if needed
-	if logger != nil {
-		if c.AzureClientSecret == "" && c.AzureFederatedIdentity == "" {
-			logger.Warn(`Revaulter is running without an 'azureClientSecret' in the configuration, which requires using public clients ("mobile and desktop applications"). Configuring the Revaulter Entra ID (Azure AD) application as a confidential client ("web applications") and using either a client secret or Federated Identity is recommended for security.`)
-		}
-	}
 
 	return nil
 }
 
-// SetTokenSigningKey parses the token signing key.
-// If it's empty, will generate a new one.
-func (c *Config) SetTokenSigningKey(logger *slog.Logger) (err error) {
-	b := []byte(c.TokenSigningKey)
-	if len(b) == 0 {
-		if logger != nil {
-			logger.Info("No 'tokenSigningKey' found in the configuration: a random one will be generated")
-		}
-
-		c.internal.tokenSigningKeyParsed = make([]byte, 32)
-		_, err = io.ReadFull(rand.Reader, c.internal.tokenSigningKeyParsed)
-		if err != nil {
-			return fmt.Errorf("failed to generate random bytes: %w", err)
-		}
-		return nil
+// SetSecretKey derives the instance-wide deterministic WebAuthn PRF salt from `secretKey` and the token signing key.
+// The resulting salt is NOT used to encrypt any server-side data; it is purely the input-material anchor that every user's in-browser key derivation (static ECDH/ML-KEM decryption keys and per-operation AES-GCM keys) is bound to.
+func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
+	if c.SecretKey == "" {
+		return errors.New("secret key value is empty")
 	}
+	sk := []byte(c.SecretKey)
 
-	// Use HKDF to ensure the key is 256-bit long
-	c.internal.tokenSigningKeyParsed, err = hkdf.Key(sha256.New, b, nil, "revaulter-token-signing-key", 32)
+	// Use HKDF to derive the 128-bit PRF salt
+	prfSalt, err := hkdf.Key(sha256.New, sk, nil, "revaulter-prf-salt", 16)
+	if err != nil {
+		return fmt.Errorf("failed to derive PRF salt: %w", err)
+	}
+	c.internal.prfSalt = base64.RawURLEncoding.EncodeToString(prfSalt)
+
+	// Use HKDF to derive the 256-bit token signing key
+	tokenSigningKeyRaw, err := hkdf.Key(sha256.New, sk, nil, "revaulter-session-token", 32)
 	if err != nil {
 		return fmt.Errorf("failed to derive token signing key: %w", err)
 	}
 
-	return nil
-}
-
-// SetCookieKeys sets the cookie encryption and signing keys.
-func (c *Config) SetCookieKeys(logger *slog.Logger) (err error) {
-	// If we have cookieEncryptionKey set, derive the keys from that
-	// Otherwise, generate the keys randomly
-	var (
-		// Cookie Encryption Key, 128-bit (for AES-KW)
-		cekRaw []byte
-		// Cookie Signing Key, 256-bit (for HMAC-SHA256)
-		cskRaw []byte
-	)
-	if c.CookieEncryptionKey != "" {
-		var material []byte
-		material, err = hkdf.Key(sha256.New, []byte(c.CookieEncryptionKey), nil, "revaulter-cookie-keys", 48)
-		if err != nil {
-			return fmt.Errorf("failed to derive cookie keys: %w", err)
-		}
-		cekRaw = material[0:16]
-		cskRaw = material[16:]
-	} else {
-		if logger != nil {
-			logger.Info("No 'cookieEncryptionKey' found in the configuration: a random one will be generated")
-		}
-
-		cekRaw = make([]byte, 16)
-		_, err = io.ReadFull(rand.Reader, cekRaw)
-		if err != nil {
-			return fmt.Errorf("failed to generate random cookieEncryptionKey: %w", err)
-		}
-
-		cskRaw = make([]byte, 32)
-		_, err = io.ReadFull(rand.Reader, cskRaw)
-		if err != nil {
-			return fmt.Errorf("failed to generate random cookieSigningKey: %w", err)
-		}
+	// Import the token signing key as a jwk.Key
+	c.internal.tokenSigningKey, err = jwk.Import[jwk.SymmetricKey](tokenSigningKeyRaw)
+	if err != nil {
+		return fmt.Errorf("failed to import token signing key as jwk.Key: %w", err)
 	}
 
 	// Calculate the key ID
-	kid := computeKeyId(cskRaw)
-
-	// Import the keys as JWKs
-	c.internal.cookieEncryptionKeyParsed, err = jwk.FromRaw(cekRaw)
-	if err != nil {
-		return fmt.Errorf("failed to import cookieEncryptionKey as jwk.Key: %w", err)
-	}
-	_ = c.internal.cookieEncryptionKeyParsed.Set("kid", kid)
-
-	c.internal.cookieSigningKeyParsed, err = jwk.FromRaw(cskRaw)
-	if err != nil {
-		return fmt.Errorf("failed to import cookieSigningKey as jwk.Key: %w", err)
-	}
-	_ = c.internal.cookieSigningKeyParsed.Set("kid", kid)
+	_ = c.internal.tokenSigningKey.Set(jwk.KeyIDKey, computeKeyId(tokenSigningKeyRaw))
 
 	return nil
-}
-
-// String implements fmt.Stringer and is used for debugging
-// Returns the entire configuration as JSON
-func (c *Config) String() string {
-	enc, _ := json.Marshal(c)
-	return string(enc)
 }
 
 // Returns the key ID from a key

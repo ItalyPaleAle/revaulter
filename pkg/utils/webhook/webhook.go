@@ -7,15 +7,19 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	kclock "k8s.io/utils/clock"
 
 	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
@@ -46,15 +50,69 @@ func NewWebhook() Webhook {
 
 // newWebhookWithClock creates a new Webhook with the given clock
 func newWebhookWithClock(clock kclock.Clock) Webhook {
+	// Build an HTTP transport whose dialer refuses to connect to private or otherwise non-routable IP addresses.
+	// net.Dialer.Control is invoked AFTER the OS has resolved the hostname to an IP but BEFORE the connect syscall, which means:
+	//   1. it sees the actual IP that would be connected to (no TOCTOU)
+	//   2. it runs for every A/AAAA candidate in a multi-address result, so a mixed-public/private DNS response cannot slip through
+	//   3. it also catches redirects (we disable auto-following below for good measure, but a custom resolver round would still be blocked)
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control: func(network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("invalid dial address %q: %w", address, err)
+			}
+			ip := net.ParseIP(host)
+			if ip == nil {
+				return fmt.Errorf("dial target %q is not an IP literal", host)
+			}
+			if utils.IsPrivateIP(ip) {
+				return fmt.Errorf("refusing to dial private/internal IP %s: SSRF protection", ip)
+			}
+			return nil
+		},
+	}
+
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
 	httpClient := &http.Client{
 		Timeout: webhookTimeout,
+		// Disable automatic redirect following to prevent SSRF via redirects to internal IPs
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Transport: otelhttp.NewTransport(transport),
 	}
-	// Update the transport for the HTTP client to include tracing information
-	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	return &webhookClient{
 		clock:      clock,
 		httpClient: httpClient,
+	}
+}
+
+// validateWebhookScheme checks that the webhook URL uses an allowed scheme (http/https)
+func validateWebhookScheme(webhookUrl string) error {
+	parsed, err := url.Parse(webhookUrl)
+	if err != nil {
+		return fmt.Errorf("invalid webhook URL: %w", err)
+	}
+
+	// Only allow http and https schemes
+	switch parsed.Scheme {
+	case "http", "https":
+		// OK
+		return nil
+	default:
+		return fmt.Errorf("webhook URL has disallowed scheme %q: only http and https are permitted", parsed.Scheme)
 	}
 }
 
@@ -64,14 +122,21 @@ func (w *webhookClient) SetBaseURL(val string) {
 }
 
 // SendWebhook sends the notification
-func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (err error) {
+func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) error {
 	cfg := config.Get()
-
 	webhookUrl := cfg.WebhookUrl
+
+	// Validate the webhook URL scheme
+	// The custom net.Dialer.Control on the HTTP transport enforces the private-IP block at connect time
+	err := validateWebhookScheme(webhookUrl)
+	if err != nil {
+		return fmt.Errorf("webhook URL validation failed: %w", err)
+	}
 
 	// Retry up to 3 times
 	const attempts = 3
 	var i int
+retryLoop:
 	for i = range attempts {
 		var req *http.Request
 		reqCtx, reqCancel := context.WithTimeout(ctx, webhookTimeout)
@@ -109,7 +174,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 					// Nop
 				case <-ctx.Done():
 					err = ctx.Err()
-					break
+					break retryLoop
 				}
 				continue
 			}
@@ -139,7 +204,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 					// Nop
 				case <-ctx.Done():
 					err = ctx.Err()
-					break
+					break retryLoop
 				}
 				continue
 			}
@@ -156,7 +221,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 					// Nop
 				case <-ctx.Done():
 					err = ctx.Err()
-					break
+					break retryLoop
 				}
 				continue
 			}
@@ -173,12 +238,12 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) (
 	}
 
 	if err != nil {
-		err = fmt.Errorf("failed to send webhook after %d attempts; last error: %w", i, err)
+		err = fmt.Errorf("failed to send webhook after %d attempts; last error: %w", i+1, err)
 	}
 	return err
 }
 
-func (w *webhookClient) getLink(data *WebhookRequest) string {
+func (w *webhookClient) getLink() string {
 	if w.baseURL != "" {
 		return w.baseURL
 	}
@@ -187,19 +252,7 @@ func (w *webhookClient) getLink(data *WebhookRequest) string {
 
 func (w *webhookClient) preparePlainRequest(ctx context.Context, webhookUrl string, data *WebhookRequest) (req *http.Request, err error) {
 	// Format the message
-	message := fmt.Sprintf(
-		`Received a request to %s a key using key **%s** in vault **%s**.
-
-Confirm request: %s
-
-(Request ID: %s - Client IP: %s)`,
-		data.OperationName,
-		data.KeyId,
-		data.Vault,
-		w.getLink(data),
-		data.StateId,
-		data.Requestor,
-	)
+	message := w.formatPlainMessage(data)
 
 	// Create the request
 	req, err = http.NewRequestWithContext(ctx, http.MethodPost, webhookUrl, strings.NewReader(message))
@@ -218,20 +271,7 @@ Confirm request: %s
 
 func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl string, data *WebhookRequest) (req *http.Request, err error) {
 	// Format the message
-	var note string
-	if data.Note != "" {
-		note = "Note: *" + data.Note + "*\n"
-	}
-	message := fmt.Sprintf(
-		"Received a request to %s a key using key **%s** in vault **%s**.\n%s[Confirm request](%s)\n`(Request ID: %s - Client IP: %s)`",
-		data.OperationName,
-		data.KeyId,
-		data.Vault,
-		note,
-		w.getLink(data),
-		data.StateId,
-		data.Requestor,
-	)
+	message := w.formatSlackMessage(data)
 
 	// Build the body
 	buf := &bytes.Buffer{}
@@ -260,10 +300,75 @@ func (w *webhookClient) prepareSlackRequest(ctx context.Context, webhookUrl stri
 }
 
 type WebhookRequest struct {
+	Flow string
+
 	OperationName string
 	KeyId         string
 	Vault         string
-	StateId       string
-	Requestor     string
-	Note          string
+
+	AssignedUser string
+	KeyLabel     string
+	Algorithm    string
+
+	Requestor string
+	Note      string
+}
+
+func (w *webhookClient) formatPlainMessage(data *WebhookRequest) string {
+	var note string
+	if data.Note != "" {
+		note = "\n\nNote: " + data.Note
+	}
+	return fmt.Sprintf(
+		`Received a request to %s using key label **%s** for user **%s** (algorithm **%s**).
+
+Open Revaulter: %s
+
+(Client IP: %s)%s`,
+		data.OperationName,
+		data.KeyLabel,
+		data.AssignedUser,
+		data.Algorithm,
+		w.getLink(),
+		data.Requestor,
+		note,
+	)
+}
+
+// escapeSlackText escapes the small set of mrkdwn/meta characters we interpolate
+// This prevents user-controlled fields such as key labels and notes from changing how the webhook message renders
+func escapeSlackText(v string) string {
+	if v == "" {
+		return ""
+	}
+
+	// Slack and Discord Slack-compatible webhooks treat &, <, and > as HTML entities
+	// The remaining characters are escaped so user-controlled text cannot inject emphasis, strike-through, or code spans
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"*", "\\*",
+		"_", "\\_",
+		"~", "\\~",
+		"`", "\\`",
+	)
+	return replacer.Replace(v)
+}
+
+func (w *webhookClient) formatSlackMessage(data *WebhookRequest) string {
+	var note string
+	if data.Note != "" {
+		note = "Note: *" + escapeSlackText(data.Note) + "*\n"
+	}
+	return fmt.Sprintf(
+		"Received a request to %s using key label **%s** for user **%s** (algorithm **%s**).\n%s[Open Revaulter](%s)\n`(Client IP: %s)`",
+		escapeSlackText(data.OperationName),
+		escapeSlackText(data.KeyLabel),
+		escapeSlackText(data.AssignedUser),
+		escapeSlackText(data.Algorithm),
+		note,
+		w.getLink(),
+		escapeSlackText(data.Requestor),
+	)
 }

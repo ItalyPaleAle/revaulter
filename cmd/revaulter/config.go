@@ -166,14 +166,8 @@ func processConfig(log *slog.Logger, cfg *config.Config) (err error) {
 		return err
 	}
 
-	// Ensures the token signing key is present
-	err = cfg.SetTokenSigningKey(log)
-	if err != nil {
-		return err
-	}
-
-	// Set the cookie keys
-	err = cfg.SetCookieKeys(log)
+	// Parse secret key
+	err = cfg.SetSecretKey(log)
 	if err != nil {
 		return err
 	}

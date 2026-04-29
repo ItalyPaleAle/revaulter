@@ -9,17 +9,16 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/gin-contrib/cors"
+	location "github.com/gin-contrib/location/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/go-chi/httprate"
+	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
+	"github.com/italypaleale/go-kit/eventqueue"
 	slogkit "github.com/italypaleale/go-kit/slog"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -31,7 +30,7 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/keyvault"
+	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/utils/broker"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
@@ -43,23 +42,48 @@ const (
 	jsonContentType   = "application/json; charset=utf-8"
 )
 
+// These variables are overwritten in e2e_routes_testbuild when building for e2e tests
+var (
+	// List of test routes
+	testRoutes []func(s *Server, r gin.IRouter)
+	// Rate limit for CLI request creation
+	// 200 req/m
+	requestRateLimit = 200
+	// Rate limit for auth endpoints
+	// 30 req/m
+	authRateLimitRPM = 30
+	// Rate limit for unauthenticated public signing key fetch
+	// 120 req/m
+	publicKeyRateLimitRPM = 120
+)
+
 // Server is the server based on Gin
 type Server struct {
 	appRouter  *gin.Engine
 	httpClient *http.Client
-	states     map[string]*requestState
 	lock       sync.RWMutex
 	webhook    webhook.Webhook
 	metrics    *metrics.RevaulterMetrics
 
-	federatedIdentityCredential azcore.TokenCredential
-
-	// Subscribers that receive public events
-	pubsub *broker.Broker[*requestStatePublic]
-	// Subscriptions to watch for state changes
+	// Subscribers for pending request list updates
+	pubsub *broker.Broker[*db.V2RequestListItem]
+	// Subscriptions to watch request status changes
 	// Each state can only have one subscription
 	// If another call tries to subscribe to the same state, it will evict the first call
-	subs map[string]chan *requestState
+	subs map[string]chan struct{}
+
+	// Delayed work for request expiry and record deletion
+	requestExpiryQueue *eventqueue.Processor[string, requestExpiryEvent]
+	deleteQueue        *eventqueue.Processor[string, deleteEvent]
+
+	// Database and request store
+	db       *db.DB
+	webAuthn *webauthnlib.WebAuthn
+
+	// Per-user rate limiter for wrapped primary key delivery
+	// Protects delivery of the wrapped root-key blob to a WebAuthn-authenticated client
+	// and reduces abuse of the password-gated unwrap flow
+	wrappedKeyLimiter *httprate.RateLimiter
 
 	// Servers
 	appSrv *http.Server
@@ -77,14 +101,6 @@ type Server struct {
 	// Listeners for the app and metrics servers
 	// These can be used for testing without having to start an actual TCP listener
 	appListener net.Listener
-
-	// Factory for keyvault.Client objects
-	// This is defined as a property to allow for mocking
-	kvClientFactory keyvault.ClientFactory
-
-	// Optional function to add test routes
-	// This is used in testing
-	addTestRoutes func(s *Server, r gin.IRouter)
 }
 
 // NewServerOpts contains options for the NewServer method
@@ -93,10 +109,7 @@ type NewServerOpts struct {
 	Webhook       webhook.Webhook
 	Metrics       *metrics.RevaulterMetrics
 	TraceExporter sdkTrace.SpanExporter
-
-	// Optional function to add test routes
-	// This is used in testing
-	addTestRoutes func(s *Server, r gin.IRouter)
+	DB            *db.DB
 }
 
 // NewServer creates a new Server object and initializes it
@@ -109,17 +122,25 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		states:  map[string]*requestState{},
-		subs:    map[string]chan *requestState{},
-		pubsub:  broker.NewBroker[*requestStatePublic](),
+		subs:    map[string]chan struct{}{},
+		pubsub:  broker.NewBroker[*db.V2RequestListItem](),
 		webhook: opts.Webhook,
 		metrics: opts.Metrics,
+		db:      opts.DB,
 
-		httpClient:      httpClient,
-		kvClientFactory: keyvault.NewClient,
+		httpClient: httpClient,
 
-		addTestRoutes: opts.addTestRoutes,
+		// Throttle wrapped primary key delivery to 4 successful logins per 10-minute window, per user
+		wrappedKeyLimiter: httprate.NewRateLimiter(4, 10*time.Minute),
 	}
+
+	// Create the eventqueue processors for performing garbage collection
+	s.requestExpiryQueue = eventqueue.NewProcessor(eventqueue.Options[string, requestExpiryEvent]{
+		ExecuteFn: s.executeRequestExpiryEvent,
+	})
+	s.deleteQueue = eventqueue.NewProcessor(eventqueue.Options[string, deleteEvent]{
+		ExecuteFn: s.executeDeleteEvent,
+	})
 
 	// Init the object
 	err := s.init(opts.Log, opts.TraceExporter)
@@ -132,16 +153,17 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 
 // Init the Server object and create a Gin server
 func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (err error) {
-	// Init the federated identity credential provider if needed
-	err = s.initFederatedIdentity()
-	if err != nil {
-		return fmt.Errorf("failed to initialize the federated identity credential provider: %w", err)
-	}
-
 	// Init tracer
 	err = s.initTracer(traceExporter)
 	if err != nil {
 		return err
+	}
+
+	s.pubsub.SetLogger(log.With(slog.String("component", "pubsub")))
+
+	s.webAuthn, err = s.initWebAuthn()
+	if err != nil {
+		return fmt.Errorf("failed to initialize WebAuthn config: %w", err)
 	}
 
 	// Init the app server
@@ -193,131 +215,140 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	// Create the Gin router and add various middlewares
 	s.appRouter = gin.New()
 	s.appRouter.Use(gin.Recovery())
-	s.appRouter.Use(s.MiddlewareMaxBodySize(20 << 10)) // 20KB
+	s.appRouter.Use(s.MiddlewareMaxBodySize(1 << 20)) // 1MB
+	s.appRouter.Use(location.Default())
 
-	// Configure the trusted IP header and proxies
-	s.configureTrustedProxies()
+	// Configure the trusted proxies
+	err = s.configureTrustedProxies()
+	if err != nil {
+		return err
+	}
 
 	loggerMw := s.MiddlewareLogger(log)
-	corsMw := cors.New(s.getCorsConfig())
 	addStandardMiddlewares := func(r gin.IRoutes) {
-		r.Use(corsMw)
 		if s.tracer != nil {
 			r.Use(otelgin.Middleware(buildinfo.AppName, otelgin.WithTracerProvider(s.tracer)))
 		}
+
 		r.Use(s.MiddlewareRequestId)
+		r.Use(s.MiddlewareNoCache)
+
 		if s.metrics != nil {
 			r.Use(s.MiddlewareCountMetrics)
 		}
+
 		r.Use(loggerMw)
 	}
 
 	// Add routes
 	// Start with the healthz route
 	// This has less middlewares
-	healthzGroup := s.appRouter.Group("")
+	healthzGroup := s.appRouter.Group("/healthz", s.MiddlewareNoCache)
 	if s.metrics != nil {
 		healthzGroup.Use(s.MiddlewareCountMetrics)
 	}
 	if !cfg.OmitHealthCheckLogs {
 		healthzGroup.Use(loggerMw)
 	}
-	healthzGroup.GET("/healthz", gin.WrapF(s.RouteHealthzHandler))
+	healthzGroup.GET("", gin.WrapF(s.RouteHealthzHandler))
 
-	// Logger middleware that removes the auth code from the URL
-	codeFilterLogMw := s.MiddlewareLoggerMask(regexp.MustCompile(`(\?|&)(code|state|session_state)=([^&]*)`), "$1$2***")
+	// Unauthenticated info endpoint for server discovery
+	infoGroup := s.appRouter.Group("/info")
+	addStandardMiddlewares(infoGroup)
+	infoGroup.GET("", s.RouteInfoHandler)
+	infoGroup.GET("/integrity", s.RouteInfoIntegrityHandler)
 
-	// Middleware to allow certain IPs
-	allowIpMw, err := s.AllowIpMiddleware()
-	if err != nil {
-		return err
+	// CSRF middleware for browser-facing endpoints
+	csrfMw := s.MiddlewareCSRF()
+
+	// Session middleware with and without requireReady
+	sessionMw := s.MiddlewareSession(false)
+	sessionReadyMw := s.MiddlewareSession(true)
+
+	// Rate limiters for request creation and authentication endpoints
+	requestRateLimiter := MiddlewareRateLimit(requestRateLimit)
+	authRateLimiter := MiddlewareRateLimit(authRateLimitRPM)
+	publicKeyRateLimiter := MiddlewareRateLimit(publicKeyRateLimitRPM)
+
+	// v2 routes (WebAuthn + browser crypto flow)
+	v2RouteGroup := s.appRouter.Group("/v2")
+	addStandardMiddlewares(v2RouteGroup)
+
+	// Request group is API-to-server (not browser-originated), so no CSRF middleware
+	v2RequestGroup := v2RouteGroup.Group("/request")
+	v2RequestGroup.Use(requestRateLimiter, s.MiddlewareRequestKey)
+	v2RequestGroup.POST("/encrypt", s.RouteV2RequestCreate("encrypt"))
+	v2RequestGroup.POST("/decrypt", s.RouteV2RequestCreate("decrypt"))
+	v2RequestGroup.POST("/sign", s.RouteV2RequestCreate("sign"))
+	v2RequestGroup.GET("/pubkey", s.RouteV2RequestPubkey)
+	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
+
+	// Public (unauthenticated) signing key fetch endpoints, rate-limited
+	// Paths carry the format as a dot-extension
+	// - JWK: <id>.jwk and <id>.json
+	// - PEM: <id>.pem and <id>.pub
+	v2SigningKeysGroup := v2RouteGroup.Group("/signing-keys")
+	v2SigningKeysGroup.Use(publicKeyRateLimiter)
+	v2SigningKeysGroup.GET("/:filename", s.RouteV2SigningKeyPublic)
+
+	// API and auth groups are browser-facing, apply CSRF protection
+	v2APIGroup := v2RouteGroup.Group("/api")
+	v2APIGroup.Use(csrfMw, sessionReadyMw)
+	v2APIGroup.GET("/list", s.RouteV2APIList)
+	v2APIGroup.GET("/request/:state", s.RouteV2APIRequestGet)
+	v2APIGroup.POST("/confirm", s.RouteV2APIConfirm)
+	v2APIGroup.GET("/signing-keys", s.RouteV2APISigningKeyList)
+	v2APIGroup.POST("/signing-keys", s.RouteV2APISigningKeyCreate)
+	v2APIGroup.GET("/signing-keys/:id", s.RouteV2APISigningKeyGet)
+	v2APIGroup.POST("/signing-keys/:id", s.RouteV2APISigningKeyUpdate)
+	v2APIGroup.DELETE("/signing-keys/:id", s.RouteV2APISigningKeyDelete)
+
+	v2AuthGroup := v2RouteGroup.Group("/auth")
+	v2AuthGroup.Use(csrfMw, authRateLimiter)
+	v2AuthGroup.POST("/register/begin", s.RouteV2AuthRegisterBegin)
+	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
+	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
+	v2AuthGroup.POST("/login/finish", s.RouteV2AuthLoginFinish)
+	v2AuthGroup.GET("/session", sessionReadyMw, s.RouteV2AuthSession)
+	v2AuthGroup.POST("/finalize-signup", sessionMw, s.RouteV2AuthFinalizeSignup)
+	v2AuthGroup.POST("/allowed-ips", sessionReadyMw, s.RouteV2AuthAllowedIPs)
+	v2AuthGroup.POST("/regenerate-request-key", sessionReadyMw, s.RouteV2AuthRequestKeyRegenerate)
+	v2AuthGroup.POST("/update-display-name", sessionReadyMw, s.RouteV2AuthUpdateDisplayName)
+	v2AuthGroup.POST("/update-wrapped-key", sessionReadyMw, s.RouteV2AuthUpdateWrappedKey)
+	v2AuthGroup.GET("/credentials", sessionReadyMw, s.RouteV2AuthListCredentials)
+	v2AuthGroup.POST("/credentials/add/begin", sessionReadyMw, s.RouteV2AuthAddCredentialBegin)
+	v2AuthGroup.POST("/credentials/add/finish", sessionReadyMw, s.RouteV2AuthAddCredentialFinish)
+	v2AuthGroup.POST("/credentials/rename", sessionReadyMw, s.RouteV2AuthRenameCredential)
+	v2AuthGroup.POST("/credentials/delete", sessionReadyMw, s.RouteV2AuthDeleteCredential)
+	v2AuthGroup.POST("/logout", sessionMw, s.RouteV2AuthLogout)
+
+	// Add test routes if any
+	for _, addRoutes := range testRoutes {
+		addRoutes(s, s.appRouter)
 	}
-
-	// Requests - these share the /request prefix and all use the allow IP middleware
-	requestRouteGroup := s.appRouter.Group("/request")
-	addStandardMiddlewares(requestRouteGroup)
-	requestRouteGroup.Use(allowIpMw, s.RequestKeyMiddleware())
-	requestRouteGroup.GET("/result/:state", s.RouteRequestResult)
-	requestRouteGroup.POST("/encrypt", s.RouteRequestOperations(OperationEncrypt))
-	requestRouteGroup.POST("/decrypt", s.RouteRequestOperations(OperationDecrypt))
-	requestRouteGroup.POST("/sign", s.RouteRequestOperations(OperationSign))
-	requestRouteGroup.POST("/verify", s.RouteRequestOperations(OperationVerify))
-	requestRouteGroup.POST("/wrapkey", s.RouteRequestOperations(OperationWrapKey))
-	requestRouteGroup.POST("/unwrapkey", s.RouteRequestOperations(OperationUnwrapKey))
-
-	// API routes - these share the /api prefix
-	apiRouteGroup := s.appRouter.Group("/api")
-	addStandardMiddlewares(apiRouteGroup)
-	apiRouteGroup.GET("/list",
-		s.AccessTokenMiddleware(AccessTokenMiddlewareOpts{Required: true}),
-		s.RouteApiListGet,
-	)
-	apiRouteGroup.POST("/confirm",
-		s.AccessTokenMiddleware(AccessTokenMiddlewareOpts{Required: true, AllowAccessTokenInHeader: true}),
-		s.RouteApiConfirmPost,
-	)
-
-	// Auth routes - these share the /auth prefix
-	authRouteGroup := s.appRouter.Group("/auth")
-	addStandardMiddlewares(authRouteGroup)
-	authRouteGroup.GET("/signin", s.RouteAuthSignin)
-	authRouteGroup.GET("/confirm", codeFilterLogMw, s.RouteAuthConfirm)
 
 	// Static files as fallback
 	// This doesn't include most middlewares
-	s.appRouter.NoRoute(s.serveClient()...)
+	if !cfg.Dev.DisableClientServing {
+		s.appRouter.NoRoute(s.serveClient()...)
+	}
 
 	return nil
 }
 
-func (s *Server) getCorsConfig() cors.Config {
-	corsConfig := cors.Config{
-		AllowMethods: []string{
-			http.MethodGet,
-			http.MethodPost,
-			http.MethodHead,
-		},
-		AllowHeaders: []string{
-			"Authorization",
-			"Origin",
-			"Content-Length",
-			"Content-Type",
-		},
-		ExposeHeaders: []string{
-			"Retry-After",
-			"Content-Type",
-		},
-		AllowCredentials: false,
-		MaxAge:           12 * time.Hour,
-	}
-
-	// Check if we are restricting the origins for CORS
-	origins := config.Get().Origins
-	switch {
-	case len(origins) == 0 || (len(origins) == 1 && origins[0] == ""):
-		// Default is baseUrl
-		corsConfig.AllowOrigins = []string{s.getBaseURL()}
-	case len(origins) == 1 && origins[0] == "*":
-		corsConfig.AllowAllOrigins = true
-	default:
-		corsConfig.AllowAllOrigins = false
-		corsConfig.AllowOrigins = origins
-	}
-
-	return corsConfig
-}
-
-func (s *Server) configureTrustedProxies() {
-	// Configure the trusted IP header
-	trustedIPHeader := config.Get().TrustedForwardedIPHeader
-	if trustedIPHeader != "" {
-		// If there's a trusted IP header, the app is behind a proxy, so we trust all addresses for the proxy
-		_ = s.appRouter.SetTrustedProxies([]string{"0.0.0.0/0", "::/0"})
-		s.appRouter.RemoteIPHeaders = strings.Split(trustedIPHeader, ",")
-	} else {
+func (s *Server) configureTrustedProxies() error {
+	trustedProxies := config.Get().TrustedProxies
+	if len(trustedProxies) == 0 {
 		// Set Gin to not trust any proxy
-		_ = s.appRouter.SetTrustedProxies(nil)
+		trustedProxies = nil
 	}
+
+	err := s.appRouter.SetTrustedProxies(trustedProxies)
+	if err != nil {
+		return fmt.Errorf("error setting trusted proxies in server: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Server) getBaseURL() string {
@@ -336,42 +367,6 @@ func (s *Server) getBaseURL() string {
 	}
 }
 
-func (s *Server) initFederatedIdentity() (err error) {
-	cfg := config.Get()
-
-	// Crete the federated identity credential object depending on the kind of federated identity
-	afi := strings.ToLower(cfg.AzureFederatedIdentity)
-	switch {
-	case afi == "":
-		// If federated identity is disabled, return
-		return nil
-	case strings.HasPrefix(afi, "managedidentity="):
-		// User-assigned managed identity
-		s.federatedIdentityCredential, err = azidentity.NewManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{
-			ID: azidentity.ClientID(afi[len("managedidentity="):]),
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create managed identity credential object: %w", err)
-		}
-	case afi == "managedidentity":
-		// System-assigned managed identity
-		s.federatedIdentityCredential, err = azidentity.NewManagedIdentityCredential(nil)
-		if err != nil {
-			return fmt.Errorf("failed to create managed identity credential object: %w", err)
-		}
-	case afi == "workloadidentity":
-		// Workload Identity
-		s.federatedIdentityCredential, err = azidentity.NewWorkloadIdentityCredential(nil)
-		if err != nil {
-			return fmt.Errorf("failed to create workload identity credential object: %w", err)
-		}
-	default:
-		return fmt.Errorf("invalid value for configuration option 'azureFederatedIdentity': '%s'", cfg.AzureFederatedIdentity)
-	}
-
-	return nil
-}
-
 // Run the web server
 // Note this function is blocking, and will return only when the servers are shut down via context cancellation.
 func (s *Server) Run(ctx context.Context) error {
@@ -380,6 +375,10 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	defer s.running.Store(false)
 	defer s.wg.Wait()
+
+	// Stop the background eventqueue processors
+	defer s.requestExpiryQueue.Close()
+	defer s.deleteQueue.Close()
 
 	// App server
 	s.wg.Add(1)
@@ -423,11 +422,15 @@ func (s *Server) startAppServer(ctx context.Context) error {
 	log := logging.LogFromContext(ctx)
 
 	// Create the HTTP(S) server
+	// WriteTimeout is intentionally left unset because long-polling and NDJSON streaming routes legitimately hold the response open for minutes
 	s.appSrv = &http.Server{
 		Addr:              net.JoinHostPort(cfg.Bind, strconv.Itoa(cfg.Port)),
 		MaxHeaderBytes:    1 << 20,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
+
 	if s.tlsConfig != nil {
 		// Using TLS
 		s.appSrv.Handler = s.appRouter
@@ -456,6 +459,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		slog.Bool("tls", s.tlsConfig != nil),
 		slog.String("url", s.getBaseURL()),
 	)
+
 	go func() {
 		defer s.appListener.Close()
 
@@ -471,6 +475,53 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		}
 	}()
 
+	if s.db != nil {
+		rs := s.db.RequestStore()
+		as := s.db.AuthStore()
+
+		now := time.Now()
+
+		// Cleanup expired requests
+		err := rs.ExpirePending(ctx, now)
+		if err != nil {
+			return fmt.Errorf("failed to cleanup expired requests at startup: %w", err)
+		}
+
+		// Cleanup expired records
+		_, err = rs.CleanupOldRecords(ctx, now)
+		if err != nil {
+			return fmt.Errorf("failed to cleanup old request records at startup: %w", err)
+		}
+
+		// Load currently-pending items to enqueue for cleanup, for all users
+		list, err := rs.ListPending(ctx, "")
+		if err != nil {
+			return fmt.Errorf("failed to initialize request expiry queue: %w", err)
+		}
+		for _, item := range list {
+			err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
+				State:  item.State,
+				UserID: item.UserID,
+				TTL:    time.Unix(item.Expiry, 0),
+			})
+			if err != nil {
+				return fmt.Errorf("failed to enqueue request expiry for %s: %w", item.State, err)
+			}
+		}
+
+		// Cleanup expired auth records
+		err = as.CleanupExpired(ctx, time.Now())
+		if err != nil {
+			return fmt.Errorf("failed to cleanup expired auth records at startup: %w", err)
+		}
+
+		// Seed the recurring audit-log prune
+		// The handler re-enqueues itself, so a single boot-time enqueue keeps the chain running
+		err = s.enqueueAuditPrune(time.Now())
+		if err != nil {
+			return fmt.Errorf("failed to seed audit prune: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -535,13 +586,4 @@ func (s *Server) loadTLSConfig(log *slog.Logger) (tlsConfig *tls.Config, watchFn
 	log.Debug("Loaded TLS certificates from PEM values")
 
 	return tlsConfig, nil, nil
-}
-
-type operationResponse struct {
-	keyvault.KeyVaultResponse `json:"response,omitempty"`
-
-	State   string `json:"state"`
-	Pending bool   `json:"pending,omitempty"`
-	Done    bool   `json:"done,omitempty"`
-	Failed  bool   `json:"failed,omitempty"`
 }

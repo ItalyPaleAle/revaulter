@@ -5,10 +5,19 @@
 package config
 
 import (
+	"encoding/json"
+
 	"github.com/jinzhu/copier"
 
 	"github.com/italypaleale/revaulter/pkg/utils/configloader"
 )
+
+// String implements fmt.Stringer and is used for debugging
+// Returns the entire configuration as JSON
+func (c *Config) String() string {
+	enc, _ := json.Marshal(c)
+	return string(enc)
+}
 
 // SetTestConfig updates the configuration in the global config object for the test
 // Returns a function that should be called with "defer" to restore the previous configuration
@@ -33,14 +42,12 @@ func SetTestConfig(values map[string]any) func() {
 		panic(err)
 	}
 
-	// Set the token signing key and cookie keys
-	err = config.SetCookieKeys(nil)
-	if err != nil {
-		panic(err)
-	}
-	err = config.SetTokenSigningKey(nil)
-	if err != nil {
-		panic(err)
+	// Set the secret key
+	if config.SecretKey != "" {
+		err = config.SetSecretKey(nil)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	// Return a function that restores the original value

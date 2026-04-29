@@ -1,11 +1,14 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -16,851 +19,1007 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/keyvault"
-	"github.com/italypaleale/revaulter/pkg/testutils"
+	"github.com/italypaleale/revaulter/pkg/db"
+	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils/bufconn"
 	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
 const (
-	// Servers are started on in-memory listeners so these ports aren't actually used for TCP sockets
 	testServerPort = 5701
-
-	// Size for the in-memory buffer for bufconn
 	bufconnBufSize = 1 << 20 // 1MB
 )
 
+// doRequestKeyJSON sends an HTTP request to /v2/request/<suffix> with the request key in the Authorization header
+// The helper drains and closes the response body before returning, but the bodyclose linter can't see through the wrapper, so callers add `//nolint:bodyclose`
+func doRequestKeyJSON(t *testing.T, client *http.Client, method, suffix, requestKey string, body any) (*http.Response, map[string]any) {
+	t.Helper()
+
+	var reader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		reader = bytes.NewReader(b)
+	}
+
+	req, err := http.NewRequestWithContext(t.Context(), method, fmt.Sprintf("https://localhost:%d/v2/request/%s", testServerPort, suffix), reader)
+	require.NoError(t, err)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+requestKey)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res, out
+}
+
 func TestMain(m *testing.M) {
+	// #nosec G101 -- Hardcoded credentials are test ones
 	_ = config.SetTestConfig(map[string]any{
-		"logLevel":            "info",
-		"port":                testServerPort,
-		"bind":                "127.0.0.1",
-		"sessionTimeout":      5 * time.Minute,
-		"requestTimeout":      5 * time.Minute,
-		"webhookUrl":          "http://test.local",
-		"azureClientId":       "azure-client-id",
-		"azureTenantId":       "azure-tenant-id",
-		"cookieEncryptionKey": "hello-world",
-		"tokenSigningKey":     "hello-world",
+		"logLevel":       "info",
+		"port":           testServerPort,
+		"bind":           "127.0.0.1",
+		"sessionTimeout": 5 * time.Minute,
+		"requestTimeout": 5 * time.Minute,
+		"webhookUrl":     "http://test.local",
+		"databaseDSN":    ":memory:",
+		"secretKey":      "dGVzdC12Mi1kYi1rZXk",
 	})
 
 	gin.SetMode(gin.ReleaseMode)
-
 	os.Exit(m.Run())
 }
 
-func TestServerLifecycle(t *testing.T) {
-	// Create the server
-	// This will create in-memory listeners with bufconn too
-	srv, cleanup := newTestServer(t, nil, nil, nil)
+func TestServerV2RequestLifecycle(t *testing.T) {
+	setTestConfig(t, "v2-req.db")
+
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	t.Cleanup(cleanup)
 
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
 
-	// Make a request to the /healthz endpoint in the app server
-	appClient := clientForListener(srv.appListener)
-	reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer reqCancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-		fmt.Sprintf("https://localhost:%d/healthz", testServerPort), nil)
-	require.NoError(t, err)
-	res, err := appClient.Do(req)
-	require.NoError(t, err)
-	defer closeBody(res)
-
-	assert.Equal(t, http.StatusNoContent, res.StatusCode)
-	healthzRes, err := io.ReadAll(res.Body)
-	require.NoError(t, err)
-	assert.Empty(t, healthzRes)
-}
-
-func TestServerAppRoutes(t *testing.T) {
-	var accessTokenCookie *http.Cookie
-
-	// Create a roundtripper that captures the requests
-	rtt := &testutils.RoundTripperTest{}
-
-	// Create a mock webhook
-	webhookRequests := make(chan *webhook.WebhookRequest, 1)
-
-	// Create the server
-	// This will create in-memory listeners with bufconn too
-	logBuf := bytes.NewBuffer(make([]byte, 0, 5<<20))
-	srv, cleanup := newTestServer(t, &mockWebhook{requests: webhookRequests}, rtt, logBuf)
-	require.NotNil(t, srv)
-	defer cleanup()
-	stopServerFn := startTestServer(t, srv)
-	defer stopServerFn(t)
-	appClient := clientForListener(srv.appListener)
-
-	// Mock the Key Vault client
-	srv.kvClientFactory = func(opts keyvault.ClientOptions) keyvault.Client {
-		return &mockKVClient{}
+	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
 	}
 
-	// Add a route group for routes specific to some tests
-	testRoutes := srv.appRouter.Group("/_test")
-
-	// Test the healthz endpoints
-	t.Run("healthz", func(t *testing.T) {
-		// Make a request to the /healthz endpoint
-		reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-		defer reqCancel()
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-			fmt.Sprintf("https://localhost:%d/healthz", testServerPort), nil)
+	doGetJSON := func(t *testing.T, path string, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), nil)
 		require.NoError(t, err)
-		res, err := appClient.Do(req)
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
 		require.NoError(t, err)
-		defer closeBody(res)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
+	}
 
-		// Check the response
-		require.Equal(t, http.StatusNoContent, res.StatusCode)
-		body, err := io.ReadAll(res.Body)
-		require.NoError(t, err)
-		assert.Empty(t, body)
+	sessionCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
 
-		// Reset the log buffer
-		logBuf.Reset()
-	})
+	// Build JWK for client transport key
+	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
+	require.NoError(t, err)
 
-	// Test the auth routes
-	t.Run("auth", func(t *testing.T) {
-		var (
-			authState       string
-			authStateCookie *http.Cookie
-		)
+	// Create request
+	res, createResp := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
+	require.Equal(t, http.StatusAccepted, res.StatusCode)
+	state, _ := createResp["state"].(string)
+	require.NotEmpty(t, state)
 
-		// Make a request to the /auth/signin endpoint
-		t.Run("signin", func(t *testing.T) {
-			reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-			defer reqCancel()
-			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-				fmt.Sprintf("https://localhost:%d/auth/signin", testServerPort), nil)
-			require.NoError(t, err)
-			res, err := appClient.Do(req)
-			require.NoError(t, err)
-			defer closeBody(res)
-
-			// Ensure the redirect is present
-			require.Equal(t, http.StatusTemporaryRedirect, res.StatusCode)
-
-			loc := res.Header.Get("Location")
-			require.NotEmpty(t, loc)
-
-			locURL, err := url.Parse(loc)
-			require.NoError(t, err)
-
-			assert.True(t, strings.HasPrefix(loc, "https://login.microsoftonline.com/azure-tenant-id/oauth2/v2.0/authorize"))
-			assert.Equal(t, "azure-client-id", locURL.Query().Get("client_id"))
-			assert.Equal(t, "https://localhost:"+strconv.Itoa(testServerPort)+"/auth/confirm", locURL.Query().Get("redirect_uri"))
-			assert.Equal(t, "https://vault.azure.net/user_impersonation", locURL.Query().Get("scope"))
-			assert.NotEmpty(t, locURL.Query().Get("code_challenge"))
-
-			authState = locURL.Query().Get("state")
-			require.NotEmpty(t, authState)
-
-			// Ensure the cookie is present
-			cookies := res.Cookies()
-			require.NotEmpty(t, cookies)
-			require.Len(t, cookies, 1)
-			require.NotNil(t, cookies[0])
-
-			require.Equal(t, "_auth_state", cookies[0].Name)
-			require.Equal(t, "/auth", cookies[0].Path)
-			require.NoError(t, cookies[0].Valid())
-			require.NotEmpty(t, cookies[0].Value)
-			require.Greater(t, cookies[0].MaxAge, 1) //nolint:testifylint
-			authStateCookie = cookies[0]
-		})
-
-		t.Run("confirm", func(t *testing.T) {
-			// Helper function that ensures the auth state cookie is unset in case of errors
-			ensureAuthStateCookieUnset := func(t *testing.T, res *http.Response) {
-				var found bool
-				for _, cookie := range res.Cookies() {
-					if cookie.Name != "_auth_state" {
-						continue
-					}
-
-					found = true
-					require.NoError(t, cookie.Valid())
-					require.Empty(t, cookie.Value)
-					require.Equal(t, -1, cookie.MaxAge)
-					require.Equal(t, "/auth", cookie.Path)
-				}
-
-				require.True(t, found)
-			}
-
-			t.Run("Missing code", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-					fmt.Sprintf("https://localhost:%d/auth/confirm", testServerPort), nil)
-				require.NoError(t, err)
-				res, err := appClient.Do(req)
-				require.NoError(t, err)
-				defer closeBody(res)
-
-				assertResponseError(t, res, http.StatusBadRequest, "Parameter code is missing in the request")
-			})
-
-			t.Run("Missing state", func(t *testing.T) {
-				// Reset the log buffer before starting
-				logBuf.Reset()
-
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-					fmt.Sprintf("https://localhost:%d/auth/confirm?code=foo", testServerPort), nil)
-				require.NoError(t, err)
-				res, err := appClient.Do(req)
-				require.NoError(t, err)
-				defer closeBody(res)
-
-				assertResponseError(t, res, http.StatusBadRequest, "Parameter state is missing in the request")
-
-				// Ensure that the logs do not contain the code and state
-				logStr := logBuf.String()
-				assert.Contains(t, logStr, `path=/auth/confirm?code***`)
-				assert.Contains(t, logStr, `status=400`)
-				assert.Contains(t, logStr, `method=GET`)
-			})
-
-			t.Run("Missing auth state cookie", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-					fmt.Sprintf("https://localhost:%d/auth/confirm?code=foo&state=bar", testServerPort), nil)
-				require.NoError(t, err)
-				res, err := appClient.Do(req)
-				require.NoError(t, err)
-				defer closeBody(res)
-
-				assertResponseError(t, res, http.StatusBadRequest, "Auth state cookie is missing or invalid")
-			})
-
-			t.Run("Invalid auth state cookie", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				// The state parameter in the header does not match what's in the cookie
-				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-					fmt.Sprintf("https://localhost:%d/auth/confirm?code=foo&state=_notvalid", testServerPort), nil)
-				require.NoError(t, err)
-				req.AddCookie(authStateCookie)
-
-				res, err := appClient.Do(req)
-				require.NoError(t, err)
-				defer closeBody(res)
-
-				assertResponseError(t, res, http.StatusBadRequest, "The state token could not be validated")
-				ensureAuthStateCookieUnset(t, res)
-			})
-
-			t.Run("Exchange for access token", func(t *testing.T) {
-				reqCh := make(chan *http.Request, 1)
-				responsesCh := make(chan *http.Response, 1)
-				responsesCh <- &http.Response{
-					StatusCode: http.StatusForbidden,
-					Body:       io.NopCloser(strings.NewReader(`{"token_type":"Bearer","scope":"https://vault.azure.net/user_impersonation","access_token":"my.access.token","expires_in":3600}`)),
-				}
-				rtt.SetReqCh(reqCh)
-				rtt.SetResponsesCh(responsesCh)
-				defer func() {
-					rtt.SetReqCh(nil)
-					rtt.SetResponsesCh(nil)
-				}()
-
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-					fmt.Sprintf("https://localhost:%d/auth/confirm?code=auth-code&state=%s", testServerPort, authState), nil)
-				require.NoError(t, err)
-				req.AddCookie(authStateCookie)
-
-				res, err := appClient.Do(req)
-				require.NoError(t, err)
-				defer closeBody(res)
-
-				// Ensure the redirect is present
-				require.Equal(t, http.StatusTemporaryRedirect, res.StatusCode)
-
-				loc := res.Header.Get("Location")
-				require.Equal(t, fmt.Sprintf("https://localhost:%d", testServerPort), loc)
-
-				// Ensure the cookies are present
-				// Should both set _at and reset _auth_state
-				cookies := res.Cookies()
-				require.NotEmpty(t, cookies)
-				require.Len(t, cookies, 2)
-
-				for _, cookie := range cookies {
-					require.NotNil(t, cookie)
-					switch cookie.Name {
-					case "_at":
-						require.NoError(t, cookie.Valid())
-						require.NotEmpty(t, cookie.Value)
-						require.Equal(t, int(config.Get().SessionTimeout.Seconds()), cookie.MaxAge)
-						require.Equal(t, "/", cookie.Path)
-						accessTokenCookie = cookie
-					case "_auth_state":
-						require.NoError(t, cookie.Valid())
-						require.Empty(t, cookie.Value)
-						require.Equal(t, -1, cookie.MaxAge)
-						require.Equal(t, "/auth", cookie.Path)
-						authStateCookie = nil
-					default:
-						t.Fatal("Found unexpected cookie:", cookie.Name)
-					}
-				}
-			})
-		})
-
-		// Reset the log buffer
-		logBuf.Reset()
-	})
-
-	// If we don't have an access token, stop here since we can't test the next routes
-	require.NotEmpty(t, accessTokenCookie, "Cannot continue tests without an access token")
-
-	t.Run("auth middleware", func(t *testing.T) {
-		// Add routes specifically to test the auth middleware
-		testRoutes.GET("/auth",
-			srv.AccessTokenMiddleware(AccessTokenMiddlewareOpts{Required: true}),
-			func(c *gin.Context) {
-				c.Status(http.StatusNoContent)
-			},
-		)
-		testRoutes.GET("/auth-header",
-			srv.AccessTokenMiddleware(AccessTokenMiddlewareOpts{Required: true, AllowAccessTokenInHeader: true}),
-			func(c *gin.Context) {
-				c.Status(http.StatusNoContent)
-			},
-		)
-
-		authTestFn := func(success bool, path string, modifier func(req *http.Request)) func(t *testing.T) {
-			return func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-					fmt.Sprintf("https://localhost:%d/_test/%s", testServerPort, path), nil)
-				require.NoError(t, err)
-				if modifier != nil {
-					modifier(req)
-				}
-
-				res, err := appClient.Do(req)
-				require.NoError(t, err)
-				defer closeBody(res)
-
-				if success {
-					require.Equal(t, http.StatusNoContent, res.StatusCode)
-				} else {
-					require.Equal(t, http.StatusUnauthorized, res.StatusCode)
-				}
-			}
+	// List pending request for alice
+	resList, err := func() (*http.Response, error) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort), nil)
+		if err != nil {
+			return nil, err
 		}
+		req.AddCookie(sessionCookie)
+		return client.Do(req)
+	}()
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		resList.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, resList.StatusCode)
+	var list []map[string]any
+	require.NoError(t, json.NewDecoder(resList.Body).Decode(&list))
+	require.Len(t, list, 1)
+	require.Equal(t, state, list[0]["state"])
 
-		t.Run("successful auth with cookie", authTestFn(true, "auth", func(req *http.Request) {
-			req.AddCookie(accessTokenCookie)
-		}))
+	// Get request details
+	res, detail := doGetJSON(t, "/v2/api/request/"+state, sessionCookie)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, aliceUser.ID, detail["userId"])
+	reqObj, ok := detail["encryptedRequest"].(map[string]any)
+	require.True(t, ok)
+	require.NotNil(t, reqObj["cliEphemeralPublicKey"])
 
-		t.Run("successful auth with header", authTestFn(true, "auth-header", func(req *http.Request) {
-			req.Header.Set("Authorization", "Bearer "+accessTokenCookie.Value)
-		}))
+	// Confirm with a valid-looking encrypted response envelope
+	browserPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
+	require.NoError(t, err)
+	res, confirmResp := doPostJSON(t, "/v2/api/confirm", map[string]any{
+		"state":            state,
+		"confirm":          true,
+		"responseEnvelope": newV2ResponseEnvelope(browserJWK),
+	}, sessionCookie)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, true, confirmResp["confirmed"])
 
-		t.Run("successful auth with cookie when header is allowed too", authTestFn(true, "auth-header", func(req *http.Request) {
-			req.AddCookie(accessTokenCookie)
-		}))
+	// Result endpoint returns completed envelope
+	res, result := doRequestKeyJSON(t, client, http.MethodGet, "result/"+state, aliceUser.RequestKey, nil)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, state, result["state"])
+	require.Equal(t, true, result["done"])
+	_, ok = result["responseEnvelope"].(map[string]any)
+	require.True(t, ok)
 
-		t.Run("missing access token", authTestFn(false, "auth", nil))
-
-		t.Run("access token in header not allowed by route", authTestFn(false, "auth", func(req *http.Request) {
-			req.Header.Set("Authorization", "Bearer "+accessTokenCookie.Value)
-		}))
-
-		t.Run("missing Bearer prefix in header", authTestFn(false, "auth-header", func(req *http.Request) {
-			req.Header.Set("Authorization", accessTokenCookie.Value)
-		}))
-	})
-
-	t.Run("Operations and APIs", func(t *testing.T) {
-		t.Run("List API returns no item", func(t *testing.T) {
-			reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-			defer reqCancel()
-			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-				fmt.Sprintf("https://localhost:%d/api/list", testServerPort), nil)
-			require.NoError(t, err)
-			req.AddCookie(accessTokenCookie)
-
-			res, err := appClient.Do(req)
-			require.NoError(t, err)
-			defer closeBody(res)
-
-			// Response should be an empty JSON array
-			require.Equal(t, http.StatusOK, res.StatusCode)
-			require.Equal(t, jsonContentType, res.Header.Get("Content-Type")) //nolint:testifylint
-
-			body, err := io.ReadAll(res.Body)
-			require.NoError(t, err)
-			require.Equal(t, "[]", string(body))
-		})
-
-		listSubscribeCtx, listSubscribeCancel := context.WithCancel(t.Context())
-		defer listSubscribeCancel()
-		listSubscribeCh := make(chan *requestStatePublic)
-		t.Run("Subscribe to list API stream", func(t *testing.T) {
-			req, err := http.NewRequestWithContext(listSubscribeCtx, http.MethodGet,
-				fmt.Sprintf("https://localhost:%d/api/list", testServerPort), nil)
-			require.NoError(t, err)
-			req.Header.Set("Accept", ndJSONContentType)
-			req.AddCookie(accessTokenCookie)
-
-			// Do not call defer closeBody(res) here because we want to continue reading from the stream after the test is done
-			//nolint:bodyclose
-			res, err := appClient.Do(req)
-			require.NoError(t, err)
-
-			require.Equal(t, http.StatusOK, res.StatusCode)
-			require.Equal(t, ndJSONContentType, res.Header.Get("Content-Type")) //nolint:testifylint
-
-			go func() {
-				defer closeBody(res)
-
-				dec := json.NewDecoder(res.Body)
-			L:
-				for {
-					var val requestStatePublic
-					decErr := dec.Decode(&val)
-					switch {
-					case decErr == nil:
-						listSubscribeCh <- &val
-					case errors.Is(decErr, io.EOF) || errors.Is(decErr, context.Canceled):
-						break L
-					default:
-						panic("Unexpected error from list API stream: " + decErr.Error())
-					}
-				}
-				close(listSubscribeCh)
-			}()
-		})
-
-		// If the test failed at this stage, we need to abort
-		require.False(t, t.Failed(), "Cannot continue tests without a list subscription")
-
-		createRequestFn := func(reqDataFn func(*operationRequest), resultFn func(stateID string)) func(t *testing.T) {
-			return func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				reqData := &operationRequest{
-					Vault:     "testvault",
-					KeyId:     "testkey",
-					Algorithm: "RSA-OAEP",
-					Value:     base64.RawURLEncoding.EncodeToString([]byte("hello world")),
-				}
-				if reqDataFn != nil {
-					reqDataFn(reqData)
-				}
-				reqBody, _ := json.Marshal(reqData)
-				req, err := http.NewRequestWithContext(reqCtx, http.MethodPost,
-					fmt.Sprintf("https://localhost:%d/request/encrypt", testServerPort),
-					bytes.NewReader(reqBody),
-				)
-				require.NoError(t, err)
-				req.Header.Set("Content-Type", jsonContentType)
-
-				res, err := appClient.Do(req)
-				require.NoError(t, err)
-				defer closeBody(res)
-
-				// Response should contain the operation ID
-				require.Equal(t, http.StatusAccepted, res.StatusCode)
-				require.Equal(t, jsonContentType, res.Header.Get("Content-Type")) //nolint:testifylint
-
-				resData := operationResponse{}
-				err = json.NewDecoder(res.Body).Decode(&resData)
-				require.NoError(t, err)
-				assert.True(t, resData.Pending)
-				assert.False(t, resData.Done)
-				assert.False(t, resData.Failed)
-				assert.NotEmpty(t, resData.State)
-
-				// The list channel should now receive the new request
-				select {
-				case <-time.After(time.Second):
-					t.Fatalf("Did not receive item in list within 1s: %s", resData.State)
-				case item := <-listSubscribeCh:
-					require.NotNil(t, item)
-					require.Equal(t, resData.State, item.State)
-					assert.Equal(t, "pending", item.Status)
-					assert.Equal(t, "encrypt", item.Operation)
-					assert.Equal(t, "https://testvault.vault.azure.net", item.VaultName)
-					assert.Equal(t, "testkey", item.KeyId)
-
-					// Request date should be approximately now or a few seconds ago
-					now := time.Now().Unix()
-					assert.LessOrEqual(t, item.Date, now)
-					assert.Greater(t, item.Date, now-5)
-
-					// Item should have the correct expiration date
-					expectTimeoutSeconds := int64(config.Get().RequestTimeout.Seconds())
-					if timeout, ok := reqData.Timeout.(string); ok && timeout != "" {
-						dur, err := time.ParseDuration(timeout)
-						require.NoError(t, err)
-						expectTimeoutSeconds = int64(dur.Seconds())
-					}
-					assert.Equal(t, item.Date+expectTimeoutSeconds, item.Expiry)
-				}
-
-				if resultFn != nil {
-					resultFn(resData.State)
-				}
-
-				// Webhook should have been invoked
-				select {
-				case <-time.After(100 * time.Millisecond):
-					t.Fatalf("Did not receive webhook before timeout: %s", resData.State)
-				case msg := <-webhookRequests:
-					require.NotNil(t, msg)
-					assert.Equal(t, resData.State, msg.StateId)
-					assert.Equal(t, "encrypt", msg.OperationName)
-					assert.Equal(t, reqData.Note, msg.Note)
-					assert.Equal(t, "https://testvault.vault.azure.net", msg.Vault)
-					assert.Equal(t, "testkey", msg.KeyId)
-					// IP of caller is always 1.2.3.4 in bufconn
-					assert.Equal(t, "1.2.3.4", msg.Requestor)
-				}
-			}
-		}
-
-		var stateIDs [6]string
-		t.Run("Create 5 requests", func(t *testing.T) {
-			for i := range 5 {
-				t.Run("request "+strconv.Itoa(i), createRequestFn(nil, func(stateID string) {
-					stateIDs[i] = stateID
-				}))
-			}
-		})
-
-		t.Run("Create request that expires in 1s", createRequestFn(
-			func(or *operationRequest) {
-				// Minimum is 1s
-				or.Timeout = "1s"
-			},
-			func(stateID string) {
-				stateIDs[5] = stateID
-			},
-		))
-
-		t.Log("State IDs", stateIDs)
-
-		var responsesChs [6]chan *struct {
-			state  string
-			status int
-			res    map[string]any
-			reqID  int
-		}
-		subscribeToResponseFn := func(t *testing.T, stateID int, reqID int) {
-			//nolint:usetesting
-			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
-				fmt.Sprintf("https://localhost:%d/request/result/%s", testServerPort, stateIDs[stateID]), nil)
-			require.NoError(t, err)
-			req.Header.Set("Content-Type", jsonContentType)
-
-			if responsesChs[stateID] == nil {
-				responsesChs[stateID] = make(chan *struct {
-					state  string
-					status int
-					res    map[string]any
-					reqID  int
-				}, 1)
-			}
-
-			go func() {
-				res, err := appClient.Do(req)
-				if err != nil {
-					panic("Failed to make request: " + err.Error())
-				}
-				defer closeBody(res)
-
-				var resData map[string]any
-				err = json.NewDecoder(res.Body).Decode(&resData)
-				if err != nil {
-					panic("Failed to decode JSON response: " + err.Error())
-				}
-
-				responsesChs[stateID] <- &struct {
-					state  string
-					status int
-					res    map[string]any
-					reqID  int
-				}{
-					state:  stateIDs[stateID],
-					status: res.StatusCode,
-					res:    resData,
-					reqID:  reqID,
-				}
-			}()
-		}
-
-		t.Run("Subscribe to responses", func(t *testing.T) {
-			t.Run("Subscribe to request 0", func(t *testing.T) {
-				subscribeToResponseFn(t, 0, 0)
-			})
-
-			t.Run("Subscribe to request 1 multiple times", func(t *testing.T) {
-				// Subscribe to state ID 1; there should be no signal at this point
-				subscribeToResponseFn(t, 1, 1)
-				select {
-				case <-time.After(750 * time.Millisecond):
-					// All good
-				case data := <-responsesChs[1]:
-					t.Fatal("Received response when it was not expected", data)
-				}
-
-				// Subscribing to state ID 1 again should cause the first request to be interrupted
-				subscribeToResponseFn(t, 1, 2)
-				select {
-				case <-time.After(750 * time.Millisecond):
-					t.Fatal("Did not receive a response in time")
-				case data := <-responsesChs[1]:
-					require.Equal(t, 1, data.reqID)
-					assert.Equal(t, http.StatusAccepted, data.status)
-					assert.Equal(t, map[string]any{
-						"state":   stateIDs[1],
-						"pending": true,
-					}, data.res)
-				}
-
-				// Repeat
-				subscribeToResponseFn(t, 1, 3)
-				select {
-				case <-time.After(750 * time.Millisecond):
-					t.Fatal("Did not receive a response in time")
-				case data := <-responsesChs[1]:
-					require.Equal(t, 2, data.reqID)
-					assert.Equal(t, http.StatusAccepted, data.status)
-					assert.Equal(t, map[string]any{
-						"state":   stateIDs[1],
-						"pending": true,
-					}, data.res)
-				}
-			})
-
-			t.Run("Subscribe to request 5", func(t *testing.T) {
-				subscribeToResponseFn(t, 5, 100)
-			})
-		})
-
-		t.Run("Request 5 should expire", func(t *testing.T) {
-			// Should expire
-			select {
-			// This gives it 1.5 seconds because the request expires after 1s
-			case <-time.After(1500 * time.Millisecond):
-				t.Fatal("Did not receive a response in time")
-			case data := <-responsesChs[5]:
-				require.Equal(t, 100, data.reqID)
-				assert.Equal(t, http.StatusConflict, data.status)
-				assert.Equal(t, map[string]any{
-					"state":  stateIDs[5],
-					"failed": true,
-				}, data.res)
-			}
-
-			// The list channel should receive the notification
-			select {
-			case <-time.After(500 * time.Millisecond):
-				t.Fatal("Did not receive updated item in list within 500ms")
-			case item := <-listSubscribeCh:
-				require.NotNil(t, item)
-				require.Equal(t, stateIDs[5], item.State)
-				assert.Equal(t, "removed", item.Status)
-			}
-		})
-
-		t.Run("Complete operations", func(t *testing.T) {
-			completeOperationFn := func(t *testing.T, reqCtx context.Context, reqData *confirmRequest) *http.Response {
-				t.Helper()
-
-				reqBody, _ := json.Marshal(reqData)
-				req, err := http.NewRequestWithContext(reqCtx, http.MethodPost,
-					fmt.Sprintf("https://localhost:%d/api/confirm", testServerPort),
-					bytes.NewReader(reqBody),
-				)
-				require.NoError(t, err)
-				req.AddCookie(accessTokenCookie)
-				req.Header.Set("Content-Type", jsonContentType)
-
-				res, err := appClient.Do(req)
-				require.NoError(t, err)
-
-				return res
-			}
-
-			t.Run("Cannot have both confirm and cancel", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				// False positive - body is closed
-				//nolint:bodyclose
-				res := completeOperationFn(t, reqCtx, &confirmRequest{
-					Cancel:  true,
-					Confirm: true,
-					StateId: stateIDs[0],
-				})
-				defer closeBody(res)
-
-				assertResponseError(t, res, http.StatusBadRequest, "One and only one of confirm and cancel must be set to true in the body")
-			})
-
-			t.Run("Operation not found", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				// False positive - body is closed
-				//nolint:bodyclose
-				res := completeOperationFn(t, reqCtx, &confirmRequest{
-					Confirm: true,
-					StateId: "not-found",
-				})
-				defer closeBody(res)
-
-				assertResponseError(t, res, http.StatusBadRequest, "State not found or expired")
-			})
-
-			t.Run("Operation has expired", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				// False positive - body is closed
-				//nolint:bodyclose
-				res := completeOperationFn(t, reqCtx, &confirmRequest{
-					Confirm: true,
-					StateId: stateIDs[5],
-				})
-				defer closeBody(res)
-
-				assertResponseError(t, res, http.StatusBadRequest, "State not found or expired")
-			})
-
-			t.Run("Cancel operation 0", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				// False positive - body is closed
-				//nolint:bodyclose
-				res := completeOperationFn(t, reqCtx, &confirmRequest{
-					Cancel:  true,
-					StateId: stateIDs[0],
-				})
-				defer closeBody(res)
-
-				// Response should be a JSON object indicating cancellation
-				require.Equal(t, http.StatusOK, res.StatusCode)
-				require.Equal(t, jsonContentType, res.Header.Get("Content-Type")) //nolint:testifylint
-
-				body, err := io.ReadAll(res.Body)
-				require.NoError(t, err)
-				require.Equal(t, `{"canceled":true}`, string(body))
-
-				// Should receive the result in responsesChs[0]
-				select {
-				case <-time.After(500 * time.Millisecond):
-					t.Fatal("Did not receive a response in time")
-				case data := <-responsesChs[0]:
-					require.Equal(t, 0, data.reqID)
-					assert.Equal(t, http.StatusConflict, data.status)
-					assert.Equal(t, map[string]any{
-						"state":  stateIDs[0],
-						"failed": true,
-					}, data.res)
-				}
-
-				// The list channel should receive the notification
-				select {
-				case <-time.After(500 * time.Millisecond):
-					t.Fatal("Did not receive updated item in list within 500ms")
-				case item := <-listSubscribeCh:
-					require.NotNil(t, item)
-					require.Equal(t, stateIDs[0], item.State)
-					assert.Equal(t, "removed", item.Status)
-				}
-			})
-
-			t.Run("Confirm operation 1", func(t *testing.T) {
-				reqCtx, reqCancel := context.WithTimeout(t.Context(), 2*time.Second)
-				defer reqCancel()
-				res := completeOperationFn(t, reqCtx, &confirmRequest{
-					Confirm: true,
-					StateId: stateIDs[1],
-				})
-				defer closeBody(res)
-
-				// Response should be a JSON object indicating confirmation
-				require.Equal(t, http.StatusOK, res.StatusCode)
-				require.Equal(t, jsonContentType, res.Header.Get("Content-Type")) //nolint:testifylint
-
-				body, err := io.ReadAll(res.Body)
-				require.NoError(t, err)
-				require.Equal(t, `{"confirmed":true}`, string(body))
-
-				// Should receive the result in responsesChs[0]
-				select {
-				case <-time.After(500 * time.Millisecond):
-					t.Fatal("Did not receive a response in time")
-				case data := <-responsesChs[1]:
-					// This was request 3
-					require.Equal(t, 3, data.reqID)
-					assert.Equal(t, http.StatusOK, data.status)
-					assert.Equal(t, map[string]any{
-						"done": true,
-						"response": map[string]any{
-							"data": base64.StdEncoding.EncodeToString([]byte("hello world")),
-						},
-						"state": stateIDs[1],
-					}, data.res)
-				}
-
-				// The list channel should receive the notification
-				select {
-				case <-time.After(500 * time.Millisecond):
-					t.Fatal("Did not receive updated item in list within 500ms")
-				case item := <-listSubscribeCh:
-					require.NotNil(t, item)
-					require.Equal(t, stateIDs[1], item.State)
-					assert.Equal(t, "removed", item.Status)
-				}
-			})
-		})
-
-		t.Run("Stop list subscription", func(t *testing.T) {
-			// Canceling the context should stop the request
-			listSubscribeCancel()
-			select {
-			case <-time.After(time.Second):
-				t.Fatal("Did not receive signal within 1s")
-			case _, more := <-listSubscribeCh:
-				require.False(t, more)
-			}
-		})
-	})
+	res, result = doRequestKeyJSON(t, client, http.MethodGet, "result/"+state, aliceUser.RequestKey, nil)
+	require.Equal(t, http.StatusNotFound, res.StatusCode)
+	require.Contains(t, result["error"], "State not found or expired")
 }
 
-func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.RoundTripper, logDest io.Writer) (*Server, func()) {
+func TestServerV2PublicSignup(t *testing.T) {
+	setTestConfig(t, "v2-users.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
+	}
+
+	_, _ = seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	// Public signup remains available for later users
+	res, regBegin := doPostJSON(t, "/v2/auth/register/begin", map[string]any{"displayName": "Bob"})
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.NotEmpty(t, regBegin["challengeId"])
+	require.Equal(t, "webauthn", regBegin["mode"])
+}
+
+func TestServerV2SessionMiddlewareAllowsNonreadyUsersOnListAPI(t *testing.T) {
+	setTestConfig(t, "v2-nonready.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-nonready", "Non-ready")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort), nil)
+	require.NoError(t, err)
+	req.AddCookie(sessionCookie)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+
+	var body []map[string]any
+	require.NoError(t, json.NewDecoder(res.Body).Decode(&body))
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Empty(t, body)
+}
+
+func TestServerV2APIListScopesToSignedInUser(t *testing.T) {
+	setTestConfig(t, "v2-list-scope.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice-list", "Alice")
+	bobCookie, bobUser := seedV2SessionCookie(t, srv, "user-bob-list", "Bob")
+
+	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
+	require.NoError(t, err)
+
+	// Create a pending request on the given user's request-key endpoint and return the state
+	// The handler is API-to-server, so no session cookie is required
+	createRequest := func(t *testing.T, user *db.User, label string) string {
+		t.Helper()
+		// Body is drained and closed inside doRequestKeyJSON; the linter can't follow the wrapper
+		//nolint:bodyclose
+		res, out := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", user.RequestKey, newV2CreateRequestBody(label, "A256GCM", clientJWK))
+		require.Equal(t, http.StatusAccepted, res.StatusCode)
+		state, _ := out["state"].(string)
+		require.NotEmpty(t, state)
+		return state
+	}
+
+	listRequests := func(t *testing.T, cookie *http.Cookie) (int, []map[string]any) {
+		t.Helper()
+		req, rErr := http.NewRequestWithContext(
+			t.Context(),
+			http.MethodGet,
+			fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort),
+			nil,
+		)
+		require.NoError(t, rErr)
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		res, dErr := client.Do(req)
+		require.NoError(t, dErr)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		if res.StatusCode != http.StatusOK {
+			return res.StatusCode, nil
+		}
+		var out []map[string]any
+		require.NoError(t, json.NewDecoder(res.Body).Decode(&out))
+		return res.StatusCode, out
+	}
+
+	aliceState1 := createRequest(t, aliceUser, "alice-key-1")
+	aliceState2 := createRequest(t, aliceUser, "alice-key-2")
+	bobState := createRequest(t, bobUser, "bob-key")
+
+	// Alice's list returns only her requests
+	status, aliceList := listRequests(t, aliceCookie)
+	require.Equal(t, http.StatusOK, status)
+	require.Len(t, aliceList, 2)
+	seen := make([]string, 0, len(aliceList))
+	for _, item := range aliceList {
+		require.Equal(t, aliceUser.ID, item["userId"])
+		state, _ := item["state"].(string)
+		require.NotEqual(t, bobState, state, "Bob's state must not appear in Alice's list")
+		seen = append(seen, state)
+	}
+	require.ElementsMatch(t, []string{aliceState1, aliceState2}, seen)
+
+	// Bob's list returns only his single request
+	status, bobList := listRequests(t, bobCookie)
+	require.Equal(t, http.StatusOK, status)
+	require.Len(t, bobList, 1)
+	require.Equal(t, bobUser.ID, bobList[0]["userId"])
+	require.Equal(t, bobState, bobList[0]["state"])
+
+	// Unauthenticated requests are rejected before the handler reads the store
+	status, _ = listRequests(t, nil)
+	require.Equal(t, http.StatusUnauthorized, status)
+}
+
+// openListStream opens /v2/api/list with Accept: application/x-ndjson and returns the response together with a channel that delivers each ndjson line
+// Callers must defer the returned cleanup to close the body and cancel the request context
+func openListStream(t *testing.T, client *http.Client, cookie *http.Cookie) (*http.Response, <-chan string) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort),
+		nil,
+	)
+	require.NoError(t, err)
+	req.Header.Set("Accept", ndJSONContentType)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+
+	lines := make(chan string, 8)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(res.Body)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		_ = res.Body.Close()
+	})
+	return res, lines
+}
+
+func TestServerV2APIListStreamUnauthenticated(t *testing.T) {
+	setTestConfig(t, "v2-list-stream-unauth.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	// Note stream is closed with a cleanup function
+	//nolint:bodyclose
+	res, _ := openListStream(t, client, nil)
+	require.Equal(t, http.StatusUnauthorized, res.StatusCode)
+}
+
+func TestServerV2APIListStreamEmptySendsSentinel(t *testing.T) {
+	setTestConfig(t, "v2-list-stream-empty.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, _ := seedV2SessionCookie(t, srv, "user-alice-stream-empty", "Alice")
+
+	// Note stream is closed with a cleanup function
+	//nolint:bodyclose
+	res, lines := openListStream(t, client, aliceCookie)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Contains(t, res.Header.Get("Content-Type"), ndJSONContentType)
+
+	// When the initial list is empty the handler writes a single `{}` sentinel line before entering the event loop
+	select {
+	case line, ok := <-lines:
+		require.True(t, ok, "stream closed before delivering sentinel")
+		require.Equal(t, "{}", line)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for empty-list sentinel")
+	}
+}
+
+func TestServerV2APIListStreamScopesToSignedInUser(t *testing.T) {
+	setTestConfig(t, "v2-list-stream-scope.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	rs := srv.db.RequestStore()
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice-stream", "Alice")
+	_, bobUser := seedV2SessionCookie(t, srv, "user-bob-stream", "Bob")
+
+	// Seed one pending request for each user directly against the store so the test doesn't depend on the encrypt endpoint
+	now := time.Now().UTC().Truncate(time.Second)
+	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
+		State:            "alice-stream-state",
+		UserID:           aliceUser.ID,
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "alice-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(10 * time.Minute),
+		EncryptedRequest: `{}`,
+	})
+	require.NoError(t, err)
+
+	err = rs.CreateRequest(t.Context(), db.CreateRequestInput{
+		State:            "bob-stream-state",
+		UserID:           bobUser.ID,
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "bob-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(10 * time.Minute),
+		EncryptedRequest: `{}`,
+	})
+	require.NoError(t, err)
+
+	// Open the stream
+	// Note stream is closed with a cleanup function
+	//nolint:bodyclose
+	res, lines := openListStream(t, client, aliceCookie)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Contains(t, res.Header.Get("Content-Type"), ndJSONContentType)
+
+	readLine := func(t *testing.T, timeout time.Duration) string {
+		t.Helper()
+		select {
+		case line, ok := <-lines:
+			require.True(t, ok, "stream closed while waiting for a line")
+			return line
+		case <-time.After(timeout):
+			t.Fatal("timed out waiting for stream line")
+			return ""
+		}
+	}
+
+	// Initial batch must contain only Alice's pending request
+	initial := readLine(t, 2*time.Second)
+	var item map[string]any
+	require.NoError(t, json.Unmarshal([]byte(initial), &item))
+	require.Equal(t, "alice-stream-state", item["state"])
+	require.Equal(t, aliceUser.ID, item["userId"])
+
+	// No Bob rows must follow in the initial batch
+	select {
+	case extra, ok := <-lines:
+		if ok {
+			t.Fatalf("unexpected extra row in initial batch: %s", extra)
+		}
+	case <-time.After(300 * time.Millisecond):
+		// expected — initial batch exhausted
+	}
+
+	// Reading the initial line proves the handler has already Subscribe()'d and Flush()'d, so any publish after this point is observable
+	// A pubsub event targeting a different user must be filtered out by the UserID check in the handler
+	srv.publishListItem(&db.V2RequestListItem{
+		State:  "bob-live-update",
+		Status: "removed",
+		UserID: bobUser.ID,
+	})
+	select {
+	case leaked := <-lines:
+		t.Fatalf("Alice received a message targeting Bob: %s", leaked)
+	case <-time.After(400 * time.Millisecond):
+		// expected — filtered
+	}
+
+	// A pubsub event targeting Alice must be delivered within a couple of flush ticks
+	srv.publishListItem(&db.V2RequestListItem{
+		State:  "alice-live-update",
+		Status: "removed",
+		UserID: aliceUser.ID,
+	})
+	live := readLine(t, 2*time.Second)
+	require.NoError(t, json.Unmarshal([]byte(live), &item))
+	require.Equal(t, "alice-live-update", item["state"])
+	require.Equal(t, aliceUser.ID, item["userId"])
+}
+
+func TestServerV2APIListStreamSuppressesDuplicateInitialEvents(t *testing.T) {
+	setTestConfig(t, "v2-list-stream-dup.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	rs := srv.db.RequestStore()
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice-stream-dup", "Alice")
+	now := time.Now().UTC().Truncate(time.Second)
+	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
+		State:            "alice-stream-dup-state",
+		UserID:           aliceUser.ID,
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "alice-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(10 * time.Minute),
+		EncryptedRequest: `{}`,
+	})
+	require.NoError(t, err)
+
+	// Note stream is closed with a cleanup function
+	//nolint:bodyclose
+	res, lines := openListStream(t, client, aliceCookie)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+
+	select {
+	case line, ok := <-lines:
+		require.True(t, ok, "stream closed before delivering initial item")
+		var item map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &item))
+		require.Equal(t, "alice-stream-dup-state", item["state"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial stream item")
+	}
+
+	// A live publish for a state already replayed by the initial list should not duplicate the item
+	srv.publishListItem(&db.V2RequestListItem{
+		State:  "alice-stream-dup-state",
+		Status: string(db.V2RequestStatusPending),
+		UserID: aliceUser.ID,
+	})
+	select {
+	case dup, ok := <-lines:
+		if ok {
+			t.Fatalf("unexpected duplicate stream row: %s", dup)
+		}
+	case <-time.After(400 * time.Millisecond):
+		// Expected because duplicate pending item was suppressed
+	}
+
+	// Removal events for an initial state must still be delivered so the UI can clear the item
+	srv.publishListItem(&db.V2RequestListItem{
+		State:  "alice-stream-dup-state",
+		Status: "removed",
+		UserID: aliceUser.ID,
+	})
+	select {
+	case line, ok := <-lines:
+		require.True(t, ok, "stream closed before delivering removal")
+		var item map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &item))
+		require.Equal(t, "alice-stream-dup-state", item["state"])
+		require.Equal(t, "removed", item["status"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for removal stream item")
+	}
+}
+
+func TestServerV2FinalizeSignupRefreshesSessionForReadyAPI(t *testing.T) {
+	setTestConfig(t, "v2-finalize-refresh.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, user := seedV2SessionCookie(t, srv, "user-finalize-refresh", "Refresh User")
+
+	requestEncPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	requestEncJWK, err := protocolv2.ECP256PublicJWKFromECDH(requestEncPriv.PublicKey())
+	require.NoError(t, err)
+	requestEncJWKJSON, err := json.Marshal(requestEncJWK)
+	require.NoError(t, err)
+
+	body, err := json.Marshal(map[string]any{
+		"requestEncEcdhPubkey":         json.RawMessage(requestEncJWKJSON),
+		"requestEncMlkemPubkey":        base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey-refresh")),
+		"anchorEs384PublicKey":         map[string]any{},
+		"anchorMldsa87PublicKey":       "test-anchor-ml-dsa",
+		"pubkeyBundleSignatureEs384":   "sig-es384",
+		"pubkeyBundleSignatureMldsa87": "sig-mldsa87",
+		"wrappedAnchorKey":             base64.RawURLEncoding.EncodeToString([]byte("wrapped-anchor-refresh")),
+		"attestationPayload":           `{"userId":"user-finalize-refresh","credentialId":"cred-user-finalize-refresh","credentialPublicKeyHash":"test","wrappedKeyEpoch":1,"createdAt":1}`,
+		"attestationSignatureEs384":    "sig-es384",
+		"attestationSignatureMldsa87":  "sig-mldsa87",
+	})
+	require.NoError(t, err)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/finalize-signup", testServerPort), bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+	_ = user
+}
+
+func TestServerV2SessionEndpointAllowsNonreadyUsers(t *testing.T) {
+	setTestConfig(t, "v2-session-nonready.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-nonready-session", "Nonready Session")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/auth/session", testServerPort), nil)
+	require.NoError(t, err)
+	req.AddCookie(sessionCookie)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+
+	var body map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&body)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, true, body["authenticated"])
+	require.Equal(t, "user-nonready-session", body["userId"])
+}
+
+func TestServerV2DisableSignup(t *testing.T) {
+	setTestConfig(t, "v2-disable-signup.db", map[string]any{"disableSignup": true})
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	body, err := json.Marshal(map[string]any{"displayName": "Alice"})
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/register/begin", testServerPort), bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusForbidden, res.StatusCode)
+}
+
+func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
+	setTestConfig(t, "v2-security.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
+	}
+	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
+	require.NoError(t, err)
+
+	// Reject malformed client transport JWK (private material present).
+	invalidCreateBody := newV2CreateRequestBody("disk-key", "A256GCM", clientJWK)
+	invalidCreateBody["cliEphemeralPublicKey"] = map[string]any{
+		"kty": "EC", "crv": "P-256",
+		"x": clientJWK.X, "y": clientJWK.Y,
+		"d": "forbidden",
+	}
+	res, _ := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, invalidCreateBody)
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+
+	invalidNoteBody := newV2CreateRequestBody("disk-key", "A256GCM", clientJWK)
+	invalidNoteBody["note"] = "boot unlock!"
+	res, _ = doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, invalidNoteBody)
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+
+	// Create a valid request targeted to alice.
+	res, create := doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, newV2CreateRequestBody("disk-key", "A256GCM", clientJWK))
+	require.Equal(t, http.StatusAccepted, res.StatusCode)
+	state, _ := create["state"].(string)
+	require.NotEmpty(t, state)
+
+	// Alice sees the request.
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/api/list", testServerPort), nil)
+	require.NoError(t, err)
+	req.AddCookie(aliceCookie)
+	resList, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		resList.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, resList.StatusCode)
+	var list []map[string]any
+	require.NoError(t, json.NewDecoder(resList.Body).Decode(&list))
+	require.Len(t, list, 1)
+	require.Equal(t, state, list[0]["state"])
+
+	// Reject malformed response envelope from Alice.
+	invalidEnvelope := newV2ResponseEnvelope(clientJWK)
+	invalidEnvelope["browserEphemeralPublicKey"] = map[string]any{
+		"kty": "EC", "crv": "P-256",
+		"x": clientJWK.X, "y": clientJWK.Y,
+		"d": "forbidden",
+	}
+	res, _ = doPostJSON(t, "/v2/api/confirm", map[string]any{
+		"state":            state,
+		"confirm":          true,
+		"responseEnvelope": invalidEnvelope,
+	}, aliceCookie)
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+
+	// Reject response envelope with malformed transport fields.
+	browserPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	browserJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserPriv.PublicKey())
+	require.NoError(t, err)
+	invalidNonceEnvelope := newV2ResponseEnvelope(browserJWK)
+	invalidNonceEnvelope["nonce"] = "!!!!"
+	res, _ = doPostJSON(t, "/v2/api/confirm", map[string]any{
+		"state":            state,
+		"confirm":          true,
+		"responseEnvelope": invalidNonceEnvelope,
+	}, aliceCookie)
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+
+	// Expiry path: short timeout should transition to failed/expired on result polling.
+	expiringCreateBody := newV2CreateRequestBody("expiring-key", "A256GCM", clientJWK)
+	expiringCreateBody["timeout"] = "1s"
+	res, create = doRequestKeyJSON(t, client, http.MethodPost, "encrypt", aliceUser.RequestKey, expiringCreateBody)
+	require.Equal(t, http.StatusAccepted, res.StatusCode)
+	expState, _ := create["state"].(string)
+	require.NotEmpty(t, expState)
+	time.Sleep(1_500 * time.Millisecond)
+	res, result := doRequestKeyJSON(t, client, http.MethodGet, "result/"+expState, aliceUser.RequestKey, nil)
+	require.Equal(t, http.StatusConflict, res.StatusCode)
+	require.Equal(t, true, result["failed"])
+
+	res, result = doRequestKeyJSON(t, client, http.MethodGet, "result/"+expState, aliceUser.RequestKey, nil)
+	require.Equal(t, http.StatusNotFound, res.StatusCode)
+	require.Contains(t, result["error"], "State not found or expired")
+}
+
+func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
+	setTestConfig(t, "v2-webhook.db")
+
+	webhookRequests := make(chan *webhook.WebhookRequest, 1)
+	srv := newTestServer(t, &mockWebhook{requests: webhookRequests}, nil, nil)
+	require.NotNil(t, srv)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
+	require.NoError(t, err)
+
+	_, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	createBody := newV2CreateRequestBody("disk-key", "A256GCM", clientJWK)
+	createBody["note"] = "boot unlock"
+	body, err := json.Marshal(createBody)
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/request/encrypt", testServerPort), bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+aliceUser.RequestKey)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusAccepted, res.StatusCode)
+
+	select {
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not receive webhook notification")
+	case msg := <-webhookRequests:
+		require.NotNil(t, msg)
+		require.Equal(t, "v2", msg.Flow)
+		require.Equal(t, "encrypt", msg.OperationName)
+		require.Equal(t, "Alice", msg.AssignedUser)
+		require.Equal(t, "disk-key", msg.KeyLabel)
+		require.Equal(t, "A256GCM", msg.Algorithm)
+		require.Equal(t, "boot unlock", msg.Note)
+	}
+}
+
+func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T) {
+	setTestConfig(t, "v2-expiry-callback.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	rs := srv.db.RequestStore()
+
+	_, user := seedV2SessionCookie(t, srv, "user-expiry-callback", "Expiry Callback")
+	now := time.Now().UTC().Truncate(time.Second)
+	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
+		State:            "state-expiry-callback",
+		UserID:           user.ID,
+		Operation:        "encrypt",
+		RequestorIP:      "127.0.0.1",
+		KeyLabel:         "callback-key",
+		Algorithm:        "A256GCM",
+		CreatedAt:        now.Add(-2 * time.Minute),
+		ExpiresAt:        now.Add(-1 * time.Minute),
+		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
+	})
+	require.NoError(t, err)
+
+	srv.executeRequestExpiryEvent(requestExpiryEvent{
+		State:  "state-expiry-callback",
+		UserID: user.ID,
+		TTL:    now.Add(-1 * time.Minute),
+	})
+
+	rec, err := rs.GetRequest(t.Context(), "state-expiry-callback")
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(t, db.V2RequestStatusExpired, rec.Status)
+
+	srv.executeDeleteEvent(deleteEvent{
+		KeyName: "request-delete:state-expiry-callback",
+		Kind:    "request",
+		ID:      "state-expiry-callback",
+		TTL:     now.Add(10 * time.Minute),
+	})
+
+	rec, err = rs.GetRequest(t.Context(), "state-expiry-callback")
+	require.NoError(t, err)
+	require.Nil(t, rec)
+}
+
+func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
+	setTestConfig(t, "v2-logout.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-logout", "Logout User")
+	require.NotEmpty(t, sessionCookie.Value)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/logout", testServerPort), bytes.NewReader([]byte(`{}`)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+
+	req2, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/auth/session", testServerPort), nil)
+	require.NoError(t, err)
+	resCookies := res.Cookies()
+	for _, cookie := range resCookies {
+		if cookie.Name == sessionCookie.Name {
+			req2.AddCookie(cookie)
+		}
+	}
+	res2, err := client.Do(req2)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res2.Body)
+		res2.Body.Close()
+	}()
+	require.Equal(t, http.StatusUnauthorized, res2.StatusCode)
+}
+
+func TestServerV2AuthLogoutClearsBothCookieNames(t *testing.T) {
+	// Regression: logout must clear both the `__Host-_s` (secure) and `_s` (insecure) cookie names
+	// A scheme change between login and logout (e.g. a proxy switching https→http on a subsequent hop) would otherwise leave a stray session cookie behind
+	setTestConfig(t, "v2-logout-both.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-logout-both", "Logout Both User")
+	require.NotEmpty(t, sessionCookie.Value)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/auth/logout", testServerPort), bytes.NewReader([]byte(`{}`)))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(sessionCookie)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+
+	var sawSecure, sawInsecure bool
+	for _, cookie := range res.Cookies() {
+		switch cookie.Name {
+		case sessionCookieNameSecure:
+			sawSecure = true
+			require.Equal(t, "/", cookie.Path, "secure cookie must be cleared with path=/")
+			require.True(t, cookie.MaxAge < 0 || !cookie.Expires.IsZero() && cookie.Expires.Before(time.Now()), "secure cookie must be expired")
+		case sessionCookieNameInsecure:
+			sawInsecure = true
+			require.Equal(t, "/v2", cookie.Path, "insecure cookie must be cleared with path=/v2")
+			require.True(t, cookie.MaxAge < 0 || !cookie.Expires.IsZero() && cookie.Expires.Before(time.Now()), "insecure cookie must be expired")
+		}
+	}
+	require.True(t, sawSecure, "logout must set an expired __Host-_s cookie")
+	require.True(t, sawInsecure, "logout must set an expired _s cookie")
+}
+
+func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.RoundTripper, logDest io.Writer) *Server {
 	t.Helper()
 
 	if logDest == nil {
@@ -877,14 +1036,20 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	cert, key, err := getSelfSignedTLSCredentials()
 	require.NoError(t, err, "cannot get TLS credentials")
 
-	cleanup := config.SetTestConfig(map[string]any{
-		"tLSCertPEM": cert,
-		"tLSKeyPEM":  key,
-	})
+	t.Cleanup(
+		config.SetTestConfig(map[string]any{
+			"tLSCertPEM": cert,
+			"tLSKeyPEM":  key,
+		}),
+	)
+	dbConn := db.NewTestDatabaseForServerTests(t)
+	err = db.RunMigrations(t.Context(), dbConn, log)
+	require.NoError(t, err)
 
 	srv, err := NewServer(NewServerOpts{
 		Log:     log,
 		Webhook: wh,
+		DB:      dbConn,
 	})
 	require.NoError(t, err)
 
@@ -894,10 +1059,175 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 		srv.httpClient.Transport = httpClientTransport
 	}
 
-	return srv, cleanup
+	return srv
 }
 
-func startTestServer(t *testing.T, srv *Server) func(t *testing.T) {
+// setTestConfig applies the standard v2 server test config, registering cleanup with t
+// dbName is joined to t.TempDir() and used for databaseDSN
+// Optional override maps are merged on top of the defaults, so callers can toggle extra flags (e.g. "disableSignup": true)
+func setTestConfig(t *testing.T, dbName string, overrides ...map[string]any) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	cfg := map[string]any{
+		"databaseDSN": tmpDir + "/" + dbName,
+		// #nosec G101 -- Hardcoded credentials are test ones
+		"secretKey":       "dGVzdC12Mi1kYi1rZXk",
+		"baseUrl":         fmt.Sprintf("https://localhost:%d", testServerPort),
+		"webauthnOrigins": []string{fmt.Sprintf("https://localhost:%d", testServerPort)},
+	}
+
+	// Add overrides
+	for _, o := range overrides {
+		maps.Copy(cfg, o)
+	}
+
+	// Set the test config and enable automated cleanup on test end
+	t.Cleanup(config.SetTestConfig(cfg))
+}
+
+func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName string) (*http.Cookie, *db.User) {
+	t.Helper()
+
+	user, _ := db.ExecuteInTransaction(t.Context(), srv.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (*db.User, error) {
+		as := tx.AuthStore()
+
+		_, err := as.RegisterUser(ctx, db.RegisterUserInput{
+			UserID:         userID,
+			DisplayName:    displayName,
+			WebAuthnUserID: base64.RawURLEncoding.EncodeToString([]byte("webauthn-" + userID)),
+			CredentialID:   "cred-" + userID,
+			PublicKey:      `{}`,
+			SignCount:      1,
+			SessionTTL:     config.Get().SessionTimeout,
+		})
+		require.NoError(t, err)
+
+		requestEncPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		requestEncJWK, err := protocolv2.ECP256PublicJWKFromECDH(requestEncPriv.PublicKey())
+		require.NoError(t, err)
+		requestEncJWKJSON, err := json.Marshal(requestEncJWK)
+		require.NoError(t, err)
+		_, err = as.FinalizeSignup(
+			ctx,
+			db.FinalizeSignupInput{
+				UserID:                userID,
+				WrappedPrimaryKey:     "test-wrapped-primary-key",
+				RequestEncEcdhPubkey:  string(requestEncJWKJSON),
+				RequestEncMlkemPubkey: base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey")),
+			},
+		)
+		require.NoError(t, err)
+
+		user, err := as.GetUserByID(ctx, userID)
+		require.NoError(t, err)
+		require.NotNil(t, user)
+
+		return user, nil
+	})
+
+	signed, err := newAuthSessionToken(user, config.Get().SessionTimeout)
+	require.NoError(t, err)
+	token, err := signAuthSessionToken(signed)
+	require.NoError(t, err)
+
+	return &http.Cookie{
+		Name:  sessionCookieNameSecure,
+		Value: token,
+		Path:  "/",
+	}, user
+}
+
+// testAnchorKeyPair holds the private halves of a hybrid anchor pair plus the wire-format pubkeys that match what FinalizeSignup stores
+// Used by tests that need to forge anchor-signed proofs (publication, attestation, ...) for an existing user
+type testAnchorKeyPair struct {
+	Es384Priv        *ecdsa.PrivateKey
+	Mldsa87Priv      *mldsa87.PrivateKey
+	Mldsa87Pub       *mldsa87.PublicKey
+	Mldsa87PubBytes  []byte
+	Es384JWKBody     string
+	Mldsa87PubBase64 string
+}
+
+// seedV2AnchorForUser provisions a hybrid anchor pair on an existing user (already created via seedV2SessionCookie)
+// Returns the priv keys so tests can sign publication or attestation proofs against the pinned anchor
+func seedV2AnchorForUser(t *testing.T, srv *Server, userID string) *testAnchorKeyPair {
+	t.Helper()
+
+	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	mlPubBytes, err := mlPub.MarshalBinary()
+	require.NoError(t, err)
+
+	es384JWK, err := protocolv2.ECP384PublicJWKFromECDSA(&esPriv.PublicKey)
+	require.NoError(t, err)
+	es384Body := es384JWK.CanonicalBody()
+	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPubBytes)
+
+	// Update the user record directly so tests can layer an anchor on top of seedV2SessionCookie without rerunning the full signup flow
+	_, err = srv.db.Exec(t.Context(),
+		`UPDATE v2_users SET anchor_es384_public_key = $1, anchor_mldsa87_public_key = $2 WHERE id = $3`,
+		es384Body, mlPubB64, userID,
+	)
+	require.NoError(t, err)
+
+	return &testAnchorKeyPair{
+		Es384Priv:        esPriv,
+		Mldsa87Priv:      mlPriv,
+		Mldsa87Pub:       mlPub,
+		Mldsa87PubBytes:  mlPubBytes,
+		Es384JWKBody:     es384Body,
+		Mldsa87PubBase64: mlPubB64,
+	}
+}
+
+// buildSigningKeyPublicationProof assembles a payload at server-now and signs it under the supplied anchor
+// Tests pass in the user ID, algorithm, key label, JWK thumbprint id, and current epoch — the server's verifier will compare each against its own copy
+func buildSigningKeyPublicationProof(t *testing.T, anchor *testAnchorKeyPair, userID, algorithm, keyLabel, keyID string, epoch int64) (payload, sigEsB64, sigMlB64 string) {
+	t.Helper()
+
+	return signSigningKeyPublication(t, anchor, &protocolv2.SigningKeyPublicationPayload{
+		UserID:          userID,
+		Algorithm:       algorithm,
+		KeyLabel:        keyLabel,
+		KeyID:           keyID,
+		WrappedKeyEpoch: epoch,
+		CreatedAt:       time.Now().Unix(),
+		V:               protocolv2.SigningKeyPublicationVersion,
+	})
+}
+
+// signSigningKeyPublication produces canonical-body + base64url ES384 + base64url ML-DSA-87 signatures for a publication payload
+// Tests use this to assemble a proof that the server's verifier will accept
+func signSigningKeyPublication(t *testing.T, anchor *testAnchorKeyPair, payload *protocolv2.SigningKeyPublicationPayload) (canonicalBody, sigEsB64, sigMlB64 string) {
+	t.Helper()
+
+	canonicalBody = payload.CanonicalBody()
+	msg := protocolv2.CanonicalSigningKeyPublicationMessage(payload)
+
+	digest := sha512.Sum384(msg)
+	r, s, err := ecdsa.Sign(rand.Reader, anchor.Es384Priv, digest[:])
+	require.NoError(t, err)
+	sig := make([]byte, protocolv2.ES384SignatureSize)
+	const half = protocolv2.ES384SignatureSize / 2
+	rBytes := r.Bytes()
+	sBytes := s.Bytes()
+	copy(sig[half-len(rBytes):half], rBytes)
+	copy(sig[protocolv2.ES384SignatureSize-len(sBytes):], sBytes)
+	sigEsB64 = base64.RawURLEncoding.EncodeToString(sig)
+
+	mlSig := make([]byte, protocolv2.MLDSA87SignatureSize)
+	err = mldsa87.SignTo(anchor.Mldsa87Priv, msg, nil, false, mlSig)
+	require.NoError(t, err)
+	sigMlB64 = base64.RawURLEncoding.EncodeToString(mlSig)
+
+	return canonicalBody, sigEsB64, sigMlB64
+}
+
+func startTestServer(t *testing.T, srv *Server) {
 	t.Helper()
 
 	// Start the server in a background goroutine
@@ -916,16 +1246,14 @@ func startTestServer(t *testing.T, srv *Server) func(t *testing.T) {
 		t.Fatalf("Received an unexpected error in startErrCh: %v", err)
 	}
 
-	// Return a function to tear down the test server, which must be invoked at the end of the test
-	return func(t *testing.T) {
-		t.Helper()
-
+	// Tear down the test server when test is done
+	t.Cleanup(func() {
 		// Shutdown the server
 		srvCancel()
 
 		// At the end of the test, there should be no error
 		require.NoError(t, <-startErrCh, "received an unexpected error in startErrCh")
-	}
+	})
 }
 
 func clientForListener(ln net.Listener) *http.Client {
@@ -944,6 +1272,39 @@ func clientForListener(ln net.Listener) *http.Client {
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+}
+
+func newV2CreateRequestBody(keyLabel string, algorithm string, cliJWK protocolv2.ECP256PublicJWK) map[string]any {
+	return map[string]any{
+		"keyLabel":      keyLabel,
+		"algorithm":     algorithm,
+		"requestEncAlg": protocolv2.TransportAlg,
+		"cliEphemeralPublicKey": map[string]any{
+			"kty": cliJWK.Kty,
+			"crv": cliJWK.Crv,
+			"x":   cliJWK.X,
+			"y":   cliJWK.Y,
+		},
+		"mlkemCiphertext":       base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-ciphertext")),
+		"encryptedPayloadNonce": base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
+		"encryptedPayload":      base64.RawURLEncoding.EncodeToString([]byte("test-request-ciphertext")),
+	}
+}
+
+func newV2ResponseEnvelope(browserJWK protocolv2.ECP256PublicJWK) map[string]any {
+	return map[string]any{
+		"transportAlg": protocolv2.TransportAlg,
+		"browserEphemeralPublicKey": map[string]any{
+			"kty": browserJWK.Kty,
+			"crv": browserJWK.Crv,
+			"x":   browserJWK.X,
+			"y":   browserJWK.Y,
+		},
+		"mlkemCiphertext": base64.RawURLEncoding.EncodeToString([]byte("test-response-mlkem-ciphertext")),
+		"nonce":           base64.RawURLEncoding.EncodeToString([]byte("123456789012")),
+		"ciphertext":      base64.RawURLEncoding.EncodeToString([]byte("test-response-ciphertext")),
+		"resultType":      "bytes",
 	}
 }
 
@@ -983,21 +1344,6 @@ func getSelfSignedTLSCredentials() (certPem []byte, keyPem []byte, err error) {
 	return certPem, keyPem, nil
 }
 
-func assertResponseError(t *testing.T, res *http.Response, expectStatusCode int, expectErr string) {
-	t.Helper()
-
-	require.Equal(t, expectStatusCode, res.StatusCode, "Response has an unexpected status code")
-	require.Equal(t, jsonContentType, res.Header.Get("Content-Type"), "Content-Type header is invalid") //nolint:testifylint
-
-	data := struct {
-		Error string `json:"error"`
-	}{}
-	err := json.NewDecoder(res.Body).Decode(&data)
-	require.NoError(t, err, "Error parsing response body as JSON")
-
-	require.Equal(t, expectErr, data.Error, "Error message does not match")
-}
-
 // mockWebhook implements the Webhook interface
 type mockWebhook struct {
 	requests chan *webhook.WebhookRequest
@@ -1014,60 +1360,283 @@ func (w mockWebhook) SetBaseURL(val string) {
 	// Nop
 }
 
-// Closes a HTTP response body making sure to drain it first
-// Normally invoked as a defer'd function
-func closeBody(res *http.Response) {
-	_, _ = io.Copy(io.Discard, res.Body)
-	res.Body.Close()
+// testValidWrappedAnchorEnvelope returns a syntactically valid wrapped-anchor envelope for tests
+// The envelope is the one enforced by validateWrappedAnchorEnvelope: alphabetical newline `key=value` lines wrapped in base64url
+// The ciphertext is not a real AES-GCM output; these tests exercise route-level structural validation, not decryption
+func testValidWrappedAnchorEnvelope(t *testing.T) string {
+	t.Helper()
+	ciphertext := base64.RawURLEncoding.EncodeToString([]byte("test-ciphertext"))
+	nonce := base64.RawURLEncoding.EncodeToString(make([]byte, 12))
+	body := "ciphertext=" + ciphertext + "\nnonce=" + nonce + "\nv=1"
+	return base64.RawURLEncoding.EncodeToString([]byte(body))
 }
 
-// mockKVClient implements the keyvault.Client interface
-type mockKVClient struct{}
+func TestServerV2UpdateDisplayName(t *testing.T) {
+	setTestConfig(t, "v2-display-name.db")
 
-func (kv *mockKVClient) Encrypt(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*keyvault.KeyVaultEncryptResponse, error) {
-	res := &keyvault.KeyVaultEncryptResponse{
-		Data: params.Value,
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
 	}
-	res.SetKeyID(keyName + "/" + keyVersion)
-	return res, nil
+
+	doGetJSON := func(t *testing.T, path string, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), nil)
+		require.NoError(t, err)
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
+	}
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	// Successful update
+	res, body := doPostJSON(t, "/v2/auth/update-display-name", map[string]any{"displayName": "New Name"}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, true, body["ok"])
+	require.Equal(t, "New Name", body["displayName"])
+
+	// Verify via session endpoint
+	res, body = doGetJSON(t, "/v2/auth/session", sessionCookie)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, "New Name", body["displayName"])
+
+	// Too-long name
+	longName := strings.Repeat("a", 101)
+	res, _ = doPostJSON(t, "/v2/auth/update-display-name", map[string]any{"displayName": longName}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+
+	// Without session cookie — 401
+	res, _ = doPostJSON(t, "/v2/auth/update-display-name", map[string]any{"displayName": "Test"})
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusUnauthorized, res.StatusCode)
 }
 
-func (kv *mockKVClient) Decrypt(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*keyvault.KeyVaultDecryptResponse, error) {
-	res := &keyvault.KeyVaultDecryptResponse{
-		Data: params.Value,
+func TestServerV2UpdateWrappedKey(t *testing.T) {
+	setTestConfig(t, "v2-wrapped-key.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+	as := srv.db.AuthStore()
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
 	}
-	res.SetKeyID(keyName + "/" + keyVersion)
-	return res, nil
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	// The wrapped primary key lives on the credential that authenticated the session, so the route requires its credential_id
+	const credentialID = "cred-user-alice"
+
+	// The update route validates the wrapped-anchor envelope structurally, so tests must send something that passes validation
+	validAnchor := testValidWrappedAnchorEnvelope(t)
+
+	// Successful update
+	res, body := doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "new-key-blob", "wrappedAnchorKey": validAnchor, "advanceEpoch": true}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, true, body["ok"])
+	user, err := as.GetUserByID(t.Context(), "user-alice")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, user.WrappedKeyEpoch)
+
+	// Empty string is valid
+	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "", "wrappedAnchorKey": ""}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, true, body["ok"])
+	user, err = as.GetUserByID(t.Context(), "user-alice")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, user.WrappedKeyEpoch)
+
+	// Starting an add-credential WebAuthn ceremony must block concurrent password changes
+	_, err = db.ExecuteInTransaction(t.Context(), srv.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (any, error) {
+		return tx.AuthStore().BeginChallenge(ctx, "add-credential", "user-alice", "pending-add", time.Now().UTC().Add(5*time.Minute), nil)
+	})
+	require.NoError(t, err)
+
+	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "blocked-while-pending", "wrappedAnchorKey": validAnchor, "advanceEpoch": true}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusConflict, res.StatusCode)
+	require.Contains(t, body["error"], "passkey registration is in progress")
 }
 
-func (kv *mockKVClient) WrapKey(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*keyvault.KeyVaultEncryptResponse, error) {
-	res := &keyvault.KeyVaultEncryptResponse{
-		Data: params.Value,
-	}
-	res.SetKeyID(keyName + "/" + keyVersion)
-	return res, nil
-}
+func TestServerV2CredentialLifecycle(t *testing.T) {
+	setTestConfig(t, "v2-cred-lifecycle.db")
 
-func (kv *mockKVClient) UnwrapKey(ctx context.Context, vault, keyName, keyVersion string, params azkeys.KeyOperationParameters) (*keyvault.KeyVaultDecryptResponse, error) {
-	res := &keyvault.KeyVaultDecryptResponse{
-		Data: params.Value,
-	}
-	res.SetKeyID(keyName + "/" + keyVersion)
-	return res, nil
-}
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
 
-func (kv *mockKVClient) Sign(ctx context.Context, vault, keyName, keyVersion string, params azkeys.SignParameters) (*keyvault.KeyVaultSignResponse, error) {
-	res := &keyvault.KeyVaultSignResponse{
-		Data: params.Value,
-	}
-	res.SetKeyID(keyName + "/" + keyVersion)
-	return res, nil
-}
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
 
-func (kv *mockKVClient) Verify(ctx context.Context, vault, keyName, keyVersion string, params azkeys.VerifyParameters) (*keyvault.KeyVaultVerifyResponse, error) {
-	res := &keyvault.KeyVaultVerifyResponse{
-		Valid: true,
+	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (*http.Response, map[string]any) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
 	}
-	res.SetKeyID(keyName + "/" + keyVersion)
-	return res, nil
+
+	doGetJSONArray := func(t *testing.T, path string, cookies ...*http.Cookie) (*http.Response, []map[string]any) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), nil)
+		require.NoError(t, err)
+		for _, c := range cookies {
+			if c != nil {
+				req.AddCookie(c)
+			}
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out []map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res, out
+	}
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	// List credentials — should have 1
+	res, creds := doGetJSONArray(t, "/v2/auth/credentials", sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Len(t, creds, 1)
+	credID, _ := creds[0]["id"].(string)
+	require.NotEmpty(t, credID)
+
+	// Rename credential
+	res2, body := doPostJSON(t, "/v2/auth/credentials/rename", map[string]any{
+		"id":          credID,
+		"displayName": "My Passkey",
+	}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res2.StatusCode)
+	require.Equal(t, true, body["ok"])
+
+	// Verify rename
+	res, creds = doGetJSONArray(t, "/v2/auth/credentials", sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Equal(t, "My Passkey", creds[0]["displayName"])
+
+	// Delete last credential — should fail with 409
+	res2, _ = doPostJSON(t, "/v2/auth/credentials/delete", map[string]any{"id": credID}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res2.Body.Close()
+	}()
+	require.Equal(t, http.StatusConflict, res2.StatusCode)
+
+	// Delete nonexistent credential — 404
+	res2, _ = doPostJSON(t, "/v2/auth/credentials/delete", map[string]any{"id": "nonexistent"}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res2.Body.Close()
+	}()
+	require.Equal(t, http.StatusNotFound, res2.StatusCode)
 }

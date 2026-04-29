@@ -1,32 +1,3 @@
-## azureClientId (string)
-## Description:
-##   Client ID of the Azure AD application
-## Required
-azureClientId:
-
-## azureTenantId (string)
-## Description:
-##   Tenant ID of the Azure AD application.
-## Required
-azureTenantId:
-
-## azureClientSecret (string)
-## Description:
-##   Client secret of the Azure AD application, for using confidential clients.
-##   This is optional, but recommended when not using Federated Identity Credentials.
-#azureClientSecret: 
-
-## azureFederatedIdentity (string)
-## Description:
-##   Enables the usage of Federated Identity Credentials to obtain assertions for confidential clients for Azure AD applications.
-##   This is an alternative to using client secrets, when the application is running in Azure in an environment that supports Managed Identity, or in an environment that supports Workload Identity Federation with Azure AD.
-##   Currently, these values are supported:
-##
-##   - `ManagedIdentity`: uses a system-assigned managed identity
-##   - `ManagedIdentity=client-id`: uses a user-assigned managed identity with client id "client-id" (e.g. "ManagedIdentity=00000000-0000-0000-0000-000000000000")
-##   - `WorkloadIdentity`: uses workload identity, e.g. for Kubernetes
-#azureFederatedIdentity: 
-
 ## webhookUrl (string)
 ## Description:
 ##   Endpoint of the webhook, where notifications are sent to.
@@ -46,7 +17,10 @@ webhookUrl:
 
 ## webhookKey (string)
 ## Description:
-##   Value for the Authorization header send with the webhook request. Set this if your webhook requires it.
+##   Value sent verbatim as the `Authorization` header on webhook requests
+##   Revaulter does NOT add an authentication scheme prefix, so include one yourself if your downstream expects it
+##   For example, set this to `Bearer abc123` for bearer-token auth, or `Basic dXNlcjpwYXNz` for HTTP Basic
+##   Leave unset to omit the header entirely
 #webhookKey: 
 
 ## baseUrl (string)
@@ -85,73 +59,73 @@ webhookUrl:
 ##   Full, PEM-encoded TLS key. Using `tlsCertPEM` and `tlsKeyPEM` is an alternative method of passing TLS certificates than using `tlsPath`.
 #tlsKeyPEM: 
 
-## allowedIps (list of strings)
+## databaseDSN (string)
 ## Description:
-##   If set, allows connections to the APIs only from the IPs or ranges set here. You can set individual IP addresses (IPv4 or IPv6) or ranges in the CIDR notation, and you can add multiple values separated by commas. For example, to allow connections from localhost and IPs in the `10.x.x.x` range only, set this to: `127.0.0.1,10.0.0.0/8`.
-##   Note that this value is used to restrict connections to the `/request` endpoints only. It does not restrict the endpoints used by administrators to confirm (or deny) requests.
-#allowedIps: 
+##   Connection string for the database. The backend is inferred from the DSN (for example: `postgres://`, `postgresql://`, `sqlite://`).
+##   If no scheme is present, the value is treated as a local SQLite file path.
+## Required
+databaseDSN:
 
-## requestKey (string)
+## secretKey (string)
 ## Description:
-##   If set, clients need to provide this shared key in calls made to the `/request` endpoints, in the `Authorization` header.
-##   Note that this option only applies to calls to the `/request` endpoints. It does not apply to the endpoints used by administrators to confirm (or deny) requests.
-#requestKey: 
-
-## allowedVaults (list of strings)
-## Description:
-##   If set, allows requests targeting only the Azure Key Vaults named in the list.
-##   Values can be formatted as:
+##   Instance-wide secret to derive encryption keys.
+##   It's recommended to generate with `openssl rand -base64 32`.
 ##
-##   - The address of the vault, such as "https://<name>.vault.azure.net" (could be a different format if using different clouds or private endpoints)
-##   - The FQDN of the vault, such as "<name>.vault.azure.net" (or another domain if using different clouds or private endpoints)
-##   - Only the name of the vault, which will be formatted for "vault.azure.net"
-#allowedVaults: 
+##   IMPORTANT: rotating `secretKey` changes the PRF salt for every user effectively bricks every existing account. Treat this value as immutable for the lifetime of the instance; if you must rotate it, plan on every user re-registering from scratch.
+##
+##   Note: this value is NOT used to encrypt anything server-side: all request payloads and responses are end-to-end encrypted in the browser, and the server only stores opaque envelopes.
+## Required
+secretKey:
 
-## origins (list of strings)
+## webauthnRpId (string)
 ## Description:
-##   Lists of origins that are allowed for CORS. This should be a list of all URLs admins can access Revaulter at. Alternatively, set this to `*` to allow any origin (not recommended).
-## Default: equal to the value of `baseUrl`
-#origins: 
+##   WebAuthn RP ID for authentication.
+##   If empty, derived from `baseUrl`.
+#webauthnRpId: 
+
+## webauthnRpName (string)
+## Description:
+##   WebAuthn RP display name for authentication.
+## Default: "Revaulter"
+#webauthnRpName: 
+
+## webauthnOrigins (list of strings)
+## Description:
+##   Allowed origins for WebAuthn auth.
+##   If empty, falls back to `baseUrl`
+#webauthnOrigins: 
+
+## disableSignup (boolean)
+## Description:
+##   Disable creation of new user accounts.
+## Default: false
+#disableSignup: 
 
 ## sessionTimeout (duration)
 ## Description:
-##   Timeout for sessions before having to authenticate again, as a Go duration. This cannot be more than 1 hour.
+##   Timeout for sessions before having to authenticate again, as a Go duration.
+##   This cannot be more than 1 hour.
 ## Default: 5m
 #sessionTimeout: 
 
 ## requestTimeout (duration)
 ## Description:
-##   Default timeout for wrap and unwrap requests, as a Go duration. This is the default value, and can be overridden in each request.
+##   Default timeout for request operations, as a Go duration.
+##   This is the default value, and can be overridden in each request.
 ## Default: 5m
 #requestTimeout: 
 
-## trustedForwardedIPHeader (string)
+## trustedProxies (list of strings)
 ## Description:
-##   String with the name of a header (or multiple, comma-separated values) to trust as containing the client IP. This is usually necessary when Vault is served through a proxy service and/or CDN.
-##   This option should not be set if the application is exposed directly, without a proxy or CDN.
-##   Common values include:
-##
-##   - `X-Forwarded-For,X-Real-Ip`: `X-Forwarded-For` is the [de-facto standard](https://http.dev/x-forwarded-for) set by proxies; some set `X-Real-Ip`
-##   - `CF-Connecting-IP`: when the application is served by a [Cloudflare CDN](https://developers.cloudflare.com/fundamentals/reference/http-request-headers/#cf-connecting-ip)
-#trustedForwardedIPHeader: 
+##   List of IPs or CIDRs of trusted proxies, which enables trusting the X-Forwarded-* headers
+##   For example, `10.0.0.0/8`
+#trustedProxies: 
 
 ## omitHealthCheckLogs (boolean)
 ## Description:
 ##   If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
 ## Default: false
 #omitHealthCheckLogs: 
-
-## tokenSigningKey (string)
-## Description:
-##   String used as key to sign state tokens. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
-## Default: randomly-generated when the application starts
-#tokenSigningKey: 
-
-## cookieEncryptionKey (string)
-## Description:
-##   String used as key to encrypt cookies. If left empty, it will be randomly generated every time the app starts (recommended, unless you need user sessions to persist after the application is restarted).
-## Default: randomly-generated when the application starts
-#cookieEncryptionKey: 
 
 ## trustedRequestIdHeader (string)
 ## Description:

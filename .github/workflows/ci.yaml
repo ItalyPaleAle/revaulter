@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: revaulter_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      CGO_ENABLED: "0"
+      GOLANGCI_LINT_VERSION: "v2.11.4"
+      GOEXPERIMENT: jsonv2
+      TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/revaulter_test?sslmode=disable
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: "go.mod"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          package_json_file: "client/web/package.json"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: "client/web/.nvmrc"
+          cache: "pnpm"
+          cache-dependency-path: "client/web/pnpm-lock.yaml"
+
+      - name: Check Go dependency minimum age
+        run: |
+          go install github.com/fchimpan/gomod-age@09005169a4792ad1a4824e1fc6d85785d91cea36
+          gomod-age
+
+      - name: Install client dependencies
+        working-directory: client/web
+        run: |
+          pnpm install --frozen-lockfile
+
+      - name: Run biome
+        working-directory: client/web
+        run: |
+          pnpm run check
+          pnpm run svelte-check
+
+      - name: Build client
+        working-directory: client/web
+        run: |
+          pnpm run build
+
+      - name: Check diff
+        run: |
+          make check-config-diff || echo "Please run 'make gen-config'"
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: Run backend tests (SQLite)
+        run: |
+          make test
+
+      - name: Run backend tests (Postgres)
+        env:
+          TEST_DATABASE_DSN: ${{ env.TEST_POSTGRES_DSN }}
+        run: |
+          make test
+
+      - name: Install Playwright browsers
+        working-directory: client/web
+        run: |
+          pnpm run e2e:install
+
+      - name: Run frontend tests
+        working-directory: client/web
+        run: |
+          pnpm run test
+
+      - name: Build E2E server binary
+        working-directory: client/web
+        run: |
+          pnpm run e2e:build-server
+
+      - name: Run E2E tests (SQLite)
+        working-directory: client/web
+        run: |
+          pnpm exec playwright test
+
+      - name: Run E2E tests (Postgres)
+        working-directory: client/web
+        env:
+          E2E_DATABASE_DSN: ${{ env.TEST_POSTGRES_DSN }}
+        run: |
+          pnpm exec playwright test

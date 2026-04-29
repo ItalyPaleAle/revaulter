@@ -1,16 +1,15 @@
 package config
 
 import (
-	"bytes"
-	"encoding/base64"
 	"encoding/hex"
-	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const testSecretKey = "0123456789abcdefghij0123456789"
 
 func TestValidateConfig(t *testing.T) {
 	// Set initial variables in the global object
@@ -21,9 +20,9 @@ func TestValidateConfig(t *testing.T) {
 	})
 
 	t.Cleanup(SetTestConfig(map[string]any{
-		"azureClientId": "d196f679-da38-492c-946a-60ae8324e7f9",
-		"azureTenantId": "e440d651-3dcf-4c20-b147-96a2ff00ee25",
-		"webhookUrl":    "http://test.local",
+		"webhookUrl":  "http://test.local",
+		"databaseDSN": "sqlite://./test.db",
+		"secretKey":   testSecretKey,
 	}))
 
 	t.Run("succeeds with all required vars", func(t *testing.T) {
@@ -31,24 +30,14 @@ func TestValidateConfig(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("fails without azureClientId", func(t *testing.T) {
+	t.Run("fails without databaseDSN", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
-			"azureClientId": "",
+			"databaseDSN": "",
 		}))
 
 		err := config.Validate(nil)
 		require.Error(t, err)
-		require.ErrorContains(t, err, "'azureClientId' missing")
-	})
-
-	t.Run("fails without azureTenantId", func(t *testing.T) {
-		t.Cleanup(SetTestConfig(map[string]any{
-			"azureTenantId": "",
-		}))
-
-		err := config.Validate(nil)
-		require.Error(t, err)
-		require.ErrorContains(t, err, "'azureTenantId' missing")
+		require.ErrorContains(t, err, "'databaseDSN' missing")
 	})
 
 	t.Run("fails without webhookUrl", func(t *testing.T) {
@@ -90,95 +79,66 @@ func TestValidateConfig(t *testing.T) {
 		require.Error(t, err)
 		require.ErrorContains(t, err, "'requestTimeout' is invalid")
 	})
-}
 
-func TestSetTokenSigningKey(t *testing.T) {
-	logs := &bytes.Buffer{}
-	logger := slog.New(slog.NewTextHandler(logs, nil))
-
-	t.Run("tokenSigningKey present", func(t *testing.T) {
+	t.Run("fails when secretKey is empty", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
-			"tokenSigningKey": "hello-world",
+			"secretKey": "",
 		}))
 
-		err := config.SetTokenSigningKey(logger)
-		require.NoError(t, err)
-		assert.Equal(t, "106f91bd03b5e3735cd6efcb50474f50c4b6de2ff28084af01642056aaa93e9e", hex.EncodeToString(config.GetTokenSigningKey()))
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'secretKey' missing")
 	})
 
-	t.Run("tokenSigningKey not present", func(t *testing.T) {
+	t.Run("fails when databaseDSN is empty", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
-			"tokenSigningKey": "",
+			"databaseDSN": "",
 		}))
 
-		err := config.SetTokenSigningKey(logger)
-		require.NoError(t, err)
-		val := config.GetTokenSigningKey()
-		require.Len(t, val, 32)
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'databaseDSN' missing")
+	})
 
-		logsMsg := logs.String()
-		require.Contains(t, logsMsg, "No 'tokenSigningKey' found in the configuration")
+	t.Run("fails when secretKey is too short", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"secretKey": "too-short-secret",
+		}))
 
-		// Should be different every time
-		err = config.SetTokenSigningKey(logger)
-		require.NoError(t, err)
-		assert.NotEqual(t, val, config.GetTokenSigningKey())
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "secret key is too short")
 	})
 }
 
-func TestSetCookieKeys(t *testing.T) {
-	t.Run("cookieEncryptionKey present", func(t *testing.T) {
-		t.Cleanup(SetTestConfig(map[string]any{
-			"cookieEncryptionKey": "some-key",
-		}))
+func TestSetSecretKey(t *testing.T) {
+	t.Run("fails with an empty secret", func(t *testing.T) {
+		cfg := &Config{}
 
-		err := config.SetCookieKeys(nil)
-		require.NoError(t, err)
-
-		cek := config.GetCookieEncryptionKey()
-		csk := config.GetCookieSigningKey()
-		require.NotNil(t, cek)
-		require.NotNil(t, csk)
-
-		var cekRaw, cskRaw []byte
-		err = cek.Raw(&cekRaw)
-		require.NoError(t, err)
-		err = csk.Raw(&cskRaw)
-		require.NoError(t, err)
-
-		require.Equal(t, "wJEZU13IzSYiJoN1p91LZQ", base64.RawStdEncoding.EncodeToString(cekRaw))
-		require.Equal(t, "WXuBILBbwdBXqCeLPbpumAyQygAh3XyO0Wh7UIJqb6I", base64.RawStdEncoding.EncodeToString(cskRaw))
-
-		require.Equal(t, "Tx-KPWjsUo_5iMRe", cek.KeyID())
-		require.Equal(t, "Tx-KPWjsUo_5iMRe", csk.KeyID())
+		err := cfg.SetSecretKey(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "secret key value is empty")
 	})
 
-	t.Run("cookieEncryptionKey no present", func(t *testing.T) {
-		t.Cleanup(SetTestConfig(map[string]any{
-			"cookieEncryptionKey": "",
-		}))
+	t.Run("derives the prf salt and token signing key", func(t *testing.T) {
+		cfg := &Config{
+			SecretKey: testSecretKey,
+		}
 
-		err := config.SetCookieKeys(nil)
+		err := cfg.SetSecretKey(nil)
 		require.NoError(t, err)
 
-		cek := config.GetCookieEncryptionKey()
-		csk := config.GetCookieSigningKey()
-		require.NotNil(t, cek)
-		require.NotNil(t, csk)
+		assert.Equal(t, "5VgVFp_QTW5WNbVFLxgANw", cfg.GetPRFSalt())
 
-		var cekRaw, cskRaw []byte
-		err = cek.Raw(&cekRaw)
-		require.NoError(t, err)
-		err = csk.Raw(&cskRaw)
-		require.NoError(t, err)
+		tokenSigningKey := cfg.internal.tokenSigningKey
+		require.NotNil(t, tokenSigningKey)
 
-		require.Len(t, cekRaw, 16)
-		require.Len(t, cskRaw, 32)
+		octets, ok := tokenSigningKey.Octets()
+		require.True(t, ok)
+		require.Equal(t, "db8ddf38fd1528c437e3fac0de58bf997a9756cae46ce4d64c9593e26475ac96", hex.EncodeToString(octets))
 
-		require.NotEqual(t, make([]byte, 16), cekRaw)
-		require.NotEqual(t, make([]byte, 32), cskRaw)
-
-		require.NotEmpty(t, cek.KeyID())
-		require.NotEmpty(t, csk.KeyID())
+		kid, ok := tokenSigningKey.KeyID()
+		require.True(t, ok)
+		require.Equal(t, "MehRB3ZvRA3XKfxB", kid)
 	})
 }

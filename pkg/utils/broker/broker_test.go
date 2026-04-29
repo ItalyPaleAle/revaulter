@@ -89,6 +89,61 @@ func TestBroker(t *testing.T) {
 	require.Nil(t, sub)
 }
 
+// TestBrokerPublishNonBlocking verifies that Publish never blocks on a slow or hung subscribe
+// A single slow subscriber must not prevent Publish from returning promptly, and Unsubscribe/Shutdown must remain responsive.
+func TestBrokerPublishNonBlocking(t *testing.T) {
+	b := NewBroker[int]()
+
+	slow, err := b.Subscribe()
+	require.NoError(t, err)
+	fast, err := b.Subscribe()
+	require.NoError(t, err)
+
+	// Fill the slow subscriber's buffer so additional publishes must drop
+	for range cap(slow) {
+		b.Publish(1)
+	}
+
+	// Drain the fast one so we don't confuse the two subscribers' buffers
+	for len(fast) > 0 {
+		<-fast
+	}
+
+	// This publish must NOT block, even though slow's buffer is full
+	done := make(chan struct{})
+	go func() {
+		b.Publish(99)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Publish blocked when subscriber buffer was full")
+	}
+
+	// The fast subscriber should still receive the new message
+	select {
+	case n := <-fast:
+		require.Equal(t, 99, n)
+	case <-time.After(time.Second):
+		t.Fatal("fast subscriber did not receive message after dropped slow delivery")
+	}
+
+	// Unsubscribe must still be responsive while slow's buffer is full
+	unsubDone := make(chan struct{})
+	go func() {
+		b.Unsubscribe(slow)
+		close(unsubDone)
+	}()
+	select {
+	case <-unsubDone:
+	case <-time.After(time.Second):
+		t.Fatal("Unsubscribe blocked by full subscriber buffer")
+	}
+
+	b.Shutdown()
+}
+
 func assertChanClosed[T any](t *testing.T, ch chan T) {
 	t.Helper()
 	select {

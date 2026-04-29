@@ -14,7 +14,7 @@ var (
 	rootCmd = &cobra.Command{
 		Use:           "revaulter-cli",
 		Short:         "A CLI for interacting with Revaulter",
-		Long:          `revaulter-cli helps interacting with Revaulter servers, performing operations on keys stored on Azure Key Vault, including: key wrapping and unwrapping, data encryption and decryption, computing and verifying digital signatures`,
+		Long:          `revaulter-cli helps interacting with Revaulter v2 servers`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -39,6 +39,13 @@ func init() {
 
 	// Set persistent flags
 	rootCmd.PersistentFlags().BoolVarP(&pf.Verbose, "verbose", "V", false, "Show debug-level logs")
+
+	// Register sub-commands
+	rootCmd.AddCommand(
+		newV2OperationCmd("encrypt", "Encrypt data", func() v2OperationFlags { return &v2OperationFlagsEncrypt{} }),
+		newV2OperationCmd("decrypt", "Decrypt data", func() v2OperationFlags { return &v2OperationFlagsDecrypt{} }),
+		newV2OperationCmd("sign", "Sign data", func() v2OperationFlags { return &v2OperationFlagsSign{} }),
+	)
 }
 
 // Run executes the root command

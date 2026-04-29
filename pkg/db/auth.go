@@ -1,0 +1,970 @@
+package db
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/italypaleale/go-sql-utils/adapter"
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
+	"modernc.org/sqlite"
+
+	"github.com/italypaleale/revaulter/pkg/utils"
+)
+
+type AuthStore struct {
+	db   adapter.Querier
+	kind BackendKind
+}
+
+// RequestKeyPrefix is prepended to newly generated request keys
+// This lets operators grep logs/leaked artifacts for "rvk_" so accidental leakage is easy to detect and redact
+const RequestKeyPrefix = "rvk_"
+
+// requestKeyRandomLength is the number of random base62 characters appended after the prefix
+const requestKeyRandomLength = 20
+
+func newRequestKey() (string, error) {
+	random, err := utils.RandomString(requestKeyRandomLength)
+	if err != nil {
+		return "", err
+	}
+
+	return RequestKeyPrefix + random, nil
+}
+
+type User struct {
+	ID                           string
+	DisplayName                  string
+	Status                       string
+	WebAuthnUserID               string
+	RequestKey                   string
+	RequestEncEcdhPubkey         string
+	RequestEncMlkemPubkey        string
+	AnchorEs384PublicKey         string
+	AnchorMldsa87PublicKey       string
+	PubkeyBundleSignatureEs384   string
+	PubkeyBundleSignatureMldsa87 string
+	WrappedKeyEpoch              int64
+	AllowedIPs                   []string
+	Ready                        bool
+}
+
+type AuthChallenge struct {
+	ID        string
+	Kind      string
+	UserID    string
+	Challenge string
+	ExpiresAt time.Time
+}
+
+type AuthCredentialRecord struct {
+	ID                          string
+	CredentialID                string
+	DisplayName                 string
+	PublicKey                   string
+	SignCount                   int64
+	WrappedPrimaryKey           string
+	WrappedAnchorKey            string
+	AttestationPayload          string
+	AttestationSignatureEs384   string
+	AttestationSignatureMldsa87 string
+	WrappedKeyEpoch             int64
+	CreatedAt                   int64
+	LastUsedAt                  int64
+}
+
+type RegisterUserInput struct {
+	UserID                string
+	DisplayName           string
+	WebAuthnUserID        string
+	CredentialID          string
+	CredentialDisplayName string
+	PublicKey             string
+	SignCount             int64
+	SessionTTL            time.Duration
+}
+
+type AddCredentialInput struct {
+	UserID                      string
+	CredentialID                string
+	DisplayName                 string
+	PublicKey                   string
+	SignCount                   int64
+	WrappedPrimaryKey           string
+	WrappedAnchorKey            string
+	AttestationPayload          string
+	AttestationSignatureEs384   string
+	AttestationSignatureMldsa87 string
+}
+
+type LoginInput struct {
+	UserID       string
+	CredentialID string
+	SignCount    int64
+	SessionTTL   time.Duration
+}
+
+type FinalizeSignupInput struct {
+	UserID                       string
+	WrappedPrimaryKey            string
+	WrappedAnchorKey             string
+	RequestEncEcdhPubkey         string
+	RequestEncMlkemPubkey        string
+	AnchorEs384PublicKey         string
+	AnchorMldsa87PublicKey       string
+	PubkeyBundleSignatureEs384   string
+	PubkeyBundleSignatureMldsa87 string
+	AttestationPayload           string
+	AttestationSignatureEs384    string
+	AttestationSignatureMldsa87  string
+}
+
+var (
+	ErrUserAlreadyExists  = errors.New("user already exists")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrInvalidLogin       = errors.New("invalid login")
+	ErrInvalidChallenge   = errors.New("challenge is invalid or expired")
+	ErrPasswordAlreadySet = errors.New("password already set")
+	ErrCredentialNotFound = errors.New("credential not found")
+	ErrLastCredential     = errors.New("cannot delete the last credential")
+	ErrDisplayNameTooLong = errors.New("display name is too long")
+	ErrAlreadyFinalized   = errors.New("user is already finalized")
+	ErrInvalidIP          = errors.New("invalid IP")
+	ErrInvalidCIDR        = errors.New("invalid CIDR")
+)
+
+func NewAuthStore(db adapter.Querier, kind BackendKind) (*AuthStore, error) {
+	if db == nil {
+		return nil, errors.New("db is nil")
+	}
+
+	return &AuthStore{
+		db:   db,
+		kind: kind,
+	}, nil
+}
+
+func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.
+		QueryRow(ctx, `SELECT COUNT(*) FROM v2_users`).
+		Scan(&n)
+	return n, err
+}
+
+func (s *AuthStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
+	return s.getUser(ctx, "id", userID)
+}
+
+func (s *AuthStore) GetUserByWebAuthnUserID(ctx context.Context, webAuthnUserID string) (*User, error) {
+	return s.getUser(ctx, "webauthn_user_id", webAuthnUserID)
+}
+
+func (s *AuthStore) GetUserByRequestKey(ctx context.Context, requestKey string) (*User, error) {
+	return s.getUser(ctx, "request_key", requestKey)
+}
+
+func (s *AuthStore) getUser(ctx context.Context, column string, value string) (*User, error) {
+	switch column {
+	case "id", "webauthn_user_id", "request_key":
+		// All good
+	default:
+		return nil, fmt.Errorf("invalid column requested: %s", column)
+	}
+
+	var (
+		user          User
+		allowedIPsCSV string
+	)
+	query := `SELECT id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, wrapped_key_epoch, allowed_ips, ready
+		FROM v2_users
+		WHERE ` + column + ` = $1`
+	err := s.db.
+		QueryRow(ctx, query, value).
+		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &user.AnchorEs384PublicKey, &user.AnchorMldsa87PublicKey, &user.PubkeyBundleSignatureEs384, &user.PubkeyBundleSignatureMldsa87, &user.WrappedKeyEpoch, &allowedIPsCSV, &user.Ready)
+	if s.db.IsNoRowsError(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	user.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
+
+	return &user, nil
+}
+
+func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthCredentialRecord, error) {
+	rows, err := s.db.Query(ctx,
+		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_anchor_key, attestation_payload, attestation_signature_es384, attestation_signature_mldsa87, wrapped_key_epoch, created_at, last_used_at
+			FROM v2_user_credentials
+			WHERE user_id = $1
+			ORDER BY created_at ASC`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AuthCredentialRecord
+	for rows.Next() {
+		var rec AuthCredentialRecord
+		err = rows.Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.WrappedAnchorKey, &rec.AttestationPayload, &rec.AttestationSignatureEs384, &rec.AttestationSignatureMldsa87, &rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+func (s *AuthStore) BeginChallenge(ctx context.Context, kind string, userID string, challenge string, expiresAt time.Time, payload any) (*AuthChallenge, error) {
+	// Must be invoked as a transaction
+	if !s.db.IsTransaction() {
+		// Indicates a development-time error
+		panic("BeginChallenge must be invoked in a transaction")
+	}
+
+	if challenge == "" {
+		return nil, errors.New("challenge is empty")
+	}
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().UTC().Add(5 * time.Minute)
+	}
+
+	rec := &AuthChallenge{
+		ID:        uuid.NewString(),
+		Kind:      kind,
+		UserID:    userID,
+		Challenge: challenge,
+		ExpiresAt: expiresAt,
+	}
+
+	var payloadBytes []byte
+	if payload != nil {
+		var err error
+		payloadBytes, err = json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Insert the challenge
+	_, err := s.db.Exec(ctx,
+		`INSERT INTO v2_auth_challenges (id, kind, user_id, challenge, expires_at) VALUES ($1, $2, $3, $4, $5)`,
+		rec.ID, rec.Kind, rec.UserID, rec.Challenge, rec.ExpiresAt.Unix(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Insert the payload
+	if len(payloadBytes) > 0 {
+		_, err = s.db.Exec(ctx,
+			`INSERT INTO v2_auth_challenge_payloads (challenge_id, session_data) VALUES ($1, $2)`,
+			rec.ID, string(payloadBytes),
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return rec, nil
+}
+
+// ConsumeChallenge atomically marks the challenge row as used and returns its payload
+// When userID is non-empty, the consume succeeds only if the row's user_id matches; this prevents an attacker who learned a challenge ID from consuming a challenge that belongs to a different user (which would let them DoS the legitimate ceremony)
+// Pass userID = "" for flows where no authenticated user is bound to the challenge yet (register, login)
+func (s *AuthStore) ConsumeChallenge(ctx context.Context, id string, kind string, userID string, out any) error {
+	now := time.Now().Unix()
+
+	// Atomically mark the challenge as used and retrieve the payload
+	// When $4 is empty the user-binding clause is a no-op so register/login challenges still consume normally
+	var payload sql.NullString
+	err := s.db.
+		QueryRow(ctx, `UPDATE v2_auth_challenges
+			SET used_at = $1
+			WHERE id = $2 AND kind = $3 AND used_at IS NULL AND expires_at >= $1
+				AND ($4 = '' OR user_id = $4)
+			RETURNING (
+				SELECT session_data
+				FROM v2_auth_challenge_payloads
+				WHERE challenge_id = v2_auth_challenges.id
+			)`, now, id, kind, userID).
+		Scan(&payload)
+	if s.db.IsNoRowsError(err) {
+		return ErrInvalidChallenge
+	} else if err != nil {
+		return err
+	}
+
+	// If there's no destination, or if the payload is NULL, return
+	if out == nil || !payload.Valid {
+		return nil
+	}
+
+	// Unmarshal the payload
+	err = json.Unmarshal([]byte(payload.String), out)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*User, error) {
+	// Must be invoked as a transaction
+	if !s.db.IsTransaction() {
+		// Indicates a development-time error
+		panic("RegisterUser must be invoked in a transaction")
+	}
+
+	requestKey, err := newRequestKey()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().Unix()
+	_, err = s.db.Exec(ctx,
+		`INSERT INTO v2_users (id, display_name, status, webauthn_user_id, request_key, wrapped_key_epoch, allowed_ips, ready, created_at, updated_at)
+			VALUES ($1, $2, 'active', $3, $4, 1, '', false, $5, $5)`,
+		in.UserID, strings.TrimSpace(in.DisplayName), in.WebAuthnUserID, requestKey, now,
+	)
+	if isIntegrityViolationError(err) {
+		return nil, ErrUserAlreadyExists
+	} else if err != nil {
+		return nil, err
+	}
+
+	_, err = s.db.Exec(ctx,
+		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, created_at, last_used_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+		uuid.NewString(), in.UserID, in.CredentialID, strings.TrimSpace(in.CredentialDisplayName), in.PublicKey, in.SignCount, now,
+	)
+	if isIntegrityViolationError(err) {
+		return nil, ErrUserAlreadyExists
+	} else if err != nil {
+		return nil, err
+	}
+
+	return &User{
+		ID:              in.UserID,
+		DisplayName:     strings.TrimSpace(in.DisplayName),
+		Status:          "active",
+		WebAuthnUserID:  in.WebAuthnUserID,
+		RequestKey:      requestKey,
+		WrappedKeyEpoch: 1,
+		AllowedIPs:      nil,
+		Ready:           false,
+	}, nil
+}
+
+func (s *AuthStore) Login(ctx context.Context, in LoginInput) error {
+	now := time.Now().Unix()
+	err := s.db.
+		QueryRow(ctx,
+			`UPDATE v2_user_credentials
+			SET sign_count = $1, last_used_at = $2
+			WHERE credential_id = $3
+			AND user_id = (
+				SELECT id FROM v2_users WHERE id = $4 AND status = 'active'
+			)
+			RETURNING user_id`,
+			in.SignCount, now, in.CredentialID, in.UserID,
+		).
+		Scan(&in.UserID)
+	if s.db.IsNoRowsError(err) {
+		return ErrInvalidLogin
+	} else if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// FinalizeSignup marks the account as ready and persists all long-lived cryptographic material generated at signup time: the user's transport pubkeys, anchor pubkeys and bundle self-signatures, plus the first credential's wrapped primary key, wrapped anchor key, and hybrid attestation
+// Returns the updated user row
+func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) (*User, error) {
+	if len(in.WrappedPrimaryKey) > 512 {
+		return nil, errors.New("wrappedPrimaryKey is too large")
+	}
+	if len(in.WrappedAnchorKey) > 32<<10 {
+		return nil, errors.New("wrappedAnchorKey is too large")
+	}
+	if len(in.AttestationPayload) > 4<<10 {
+		return nil, errors.New("attestationPayload is too large")
+	}
+
+	// Must be invoked as a transaction
+	if !s.db.IsTransaction() {
+		// Indicates a development-time error
+		panic("FinalizeSignup must be invoked in a transaction")
+	}
+
+	now := time.Now().Unix()
+	updatedUser := &User{}
+	var allowedIPsCSV string
+	err := s.db.
+		QueryRow(ctx,
+			`UPDATE v2_users
+			SET request_enc_ecdh_pubkey = $1,
+				request_enc_mlkem_pubkey = $2,
+				anchor_es384_public_key = $3,
+				anchor_mldsa87_public_key = $4,
+				pubkey_bundle_signature_es384 = $5,
+				pubkey_bundle_signature_mldsa87 = $6,
+				ready = true,
+				updated_at = $7
+			WHERE id = $8 AND ready = false
+			RETURNING
+				id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, wrapped_key_epoch, allowed_ips, ready`,
+			in.RequestEncEcdhPubkey, in.RequestEncMlkemPubkey,
+			in.AnchorEs384PublicKey, in.AnchorMldsa87PublicKey,
+			in.PubkeyBundleSignatureEs384, in.PubkeyBundleSignatureMldsa87,
+			now, in.UserID,
+		).
+		Scan(
+			&updatedUser.ID,
+			&updatedUser.DisplayName,
+			&updatedUser.Status,
+			&updatedUser.WebAuthnUserID,
+			&updatedUser.RequestKey,
+			&updatedUser.RequestEncEcdhPubkey,
+			&updatedUser.RequestEncMlkemPubkey,
+			&updatedUser.AnchorEs384PublicKey,
+			&updatedUser.AnchorMldsa87PublicKey,
+			&updatedUser.PubkeyBundleSignatureEs384,
+			&updatedUser.PubkeyBundleSignatureMldsa87,
+			&updatedUser.WrappedKeyEpoch,
+			&allowedIPsCSV,
+			&updatedUser.Ready,
+		)
+	if s.db.IsNoRowsError(err) {
+		var exists bool
+		err = s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, in.UserID).Scan(&exists)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrUserNotFound
+		}
+		return nil, ErrAlreadyFinalized
+	} else if err != nil {
+		return nil, err
+	}
+
+	updatedUser.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
+
+	// Store the wrapped primary key, wrapped anchor, and first credential attestation on the user's single credential (the one created during registration)
+	_, err = s.db.Exec(ctx,
+		`UPDATE v2_user_credentials
+			SET wrapped_primary_key = $1,
+				wrapped_anchor_key = $2,
+				attestation_payload = $3,
+				attestation_signature_es384 = $4,
+				attestation_signature_mldsa87 = $5,
+				wrapped_key_epoch = 1
+			WHERE user_id = $6`,
+		in.WrappedPrimaryKey, in.WrappedAnchorKey,
+		in.AttestationPayload, in.AttestationSignatureEs384, in.AttestationSignatureMldsa87,
+		in.UserID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return updatedUser, nil
+}
+
+func (s *AuthStore) GetCredentialForUser(ctx context.Context, userID string, credentialID string) (*AuthCredentialRecord, error) {
+	var rec AuthCredentialRecord
+	err := s.db.
+		QueryRow(ctx,
+			`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_anchor_key, attestation_payload, attestation_signature_es384, attestation_signature_mldsa87, wrapped_key_epoch, created_at, last_used_at
+			FROM v2_user_credentials
+			WHERE user_id = $1 AND credential_id = $2`,
+			userID, credentialID,
+		).
+		Scan(
+			&rec.ID,
+			&rec.CredentialID,
+			&rec.DisplayName,
+			&rec.PublicKey,
+			&rec.SignCount,
+			&rec.WrappedPrimaryKey,
+			&rec.WrappedAnchorKey,
+			&rec.AttestationPayload,
+			&rec.AttestationSignatureEs384,
+			&rec.AttestationSignatureMldsa87,
+			&rec.WrappedKeyEpoch,
+			&rec.CreatedAt,
+			&rec.LastUsedAt,
+		)
+	if s.db.IsNoRowsError(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	return &rec, nil
+}
+
+func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowedIPs []string) ([]string, error) {
+	normalized, err := NormalizeAllowedIPs(allowedIPs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only allow mutations for users that are active and have completed setup
+	affected, err := s.db.Exec(ctx,
+		`UPDATE v2_users SET allowed_ips = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
+		strings.Join(normalized, ","), time.Now().Unix(), userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if affected == 0 {
+		return nil, ErrUserNotFound
+	}
+
+	return normalized, nil
+}
+
+func (s *AuthStore) RegenerateRequestKey(ctx context.Context, userID string) (string, error) {
+	requestKey, err := newRequestKey()
+	if err != nil {
+		return "", err
+	}
+
+	// Only allow mutations for users that are active and have completed setup
+	affected, err := s.db.Exec(ctx,
+		`UPDATE v2_users SET request_key = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
+		requestKey, time.Now().Unix(), userID,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	if affected == 0 {
+		return "", ErrUserNotFound
+	}
+
+	return requestKey, nil
+}
+
+func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID string, displayName string) error {
+	if len(displayName) > 100 {
+		return ErrDisplayNameTooLong
+	}
+
+	affected, err := s.db.Exec(ctx,
+		`UPDATE v2_users SET display_name = $1, updated_at = $2 WHERE id = $3 AND status = 'active' AND ready = true`,
+		displayName, time.Now().Unix(), userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	if affected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+// UpdateCredentialWrappedKey updates the wrapped primary key and wrapped anchor key associated with a single credential
+// The credential must belong to the given user
+func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID string, userID string, wrappedPrimaryKey string, wrappedAnchorKey string) error {
+	if len(wrappedPrimaryKey) > 512 {
+		return errors.New("wrappedPrimaryKey is too large")
+	}
+	if len(wrappedAnchorKey) > 32<<10 {
+		return errors.New("wrappedAnchorKey is too large")
+	}
+
+	// Guard against updates for non-active users (frozen/disabled/removed) by gating both the target row and the epoch subquery on status = 'active'
+	affected, err := s.db.Exec(ctx,
+		`UPDATE v2_user_credentials SET wrapped_primary_key = $1, wrapped_anchor_key = $2, wrapped_key_epoch = (
+			SELECT wrapped_key_epoch FROM v2_users WHERE id = $4 AND status = 'active'
+		)
+			WHERE credential_id = $3 AND user_id = $4
+			AND EXISTS (SELECT 1 FROM v2_users WHERE id = $4 AND status = 'active')`,
+		wrappedPrimaryKey, wrappedAnchorKey, credentialID, userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	if affected == 0 {
+		return ErrCredentialNotFound
+	}
+
+	return nil
+}
+
+// HasPendingChallenge reports whether the user has an unconsumed, non-expired challenge of the given kind
+func (s *AuthStore) HasPendingChallenge(ctx context.Context, userID string, kind string) (bool, error) {
+	now := time.Now().Unix()
+	var exists bool
+	err := s.db.
+		QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM v2_auth_challenges WHERE user_id = $1 AND kind = $2 AND used_at IS NULL AND expires_at >= $3)`,
+			userID, kind, now,
+		).
+		Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// GetCredentialByCredentialID returns the credential record matching credential_id (base64url encoded WebAuthn credential ID) for the given user
+func (s *AuthStore) GetCredentialByCredentialID(ctx context.Context, credentialID string, userID string) (*AuthCredentialRecord, error) {
+	var rec AuthCredentialRecord
+	err := s.db.QueryRow(ctx,
+		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_anchor_key, attestation_payload, attestation_signature_es384, attestation_signature_mldsa87, wrapped_key_epoch, created_at, last_used_at
+			FROM v2_user_credentials
+			WHERE credential_id = $1 AND user_id = $2`,
+		credentialID, userID,
+	).Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.WrappedAnchorKey, &rec.AttestationPayload, &rec.AttestationSignatureEs384, &rec.AttestationSignatureMldsa87, &rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt)
+	if s.db.IsNoRowsError(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) error {
+	if len(in.WrappedPrimaryKey) > 512 {
+		return errors.New("wrappedPrimaryKey is too large")
+	}
+	if len(in.WrappedAnchorKey) > 32<<10 {
+		return errors.New("wrappedAnchorKey is too large")
+	}
+	if len(in.AttestationPayload) > 4<<10 {
+		return errors.New("attestationPayload is too large")
+	}
+
+	// Gate the insert on the user being active so future callers cannot attach a credential to a frozen/disabled user
+	// The epoch subquery and the EXISTS guard both filter on status = 'active', mirroring UpdateCredentialWrappedKey
+	now := time.Now().Unix()
+	affected, err := s.db.Exec(ctx,
+		`INSERT INTO v2_user_credentials (
+				id, user_id, credential_id, display_name, public_key, sign_count,
+				wrapped_primary_key, wrapped_anchor_key,
+				attestation_payload, attestation_signature_es384, attestation_signature_mldsa87,
+				wrapped_key_epoch, created_at, last_used_at
+			) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, (
+				SELECT wrapped_key_epoch FROM v2_users WHERE id = $2 AND status = 'active'
+			), $12, $12
+			WHERE EXISTS (SELECT 1 FROM v2_users WHERE id = $2 AND status = 'active')`,
+		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount,
+		in.WrappedPrimaryKey, in.WrappedAnchorKey,
+		in.AttestationPayload, in.AttestationSignatureEs384, in.AttestationSignatureMldsa87,
+		now,
+	)
+	if err != nil {
+		return err
+	}
+
+	if affected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+func (s *AuthStore) AdvanceWrappedKeyEpoch(ctx context.Context, userID string) (int64, error) {
+	var epoch int64
+	err := s.db.
+		QueryRow(ctx,
+			`UPDATE v2_users SET wrapped_key_epoch = wrapped_key_epoch + 1, updated_at = $1 WHERE id = $2 AND status = 'active' AND ready = true RETURNING wrapped_key_epoch`,
+			time.Now().Unix(), userID,
+		).
+		Scan(&epoch)
+	if s.db.IsNoRowsError(err) {
+		return 0, ErrUserNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	return epoch, nil
+}
+
+func (s *AuthStore) RenameCredential(ctx context.Context, id string, userID string, displayName string) error {
+	displayName = strings.TrimSpace(displayName)
+	if len(displayName) > 100 {
+		return ErrDisplayNameTooLong
+	}
+
+	affected, err := s.db.Exec(ctx,
+		`UPDATE v2_user_credentials SET display_name = $1 WHERE id = $2 AND user_id = $3`,
+		displayName, id, userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	if affected == 0 {
+		return ErrCredentialNotFound
+	}
+
+	return nil
+}
+
+func (s *AuthStore) DeleteCredential(ctx context.Context, id, userID string) error {
+	switch s.kind {
+	case BackendPostgres:
+		return s.deleteCredentialPostgres(ctx, id, userID)
+	case BackendSQLite:
+		return s.deleteCredentialSQLite(ctx, id, userID)
+	default:
+		return fmt.Errorf("unsupported backend: %s", s.kind)
+	}
+}
+
+// deleteCredentialPostgres performs the delete in a single atomic statement.
+func (s *AuthStore) deleteCredentialPostgres(ctx context.Context, id, userID string) error {
+	// The `locked` CTE acquires row-level locks via `FOR UPDATE` on all of the user's credential rows, so a concurrent delete on a sibling credential can't race us between the count and the DELETE
+	// The wrapping SELECT always returns exactly one row with the diagnostic counts, so the three outcomes (deleted / not found / last credential) are distinguishable without a second round trip
+	var total, tgt, deleted int
+	err := s.db.
+		QueryRow(ctx, `
+WITH locked AS MATERIALIZED (
+    SELECT id FROM v2_user_credentials WHERE user_id = $2 FOR UPDATE
+),
+del AS (
+    DELETE FROM v2_user_credentials
+    WHERE id = $1 AND user_id = $2
+      AND (SELECT COUNT(*) FROM locked) > 1
+      AND EXISTS (SELECT 1 FROM locked WHERE id = $1)
+    RETURNING 1
+)
+SELECT
+    (SELECT COUNT(*) FROM locked),
+    (SELECT COUNT(*) FROM locked WHERE id = $1),
+    (SELECT COUNT(*) FROM del)
+`,
+			id, userID).
+		Scan(&total, &tgt, &deleted)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case deleted == 1:
+		return nil
+	case tgt == 0:
+		return ErrCredentialNotFound
+	case total <= 1:
+		return ErrLastCredential
+	default:
+		// Shouldn't happen: either the delete fired or one of the guards tripped
+		return errors.New("delete credential: unexpected state")
+	}
+}
+
+// deleteCredentialSQLite performs the delete in one DML statement
+func (s *AuthStore) deleteCredentialSQLite(ctx context.Context, id string, userID string) error {
+	// SQLite opens writer transactions with `txlock=immediate`, so the implicit transaction this DELETE runs in serializes against every other writer:
+	// the `MATERIALIZED` CTE captures a consistent snapshot that no concurrent writer can change before the DELETE fires RETURNING yields one row only when the DELETE actually ran; a `tgt` column of 0 vs. 1 in that row — or an empty result set — distinguishes the three outcomes
+	// When nothing was deleted, a small follow-up SELECT disambiguates: races with concurrent writers are benign because the write serialization means the snapshot we observe is still a real past state
+	var total, tgt int
+	err := s.db.
+		QueryRow(ctx, `
+WITH snap AS MATERIALIZED (
+    SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE id = $1) AS tgt
+    FROM v2_user_credentials WHERE user_id = $2
+)
+DELETE FROM v2_user_credentials
+WHERE id = $1 AND user_id = $2
+  AND (SELECT total FROM snap) > 1
+RETURNING (SELECT total FROM snap), (SELECT tgt FROM snap)
+`,
+			id, userID).
+		Scan(&total, &tgt)
+	switch {
+	case err == nil:
+		return nil
+	case !s.db.IsNoRowsError(err):
+		return err
+	}
+
+	// DELETE did not fire - diagnose why
+	err = s.db.
+		QueryRow(ctx, `
+SELECT COUNT(*), COUNT(*) FILTER (WHERE id = $1)
+FROM v2_user_credentials WHERE user_id = $2
+`,
+			id, userID,
+		).
+		Scan(&total, &tgt)
+	if err != nil {
+		return err
+	}
+
+	if tgt == 0 {
+		return ErrCredentialNotFound
+	}
+	return ErrLastCredential
+}
+
+func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
+	cutoff := now.Add(-10 * time.Minute).Unix()
+
+	_, err := s.db.Exec(ctx,
+		`DELETE FROM v2_auth_challenges WHERE expires_at < $1 OR used_at IS NOT NULL`,
+		cutoff,
+	)
+	if err != nil {
+		return fmt.Errorf("error deleting expired auth challenges: %w", err)
+	}
+
+	return nil
+}
+
+func (s *AuthStore) DeleteExpiredAuthChallenge(ctx context.Context, id string, now time.Time) error {
+	cutoff := now.Add(-10 * time.Minute).Unix()
+	_, err := s.db.Exec(ctx,
+		`DELETE FROM v2_auth_challenges WHERE id = $1 AND (expires_at < $2 OR used_at IS NOT NULL)`,
+		id, cutoff,
+	)
+	if err != nil {
+		return fmt.Errorf("error deleting auth challenge: %w", err)
+	}
+	return nil
+}
+
+func (s *AuthStore) DeleteNonreadyUser(ctx context.Context, id string, now time.Time) error {
+	cutoff := now.Add(-24*time.Hour - 10*time.Minute).Unix()
+	_, err := s.db.Exec(ctx,
+		`DELETE FROM v2_users WHERE id = $1 AND ready = false AND created_at < $2`,
+		id, cutoff,
+	)
+	if err != nil {
+		return fmt.Errorf("error deleting non-ready user: %w", err)
+	}
+	return nil
+}
+
+func NormalizeAllowedIPs(allowedIPs []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(allowedIPs))
+	normalized := make([]string, 0, len(allowedIPs))
+
+	for _, entry := range allowedIPs {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		var canonical string
+		if strings.ContainsRune(entry, '/') {
+			_, network, err := net.ParseCIDR(entry)
+			if err != nil {
+				return nil, &InvalidAllowedIPError{Kind: ErrInvalidCIDR, Value: entry}
+			}
+			canonical = network.String()
+		} else {
+			ip := net.ParseIP(entry)
+			if ip == nil {
+				return nil, &InvalidAllowedIPError{Kind: ErrInvalidIP, Value: entry}
+			}
+			canonical = ip.String()
+		}
+
+		_, ok := seen[canonical]
+		if ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		normalized = append(normalized, canonical)
+	}
+
+	return normalized, nil
+}
+
+func parseAllowedIPsCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	var j int
+	for i := range parts {
+		parts[j] = strings.TrimSpace(parts[i])
+		if parts[j] != "" {
+			j++
+		}
+	}
+	parts = parts[:j]
+
+	if len(parts) == 0 {
+		return nil
+	}
+
+	return parts
+}
+
+func isIntegrityViolationError(err error) bool {
+	// Primary result code for all constraint-related errors
+	// Extended result codes shift this into the low 8 bits, see https://www.sqlite.org/rescode.html#constraint
+	const sqliteConstraintCode = 19
+
+	if err == nil {
+		return false
+	}
+
+	// Handle SQLite errors
+	sqliteErr, ok := errors.AsType[*sqlite.Error](err)
+	if ok {
+		return sqliteErr.Code()&0xFF == sqliteConstraintCode
+	}
+
+	// Handle Postgres errors
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	if ok {
+		return pgerrcode.IsIntegrityConstraintViolation(pgErr.Code)
+	}
+
+	return false
+}
+
+type InvalidAllowedIPError struct {
+	Kind  error
+	Value string
+}
+
+func (e *InvalidAllowedIPError) Error() string {
+	if e == nil || e.Kind == nil {
+		return "invalid allowed IP"
+	}
+
+	if e.Value == "" {
+		return e.Kind.Error()
+	}
+
+	return e.Kind.Error() + ": " + e.Value
+}
+
+func (e *InvalidAllowedIPError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+
+	return e.Kind
+}

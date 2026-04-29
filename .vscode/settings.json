@@ -2,6 +2,11 @@
     "editor.codeActionsOnSave": {
         "source.fixAll": "explicit"
     },
-    "eslint.validate": ["javascript", "svelte", "typescript"],
-    "go.buildTags": "unit"
+    "go.buildTags": "unit,e2e",
+    "go.testEnvVars": {
+        "GOEXPERIMENT": "jsonv2",
+    },
+    "go.toolsEnvVars": {
+        "GOEXPERIMENT": "jsonv2",
+    }
 }

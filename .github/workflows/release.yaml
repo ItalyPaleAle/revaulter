@@ -21,9 +21,8 @@ jobs:
   build:
     name: Build and release
     runs-on: ubuntu-latest
-
     env:
-      GOLANGCI_LINT_VERSION: "v2.9.0"
+      GOEXPERIMENT: jsonv2
 
     steps:
 
@@ -35,18 +34,18 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
-          package_json_file: 'client/package.json'
+          package_json_file: 'client/web/package.json'
 
       - uses: actions/setup-node@v6
         with:
-          node-version-file: 'client/.nvmrc'
+          node-version-file: 'client/web/.nvmrc'
           cache: 'pnpm'
-          cache-dependency-path: 'client/pnpm-lock.yaml'
+          cache-dependency-path: 'client/web/pnpm-lock.yaml'
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Lowercase REPO_OWNER which is required for containers
       - name: Set lowercase REPO_OWNER
@@ -56,7 +55,7 @@ jobs:
 
       - name: Generate Container tags and labels
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ env.REPO_OWNER }}/revaulter
           tags: |
@@ -67,7 +66,7 @@ jobs:
 
       - name: Generate Container tags and labels for CLI
         id: meta-cli
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ env.REPO_OWNER }}/revaulter-cli
           tags: |
@@ -94,11 +93,18 @@ jobs:
           echo "COMMIT_HASH: '$COMMIT_HASH'"
 
           BUILDINFO_PKG="github.com/italypaleale/revaulter/pkg/buildinfo"
-          BUILD_LDFLAGS="-X ${BUILDINFO_PKG}.Production=1 -X ${BUILDINFO_PKG}.AppVersion=${BUILD_VERSION} -X ${BUILDINFO_PKG}.BuildId=${BUILD_ID} -X ${BUILDINFO_PKG}.BuildDate=${BUILD_DATE} -X ${BUILDINFO_PKG}.CommitHash=${COMMIT_HASH} -buildid=${BUILD_ID}"
+          REPO_URL="https://github.com/${{ github.repository }}"
+          # This is injected into the CLI as a regex fragment, so keep it regex-safe
+          SIGNING_BRANCH_REF_PATTERN='heads/main'
+          SIGNING_REF_PATTERN="tags/v.+|${SIGNING_BRANCH_REF_PATTERN}"
+          BUILD_LDFLAGS="-X ${BUILDINFO_PKG}.Production=1 -X ${BUILDINFO_PKG}.AppVersion=${BUILD_VERSION} -X ${BUILDINFO_PKG}.BuildId=${BUILD_ID} -X ${BUILDINFO_PKG}.BuildDate=${BUILD_DATE} -X ${BUILDINFO_PKG}.CommitHash=${COMMIT_HASH} -X ${BUILDINFO_PKG}.RepoURL=${REPO_URL} -X ${BUILDINFO_PKG}.SigningRefPattern=${SIGNING_REF_PATTERN} -buildid=${BUILD_ID}"
 
           echo "BUILD_LDFLAGS=$BUILD_LDFLAGS" >> $GITHUB_ENV
+          echo "SIGNING_BRANCH_REF_PATTERN=$SIGNING_BRANCH_REF_PATTERN" >> $GITHUB_ENV
+          echo "SIGNING_REF_PATTERN=$SIGNING_REF_PATTERN" >> $GITHUB_ENV
 
           echo "BUILD_LDFLAGS: '$BUILD_LDFLAGS'"
+          echo "SIGNING_REF_PATTERN: '$SIGNING_REF_PATTERN'"
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -108,33 +114,60 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install client dependencies
-        working-directory: client
+        working-directory: client/web
         run: |
           pnpm install --frozen-lockfile
-
-      - name: Run biome
-        working-directory: client
-        run: |
-          pnpm run check
-          pnpm run svelte-check
 
       - name: Run go-generate
         run: |
           go generate -v ./...
 
-      - name: Run golangci-Lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-
-      - name: Run tests
-        env:
-          CGO_ENABLED: "1"
+      # Integrity manifest: signs the web client dist/ contents with cosign keyless
+      # Always runs on tag releases; on configured release-branch pushes, only when the head commit
+      # carries a `Sign-Web-Client: yes` trailer (parsed via `git interpret-trailers`)
+      - name: Decide whether to sign web client
+        id: sign_gate
         run: |
-          go test -v \
-            -race \
-            -tags unit \
-            ./... 
+          should_sign=false
+          if [[ "${GITHUB_REF}" == "refs/tags/v*" ]]; then
+            should_sign=true
+          elif [[ "${GITHUB_REF#refs/}" =~ ^(${SIGNING_BRANCH_REF_PATTERN})$ ]]; then
+            if git log -1 --format=%B \
+               | git interpret-trailers --parse \
+               | grep -qi '^Sign-Web-Client: yes'; then
+              should_sign=true
+            fi
+          fi
+          echo "should_sign=$should_sign" >> "$GITHUB_OUTPUT"
+          echo "GITHUB_REF=${GITHUB_REF}"
+          echo "Signing web client: $should_sign"
+
+      - name: Install cosign
+        if: steps.sign_gate.outputs.should_sign == 'true'
+        uses: sigstore/cosign-installer@v4.1.1
+
+      - name: Build integrity manifest
+        if: steps.sign_gate.outputs.should_sign == 'true'
+        run: |
+          mkdir -p pkg/server/integrity
+          go run ./tools/build-manifest \
+            --dist client/web/dist \
+            --version "${BUILD_VERSION}" \
+            --commit "${COMMIT_HASH}" \
+            --build-date "${BUILD_DATE}" \
+            --out pkg/server/integrity/manifest.txt
+
+            echo "Manifest:"
+            cat pkg/server/integrity/manifest.txt
+
+      - name: Sign integrity manifest (cosign keyless)
+        if: steps.sign_gate.outputs.should_sign == 'true'
+        env:
+          COSIGN_YES: "true"
+        run: |
+          cosign sign-blob \
+            --bundle pkg/server/integrity/manifest.sigstore.json \
+            pkg/server/integrity/manifest.txt
 
       - name: Build for all platforms
         env:
@@ -337,7 +370,7 @@ jobs:
           ls -al .out
 
       - name: Publish binaries as Actions Artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: artifacts
           path: .out
@@ -345,7 +378,7 @@ jobs:
           compression-level: 0
 
       - name: Build and push Container images
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         id: docker-build-push
         with:
           tags: ${{ steps.meta.outputs.tags }}
@@ -356,7 +389,7 @@ jobs:
           push: true
 
       - name: Build and push Container images for CLI
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         id: docker-build-push-cli
         with:
           tags: ${{ steps.meta-cli.outputs.tags }}
@@ -367,7 +400,7 @@ jobs:
           push: true
 
       - name: Binary attestation linux-amd64
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: linux-amd64/revaulter
@@ -376,7 +409,7 @@ jobs:
             .bin/revaulter-*-linux-amd64/revaulter-cli
 
       - name: Binary attestation linux-386
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: linux-386/revaulter
@@ -385,7 +418,7 @@ jobs:
             .bin/revaulter-*-linux-386/revaulter-cli
 
       - name: Binary attestation linux-arm64
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: linux-arm64/revaulter
@@ -394,7 +427,7 @@ jobs:
             .bin/revaulter-*-linux-arm64/revaulter-cli
 
       - name: Binary attestation linux-armv7
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: linux-armv7/revaulter
@@ -403,7 +436,7 @@ jobs:
             .bin/revaulter-*-linux-armv7/revaulter-cli
 
       - name: Binary attestation macos-x64
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: macos-x64/revaulter
@@ -412,7 +445,7 @@ jobs:
             .bin/revaulter-*-macos-x64/revaulter-cli
 
       - name: Binary attestation macos-arm64
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: macos-arm64/revaulter
@@ -421,7 +454,7 @@ jobs:
             .bin/revaulter-*-macos-arm64/revaulter-cli
 
       - name: Binary attestation windows-x64
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: windows-x64/revaulter
@@ -430,7 +463,7 @@ jobs:
             .bin/revaulter-*-windows-x64/revaulter-cli.exe
 
       - name: Binary attestation windows-arm64
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: windows-arm64/revaulter
@@ -439,7 +472,7 @@ jobs:
             .bin/revaulter-*-windows-arm64/revaulter-cli.exe
 
       - name: Binary attestation freebsd-amd64
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: freebsd-amd64/revaulter
@@ -448,7 +481,7 @@ jobs:
             .bin/revaulter-*-freebsd-amd64/revaulter-cli
 
       - name: Binary attestation freebsd-arm64
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: freebsd-arm64/revaulter
@@ -457,7 +490,7 @@ jobs:
             .bin/revaulter-*-freebsd-arm64/revaulter-cli
 
       - name: Container image attestation
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: 'ghcr.io/${{ env.REPO_OWNER }}/revaulter'
@@ -465,7 +498,7 @@ jobs:
           push-to-registry: true
 
       - name: Container image attestation for CLI
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           subject-name: 'ghcr.io/${{ env.REPO_OWNER }}/revaulter-cli'

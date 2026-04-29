@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,14 +36,26 @@ func Get() *Config {
 
 // GetDefaultConfig returns the default configuration.
 func GetDefaultConfig() *Config {
+	// Read the port from the env var if set
+	var port int
+	portStr := os.Getenv("PORT")
+	if portStr != "" {
+		port, _ = strconv.Atoi(portStr)
+	}
+	if port <= 0 {
+		// Default port is 8080
+		port = 8080
+	}
+
 	return &Config{
 		LogLevel:            "info",
 		LogAsJSON:           !isatty.IsTerminal(os.Stdout.Fd()),
-		Port:                8080,
+		Port:                port,
 		Bind:                "0.0.0.0",
 		SessionTimeout:      5 * time.Minute,
 		RequestTimeout:      5 * time.Minute,
 		OmitHealthCheckLogs: true,
+		WebAuthnRPName:      "Revaulter",
 	}
 }
 
