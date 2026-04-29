@@ -12,7 +12,7 @@ import (
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
-// auditRetention is how long audit_events rows are kept before the recurring prune deletes them
+// auditRetention is how long v2_audit_events rows are kept before the recurring prune deletes them
 const auditRetention = 30 * 24 * time.Hour
 
 // auditPruneInterval is how often the recurring prune fires

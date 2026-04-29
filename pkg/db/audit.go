@@ -251,7 +251,7 @@ func (s *AuditStore) Insert(ctx context.Context, data AuditEventInput) (AuditEve
 	}
 
 	_, err = s.db.Exec(ctx,
-		`INSERT INTO audit_events
+		`INSERT INTO v2_audit_events
 			(id, created_at, event_type, outcome, auth_method, actor_user_id, target_user_id, signing_key_id, credential_id, request_state, http_request_id, client_ip, user_agent, metadata)
 			VALUES (`+idPlaceholder+`, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, `+metadataPlaceholder+`)`,
 		id.String(), now, string(data.EventType), string(data.Outcome), string(data.AuthMethod),
@@ -351,7 +351,7 @@ func (s *AuditStore) List(ctx context.Context, filter AuditFilter, limit int, cu
 	}
 
 	query := `SELECT id, created_at, event_type, outcome, auth_method, actor_user_id, target_user_id, signing_key_id, credential_id, request_state, http_request_id, client_ip, user_agent, metadata
-		FROM audit_events` + whereClause + `
+		FROM v2_audit_events` + whereClause + `
 		ORDER BY id DESC
 		LIMIT $` + strconv.Itoa(len(args))
 
@@ -423,7 +423,7 @@ func (s *AuditStore) List(ctx context.Context, filter AuditFilter, limit int, cu
 // PruneBefore removes rows created before a threshold
 // Returns the number of rows removed
 func (s *AuditStore) PruneBefore(ctx context.Context, beforeUnix int64) (int64, error) {
-	affected, err := s.db.Exec(ctx, `DELETE FROM audit_events WHERE created_at < $1`, beforeUnix)
+	affected, err := s.db.Exec(ctx, `DELETE FROM v2_audit_events WHERE created_at < $1`, beforeUnix)
 	if err != nil {
 		return 0, err
 	}

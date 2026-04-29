@@ -1,6 +1,6 @@
 # Audit events
 
-Revaulter records security-relevant actions to a durable, append-only `audit_events` table. The table sits alongside the operational application log (emitted to stdout): ordinary debug messages still go to the log stream, while audit rows are the long-lived history of *who did what*.
+Revaulter records security-relevant actions to a durable, append-only `v2_audit_events` table. The table sits alongside the operational application log (emitted to stdout): ordinary debug messages still go to the log stream, while audit rows are the long-lived history of *who did what*.
 
 There is currently no UI or REST API for reading audit events and operators must query the table directly with SQL. A read endpoint may ship in a future release.
 
@@ -97,7 +97,7 @@ All queries below assume SQLite syntax; Postgres equivalents differ only in time
 
 ```sql
 SELECT created_at, event_type, outcome, client_ip, metadata
-FROM audit_events
+FROM v2_audit_events
 WHERE actor_user_id = 'user-123'
   AND created_at >= strftime('%s', 'now', '-1 day')
 ORDER BY created_at DESC;
@@ -107,7 +107,7 @@ ORDER BY created_at DESC;
 
 ```sql
 SELECT created_at, event_type, actor_user_id, client_ip
-FROM audit_events
+FROM v2_audit_events
 WHERE outcome IN ('failure', 'denied')
   AND created_at >= strftime('%s', 'now', '-7 days')
 ORDER BY created_at DESC;
@@ -117,7 +117,7 @@ ORDER BY created_at DESC;
 
 ```sql
 SELECT created_at, event_type, actor_user_id, signing_key_id, metadata
-FROM audit_events
+FROM v2_audit_events
 WHERE event_type LIKE 'signing_key.%'
 ORDER BY created_at DESC;
 ```
@@ -126,7 +126,7 @@ ORDER BY created_at DESC;
 
 ```sql
 SELECT created_at, request_state, metadata
-FROM audit_events
+FROM v2_audit_events
 WHERE event_type = 'request.expire'
   AND created_at BETWEEN ?1 AND ?2
 ORDER BY created_at DESC;
