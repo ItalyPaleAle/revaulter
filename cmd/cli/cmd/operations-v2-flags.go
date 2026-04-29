@@ -23,6 +23,10 @@ import (
 // The server enforces a 1 MiB limit on the outer request body (where the input is encoded as base64 in JSON, then encrypted)
 const maxInputBytes = 100 << 10
 
+// cliEnvelopeKind identifies the JSON shape produced by `encrypt` and consumed by `decrypt --json`
+// Bumped only when the schema changes incompatibly so old envelopes can be rejected explicitly
+const cliEnvelopeKind = "revaulter/1"
+
 // ensureWithinInputLimit rejects oversize inputs before they hit the wire
 // The reported size is the count of plaintext bytes (i.e. before base64 encoding) so the error matches the documented limit
 func ensureWithinInputLimit(field string, sizeBytes int) error {
@@ -79,10 +83,11 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 
 	cmd.Flags().StringVarP(&f.RequestKey, "request-key", "k", "", "Per-user request key used to route the request")
 	_ = cmd.MarkFlagRequired("request-key")
+	// Each operation marks --key-label required (or accepts it from --json) in its own BindToCommand
 	cmd.Flags().StringVarP(&f.KeyLabel, "key-label", "l", "", "Logical key label used for v2 key derivation")
-	_ = cmd.MarkFlagRequired("key-label")
+
+	// Each operation marks --algorithm required (or accepts it from --json) in its own BindToCommand
 	cmd.Flags().StringVarP(&f.Algorithm, "algorithm", "a", "", "algorithm identifier")
-	_ = cmd.MarkFlagRequired("algorithm")
 
 	cmd.Flags().VarP(&f.Timeout, "timeout", "t", "Timeout for the operation, as a number of seconds or Go duration")
 	cmd.Flags().StringVarP(&f.Note, "note", "n", "", "Optional message displayed alongside the request (up to 40 characters)")
@@ -159,6 +164,11 @@ type v2OperationFlagsEncrypt struct {
 
 func (f *v2OperationFlagsEncrypt) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
+
+	// --algorithm and --key-label are required for encrypt
+	_ = cmd.MarkFlagRequired("algorithm")
+	_ = cmd.MarkFlagRequired("key-label")
+
 	cmd.Flag("format").Usage = "Output format: 'json' (only)"
 	cmd.Flags().StringVarP(&f.Message, "message", "m", "", "The message to encrypt as a raw string (UTF-8). Mutually exclusive with --input and --json")
 	cmd.Flags().StringVarP(&f.Input, "input", "i", "", "Path to the message file to encrypt; use '-' to read from stdin. Mutually exclusive with --message and --json")
@@ -278,6 +288,71 @@ func (f *v2OperationFlagsEncrypt) InnerPayload(clientTransportEcdhKey protocolv2
 	}
 }
 
+// v2EncryptResponsePayload is the JSON shape produced by the browser after encrypting
+// `state` and `operation` are validated for binding consistency and then dropped from the user-facing output, since the transport AAD already binds them cryptographically
+type v2EncryptResponsePayload struct {
+	State          string `json:"state"`
+	Operation      string `json:"operation"`
+	Algorithm      string `json:"algorithm"`
+	Value          string `json:"value"`
+	Nonce          string `json:"nonce"`
+	Tag            string `json:"tag"`
+	AdditionalData string `json:"additionalData"`
+}
+
+// encryptOutputJSON is the user-facing JSON shape produced by `encrypt`
+// It mirrors what `decrypt --json` consumes, so an `encrypt | decrypt --json` pipeline needs no extra glue
+type encryptOutputJSON struct {
+	Kind           string `json:"kind"`
+	Algorithm      string `json:"algorithm"`
+	KeyLabel       string `json:"keyLabel"`
+	Value          string `json:"value"`
+	Nonce          string `json:"nonce"`
+	Tag            string `json:"tag"`
+	AdditionalData string `json:"additionalData,omitempty"`
+}
+
+// FormatResult validates the browser's response envelope against the originating request and reshapes it into the kind/keyLabel-tagged envelope `decrypt --json` expects
+func (f *v2OperationFlagsEncrypt) FormatResult(state string, plain []byte, format string) ([]byte, error) {
+	if format != "json" {
+		return nil, fmt.Errorf("unsupported format %q", format)
+	}
+
+	var resp v2EncryptResponsePayload
+	err := json.Unmarshal(plain, &resp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid encrypt response JSON: %w", err)
+	}
+	if resp.State != state {
+		return nil, errors.New("encrypt response state mismatch")
+	}
+	if resp.Operation != protocolv2.OperationEncrypt {
+		return nil, fmt.Errorf("unexpected operation in encrypt response: %q", resp.Operation)
+	}
+	if resp.Algorithm != f.Algorithm {
+		return nil, fmt.Errorf("encrypt response algorithm %q does not match requested %q", resp.Algorithm, f.Algorithm)
+	}
+	if resp.Value == "" || resp.Nonce == "" || resp.Tag == "" {
+		return nil, errors.New("encrypt response missing value/nonce/tag")
+	}
+
+	out := encryptOutputJSON{
+		Kind:           cliEnvelopeKind,
+		Algorithm:      resp.Algorithm,
+		KeyLabel:       f.KeyLabel,
+		Value:          resp.Value,
+		Nonce:          resp.Nonce,
+		Tag:            resp.Tag,
+		AdditionalData: resp.AdditionalData,
+	}
+	body, err := json.MarshalIndent(out, "", " ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode encrypt output: %w", err)
+	}
+
+	return append(body, '\n'), nil
+}
+
 // encryptJSONInput is the shape accepted by `encrypt --json`
 // Both fields are base64url-encoded
 type encryptJSONInput struct {
@@ -306,12 +381,16 @@ type v2OperationFlagsDecrypt struct {
 
 func (f *v2OperationFlagsDecrypt) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
+	cmd.Flag("algorithm").Usage = "algorithm identifier (when not using --json)"
+	cmd.Flag("key-label").Usage = "Logical key label used for v2 key derivation (when not using --json)"
 	cmd.Flag("format").Usage = "Output format: 'json' (default: JSON envelope) or 'raw' (write the decrypted plaintext as raw bytes)"
 	cmd.Flags().VarP(&f.Value, "value", "m", "The message to decrypt, base64-encoded (when not using --json)")
 	cmd.Flags().VarP(&f.Tag, "tag", "g", "Authentication tag, base64-encoded (when not using --json)")
 	cmd.Flags().Var(&f.Nonce, "nonce", "Nonce/IV, base64-encoded (when not using --json)")
 	cmd.Flags().Var(&f.AdditionalData, "aad", "Additional authenticated data, base64-encoded (when not using --json)")
-	cmd.Flags().StringVarP(&f.JSON, "json", "j", "", `Path to a JSON file (use '-' to read from stdin) in the shape produced by "encrypt": {"value":"<base64url>","nonce":"<base64url>","tag":"<base64url>","additionalData":"<base64url>"}. Mutually exclusive with --value, --tag, --nonce, and --aad`)
+	cmd.Flags().StringVarP(&f.JSON, "json", "j", "", `Path to a JSON file (use '-' to read from stdin) in the shape produced by "encrypt": {"kind":"`+cliEnvelopeKind+`","algorithm":"<id>","keyLabel":"<label>","value":"<base64url>","nonce":"<base64url>","tag":"<base64url>","additionalData":"<base64url>"} The 'additionalData' field is optional.. Mutually exclusive with --algorithm, --key-label, --value, --tag, --nonce, and --aad`)
+	cmd.MarkFlagsMutuallyExclusive("json", "algorithm")
+	cmd.MarkFlagsMutuallyExclusive("json", "key-label")
 	cmd.MarkFlagsMutuallyExclusive("json", "value")
 	cmd.MarkFlagsMutuallyExclusive("json", "tag")
 	cmd.MarkFlagsMutuallyExclusive("json", "nonce")
@@ -319,14 +398,11 @@ func (f *v2OperationFlagsDecrypt) BindToCommand(cmd *cobra.Command) {
 }
 
 func (f *v2OperationFlagsDecrypt) Validate() error {
-	err := f.v2OperationFlagsBase.Validate()
-	if err != nil {
-		return err
-	}
 	if f.Format != "json" && f.Format != "raw" {
 		return fmt.Errorf("invalid --format %q: decrypt supports 'json' or 'raw'", f.Format)
 	}
 
+	// When --json is set, the envelope supplies kind, algorithm, and keyLabel; they're populated onto the flag struct before calling base.Validate so the base normalizer sees them
 	if f.JSON != "" {
 		raw, rErr := readMaybeStdin(f.JSON)
 		if rErr != nil {
@@ -338,8 +414,25 @@ func (f *v2OperationFlagsDecrypt) Validate() error {
 		if rErr != nil {
 			return fmt.Errorf("invalid --json: %w", rErr)
 		}
+		if parsed.Kind != cliEnvelopeKind {
+			return fmt.Errorf("--json: unsupported 'kind' %q (expected %q)", parsed.Kind, cliEnvelopeKind)
+		}
 		if parsed.Value == "" {
 			return errors.New("--json: 'value' field is required")
+		}
+		if parsed.Algorithm == "" {
+			return errors.New("--json: 'algorithm' field is required")
+		}
+		if parsed.KeyLabel == "" {
+			return errors.New("--json: 'keyLabel' field is required")
+		}
+
+		f.Algorithm = parsed.Algorithm
+		f.KeyLabel = parsed.KeyLabel
+
+		err := f.v2OperationFlagsBase.Validate()
+		if err != nil {
+			return err
 		}
 
 		rErr = checkDecryptInputSizes(parsed.Value, parsed.AdditionalData, "--json")
@@ -354,6 +447,14 @@ func (f *v2OperationFlagsDecrypt) Validate() error {
 		return nil
 	}
 
+	err := f.v2OperationFlagsBase.Validate()
+	if err != nil {
+		return err
+	}
+
+	if f.Algorithm == "" {
+		return errors.New("--algorithm is required")
+	}
 	if f.Value.String() == "" {
 		return errors.New("either --value or --json is required")
 	}
@@ -400,9 +501,62 @@ func (f *v2OperationFlagsDecrypt) InnerPayload(clientTransportEcdhKey protocolv2
 	}
 }
 
+// v2DecryptResponsePayload is the JSON shape produced by the browser after decrypting
+// `value` carries the base64url-encoded plaintext bytes
+type v2DecryptResponsePayload struct {
+	State     string `json:"state"`
+	Operation string `json:"operation"`
+	Algorithm string `json:"algorithm"`
+	Value     string `json:"value"`
+}
+
+// FormatResult shapes the decrypted plaintext depending on the selected output format
+// `raw` returns the plaintext bytes verbatim (no JSON wrapper), `json` indents the browser's envelope
+func (f *v2OperationFlagsDecrypt) FormatResult(state string, plain []byte, format string) ([]byte, error) {
+	var resp v2DecryptResponsePayload
+	err := json.Unmarshal(plain, &resp)
+	if err != nil {
+		return nil, fmt.Errorf("invalid decrypt response JSON: %w", err)
+	}
+	if resp.State != state {
+		return nil, errors.New("decrypt response state mismatch")
+	}
+	if resp.Operation != protocolv2.OperationDecrypt {
+		return nil, fmt.Errorf("unexpected operation in decrypt response: %q", resp.Operation)
+	}
+	if resp.Algorithm != f.Algorithm {
+		return nil, fmt.Errorf("decrypt response algorithm %q does not match requested %q", resp.Algorithm, f.Algorithm)
+	}
+	if resp.Value == "" {
+		return nil, errors.New("decrypt response missing value")
+	}
+
+	switch format {
+	case "raw":
+		valueBytes, dErr := base64.RawURLEncoding.DecodeString(resp.Value)
+		if dErr != nil {
+			return nil, fmt.Errorf("invalid decrypted value: %w", dErr)
+		}
+		return valueBytes, nil
+	case "json":
+		var buf bytes.Buffer
+		err = json.Indent(&buf, plain, "", " ")
+		if err != nil {
+			return nil, fmt.Errorf("failed to indent response: %w", err)
+		}
+		buf.WriteByte('\n')
+		return buf.Bytes(), nil
+	default:
+		return nil, fmt.Errorf("unsupported format %q", format)
+	}
+}
+
 // decryptJSONInput is the shape accepted by `decrypt --json`
-// It mirrors the JSON envelope produced by `encrypt`; extra fields like state/operation/algorithm are ignored
+// It mirrors the JSON envelope produced by `encrypt`; `kind`, `algorithm`, and `keyLabel` are required and supply the corresponding flags
 type decryptJSONInput struct {
+	Kind           string `json:"kind"`
+	Algorithm      string `json:"algorithm"`
+	KeyLabel       string `json:"keyLabel"`
 	Value          string `json:"value"`
 	Tag            string `json:"tag"`
 	Nonce          string `json:"nonce"`
@@ -427,6 +581,11 @@ type v2OperationFlagsSign struct {
 
 func (f *v2OperationFlagsSign) BindToCommand(cmd *cobra.Command) {
 	f.BindBase(cmd)
+
+	// --algorithm and --key-label are required for sign
+	_ = cmd.MarkFlagRequired("algorithm")
+	_ = cmd.MarkFlagRequired("key-label")
+
 	cmd.Flag("format").Usage = "Output format: 'json' (default: JSON envelope with base64url r||s signature), 'jws' (compact JWS string), or 'raw' (64-byte r||s signature). 'jws' requires --input"
 	cmd.Flags().StringVarP(&f.Input, "input", "i", "", "Path to the message file to sign; use '-' to read from stdin")
 	cmd.Flags().StringVarP(&f.Digest, "digest", "d", "", "Pre-computed SHA-256 digest (hex or base64url, 32 bytes)")
