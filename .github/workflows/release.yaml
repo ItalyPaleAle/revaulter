@@ -6,8 +6,6 @@ on:
   push:
     branches:
       - main
-      # TODO: Remove this branch
-      - v2-devel
     tags:
       # Push to tags matching v*
       - 'v*'
@@ -60,29 +58,24 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ env.REPO_OWNER }}/revaulter
-          # TODO: Remove the 2-devel tag
           tags: |
             type=edge,branch=main
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=2-devel
 
       - name: Generate Container tags and labels for CLI
         id: meta-cli
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ env.REPO_OWNER }}/revaulter-cli
-          # TODO: Remove the 2-devel tag
           tags: |
             type=edge,branch=main
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=2-devel
 
       - name: Set variables
-        # TODO: Remove the 2-devel branch
         run: |
           BUILD_ID=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
           BUILD_VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
@@ -102,7 +95,7 @@ jobs:
           BUILDINFO_PKG="github.com/italypaleale/revaulter/pkg/buildinfo"
           REPO_URL="https://github.com/${{ github.repository }}"
           # This is injected into the CLI as a regex fragment, so keep it regex-safe
-          SIGNING_BRANCH_REF_PATTERN='heads/main|heads/v2-devel'
+          SIGNING_BRANCH_REF_PATTERN='heads/main'
           SIGNING_REF_PATTERN="tags/v.+|${SIGNING_BRANCH_REF_PATTERN}"
           BUILD_LDFLAGS="-X ${BUILDINFO_PKG}.Production=1 -X ${BUILDINFO_PKG}.AppVersion=${BUILD_VERSION} -X ${BUILDINFO_PKG}.BuildId=${BUILD_ID} -X ${BUILDINFO_PKG}.BuildDate=${BUILD_DATE} -X ${BUILDINFO_PKG}.CommitHash=${COMMIT_HASH} -X ${BUILDINFO_PKG}.RepoURL=${REPO_URL} -X ${BUILDINFO_PKG}.SigningRefPattern=${SIGNING_REF_PATTERN} -buildid=${BUILD_ID}"
 

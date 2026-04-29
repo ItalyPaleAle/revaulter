@@ -4,13 +4,9 @@ on:
   push:
     branches:
       - main
-      # TODO: Remove this branch
-      - v2-devel
   pull_request:
     branches:
       - main
-      # TODO: Remove this branch
-      - v2-devel
 
 permissions:
   contents: read
