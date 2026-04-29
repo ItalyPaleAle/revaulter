@@ -320,7 +320,7 @@ func (w *webhookClient) formatPlainMessage(data *WebhookRequest) string {
 		note = "\n\nNote: " + data.Note
 	}
 	return fmt.Sprintf(
-		`Received a request to %s using key label **%s** for user **%s** (algorithm **%s**).
+		`Received a request to %s using key label **%s** for user **%s**.
 
 Open Revaulter: %s
 
@@ -328,7 +328,6 @@ Open Revaulter: %s
 		data.OperationName,
 		data.KeyLabel,
 		data.AssignedUser,
-		data.Algorithm,
 		w.getLink(),
 		data.Requestor,
 		note,
@@ -362,11 +361,10 @@ func (w *webhookClient) formatSlackMessage(data *WebhookRequest) string {
 		note = "Note: *" + escapeSlackText(data.Note) + "*\n"
 	}
 	return fmt.Sprintf(
-		"Received a request to %s using key label **%s** for user **%s** (algorithm **%s**).\n%s[Open Revaulter](%s)\n`(Client IP: %s)`",
+		"Received a request to %s using key label **%s** for user **%s**.\n%s[Open Revaulter](%s)\n`(Client IP: %s)`",
 		escapeSlackText(data.OperationName),
 		escapeSlackText(data.KeyLabel),
 		escapeSlackText(data.AssignedUser),
-		escapeSlackText(data.Algorithm),
 		note,
 		w.getLink(),
 		escapeSlackText(data.Requestor),
