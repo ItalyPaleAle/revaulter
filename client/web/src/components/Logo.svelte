@@ -1,6 +1,6 @@
 <script lang="ts">
-import iconDark from '$assets/icon-dark.svg'
-import iconLight from '$assets/icon-light.svg'
+import iconDark from '$assets/icon-dark.svg?url'
+import iconLight from '$assets/icon-light.svg?url'
 
 interface Props {
     size?: number
