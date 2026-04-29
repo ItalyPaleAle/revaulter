@@ -25,9 +25,25 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/term"
 
+	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
+
+// userAgent is the User-Agent header value sent on all CLI HTTP requests
+var userAgent = "RevaulterCLI/" + buildinfo.AppVersion
+
+// userAgentTransport sets the User-Agent header on every outgoing request
+type userAgentTransport struct {
+	base http.RoundTripper
+}
+
+func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone the request because RoundTripper must not modify the input
+	r := req.Clone(req.Context())
+	r.Header.Set("User-Agent", userAgent)
+	return t.base.RoundTrip(r)
+}
 
 type v2OperationCmd struct {
 	Operation string
@@ -551,6 +567,8 @@ func getV2HTTPClient(log *slog.Logger, flags v2OperationFlags) (*http.Client, er
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-		Transport: transport,
+		Transport: &userAgentTransport{
+			base: transport,
+		},
 	}, nil
 }
