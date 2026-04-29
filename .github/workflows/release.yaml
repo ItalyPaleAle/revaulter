@@ -107,7 +107,7 @@ jobs:
           echo "SIGNING_REF_PATTERN: '$SIGNING_REF_PATTERN'"
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -129,7 +129,7 @@ jobs:
         id: sign_gate
         run: |
           should_sign=false
-          if [[ "${GITHUB_REF}" == "refs/tags/v*" ]]; then
+          if [[ "${GITHUB_REF}" =~ ^refs/tags/v ]]; then
             should_sign=true
           elif [[ "${GITHUB_REF#refs/}" =~ ^(${SIGNING_BRANCH_REF_PATTERN})$ ]]; then
             if git log -1 --format=%B \
