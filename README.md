@@ -1,6 +1,8 @@
-# Revaulter
+<p align="center">
+  <img src="icon-dark.svg" alt="Revaulter icon" width="60" height="60" />
+</p>
 
-**🛡️ Encrypt and decrypt with passkeys**
+# Revaulter: Encrypt, decrypt, and sign with passkeys
 
 Revaulter uses WebAuthn passkeys to protect cryptographic operations. Data is encrypted end-to-end: your encryption keys live in the browser, derived from your passkey, and the server never sees the key or the plaintext. When a CLI or script needs to encrypt or decrypt something, the passkey holder confirms the operation from a web app, and the browser performs the crypto locally.
 
