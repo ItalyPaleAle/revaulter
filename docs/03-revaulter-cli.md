@@ -49,7 +49,7 @@ revaulter-cli encrypt [flags]
 | `--aad` | | No | Additional authenticated data (base64-encoded). Not allowed with `--json` |
 | `--timeout` | `-t` | No | Timeout for the operation (number of seconds or Go duration, e.g. `5m`, `300`) |
 | `--note` | `-n` | No | Message displayed alongside the request (up to 40 chars, alphanumeric and `. / _ -` only) |
-| `--output` | `-o` | No | Write the result to a file instead of stdout (mode 0600, refuses symlinks) |
+| `--output` | `-o` | No | Write the result to a file instead of stdout |
 | `--format` | | No | Output format: `json` (only). Encrypt always emits the JSON envelope on stdout |
 | `--insecure` | | No | Skip TLS certificate validation |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
@@ -112,7 +112,7 @@ revaulter-cli decrypt [flags]
 | `--json` | `-j` | One of `--value` or `--json` is required | Path to a JSON file (or `-` to read from stdin) in the shape produced by `encrypt` (`{"value":"<base64url>","nonce":"<base64url>","tag":"<base64url>","additionalData":"<base64url>"}`). Mutually exclusive with `--value`, `--tag`, `--nonce`, and `--aad` |
 | `--timeout` | `-t` | No | Timeout for the operation (number of seconds or Go duration, e.g. `5m`, `300`) |
 | `--note` | `-n` | No | Message displayed alongside the request (up to 40 chars, alphanumeric and `. / _ -` only) |
-| `--output` | `-o` | No | Write the result to a file instead of stdout (mode 0600, refuses symlinks) |
+| `--output` | `-o` | No | Write the result to a file instead of stdout |
 | `--format` | | No | Output format: `json` (default — JSON envelope) or `raw` (write the decrypted plaintext as raw bytes) |
 | `--insecure` | | No | Skip TLS certificate validation |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
