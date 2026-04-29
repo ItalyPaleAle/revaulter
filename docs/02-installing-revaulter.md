@@ -92,6 +92,38 @@ postgres://revaulter:password@db.example.com:5432/revaulter?sslmode=require
 
 > ⚠️ **Warning:** When using SQLite, the database file must **not** be stored on a networked filesystem, like NFS or SMB.
 
+## Backing up Revaulter
+
+Revaulter's database is critical state and must be backed up.
+
+Even though request payloads and responses are encrypted with keys derived from passkeys, the database stores the wrapped key material that is required to use Revaulter with each passkey. If you lose the database, users will no longer be able to decrypt messages encrypted with a passkey or sign new digests.
+
+Database loss is irrecoverable.
+
+Back up the database regularly, keep backups outside the same host or volume, and test that you can restore them.
+
+> You should also preserve the same `secretKey` from your configuration because restores must use the original value.
+
+### SQLite backups
+
+With SQLite, the critical data is the database file itself.
+
+Prefer an application-aware backup such as SQLite's `.backup` command, or stop Revaulter briefly before copying the file. This avoids taking a backup from a live database file in an inconsistent state.
+
+Store the backup on a different disk, host, or backup service.
+
+Example:
+
+```bash
+sqlite3 /data/revaulter.db ".backup /backups/revaulter-$(date +%F).db"
+```
+
+### PostgreSQL backups
+
+With PostgreSQL, use standard backup tooling such as `pg_dump` for logical backups, or physical backups and WAL archiving if you need point-in-time recovery. Make sure your backup strategy covers the Revaulter database, retains copies off-host, and is tested by restoring into a fresh PostgreSQL instance.
+
+After restoring PostgreSQL, start Revaulter with the restored database and the same `secretKey` value that was used originally.
+
 ## Secret key
 
 Generate a secret key:
