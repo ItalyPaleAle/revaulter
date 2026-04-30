@@ -297,19 +297,43 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 		return ecdhPub, mlkemPub, nil
 	}
 
-	// Validate that the server supplied the full hybrid anchor bundle.
+	ts, path, err := o.loadOrInitTrustStore()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	confirm := o.terminalConfirmer()
+	pinned, err := verifyAndPinAnchor(o.flags.GetServer(), &resp, ts, confirm)
+	if err != nil {
+		return nil, nil, fmt.Errorf("anchor trust check failed: %w", err)
+	}
+	if pinned {
+		err = saveTrustStore(path, ts)
+		if err != nil {
+			return nil, nil, fmt.Errorf("save trust store: %w", err)
+		}
+		log.Info("Pinned anchor on first contact", slog.String("trust_store", path))
+	}
+
+	return ecdhPub, mlkemPub, nil
+}
+
+// verifyAndPinAnchor validates the hybrid anchor bundle in resp, verifies both signatures,
+// then checks or pins the anchor in ts. Returns pinned=true when the anchor was newly pinned;
+// the caller must save the trust store in that case.
+func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, confirm func(string) (bool, error)) (pinned bool, err error) {
 	if len(resp.AnchorEs384PublicKey) == 0 || resp.AnchorMldsa87PublicKey == "" ||
 		resp.PubkeyBundleSignatureEs384 == "" || resp.PubkeyBundleSignatureMldsa87 == "" {
-		return nil, nil, errors.New("server did not return a hybrid anchor bundle; refusing to proceed (use --no-trust-store to override)")
+		return false, errors.New("server did not return a hybrid anchor bundle; refusing to proceed (use --no-trust-store to override)")
+	}
+
+	if resp.UserID == "" {
+		return false, errors.New("server did not return userId; refusing to proceed (use --no-trust-store to override)")
 	}
 
 	es384Pub, mldsa87PubBytes, err := parseAnchorPubkeysFromWire(resp.AnchorEs384PublicKey, resp.AnchorMldsa87PublicKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid anchor public key: %w", err)
-	}
-
-	if resp.UserID == "" {
-		return nil, nil, errors.New("server did not return userId; refusing to proceed (use --no-trust-store to override)")
+		return false, fmt.Errorf("invalid anchor public key: %w", err)
 	}
 
 	// Verify both halves of the hybrid bundle signature against the SERVER-PROVIDED
@@ -317,7 +341,7 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 	// a server that serves a corrupt or mismatched bundle.
 	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(resp.AnchorEs384PublicKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid anchorEs384PublicKey: %w", err)
+		return false, fmt.Errorf("invalid anchorEs384PublicKey: %w", err)
 	}
 
 	bundlePayload := &protocolv2.PubkeyBundlePayload{
@@ -333,37 +357,18 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 	}
 	sigEs, sigMl, err := decodeHybridSignatures(resp.PubkeyBundleSignatureEs384, resp.PubkeyBundleSignatureMldsa87)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid pubkey bundle signature: %w", err)
+		return false, fmt.Errorf("invalid pubkey bundle signature: %w", err)
 	}
-	err = protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl)
-	if err != nil {
-		return nil, nil, fmt.Errorf("pubkey bundle signature verification failed: %w", err)
-	}
-
-	ts, path, err := o.loadOrInitTrustStore()
-	if err != nil {
-		return nil, nil, err
+	if err = protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl); err != nil {
+		return false, fmt.Errorf("pubkey bundle signature verification failed: %w", err)
 	}
 
-	confirm := o.terminalConfirmer()
-	pinned, err := ts.checkOrPinAnchor(
-		o.flags.GetServer(), resp.UserID,
+	return ts.checkOrPinAnchor(
+		server, resp.UserID,
 		es384Pub, resp.AnchorEs384PublicKey,
 		resp.AnchorMldsa87PublicKey, mldsa87PubBytes,
 		confirm,
 	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("anchor trust check failed: %w", err)
-	}
-	if pinned {
-		err = saveTrustStore(path, ts)
-		if err != nil {
-			return nil, nil, fmt.Errorf("save trust store: %w", err)
-		}
-		log.Info("Pinned anchor on first contact", slog.String("trust_store", path))
-	}
-
-	return ecdhPub, mlkemPub, nil
 }
 
 // loadOrInitTrustStore resolves the trust store path and loads its contents
