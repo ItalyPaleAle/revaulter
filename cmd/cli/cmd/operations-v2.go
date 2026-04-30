@@ -551,7 +551,14 @@ func doJSONRequest(client *http.Client, req *http.Request, out any) error {
 	return json.NewDecoder(res.Body).Decode(out)
 }
 
-func getV2HTTPClient(log *slog.Logger, flags v2OperationFlags) (*http.Client, error) {
+// httpClientFlags is the minimal interface required to build an HTTP client
+// It is satisfied by both v2OperationFlags and *v2OperationFlagsBase
+type httpClientFlags interface {
+	GetServer() string
+	GetConnectionOptions() (insecure bool, noh2c bool)
+}
+
+func getV2HTTPClient(log *slog.Logger, flags httpClientFlags) (*http.Client, error) {
 	server := flags.GetServer()
 	insecure, noH2c := flags.GetConnectionOptions()
 

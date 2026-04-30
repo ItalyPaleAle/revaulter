@@ -26,6 +26,14 @@ type v2RequestCreateResponse struct {
 	Pending bool   `json:"pending"`
 }
 
+// v2RequestSigningPubkeyResponse is the response for GET /v2/request/signing-pubkeys
+type v2RequestSigningPubkeyResponse struct {
+	ID        string          `json:"id"`
+	Algorithm string          `json:"algorithm"`
+	KeyLabel  string          `json:"keyLabel"`
+	JWK       json.RawMessage `json:"jwk"`
+}
+
 type v2RequestPubkeyResponse struct {
 	UserID   string          `json:"userId"`
 	EcdhP256 json.RawMessage `json:"ecdhP256"`
@@ -447,4 +455,56 @@ func validateV2CreateBody(op string, body *protocolv2.RequestCreateBody) error {
 	body.EncryptedPayload = base64.RawURLEncoding.EncodeToString(encryptedPayload)
 
 	return nil
+}
+
+// RouteV2RequestSigningPubkey returns the stored public key for a signing key owned by the request-key user
+// Query params: label (required), algorithm (optional, defaults to ES256)
+// The key is auto-stored by the server after each successful sign operation, so no extra registration step is needed
+func (s *Server) RouteV2RequestSigningPubkey(c *gin.Context) {
+	user := getRequestUserFromCtx(c)
+	if user == nil {
+		AbortWithErrorJSON(c, errors.New("missing request user in context"))
+		return
+	}
+
+	keyLabel := c.Query("label")
+	if keyLabel == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing query parameter 'label'"))
+		return
+	}
+
+	canonicalLabel, ok := protocolv2.NormalizeAndValidateKeyLabel(keyLabel)
+	if !ok {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid label"))
+		return
+	}
+
+	algorithm := c.Query("algorithm")
+	if algorithm == "" {
+		algorithm = protocolv2.SigningAlgES256
+	} else {
+		canonical, ok := protocolv2.NormalizeSigningAlgorithm(algorithm)
+		if !ok {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "unsupported algorithm"))
+			return
+		}
+		algorithm = canonical
+	}
+
+	rec, err := s.db.SigningKeyStore().GetByUserAndLabel(c.Request.Context(), user.ID, algorithm, canonicalLabel)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if rec == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "signing key not found; perform a sign operation first to register the key"))
+		return
+	}
+
+	c.JSON(http.StatusOK, v2RequestSigningPubkeyResponse{
+		ID:        rec.ID,
+		Algorithm: rec.Algorithm,
+		KeyLabel:  rec.KeyLabel,
+		JWK:       json.RawMessage(rec.JWK),
+	})
 }
