@@ -20,6 +20,7 @@ type trustCmd struct {
 	Insecure       bool
 	NoH2C          bool
 	TrustStorePath string
+	Yes            bool
 }
 
 // GetServer and GetConnectionOptions implement httpClientFlags so trustCmd can be passed to getV2HTTPClient
@@ -56,6 +57,7 @@ If the anchor is already pinned and matches, the command confirms it and exits s
 	cmd.Flags().BoolVar(&impl.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
 	cmd.Flags().BoolVar(&impl.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 	cmd.Flags().StringVar(&impl.TrustStorePath, "trust-store", "", "Path to the anchor trust store"+trustStoreDefault)
+	cmd.Flags().BoolVarP(&impl.Yes, "yes", "y", false, "Accept the anchor fingerprint without prompting (for non-interactive use)")
 
 	return cmd
 }
@@ -94,25 +96,34 @@ func (c *trustCmd) Run(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to fetch server pubkey bundle: %w", err)
 	}
 
-	// Build an interactive confirmer. The trust command is designed for first-contact
-	// setup; if the anchor isn't pinned yet and we're not on a TTY, fail closed so the
-	// user knows they need to run this interactively.
-	stdinFd := int(os.Stdin.Fd())   // #nosec G115
-	stderrFd := int(os.Stderr.Fd()) // #nosec G115
+	// Build a confirmer for first-contact pinning.
+	// --yes accepts without prompting (for scripts/CI); otherwise require a TTY.
 	var confirm func(string) (bool, error)
-	if term.IsTerminal(stdinFd) && term.IsTerminal(stderrFd) {
-		reader := bufio.NewReader(os.Stdin)
+	switch {
+	case c.Yes:
 		server, userID := c.Server, resp.UserID
 		confirm = func(fp string) (bool, error) {
-			fmt.Fprintf(os.Stderr, "First contact with %s (user %s).\n", server, userID)
+			fmt.Fprintf(os.Stderr, "Pinning anchor for %s (user %s) without confirmation (--yes).\n", server, userID)
 			fmt.Fprintf(os.Stderr, "Anchor fingerprint (SHA-256 of ES384||ML-DSA-87 pubkeys):\n  %s\n", fp)
-			fmt.Fprint(os.Stderr, "Pin this anchor? [y/N]: ")
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				return false, fmt.Errorf("read answer: %w", err)
+			return true, nil
+		}
+	default:
+		stdinFd := int(os.Stdin.Fd())   // #nosec G115
+		stderrFd := int(os.Stderr.Fd()) // #nosec G115
+		if term.IsTerminal(stdinFd) && term.IsTerminal(stderrFd) {
+			reader := bufio.NewReader(os.Stdin)
+			server, userID := c.Server, resp.UserID
+			confirm = func(fp string) (bool, error) {
+				fmt.Fprintf(os.Stderr, "First contact with %s (user %s).\n", server, userID)
+				fmt.Fprintf(os.Stderr, "Anchor fingerprint (SHA-256 of ES384||ML-DSA-87 pubkeys):\n  %s\n", fp)
+				fmt.Fprint(os.Stderr, "Pin this anchor? [y/N]: ")
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					return false, fmt.Errorf("read answer: %w", err)
+				}
+				line = strings.ToLower(strings.TrimSpace(line))
+				return line == "y" || line == "yes", nil
 			}
-			line = strings.ToLower(strings.TrimSpace(line))
-			return line == "y" || line == "yes", nil
 		}
 	}
 
