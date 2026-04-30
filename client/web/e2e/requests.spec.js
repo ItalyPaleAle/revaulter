@@ -310,7 +310,9 @@ for (const algorithm of ['A256GCM', 'aes-256-gcm', 'C20P', 'chacha20-poly1305'])
             await page.getByRole('button', { name: 'Confirm' }).click()
 
             const encryptResult = await encryptRun.done
-            expect(encryptResult.json.operation).toBe('encrypt')
+            expect(encryptResult.json.kind).toBe('revaulter/1')
+            expect(encryptResult.json.algorithm).toBe(algorithm)
+            expect(encryptResult.json.keyLabel).toBe('disk-key')
             expect(typeof encryptResult.json.value).toBe('string')
             expect(typeof encryptResult.json.nonce).toBe('string')
             expect(typeof encryptResult.json.tag).toBe('string')

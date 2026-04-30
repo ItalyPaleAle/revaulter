@@ -37,6 +37,13 @@ func trustStoreKey(server, userID string) string {
 
 // defaultTrustStorePath returns the default path for the trust store, creating the parent directory if needed
 func defaultTrustStorePath() (string, error) {
+	// If we have an env var "TRUST_STORE_PATH", use that
+	env := os.Getenv("TRUST_STORE_PATH")
+	if env != "" {
+		return env, nil
+	}
+
+	// Get the user config dir as default
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to locate user config dir: %w", err)

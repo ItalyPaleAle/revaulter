@@ -133,20 +133,22 @@ func validateV2EnvelopeForCLI(env *protocolv2.ResponseEnvelope) error {
 	return nil
 }
 
-func formatV2DecryptedPayload(state string, plain []byte) (json.RawMessage, error) {
+func formatV2DecryptedPayload(_ string, plain []byte) (json.RawMessage, error) {
 	var v any
-	if json.Unmarshal(plain, &v) == nil && json.Valid(plain) {
+	err := json.Unmarshal(plain, &v)
+	if err == nil && json.Valid(plain) {
 		return json.RawMessage(plain), nil
 	}
 
 	// Fallback: bytes -> JSON object with base64 payload
-	out := map[string]any{
-		"state": state,
-		"data":  base64.RawStdEncoding.EncodeToString(plain),
+	b, err := json.Marshal(map[string]any{
+		"data": base64.RawStdEncoding.EncodeToString(plain),
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	b, err := json.Marshal(out)
-	return json.RawMessage(b), err
+	return json.RawMessage(b), nil
 }
 
 // encryptV2RequestPayload encrypts the inner request payload using hybrid ECDH + ML-KEM
@@ -216,5 +218,6 @@ func encryptV2RequestPayload(
 
 	nonceB64 = base64.RawURLEncoding.EncodeToString(nonce)
 	ciphertextB64 = base64.RawURLEncoding.EncodeToString(ciphertext)
+
 	return cliEphPub, mlkemCiphertextB64, nonceB64, ciphertextB64, nil
 }

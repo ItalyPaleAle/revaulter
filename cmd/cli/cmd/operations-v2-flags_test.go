@@ -142,6 +142,19 @@ func TestEncryptMessageEncodesAsBase64UrlUTF8(t *testing.T) {
 	require.Empty(t, f.resolvedAADB64, "no --aad supplied")
 }
 
+func TestEncryptInputRejectsEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.bin")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+
+	f := newEncryptFlagsWithRequired(t)
+	f.Message = ""
+	f.Input = path
+	err := f.Validate()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "--input is empty")
+}
+
 func TestEncryptInputReadsFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "msg.bin")

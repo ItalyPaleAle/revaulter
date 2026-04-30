@@ -169,7 +169,7 @@ func (f *v2OperationFlagsEncrypt) BindToCommand(cmd *cobra.Command) {
 	_ = cmd.MarkFlagRequired("algorithm")
 	_ = cmd.MarkFlagRequired("key-label")
 
-	cmd.Flag("format").Usage = "Output format: 'json' (only)"
+	cmd.Flag("format").Usage = "Output format: 'json'"
 	cmd.Flags().StringVarP(&f.Message, "message", "m", "", "The message to encrypt as a raw string (UTF-8). Mutually exclusive with --input and --json")
 	cmd.Flags().StringVarP(&f.Input, "input", "i", "", "Path to the message file to encrypt; use '-' to read from stdin. Mutually exclusive with --message and --json")
 	cmd.Flags().StringVar(&f.JSON, "json", "", `Path to a JSON file (use '-' to read from stdin) of shape {"value":"<base64url>","additionalData":"<base64url>"}. Mutually exclusive with --message, --input, and --aad`)
@@ -240,6 +240,12 @@ func (f *v2OperationFlagsEncrypt) Validate() error {
 			return fmt.Errorf("failed to read --input: %w", rErr)
 		}
 
+		// Reject empty input early
+		// This is rarely intended and almost always a misconfigured pipe or empty file
+		if len(raw) == 0 {
+			return errors.New("--input is empty")
+		}
+
 		rErr = ensureWithinInputLimit("--input", len(raw))
 		if rErr != nil {
 			return rErr
@@ -289,7 +295,7 @@ func (f *v2OperationFlagsEncrypt) InnerPayload(clientTransportEcdhKey protocolv2
 }
 
 // v2EncryptResponsePayload is the JSON shape produced by the browser after encrypting
-// `state` and `operation` are validated for binding consistency and then dropped from the user-facing output, since the transport AAD already binds them cryptographically
+// `state` and `operation` are validated for binding consistency and then dropped from the user-facing output
 type v2EncryptResponsePayload struct {
 	State          string `json:"state"`
 	Operation      string `json:"operation"`

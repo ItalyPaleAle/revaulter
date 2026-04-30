@@ -128,13 +128,15 @@ func (o *v2OperationCmd) writeResult(state string, plain []byte) error {
 		if err != nil {
 			return fmt.Errorf("failed to format response: %w", err)
 		}
-		// Indent for stdout backwards compatibility
+
+		// Indent the JSON message
 		var buf bytes.Buffer
 		err = json.Indent(&buf, formatted, "", " ")
 		if err != nil {
 			return fmt.Errorf("failed to indent response: %w", err)
 		}
-		// json.Encoder.Encode appended a trailing newline; preserve that for shell-friendliness
+
+		// Appended a trailing newline for shell-friendliness
 		buf.WriteByte('\n')
 		payload = buf.Bytes()
 	}

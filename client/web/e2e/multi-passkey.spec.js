@@ -38,7 +38,9 @@ async function runEncryptThroughUI(page, requestKey, plaintext, noteSuffix) {
     await page.getByRole('button', { name: 'Confirm' }).click()
 
     const result = await encryptRun.done
-    expect(result.json.operation).toBe('encrypt')
+    expect(result.json.kind).toBe('revaulter/1')
+    expect(result.json.algorithm).toBe('A256GCM')
+    expect(result.json.keyLabel).toBe('multi-passkey')
     return result.json
 }
 
