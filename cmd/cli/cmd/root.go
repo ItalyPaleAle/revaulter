@@ -53,6 +53,7 @@ func Run() bool {
 	// Get the logger
 	// Logs are printed to stderr
 	log := slog.New(logging.SlogHandler(false, pf.logLevel, os.Stderr))
+	slog.SetDefault(log)
 
 	// Create a context with the logger built-in
 	ctx := logging.LogToContext(context.Background(), log)

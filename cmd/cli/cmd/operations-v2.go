@@ -84,16 +84,27 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	log.Info("Submitting request to server",
+		slog.String("server", o.flags.GetServer()),
+		slog.String("operation", o.Operation),
+		slog.String("key_label", o.flags.GetKeyLabel()),
+		slog.String("algorithm", o.flags.GetAlgorithm()),
+	)
+
 	state, err := o.createRequest(cmd.Context(), httpClient, kp)
 	if err != nil {
 		return fmt.Errorf("failed to start operation: %w", err)
 	}
+
+	log.Info("Waiting for browser confirmation", slog.String("state", state))
 
 	aad := buildTransportAAD(state, o.Operation, o.flags.GetAlgorithm())
 	plain, err := o.getResult(cmd.Context(), httpClient, state, kp, aad)
 	if err != nil {
 		return fmt.Errorf("failed to get response: %w", err)
 	}
+
+	log.Info("Received response from server", slog.String("state", state))
 
 	return o.writeResult(state, plain)
 }
@@ -436,6 +447,7 @@ func decodeHybridSignatures(es384B64, mldsa87B64 string) (sigEs, sigMl []byte, e
 // getResult polls the server until the operation completes and returns the decrypted plaintext bytes
 // Callers decide whether to wrap the bytes in the default JSON envelope (formatV2DecryptedPayload) or write them raw
 func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client, state string, kp *v2TransportKeyPair, aad []byte) ([]byte, error) {
+	log := logging.LogFromContext(ctx)
 	if kp == nil {
 		return nil, errors.New("missing transport key pair")
 	}
@@ -480,6 +492,10 @@ func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client,
 			return nil, errors.New("response state mismatch")
 		}
 		if res.Pending {
+			log.Debug("Server long-poll returned pending, reconnecting",
+				slog.String("state", state),
+				slog.Duration("backoff", backoff),
+			)
 			// Wait briefly before reconnecting
 			// The typical server long-poll already covered the bulk of the wait time; this backoff only kicks in if the server is returning pending quickly
 			select {
