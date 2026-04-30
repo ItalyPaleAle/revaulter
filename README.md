@@ -4,21 +4,11 @@
 
 # Revaulter: Encrypt, decrypt, and sign with passkeys
 
-Revaulter uses WebAuthn passkeys to protect cryptographic operations. Data is encrypted end-to-end: your encryption keys live in the browser, derived from your passkey, and the server never sees the key or the plaintext. When a CLI or script needs to encrypt or decrypt something, the passkey holder confirms the operation from a web app, and the browser performs the crypto locally.
+Encryption keys and signing keys don't belong in environment variables or on disk. Revaulter keeps them in your passkey: scripts submit a request, the passkey holder approves it in their browser, and the browser performs the crypto locally. The server never sees the key or the plaintext — it stores only opaque, encrypted envelopes.
+
+**Use it to:** unlock encrypted disks at boot, wrap database and TLS keys, sign release binaries from CI, protect backup repository passwords, issue long-lived JWTs — all gated behind a passkey approval.
 
 ![Screenshot of Revaulter, showing 3 requests pending approval: one for encrypting, one for signing, one for decrypting](./screenshot.webp)
-
-## How it works
-
-1. A CLI or script submits an encrypt or decrypt request to Revaulter
-2. The passkey holder gets notified (Discord, Slack, or a webhook)
-3. They open the web app, authenticate with their passkey, and review the request
-4. On approval, the browser derives the key from the passkey and performs the crypto operation locally
-5. The CLI receives the encrypted result and decrypts it locally
-
-Encryption keys are derived from the passkey in the browser (leveraging the PRF extension), they never leave the user's device. The Revaulter server is just a relay: it temporarily stores only opaque, end-to-end encrypted envelopes.
-
-![Example of a notification sent by Revaulter to a Discord channel](./notification-example.webp)
 
 ## Usage examples
 
@@ -72,6 +62,18 @@ Mint long-lived ES256 JWTs (service-to-service tokens, installer licenses, break
 ### Verify signatures with a published key
 
 Revaulter publishes the public half of every signing key on a cacheable, unauthenticated endpoint as both PEM and JWK. Verifiers fetch it once, pin it, and run fully offline from then on: there's no runtime dependency on Revaulter. [See full example](./docs/06-examples.md#fetching-a-public-key-to-verify-a-signature) in the docs.
+
+## How it works
+
+1. A CLI or script submits an encrypt or decrypt request to Revaulter
+2. The passkey holder gets notified (Discord, Slack, or a webhook)
+3. They open the web app, authenticate with their passkey, and review the request
+4. On approval, the browser derives the key from the passkey and performs the crypto operation locally
+5. The CLI receives the encrypted result and decrypts it locally
+
+Encryption keys are derived from the passkey in the browser (leveraging the PRF extension), they never leave the user's device. The Revaulter server is just a relay: it temporarily stores only opaque, end-to-end encrypted envelopes.
+
+![Example of a notification sent by Revaulter to a Discord channel](./notification-example.webp)
 
 ## Key features
 
