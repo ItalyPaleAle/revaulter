@@ -4,9 +4,16 @@
 
 # Revaulter: Encrypt, decrypt, and sign with passkeys
 
-Encryption keys and signing keys don't belong in environment variables or on disk. Revaulter keeps them in your passkey: scripts submit a request, the passkey holder approves it in their browser, and the browser performs the crypto locally. The server never sees the key or the plaintext — it stores only opaque, encrypted envelopes.
+Encryption keys and signing keys don't belong in environment variables or on disk. Revaulter keeps them in your passkey: scripts submit a request with the CLI, you approve it in your browser with a passkey, and the browser performs the crypto locally. Everything is End-to-End Encrypted (E2EE) between the CLI and your browser.
 
-**Use it to:** unlock encrypted disks at boot, wrap database and TLS keys, sign release binaries from CI, protect backup repository passwords, issue long-lived JWTs — all gated behind a passkey approval.
+**What you can use Revaulter for:**
+
+- Unlock encrypted disks at boot
+- Wrap database and TLS keys
+- Sign release binaries from CI
+- Protect backup repository passwords
+- Issue long-lived JWTs
+- Encrypt/decrypt arbitrary messages
 
 ![Screenshot of Revaulter, showing 3 requests pending approval: one for encrypting, one for signing, one for decrypting](./screenshot.webp)
 
