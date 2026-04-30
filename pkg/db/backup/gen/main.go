@@ -1,0 +1,221 @@
+// gen parses the Postgres migration SQL files and generates tables_gen.go in
+// the parent (backup) package with an accurate list of tables and columns.
+//
+// Run via: go generate ./pkg/db/backup/
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"go/format"
+	"log"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+)
+
+// skipTables lists tables that are intentionally excluded from backups because
+// they hold short-lived ephemeral data (e.g. auth challenges that expire).
+var skipTables = map[string]bool{
+	"v2_auth_challenges":       true,
+	"v2_auth_challenge_payloads": true,
+}
+
+// postgresTypeToKind maps Postgres column type names to the columnKind constant
+// used by the backup library.
+var postgresTypeToKind = map[string]string{
+	"boolean": "colKindBool",
+	"uuid":    "colKindUUID",
+	"jsonb":   "colKindJSONB",
+}
+
+// createTableRe matches a "CREATE TABLE [IF NOT EXISTS] <name> (" line.
+var createTableRe = regexp.MustCompile(`(?i)CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)\s*\(`)
+
+// columnLineRe matches a column definition line: leading whitespace, then
+// identifier, then type keyword. Lines that start with a keyword (CONSTRAINT,
+// PRIMARY, UNIQUE, FOREIGN, CHECK, INDEX) are table-level constraints and are
+// skipped.
+var columnLineRe = regexp.MustCompile(`^\s+(\w+)\s+(\w+)`)
+
+// constraintPrefixes are identifiers that, when appearing as the first token in
+// a column-body line, indicate a table-level constraint rather than a column.
+var constraintPrefixes = map[string]bool{
+	"CONSTRAINT": true,
+	"PRIMARY":    true,
+	"UNIQUE":     true,
+	"FOREIGN":    true,
+	"CHECK":      true,
+	"INDEX":      true,
+}
+
+type column struct {
+	name string
+	kind string // Go constant name, e.g. "colKindText"
+}
+
+type table struct {
+	name    string
+	columns []column
+}
+
+func main() {
+	// The generator is run from the backup package directory (go generate sets
+	// the working directory to the package containing the //go:generate comment).
+	migrationsDir := filepath.Join("..", "migrations", "postgres")
+
+	tables, err := parseDir(migrationsDir)
+	if err != nil {
+		log.Fatalf("parsing migrations: %v", err)
+	}
+
+	if err := writeGenFile("tables_gen.go", tables); err != nil {
+		log.Fatalf("writing tables_gen.go: %v", err)
+	}
+
+	log.Printf("generated tables_gen.go with %d tables", len(tables))
+}
+
+// parseDir reads all *.sql files from dir in sorted order and returns every
+// table that should be included in backups.
+func parseDir(dir string) ([]table, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", dir, err)
+	}
+
+	// Collect SQL files in sorted order so that later migrations can amend earlier ones.
+	var sqlFiles []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			sqlFiles = append(sqlFiles, filepath.Join(dir, e.Name()))
+		}
+	}
+
+	tableMap := make(map[string]table)
+	var tableOrder []string
+
+	for _, path := range sqlFiles {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", path, err)
+		}
+
+		parsed := parseTables(string(data))
+		for _, t := range parsed {
+			if skipTables[t.name] {
+				continue
+			}
+			if _, exists := tableMap[t.name]; !exists {
+				tableOrder = append(tableOrder, t.name)
+			}
+			tableMap[t.name] = t
+		}
+	}
+
+	result := make([]table, 0, len(tableOrder))
+	for _, name := range tableOrder {
+		result = append(result, tableMap[name])
+	}
+	return result, nil
+}
+
+// parseTables extracts CREATE TABLE definitions from sql and returns them in
+// definition order.
+func parseTables(sql string) []table {
+	lines := strings.Split(sql, "\n")
+
+	var tables []table
+	var current *table
+	depth := 0
+
+	for _, line := range lines {
+		if current == nil {
+			// Look for CREATE TABLE
+			m := createTableRe.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			t := table{name: m[1]}
+			current = &t
+			depth = strings.Count(line, "(") - strings.Count(line, ")")
+			continue
+		}
+
+		// Inside a CREATE TABLE body
+		depth += strings.Count(line, "(") - strings.Count(line, ")")
+
+		if depth <= 0 {
+			// Closing parenthesis — end of table definition
+			tables = append(tables, *current)
+			current = nil
+			depth = 0
+			continue
+		}
+
+		// Try to match a column definition
+		m := columnLineRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		colName := m[1]
+		colType := strings.ToLower(m[2])
+
+		// Skip table-level constraints
+		if constraintPrefixes[strings.ToUpper(colName)] {
+			continue
+		}
+
+		kind, ok := postgresTypeToKind[colType]
+		if !ok {
+			kind = "colKindText"
+		}
+
+		current.columns = append(current.columns, column{name: colName, kind: kind})
+	}
+
+	return tables
+}
+
+// writeGenFile writes the generated Go source to path.
+func writeGenFile(path string, tables []table) error {
+	var buf bytes.Buffer
+
+	fmt.Fprintln(&buf, "// Code generated by go generate; DO NOT EDIT.")
+	fmt.Fprintln(&buf, "// Source: pkg/db/migrations/postgres/")
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "package backup")
+	fmt.Fprintln(&buf)
+
+	// backupTables lists the tables to include, in FK-safe order.
+	// v2_users has no FK deps; its children follow.
+	fmt.Fprintln(&buf, "// backupTables lists the persistent tables included in a backup, in FK-safe")
+	fmt.Fprintln(&buf, "// order (parents before children so that FK constraints are satisfied on restore).")
+	fmt.Fprintln(&buf, "//")
+	fmt.Fprintln(&buf, "// Ephemeral tables (v2_auth_challenges, v2_auth_challenge_payloads) are excluded")
+	fmt.Fprintln(&buf, "// because they hold short-lived challenge data that has no value after expiry.")
+	fmt.Fprintln(&buf, "var backupTables = []tableSpec{")
+
+	for _, t := range tables {
+		fmt.Fprintf(&buf, "\t{\n")
+		fmt.Fprintf(&buf, "\t\tname: %q,\n", t.name)
+		fmt.Fprintf(&buf, "\t\tcolumns: []columnSpec{\n")
+		for _, c := range t.columns {
+			fmt.Fprintf(&buf, "\t\t\t{name: %q, kind: %s},\n", c.name, c.kind)
+		}
+		fmt.Fprintf(&buf, "\t\t},\n")
+		fmt.Fprintf(&buf, "\t},\n")
+	}
+
+	fmt.Fprintln(&buf, "}")
+
+	formatted, err := format.Source(buf.Bytes())
+	if err != nil {
+		// Write raw for debugging
+		_ = os.WriteFile(path, buf.Bytes(), 0o644)
+		return fmt.Errorf("formatting generated source: %w", err)
+	}
+
+	return os.WriteFile(path, formatted, 0o644)
+}
