@@ -264,6 +264,25 @@ func sortRows(rows [][]any) [][]any {
 	return out
 }
 
+// --- error-path tests ---
+
+func TestRestore_SchemaLevelTooNew(t *testing.T) {
+	conn := newSQLiteTestDB(t)
+
+	// Craft a backup that claims a SchemaLevel beyond what the bundled migrations can satisfy
+	// Restore must return an error ("binary too old") before touching any rows
+	var buf bytes.Buffer
+	err := writeFixture(&buf, fixtureBackup{
+		SchemaLevel: 9999,
+		Tables:      nil,
+	})
+	require.NoError(t, err)
+
+	err = Restore(t.Context(), conn, &buf)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "9999")
+}
+
 // --- DB setup ---
 
 func newSQLiteTestDB(t *testing.T) *db.DB {
