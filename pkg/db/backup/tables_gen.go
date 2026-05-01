@@ -3,9 +3,7 @@
 
 package backup
 
-// backupTables lists the persistent tables included in a backup, in FK-safe order (parents before children so that FK constraints are satisfied on restore)
-//
-// Ephemeral tables (v2_auth_challenges, v2_auth_challenge_payloads) and the metadata table are excluded from backups
+// backupTables lists the persistent tables included in a backup
 var backupTables = []tableSpec{
 	{
 		name: "v2_audit_events",

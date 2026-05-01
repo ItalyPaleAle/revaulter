@@ -51,6 +51,7 @@ type table struct {
 	fkTargets map[string]bool
 }
 
+//nolint:gocritic
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -320,7 +321,7 @@ func mergePostgresTypes(tables map[string]*table, pgTypes pgColumnTypes) {
 }
 
 // topoSort returns the tables in an order where every table's FK dependencies appear before it
-// Tables with no dependencies come first
+// Tables are visited in alphabetical order so the output is deterministic across runs
 func topoSort(tables map[string]*table) ([]*table, error) {
 	const (
 		unvisited = 0
@@ -354,7 +355,7 @@ func topoSort(tables map[string]*table) ([]*table, error) {
 			return nil
 		}
 
-		// Visit FK dependencies first
+		// Visit FK dependencies first, in alphabetical order
 		depNames := make([]string, 0, len(t.fkTargets))
 		for dep := range t.fkTargets {
 			depNames = append(depNames, dep)
@@ -427,8 +428,7 @@ func loadSQLScripts(dir string) ([]string, error) {
 	return scripts, nil
 }
 
-// sqliteTypeToKind maps a SQLite column type affinity to a preliminary columnKind
-// This is only used when Postgres introspection is unavailable
+// sqliteTypeToKind maps a SQLite column type affinity to a preliminary columnKind that Postgres introspection will refine
 func sqliteTypeToKind(typ string) string {
 	switch strings.ToUpper(typ) {
 	case "BOOLEAN":
@@ -452,9 +452,7 @@ func writeGenFile(path string, tables []*table) error {
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "package backup")
 	fmt.Fprintln(&buf)
-	fmt.Fprintln(&buf, "// backupTables lists the persistent tables included in a backup, in FK-safe order (parents before children so that FK constraints are satisfied on restore)")
-	fmt.Fprintln(&buf, "//")
-	fmt.Fprintln(&buf, "// Ephemeral tables (v2_auth_challenges, v2_auth_challenge_payloads) and the metadata table are excluded from backups")
+	fmt.Fprintln(&buf, "// backupTables lists the persistent tables included in a backup")
 	fmt.Fprintln(&buf, "var backupTables = []tableSpec{")
 
 	for _, t := range tables {
@@ -472,10 +470,12 @@ func writeGenFile(path string, tables []*table) error {
 
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
+		// #nosec G306 - Permissions 0644 are desirable here
 		_ = os.WriteFile(path, buf.Bytes(), 0o644)
 		return fmt.Errorf("formatting generated source: %w\nraw output written for debugging", err)
 	}
 
+	// #nosec G306 - Permissions 0644 are desirable here
 	err = os.WriteFile(path, formatted, 0o644)
 	if err != nil {
 		return err

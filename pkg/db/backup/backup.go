@@ -16,6 +16,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/google/uuid"
+
 	"github.com/italypaleale/revaulter/pkg/db"
 )
 

@@ -3,11 +3,13 @@ package backup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/fxamacker/cbor/v2"
+
 	"github.com/italypaleale/revaulter/pkg/db"
 )
 
@@ -59,7 +61,7 @@ func readBackup(r io.Reader) (BackupFile, error) {
 		return BackupFile{}, fmt.Errorf("reading backup header: %w", err)
 	}
 	if header != magicHeader {
-		return BackupFile{}, fmt.Errorf("not a valid backup file (bad magic header)")
+		return BackupFile{}, errors.New("not a valid backup file (bad magic header)")
 	}
 
 	var bf BackupFile
@@ -87,7 +89,7 @@ func validateMigrations(ctx context.Context, conn *db.DB, required []string) err
 	var raw string
 	err := row.Scan(&raw)
 	if conn.IsNoRowsError(err) {
-		return fmt.Errorf("target database has no migration metadata; run migrations before restoring")
+		return errors.New("target database has no migration metadata; run migrations before restoring")
 	} else if err != nil {
 		return fmt.Errorf("reading target migration metadata: %w", err)
 	}
