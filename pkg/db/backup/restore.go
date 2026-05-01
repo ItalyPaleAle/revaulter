@@ -2,32 +2,57 @@ package backup
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/fxamacker/cbor/v2"
 
 	"github.com/italypaleale/revaulter/pkg/db"
 )
 
+// restoreTxTimeout caps the duration of the restore transaction
+// On the SQL adapter the timeout applies to the whole transaction, so this needs to be generous enough for very large datasets
+const restoreTxTimeout = time.Hour
+
 // Restore reads a backup produced by Backup and inserts all rows into conn
-//
-// The target database must already have its schema migrated to at least the version recorded in the backup (i.e. RunMigrations should be called before Restore)
-// Restore returns an error if the backup was created with migrations not yet applied on the target
-//
-// Rows are inserted in FK-safe order inside a single transaction so that a failure leaves the database unchanged
+// Migrations are applied to conn before any rows are inserted, using the same migration logic the application uses on startup
+// Restore returns an error if the source schema level is newer than what the target binary can produce (meaning, the running binary is too old to safely restore the backup)
+// Rows are streamed and inserted in FK-safe order inside a single transaction so a failure leaves the database unchanged
 func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
-	bf, err := readBackup(r)
+	var magic [4]byte
+	_, err := io.ReadFull(r, magic[:])
 	if err != nil {
-		return err
+		return fmt.Errorf("reading backup magic header: %w", err)
+	}
+	if magic != magicHeader {
+		return errBadMagic
 	}
 
-	err = validateMigrations(ctx, conn, bf.Migrations)
+	dec := decMode.NewDecoder(r)
+
+	var hdr fileHeader
+	err = dec.Decode(&hdr)
 	if err != nil {
-		return err
+		return fmt.Errorf("decoding file header: %w", err)
+	}
+	if hdr.Version != formatVersion {
+		return fmt.Errorf("unsupported backup format version %d (expected %d)", hdr.Version, formatVersion)
+	}
+
+	// Bring the target database to its latest migration level using the same logic as application startup
+	err = db.RunMigrations(ctx, conn, nil)
+	if err != nil {
+		return fmt.Errorf("applying migrations to target database: %w", err)
+	}
+
+	targetLevel, err := readSchemaLevel(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("reading target schema level: %w", err)
+	}
+	if hdr.SchemaLevel > targetLevel {
+		return fmt.Errorf("backup was created at schema level %d but this binary only knows up to level %d; upgrade the binary before restoring", hdr.SchemaLevel, targetLevel)
 	}
 
 	specByName := make(map[string]tableSpec, len(backupTables))
@@ -35,17 +60,11 @@ func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 		specByName[spec.name] = spec
 	}
 
-	_, err = db.ExecuteInTransaction(ctx, conn, 0, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
-		for _, tb := range bf.Tables {
-			spec, ok := specByName[tb.Name]
-			if !ok {
-				// Unknown table: skip gracefully (forward-compat: newer backup, older binary)
-				continue
-			}
-
-			rErr := restoreTable(ctx, tx, conn.Kind(), spec, tb)
+	_, err = db.ExecuteInTransaction(ctx, conn, restoreTxTimeout, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
+		for i := range hdr.TableCount {
+			rErr := restoreTableBlock(ctx, tx, conn.Kind(), specByName, dec)
 			if rErr != nil {
-				return struct{}{}, fmt.Errorf("restoring table %q: %w", tb.Name, rErr)
+				return struct{}{}, fmt.Errorf("restoring table %d: %w", i, rErr)
 			}
 		}
 		return struct{}{}, nil
@@ -53,95 +72,54 @@ func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 	return err
 }
 
-// readBackup reads and validates the magic header then decodes the CBOR payload
-func readBackup(r io.Reader) (BackupFile, error) {
-	var header [4]byte
-	_, err := io.ReadFull(r, header[:])
+// restoreTableBlock reads one table block (header + rows + sentinel) from dec and inserts the rows into tx
+//
+// Unknown tables (e.g. a newer backup carrying a table that no longer exists in this binary) are read past but not inserted
+func restoreTableBlock(ctx context.Context, tx *db.DbTx, kind db.BackendKind, specByName map[string]tableSpec, dec *cbor.Decoder) error {
+	var tHdr tableHeader
+	err := dec.Decode(&tHdr)
 	if err != nil {
-		return BackupFile{}, fmt.Errorf("reading backup header: %w", err)
-	}
-	if header != magicHeader {
-		return BackupFile{}, errors.New("not a valid backup file (bad magic header)")
+		return fmt.Errorf("decoding table header: %w", err)
 	}
 
-	var bf BackupFile
-	dec := cbor.NewDecoder(r)
-	err = dec.Decode(&bf)
-	if err != nil {
-		return BackupFile{}, fmt.Errorf("decoding backup: %w", err)
-	}
+	spec, known := specByName[tHdr.Name]
 
-	if bf.Version != formatVersion {
-		return BackupFile{}, fmt.Errorf("unsupported backup format version %d (expected %d)", bf.Version, formatVersion)
-	}
-
-	return bf, nil
-}
-
-// validateMigrations checks that every migration recorded in the backup has already been applied to the target database
-func validateMigrations(ctx context.Context, conn *db.DB, required []string) error {
-	if len(required) == 0 {
-		return nil
-	}
-
-	row := conn.QueryRow(ctx, `SELECT value FROM metadata WHERE key = 'migrations'`)
-
-	var raw string
-	err := row.Scan(&raw)
-	if conn.IsNoRowsError(err) {
-		return errors.New("target database has no migration metadata; run migrations before restoring")
-	} else if err != nil {
-		return fmt.Errorf("reading target migration metadata: %w", err)
-	}
-
-	var applied []string
-	err = json.Unmarshal([]byte(raw), &applied)
-	if err != nil {
-		return fmt.Errorf("parsing target migration metadata: %w", err)
-	}
-
-	appliedSet := make(map[string]bool, len(applied))
-	for _, m := range applied {
-		appliedSet[m] = true
-	}
-
-	for _, m := range required {
-		if !appliedSet[m] {
-			return fmt.Errorf("backup requires migration %q which has not been applied to the target database", m)
+	var (
+		query     string
+		buildArgs func(row []any) ([]any, error)
+	)
+	if known {
+		colSpecByName := make(map[string]columnSpec, len(spec.columns))
+		for _, c := range spec.columns {
+			colSpecByName[c.name] = c
 		}
+		query, buildArgs = buildInsert(spec.name, tHdr.Columns, colSpecByName, kind)
 	}
 
-	return nil
-}
+	for {
+		var row []any
+		err = dec.Decode(&row)
+		if err != nil {
+			return fmt.Errorf("decoding row in table %q: %w", tHdr.Name, err)
+		}
+		// nil row is the end-of-table sentinel
+		if row == nil {
+			return nil
+		}
+		if !known {
+			// Forward-compat: silently skip rows from unknown tables
+			continue
+		}
 
-// restoreTable inserts all rows from tb into the target table via tx
-func restoreTable(ctx context.Context, tx *db.DbTx, kind db.BackendKind, spec tableSpec, tb TableBackup) error {
-	if len(tb.Rows) == 0 {
-		return nil
-	}
-
-	// Build a column spec index so we handle any column order in the backup
-	colSpecByName := make(map[string]columnSpec, len(spec.columns))
-	for _, c := range spec.columns {
-		colSpecByName[c.name] = c
-	}
-
-	// Use the column list from the backup to honour its ordering and handle any extra/missing columns gracefully across schema versions
-	query, buildArgs := buildInsert(spec.name, tb.Columns, colSpecByName, kind)
-
-	for _, row := range tb.Rows {
 		args, err := buildArgs(row)
 		if err != nil {
-			return err
+			return fmt.Errorf("building args for row in table %q: %w", tHdr.Name, err)
 		}
-
 		_, err = tx.Exec(ctx, query, args...)
 		if err != nil {
-			return err
+			return fmt.Errorf("inserting row into %q: %w", tHdr.Name, err)
 		}
 	}
-
-	return nil
 }
 
 // buildInsert constructs an INSERT statement and returns a function that maps a backup row into the argument slice for that statement
