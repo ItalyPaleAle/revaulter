@@ -226,7 +226,7 @@ func runRoundTrip(t *testing.T, conn *db.DB) {
 
 	// Re-export and compare
 	var actualBytes bytes.Buffer
-	require.NoError(t, Backup(t.Context(), conn, &actualBytes))
+	require.NoError(t, Backup(t.Context(), conn.DatabaseConn, &actualBytes))
 
 	actual := readFixture(t, &actualBytes)
 

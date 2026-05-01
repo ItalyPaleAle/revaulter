@@ -10,21 +10,40 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
-
 	"github.com/italypaleale/go-sql-utils/adapter"
+
+	transactions "github.com/italypaleale/go-sql-utils/transactions/adapter"
 )
+
+// backupTxTimeout caps the duration of the backup transaction
+// On the SQL adapter the timeout applies to the whole transaction, so this needs to be generous enough for very large datasets
+const backupTxTimeout = time.Hour
 
 // Backup streams a CBOR-encoded snapshot of all persistent tables in conn to w
 // The backup contains data only (no DDL) and embeds the migration level of the source database so the restore process can verify schema compatibility
 // Rows are streamed to w one at a time without buffering the entire database in memory
-// Backup does not open a transaction, so concurrent writes to conn during backup may produce a slightly inconsistent snapshot between tables
-// Callers that need a strictly consistent snapshot should arrange exclusive access (e.g. by halting writers) for the duration of the call
-func Backup(ctx context.Context, conn adapter.Querier, w io.Writer) error {
-	level, err := readSchemaLevel(ctx, conn)
+// All reads happen inside a single transaction so the dump represents a consistent snapshot across tables
+func Backup(ctx context.Context, conn adapter.DatabaseConn, w io.Writer) error {
+	_, err := transactions.ExecuteInTransaction(
+		ctx,
+		slog.Default(),
+		conn,
+		backupTxTimeout,
+		func(ctx context.Context, tx adapter.Querier) (struct{}, error) {
+			return struct{}{}, runBackup(ctx, tx, w)
+		},
+	)
+	return err
+}
+
+// runBackup performs the actual dump using the supplied transaction
+func runBackup(ctx context.Context, tx adapter.Querier, w io.Writer) error {
+	level, err := readSchemaLevel(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("reading source schema level: %w", err)
 	}
@@ -47,7 +66,7 @@ func Backup(ctx context.Context, conn adapter.Querier, w io.Writer) error {
 	}
 
 	for _, spec := range backupTables {
-		err = dumpTable(ctx, conn, spec, enc)
+		err = dumpTable(ctx, tx, spec, enc)
 		if err != nil {
 			return fmt.Errorf("dumping table %q: %w", spec.name, err)
 		}
@@ -57,7 +76,7 @@ func Backup(ctx context.Context, conn adapter.Querier, w io.Writer) error {
 }
 
 // dumpTable writes a single table block (header + rows + end-of-table sentinel) to enc
-func dumpTable(ctx context.Context, conn adapter.Querier, spec tableSpec, enc *cbor.Encoder) error {
+func dumpTable(ctx context.Context, tx adapter.Querier, spec tableSpec, enc *cbor.Encoder) error {
 	colNames := spec.columnNames()
 
 	err := enc.Encode(tableHeader{
@@ -69,7 +88,7 @@ func dumpTable(ctx context.Context, conn adapter.Querier, spec tableSpec, enc *c
 	}
 
 	query := "SELECT " + strings.Join(colNames, ", ") + " FROM " + spec.name
-	rows, err := conn.Query(ctx, query)
+	rows, err := tx.Query(ctx, query)
 	if err != nil {
 		return fmt.Errorf("querying rows: %w", err)
 	}

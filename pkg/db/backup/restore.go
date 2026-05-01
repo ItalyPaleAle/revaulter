@@ -17,7 +17,7 @@ import (
 const restoreTxTimeout = time.Hour
 
 // Restore reads a backup produced by Backup and inserts all rows into conn
-// Migrations are applied to conn before any rows are inserted, using the same migration logic the application uses on startup
+// Migrations are applied to conn up to (and only up to) the source's schema level — any newer migrations bundled with the binary are intentionally left for the application to apply on its next startup
 // Restore returns an error if the source schema level is newer than what the target binary can produce (meaning, the running binary is too old to safely restore the backup)
 // Rows are streamed and inserted in FK-safe order inside a single transaction so a failure leaves the database unchanged
 func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
@@ -41,18 +41,12 @@ func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 		return fmt.Errorf("unsupported backup format version %d (expected %d)", hdr.Version, formatVersion)
 	}
 
-	// Bring the target database to its latest migration level using the same logic as application startup
-	err = db.RunMigrations(ctx, conn, nil)
+	// Bring the target database up to (and only up to) the source's schema level
+	// Any migrations beyond that are intentionally left for the application to apply on its next startup
+	// RunMigrationsUpTo errors out if this binary doesn't have enough bundled migrations to satisfy the source level
+	err = db.RunMigrationsUpTo(ctx, conn, nil, hdr.SchemaLevel)
 	if err != nil {
 		return fmt.Errorf("applying migrations to target database: %w", err)
-	}
-
-	targetLevel, err := readSchemaLevel(ctx, conn)
-	if err != nil {
-		return fmt.Errorf("reading target schema level: %w", err)
-	}
-	if hdr.SchemaLevel > targetLevel {
-		return fmt.Errorf("backup was created at schema level %d but this binary only knows up to level %d; upgrade the binary before restoring", hdr.SchemaLevel, targetLevel)
 	}
 
 	specByName := make(map[string]tableSpec, len(backupTables))
