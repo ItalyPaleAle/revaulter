@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"path/filepath"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v4/jwk"
@@ -102,9 +103,9 @@ type Config struct {
 	// For example, `10.0.0.0/8`
 	TrustedProxies []string `env:"TRUSTEDPROXIES" yaml:"trustedProxies"`
 
-	// If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
+	// If true, calls to the healthcheck endpoint (`/healthz`) are included in the logs.
 	// +default false
-	OmitHealthCheckLogs bool `env:"OMITHEALTHCHECKLOGS" yaml:"omitHealthCheckLogs"`
+	LogHealthChecks bool `env:"LOGHEALTHCHECKS" yaml:"logHealthChecks"`
 
 	// String with the name of a header to trust as ID of each request. The ID is included in logs and in responses as `X-Request-ID` header.
 	// Common values can include:
@@ -181,6 +182,23 @@ func (c *Config) SetLoadedConfigPath(filePath string) {
 // GetInstanceID returns the instance ID.
 func (c *Config) GetInstanceID() string {
 	return c.internal.instanceID
+}
+
+// GetTLSPath returns the path to look for TLS certificates in
+func (c *Config) GetTLSPath() string {
+	// If the TLSPath option is set, return that
+	if c.TLSPath != "" {
+		return c.TLSPath
+	}
+
+	// Start from the path where the config file is present
+	file := c.GetLoadedConfigPath()
+	if file != "" {
+		return filepath.Dir(file)
+	}
+
+	// No path found
+	return ""
 }
 
 // Validate the configuration and performs some sanitization

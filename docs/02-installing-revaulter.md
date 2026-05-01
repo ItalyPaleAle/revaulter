@@ -58,7 +58,7 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 | `trustedProxies` | `TRUSTEDPROXIES` | | Comma-separated list of IPs/CIDRs to trust for `X-Forwarded-*` headers |
 | `forceSecureCookies` | `FORCESECURECOOKIES` | `false` | Force the `Secure` flag on cookies (set to `true` when behind a TLS-terminating reverse proxy) |
 | `trustedRequestIdHeader` | `TRUSTEDREQUESTIDHEADER` | | Header to trust as request ID (e.g. `X-Request-ID`, `CF-Ray`) |
-| `omitHealthCheckLogs` | `OMITHEALTHCHECKLOGS` | `false` | Suppress `/healthz` logs |
+| `logHealthChecks` | `LOGHEALTHCHECKS` | `false` | Include `/healthz` requests in the request logs |
 | `logLevel` | `LOGLEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `logAsJson` | `LOGASJSON` | auto | Emit JSON logs (defaults to `true` when no TTY is attached) |
 

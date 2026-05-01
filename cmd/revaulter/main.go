@@ -13,6 +13,8 @@ import (
 	slogkit "github.com/italypaleale/go-kit/slog"
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 
+	"github.com/italypaleale/revaulter/cmd/revaulter/healthcheck"
+	"github.com/italypaleale/revaulter/cmd/revaulter/migrate"
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/db"
@@ -41,10 +43,26 @@ func main() {
 	}
 	conf := config.Get()
 
-	// Handle the "migrate" subcommand before any server setup
-	if len(os.Args) > 1 && os.Args[1] == "migrate" {
-		runMigrate(initLogger)
-		return
+	// Handle sub-commands before any server setup
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+
+		// "migrate" runs migrations
+		case "migrate":
+			migrate.Run(initLogger)
+			os.Exit(0)
+			return
+
+		// "healthcheck" performs healthchecks on a running server
+		case "healthcheck":
+			err = healthcheck.Run(os.Args[2:])
+			if err != nil {
+				slogkit.FatalError(initLogger, "Healthcheck error", err)
+				return
+			}
+			os.Exit(0)
+			return
+		}
 	}
 
 	// Set Gin to Release mode
@@ -155,31 +173,4 @@ func main() {
 	if err != nil {
 		log.Error("Error shutting down services", slog.Any("error", err))
 	}
-}
-
-// runMigrate loads the configuration, opens the database, runs migrations, and exits
-func runMigrate(log *slog.Logger) {
-	conf := config.Get()
-	if conf.DatabaseDSN == "" {
-		slogkit.FatalError(log, "Database DSN is not configured", errors.New("databaseDSN is required"))
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	dbConn, err := db.Open(ctx, conf.DatabaseDSN)
-	if err != nil {
-		slogkit.FatalError(log, "Failed to open database", err)
-		return
-	}
-	defer dbConn.Close(ctx)
-
-	err = db.RunMigrations(ctx, dbConn, log)
-	if err != nil {
-		slogkit.FatalError(log, "Failed to run database migrations", err)
-		return
-	}
-
-	log.Info("Database migrations completed successfully")
 }
