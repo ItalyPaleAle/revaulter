@@ -5,9 +5,9 @@ type columnKind uint8
 
 const (
 	colKindText columnKind = iota // TEXT / string (default)
-	colKindBool                   // BOOLEAN — SQLite stores as INTEGER 0/1
-	colKindUUID                   // UUID — Postgres uses native uuid type
-	colKindJSONB                  // JSON/JSONB — Postgres uses jsonb type
+	colKindBool                   // BOOLEAN (SQLite stores as INTEGER 0/1)
+	colKindUUID                   // UUID (Postgres uses native uuid type)
+	colKindJSON                   // JSON/JSONB (Postgres uses jsonb type)
 )
 
 type columnSpec struct {

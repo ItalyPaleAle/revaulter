@@ -1,12 +1,5 @@
-// gen introspects a freshly-migrated SQLite and (optionally) Postgres database to generate tables_gen.go in the parent backup package
-//
-// SQLite is always used: an in-memory database is created, all migrations are applied, and PRAGMA table_info is used to obtain the definitive column list and FK graph in definition order
-//
-// Postgres is used for type resolution when the TEST_DATABASE_DSN environment variable is set
-// It provides the precise column types (boolean, uuid, jsonb) that SQLite's loose affinity cannot distinguish
-// Without Postgres the generator falls back to SQLite type strings, which means boolean and uuid columns will be classified as colKindText and the backup may not be cross-engine portable
-//
-// Run via: go generate ./pkg/db/backup/
+// gen introspects a freshly-migrated SQLite and Postgres database to generate tables_gen.go in the parent backup package
+// Run via: TEST_DATABASE_DSN=<dsn> go generate ./pkg/db/backup/
 package main
 
 import (
@@ -43,7 +36,7 @@ var postgresUDTToKind = map[string]string{
 	"bool":    "colKindBool",
 	"boolean": "colKindBool",
 	"uuid":    "colKindUUID",
-	"jsonb":   "colKindJSONB",
+	"jsonb":   "colKindJSON",
 }
 
 type column struct {
@@ -75,18 +68,16 @@ func main() {
 	// --- Postgres phase: precise column types ---
 	pgDSN := os.Getenv("TEST_DATABASE_DSN")
 	if pgDSN == "" {
-		log.Println("WARNING: TEST_DATABASE_DSN not set; column types fall back to SQLite affinity")
-		log.Println("Boolean, UUID and JSONB columns will be classified as colKindText")
-		log.Println("Set TEST_DATABASE_DSN to a Postgres DSN for accurate type generation")
-	} else {
-		pgTypes, err := introspectPostgres(ctx, pgDSN, postgresMigrationsDir)
-		if err != nil {
-			log.Fatalf("Postgres introspection failed: %v", err)
-		}
-
-		// Merge Postgres type info into the SQLite column list
-		mergePostgresTypes(sqliteTables, pgTypes)
+		log.Fatalf("TEST_DATABASE_DSN is required; set it to a Postgres DSN for accurate type generation")
 	}
+
+	pgTypes, err := introspectPostgres(ctx, pgDSN, postgresMigrationsDir)
+	if err != nil {
+		log.Fatalf("Postgres introspection failed: %v", err)
+	}
+
+	// Merge Postgres type info into the SQLite column list
+	mergePostgresTypes(sqliteTables, pgTypes)
 
 	// --- Topological sort for FK-safe restore order ---
 	ordered, err := topoSort(sqliteTables)

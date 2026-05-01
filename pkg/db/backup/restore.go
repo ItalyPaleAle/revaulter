@@ -40,9 +40,10 @@ func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 				// Unknown table: skip gracefully (forward-compat: newer backup, older binary)
 				continue
 			}
-			err := restoreTable(ctx, tx, conn.Kind(), spec, tb)
-			if err != nil {
-				return struct{}{}, fmt.Errorf("restoring table %q: %w", tb.Name, err)
+
+			rErr := restoreTable(ctx, tx, conn.Kind(), spec, tb)
+			if rErr != nil {
+				return struct{}{}, fmt.Errorf("restoring table %q: %w", tb.Name, rErr)
 			}
 		}
 		return struct{}{}, nil
@@ -82,12 +83,12 @@ func validateMigrations(ctx context.Context, conn *db.DB, required []string) err
 	}
 
 	row := conn.QueryRow(ctx, `SELECT value FROM metadata WHERE key = 'migrations'`)
+
 	var raw string
 	err := row.Scan(&raw)
-	if err != nil {
-		if conn.IsNoRowsError(err) {
-			return fmt.Errorf("target database has no migration metadata; run migrations before restoring")
-		}
+	if conn.IsNoRowsError(err) {
+		return fmt.Errorf("target database has no migration metadata; run migrations before restoring")
+	} else if err != nil {
 		return fmt.Errorf("reading target migration metadata: %w", err)
 	}
 
@@ -131,6 +132,7 @@ func restoreTable(ctx context.Context, tx *db.DbTx, kind db.BackendKind, spec ta
 		if err != nil {
 			return err
 		}
+
 		_, err = tx.Exec(ctx, query, args...)
 		if err != nil {
 			return err
@@ -158,7 +160,7 @@ func buildInsert(
 				switch spec.kind {
 				case colKindUUID:
 					ph = fmt.Sprintf("$%d::uuid", i+1)
-				case colKindJSONB:
+				case colKindJSON:
 					ph = fmt.Sprintf("$%d::jsonb", i+1)
 				}
 			}
