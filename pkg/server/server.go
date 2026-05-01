@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -247,7 +246,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	if s.metrics != nil {
 		healthzGroup.Use(s.MiddlewareCountMetrics)
 	}
-	if !cfg.OmitHealthCheckLogs {
+	if cfg.LogHealthChecks {
 		healthzGroup.Use(loggerMw)
 	}
 	healthzGroup.GET("", gin.WrapF(s.RouteHealthzHandler))
@@ -539,15 +538,8 @@ func (s *Server) loadTLSConfig(log *slog.Logger) (tlsConfig *tls.Config, watchFn
 
 	// If we don't have actual keys, then we need to load from file and reload when the files change
 	if tlsCert == "" && tlsKey == "" {
-		// If "tlsPath" is empty, use the folder where the config file is located
-		tlsPath := cfg.TLSPath
-		if tlsPath == "" {
-			file := cfg.GetLoadedConfigPath()
-			if file != "" {
-				tlsPath = filepath.Dir(file)
-			}
-		}
-
+		// Look for the path to use
+		tlsPath := cfg.GetTLSPath()
 		if tlsPath == "" {
 			// No config file loaded, so don't attempt to load TLS certs
 			return nil, nil, nil
