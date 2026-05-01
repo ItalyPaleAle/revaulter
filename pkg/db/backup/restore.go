@@ -19,7 +19,8 @@ const restoreTxTimeout = time.Hour
 // Restore reads a backup produced by Backup and inserts all rows into conn
 // Migrations are applied to conn up to (and only up to) the source's schema level — any newer migrations bundled with the binary are intentionally left for the application to apply on its next startup
 // Restore returns an error if the source schema level is newer than what the target binary can produce (meaning, the running binary is too old to safely restore the backup)
-// Rows are streamed and inserted in FK-safe order inside a single transaction so a failure leaves the database unchanged
+// Rows are then streamed and inserted in FK-safe order inside a single transaction, so a failure during row restore rolls back inserted rows.
+// Note that migrations are applied before that transaction starts, so a restore failure after migrations may still leave schema changes and migration metadata updates in place.
 func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 	var magic [4]byte
 	_, err := io.ReadFull(r, magic[:])
