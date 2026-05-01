@@ -278,9 +278,9 @@ func TestRestore_SchemaLevelTooNew(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = Restore(t.Context(), conn, &buf)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "9999")
+	restoreErr := Restore(t.Context(), conn, &buf)
+	require.Error(t, restoreErr)
+	require.ErrorContains(t, restoreErr, "9999")
 }
 
 // --- DB setup ---
