@@ -98,6 +98,7 @@ func (s *SigningKeyStore) Create(ctx context.Context, in InsertSigningKeyInput) 
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -147,6 +148,7 @@ func (s *SigningKeyStore) AutoStoreUnpublished(ctx context.Context, in InsertSig
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -172,6 +174,7 @@ func (s *SigningKeyStore) GetByUserAndLabel(ctx context.Context, userID, algorit
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -194,6 +197,7 @@ func (s *SigningKeyStore) GetByID(ctx context.Context, id string) (*PublishedSig
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -280,6 +284,7 @@ func (s *SigningKeyStore) Delete(ctx context.Context, userID, id string) (*Publi
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -307,6 +312,7 @@ func (s *SigningKeyStore) SetPublished(ctx context.Context, userID, id string, p
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -342,6 +348,7 @@ func (s *SigningKeyStore) StorePublicationProof(ctx context.Context, userID, id,
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
