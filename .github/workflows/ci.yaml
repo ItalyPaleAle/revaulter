@@ -81,6 +81,12 @@ jobs:
         run: |
           make check-config-diff || echo "Please run 'make gen-config'"
 
+      - name: Check DB diff
+        env:
+          TEST_DATABASE_DSN: ${{ env.TEST_POSTGRES_DSN }}
+        run: |
+          make check-db-diff || echo "Please run 'make gen-db'"
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
