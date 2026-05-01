@@ -10,6 +10,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 
 	"github.com/italypaleale/revaulter/pkg/db"
+	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
 // restoreTxTimeout caps the duration of the restore transaction
@@ -45,7 +46,7 @@ func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 	// Bring the target database up to (and only up to) the source's schema level
 	// Any migrations beyond that are intentionally left for the application to apply on its next startup
 	// RunMigrationsUpTo errors out if this binary doesn't have enough bundled migrations to satisfy the source level
-	err = db.RunMigrationsUpTo(ctx, conn, nil, hdr.SchemaLevel)
+	err = db.RunMigrationsUpTo(ctx, conn, logging.LogFromContext(ctx), hdr.SchemaLevel)
 	if err != nil {
 		return fmt.Errorf("applying migrations to target database: %w", err)
 	}
@@ -88,6 +89,15 @@ func restoreTableBlock(ctx context.Context, tx *db.DbTx, kind db.BackendKind, sp
 		for _, c := range spec.columns {
 			colSpecByName[c.name] = c
 		}
+
+		// Validate every column name from the backup stream against the known schema
+		// Column names cannot be parameterized, so we must ensure they are all recognized identifiers before concatenating them into SQL
+		for _, col := range tHdr.Columns {
+			if _, ok := colSpecByName[col]; !ok {
+				return fmt.Errorf("backup column %q is not a recognized column in table %q", col, tHdr.Name)
+			}
+		}
+
 		query, buildArgs = buildInsert(spec.name, tHdr.Columns, colSpecByName, kind)
 	}
 

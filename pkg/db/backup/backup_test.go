@@ -283,6 +283,29 @@ func TestRestore_SchemaLevelTooNew(t *testing.T) {
 	require.ErrorContains(t, restoreErr, "9999")
 }
 
+func TestRestore_UnrecognizedColumnRejected(t *testing.T) {
+	conn := newSQLiteTestDB(t)
+
+	// Craft a backup with a known table but a column name that doesn't exist in the schema
+	// Restore must reject it before executing any SQL, preventing identifier injection
+	var buf bytes.Buffer
+	err := writeFixture(&buf, fixtureBackup{
+		SchemaLevel: 1,
+		Tables: []fixtureTable{
+			{
+				Name:    "v2_users",
+				Columns: []string{"id; DROP TABLE v2_users; --"},
+				Rows:    [][]any{{"val"}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	restoreErr := Restore(t.Context(), conn, &buf)
+	require.Error(t, restoreErr)
+	require.ErrorContains(t, restoreErr, "not a recognized column")
+}
+
 // --- DB setup ---
 
 func newSQLiteTestDB(t *testing.T) *db.DB {
