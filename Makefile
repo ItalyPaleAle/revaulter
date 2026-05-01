@@ -21,6 +21,15 @@ gen-config:
 check-config-diff: gen-config
 	git diff --exit-code config.sample.yaml
 
+.PHONY: gen-db
+gen-db:
+	go generate ./pkg/db/...
+
+# Ensure gen-db ran
+.PHONY: check-db-diff
+check-db-diff: gen-db
+	git diff --exit-code pkg/db/backup/tables_gen.go
+
 .PHONY: client-format
 client-format:
 	(cd client/web && pnpm run format)

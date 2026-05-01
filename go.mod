@@ -5,6 +5,7 @@ go 1.26.2
 require (
 	github.com/caarlos0/env/v11 v11.4.0
 	github.com/cloudflare/circl v1.6.3
+	github.com/fxamacker/cbor/v2 v2.9.1
 	github.com/gin-contrib/location/v2 v2.0.1
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-chi/httprate v0.15.0
@@ -59,7 +60,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/gin-contrib/sse v1.1.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
