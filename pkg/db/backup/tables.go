@@ -1,6 +1,6 @@
 package backup
 
-// columnKind describes the semantic type of a column for cross-database portability.
+// columnKind describes the semantic type of a column for cross-database portability
 type columnKind uint8
 
 const (
@@ -20,7 +20,7 @@ type tableSpec struct {
 	columns []columnSpec
 }
 
-// columnNames returns just the name slice for a table spec.
+// columnNames returns just the name slice for a table spec
 func (t tableSpec) columnNames() []string {
 	names := make([]string, len(t.columns))
 	for i, c := range t.columns {

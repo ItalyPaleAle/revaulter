@@ -1,16 +1,10 @@
-// gen introspects a freshly-migrated SQLite and (optionally) Postgres database
-// to generate tables_gen.go in the parent backup package.
+// gen introspects a freshly-migrated SQLite and (optionally) Postgres database to generate tables_gen.go in the parent backup package
 //
-// SQLite is always used: an in-memory database is created, all migrations are
-// applied, and PRAGMA table_info is used to obtain the definitive column list
-// and FK graph in definition order.
+// SQLite is always used: an in-memory database is created, all migrations are applied, and PRAGMA table_info is used to obtain the definitive column list and FK graph in definition order
 //
-// Postgres is used for type resolution when the TEST_DATABASE_DSN environment
-// variable is set. It provides the precise column types (boolean, uuid, jsonb)
-// that SQLite's loose affinity cannot distinguish. Without Postgres the
-// generator falls back to SQLite type strings, which means boolean and uuid
-// columns will be classified as colKindText and the backup may not be
-// cross-engine portable.
+// Postgres is used for type resolution when the TEST_DATABASE_DSN environment variable is set
+// It provides the precise column types (boolean, uuid, jsonb) that SQLite's loose affinity cannot distinguish
+// Without Postgres the generator falls back to SQLite type strings, which means boolean and uuid columns will be classified as colKindText and the backup may not be cross-engine portable
 //
 // Run via: go generate ./pkg/db/backup/
 package main
@@ -29,20 +23,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/italypaleale/go-sql-utils/adapter"
+	postgresadapter "github.com/italypaleale/go-sql-utils/adapter/postgres"
+	sqladapter "github.com/italypaleale/go-sql-utils/adapter/sql"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	// Blank import for the SQLite driver
 	_ "modernc.org/sqlite"
 )
 
-// skipTables lists tables intentionally excluded from backups because they hold
-// ephemeral data (short-lived auth challenges) that has no value after expiry.
+// skipTables lists tables intentionally excluded from backups because they hold ephemeral data (short-lived auth challenges) that has no value after expiry
 var skipTables = map[string]bool{
 	"v2_auth_challenges":         true,
 	"v2_auth_challenge_payloads": true,
-	"metadata":                   true, // migration tracking, not application data
 }
 
-// postgresUDTToKind maps Postgres udt_name values (from information_schema) to
-// the columnKind constant used by the backup library.
+// postgresUDTToKind maps Postgres udt_name values (from information_schema) to the columnKind constant used by the backup library
 var postgresUDTToKind = map[string]string{
 	"bool":    "colKindBool",
 	"boolean": "colKindBool",
@@ -58,7 +54,7 @@ type column struct {
 type table struct {
 	name    string
 	columns []column
-	// fkTargets is the set of table names this table has FK references to.
+	// fkTargets is the set of table names this table has FK references to
 	fkTargets map[string]bool
 }
 
@@ -66,7 +62,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// The generator is invoked by go:generate from the backup package directory.
+	// The generator is invoked by go:generate from the backup package directory
 	sqliteMigrationsDir := filepath.Join("..", "migrations", "sqlite")
 	postgresMigrationsDir := filepath.Join("..", "migrations", "postgres")
 
@@ -79,15 +75,16 @@ func main() {
 	// --- Postgres phase: precise column types ---
 	pgDSN := os.Getenv("TEST_DATABASE_DSN")
 	if pgDSN == "" {
-		log.Println("WARNING: TEST_DATABASE_DSN not set; column types fall back to SQLite affinity.")
-		log.Println("Boolean, UUID and JSONB columns will be classified as colKindText.")
-		log.Println("Set TEST_DATABASE_DSN to a Postgres DSN for accurate type generation.")
+		log.Println("WARNING: TEST_DATABASE_DSN not set; column types fall back to SQLite affinity")
+		log.Println("Boolean, UUID and JSONB columns will be classified as colKindText")
+		log.Println("Set TEST_DATABASE_DSN to a Postgres DSN for accurate type generation")
 	} else {
 		pgTypes, err := introspectPostgres(ctx, pgDSN, postgresMigrationsDir)
 		if err != nil {
 			log.Fatalf("Postgres introspection failed: %v", err)
 		}
-		// Merge Postgres type info into the SQLite column list.
+
+		// Merge Postgres type info into the SQLite column list
 		mergePostgresTypes(sqliteTables, pgTypes)
 	}
 
@@ -97,15 +94,15 @@ func main() {
 		log.Fatalf("topological sort failed: %v", err)
 	}
 
-	if err := writeGenFile("tables_gen.go", ordered); err != nil {
+	err = writeGenFile("tables_gen.go", ordered)
+	if err != nil {
 		log.Fatalf("writing tables_gen.go: %v", err)
 	}
 
 	log.Printf("generated tables_gen.go with %d tables", len(ordered))
 }
 
-// introspectSQLite creates an in-memory SQLite database, applies all migrations,
-// and returns the table/column structure.
+// introspectSQLite creates an in-memory SQLite database, applies all migrations, and returns the table/column structure
 func introspectSQLite(ctx context.Context, migrationsDir string) (map[string]*table, error) {
 	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
 	if err != nil {
@@ -113,11 +110,12 @@ func introspectSQLite(ctx context.Context, migrationsDir string) (map[string]*ta
 	}
 	defer db.Close()
 
-	if err := runMigrationsSQL(ctx, db, migrationsDir); err != nil {
+	err = runMigrations(ctx, sqladapter.AdaptDatabaseSQLConn(db), migrationsDir)
+	if err != nil {
 		return nil, fmt.Errorf("run sqlite migrations: %w", err)
 	}
 
-	// List all application tables (excluding SQLite internals and skip list).
+	// List all application tables (excluding SQLite internals and skip list)
 	tableNames, err := sqliteTableNames(ctx, db)
 	if err != nil {
 		return nil, err
@@ -129,10 +127,12 @@ func introspectSQLite(ctx context.Context, migrationsDir string) (map[string]*ta
 		if err != nil {
 			return nil, err
 		}
+
 		fks, err := sqliteFKTargets(ctx, db, name)
 		if err != nil {
 			return nil, err
 		}
+
 		tables[name] = &table{
 			name:      name,
 			columns:   cols,
@@ -145,7 +145,8 @@ func introspectSQLite(ctx context.Context, migrationsDir string) (map[string]*ta
 
 func sqliteTableNames(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx,
-		"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid")
+		`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid`,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("list tables: %w", err)
 	}
@@ -154,10 +155,13 @@ func sqliteTableNames(ctx context.Context, db *sql.DB) ([]string, error) {
 	var names []string
 	for rows.Next() {
 		var name string
-		if err := rows.Scan(&name); err != nil {
+		err = rows.Scan(&name)
+		if err != nil {
 			return nil, err
 		}
-		if !skipTables[name] {
+
+		// We always skip the metadata table
+		if name != "metadata" && !skipTables[name] {
 			names = append(names, name)
 		}
 	}
@@ -174,16 +178,20 @@ func sqliteColumns(ctx context.Context, db *sql.DB, tableName string) ([]column,
 
 	var cols []column
 	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notnull int
-		var dflt sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+		var (
+			cid       int
+			name, typ string
+			notnull   int
+			dflt      sql.NullString
+			pk        int
+		)
+		err = rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk)
+		if err != nil {
 			return nil, err
 		}
-		// Map SQLite type affinity to a preliminary columnKind.
-		// This is overridden by the Postgres introspection when available.
+
+		// Map SQLite type affinity to a preliminary columnKind
+		// This is overridden by the Postgres introspection when available
 		kind := sqliteTypeToKind(typ)
 		cols = append(cols, column{name: name, kind: kind})
 	}
@@ -200,21 +208,25 @@ func sqliteFKTargets(ctx context.Context, db *sql.DB, tableName string) (map[str
 
 	targets := make(map[string]bool)
 	for rows.Next() {
-		var id, seq int
-		var targetTable, fromCol, toCol, onUpdate, onDelete, match string
-		if err := rows.Scan(&id, &seq, &targetTable, &fromCol, &toCol, &onUpdate, &onDelete, &match); err != nil {
+		var (
+			id, seq                     int
+			targetTable, fromCol, toCol string
+			onUpdate, onDelete, match   string
+		)
+		err = rows.Scan(&id, &seq, &targetTable, &fromCol, &toCol, &onUpdate, &onDelete, &match)
+		if err != nil {
 			return nil, err
 		}
+
 		targets[targetTable] = true
 	}
 	return targets, rows.Err()
 }
 
-// pgColumnTypes maps tableName → columnName → Postgres udt_name.
+// pgColumnTypes maps tableName → columnName → Postgres udt_name
 type pgColumnTypes map[string]map[string]string
 
-// introspectPostgres creates a temporary schema in the target Postgres instance,
-// applies all migrations, and returns a map of column type names.
+// introspectPostgres creates a temporary schema in the target Postgres instance, applies all migrations, and returns a map of column type names
 func introspectPostgres(ctx context.Context, dsn string, migrationsDir string) (pgColumnTypes, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -223,7 +235,7 @@ func introspectPostgres(ctx context.Context, dsn string, migrationsDir string) (
 
 	schemaName := fmt.Sprintf("gen_backup_%d", time.Now().UnixNano())
 
-	// Create the schema using the base connection (no search_path override yet).
+	// Create the schema using the base connection (no search_path override yet)
 	basePool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect to postgres: %w", err)
@@ -234,7 +246,7 @@ func introspectPostgres(ctx context.Context, dsn string, migrationsDir string) (
 		return nil, fmt.Errorf("create schema %s: %w", schemaName, err)
 	}
 
-	// Always clean up the schema when done.
+	// Always clean up the schema when done
 	defer func() {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -242,31 +254,35 @@ func introspectPostgres(ctx context.Context, dsn string, migrationsDir string) (
 		if err != nil {
 			return
 		}
+
 		pool, err := pgxpool.NewWithConfig(cleanCtx, cleanCfg)
 		if err != nil {
 			return
 		}
 		defer pool.Close()
+
 		_, _ = pool.Exec(cleanCtx, "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE")
 	}()
 
-	// Reconnect with search_path pointing to the fresh schema.
+	// Reconnect with search_path pointing to the fresh schema
 	if cfg.ConnConfig.RuntimeParams == nil {
 		cfg.ConnConfig.RuntimeParams = make(map[string]string)
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = schemaName
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect to schema %s: %w", schemaName, err)
 	}
 	defer pool.Close()
 
-	// Run Postgres migrations.
-	if err := runMigrationsPGX(ctx, pool, migrationsDir); err != nil {
+	// Run Postgres migrations
+	err = runMigrations(ctx, postgresadapter.AdaptPgxConn(pool), migrationsDir)
+	if err != nil {
 		return nil, fmt.Errorf("run postgres migrations: %w", err)
 	}
 
-	// Query column types.
+	// Query column types
 	rows, err := pool.Query(ctx, `
 		SELECT table_name, column_name, udt_name
 		FROM information_schema.columns
@@ -280,7 +296,8 @@ func introspectPostgres(ctx context.Context, dsn string, migrationsDir string) (
 	result := make(pgColumnTypes)
 	for rows.Next() {
 		var tableName, colName, udtName string
-		if err := rows.Scan(&tableName, &colName, &udtName); err != nil {
+		err = rows.Scan(&tableName, &colName, &udtName)
+		if err != nil {
 			return nil, err
 		}
 		if result[tableName] == nil {
@@ -291,8 +308,7 @@ func introspectPostgres(ctx context.Context, dsn string, migrationsDir string) (
 	return result, rows.Err()
 }
 
-// mergePostgresTypes replaces the preliminary column kinds with accurate ones
-// derived from the Postgres information_schema.
+// mergePostgresTypes replaces the preliminary column kinds with accurate ones derived from the Postgres information_schema
 func mergePostgresTypes(tables map[string]*table, pgTypes pgColumnTypes) {
 	for tableName, t := range tables {
 		pgCols, ok := pgTypes[tableName]
@@ -304,15 +320,16 @@ func mergePostgresTypes(tables map[string]*table, pgTypes pgColumnTypes) {
 			if !ok {
 				continue
 			}
-			if kind, ok := postgresUDTToKind[udtName]; ok {
+			kind, ok := postgresUDTToKind[udtName]
+			if ok {
 				t.columns[i].kind = kind
 			}
 		}
 	}
 }
 
-// topoSort returns the tables in an order where every table's FK dependencies
-// appear before it. Tables with no dependencies come first.
+// topoSort returns the tables in an order where every table's FK dependencies appear before it
+// Tables with no dependencies come first
 func topoSort(tables map[string]*table) ([]*table, error) {
 	const (
 		unvisited = 0
@@ -322,7 +339,7 @@ func topoSort(tables map[string]*table) ([]*table, error) {
 	state := make(map[string]int, len(tables))
 	result := make([]*table, 0, len(tables))
 
-	// Collect names and sort for deterministic output.
+	// Collect names and sort for deterministic output
 	names := make([]string, 0, len(tables))
 	for name := range tables {
 		names = append(names, name)
@@ -341,30 +358,35 @@ func topoSort(tables map[string]*table) ([]*table, error) {
 
 		t, ok := tables[name]
 		if !ok {
-			// FK target is a skipped table (e.g. v2_auth_challenges) — skip.
+			// FK target is a skipped table (e.g. v2_auth_challenges) — skip
 			state[name] = visited
 			return nil
 		}
 
-		// Visit FK dependencies first.
+		// Visit FK dependencies first
 		depNames := make([]string, 0, len(t.fkTargets))
 		for dep := range t.fkTargets {
 			depNames = append(depNames, dep)
 		}
+
 		sort.Strings(depNames)
+
 		for _, dep := range depNames {
-			if err := visit(dep); err != nil {
+			err := visit(dep)
+			if err != nil {
 				return err
 			}
 		}
 
 		state[name] = visited
 		result = append(result, t)
+
 		return nil
 	}
 
 	for _, name := range names {
-		if err := visit(name); err != nil {
+		err := visit(name)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -372,39 +394,23 @@ func topoSort(tables map[string]*table) ([]*table, error) {
 	return result, nil
 }
 
-// runMigrationsSQL reads all *.sql files in dir (sorted) and executes them
-// against db, splitting on ";" to handle multi-statement files.
-func runMigrationsSQL(ctx context.Context, db *sql.DB, dir string) error {
+// runMigrations does the same as runMigrationsSQL but via pgxpool
+func runMigrations(ctx context.Context, db adapter.Querier, dir string) error {
 	scripts, err := loadSQLScripts(dir)
 	if err != nil {
 		return err
 	}
-	for _, script := range scripts {
-		for _, stmt := range splitSQL(script) {
-			if _, err := db.ExecContext(ctx, stmt); err != nil {
-				return fmt.Errorf("exec %q: %w", truncate(stmt, 60), err)
-			}
-		}
-	}
-	return nil
-}
 
-// runMigrationsPGX does the same as runMigrationsSQL but via pgxpool.
-func runMigrationsPGX(ctx context.Context, pool *pgxpool.Pool, dir string) error {
-	scripts, err := loadSQLScripts(dir)
-	if err != nil {
-		return err
-	}
 	for _, script := range scripts {
-		// Postgres can handle multi-statement SQL in a single Exec.
-		if _, err := pool.Exec(ctx, script); err != nil {
+		_, err = db.Exec(ctx, script)
+		if err != nil {
 			return fmt.Errorf("exec migration: %w", err)
 		}
 	}
 	return nil
 }
 
-// loadSQLScripts reads all *.sql files from dir in sorted order.
+// loadSQLScripts reads all *.sql files from dir in sorted order
 func loadSQLScripts(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -416,10 +422,12 @@ func loadSQLScripts(dir string) ([]string, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
+
 		data, err := fs.ReadFile(os.DirFS(dir), e.Name())
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", e.Name(), err)
 		}
+
 		s := strings.TrimSpace(string(data))
 		if s != "" {
 			scripts = append(scripts, s)
@@ -428,22 +436,8 @@ func loadSQLScripts(dir string) ([]string, error) {
 	return scripts, nil
 }
 
-// splitSQL splits a SQL string containing multiple statements (separated by ";")
-// into individual, non-empty statements.
-func splitSQL(sql string) []string {
-	parts := strings.Split(sql, ";")
-	result := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	return result
-}
-
-// sqliteTypeToKind maps a SQLite column type affinity to a preliminary columnKind.
-// This is only used when Postgres introspection is unavailable.
+// sqliteTypeToKind maps a SQLite column type affinity to a preliminary columnKind
+// This is only used when Postgres introspection is unavailable
 func sqliteTypeToKind(typ string) string {
 	switch strings.ToUpper(typ) {
 	case "BOOLEAN":
@@ -453,19 +447,12 @@ func sqliteTypeToKind(typ string) string {
 	}
 }
 
-// quoteSQLiteIdent wraps an identifier in double-quotes for use in PRAGMA statements.
+// quoteSQLiteIdent wraps an identifier in double-quotes for use in PRAGMA statements
 func quoteSQLiteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
-
-// writeGenFile writes the generated Go source to path.
+// writeGenFile writes the generated Go source to path
 func writeGenFile(path string, tables []*table) error {
 	var buf bytes.Buffer
 
@@ -474,11 +461,9 @@ func writeGenFile(path string, tables []*table) error {
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "package backup")
 	fmt.Fprintln(&buf)
-	fmt.Fprintln(&buf, "// backupTables lists the persistent tables included in a backup, in FK-safe")
-	fmt.Fprintln(&buf, "// order (parents before children so that FK constraints are satisfied on restore).")
+	fmt.Fprintln(&buf, "// backupTables lists the persistent tables included in a backup, in FK-safe order (parents before children so that FK constraints are satisfied on restore)")
 	fmt.Fprintln(&buf, "//")
-	fmt.Fprintln(&buf, "// Ephemeral tables (v2_auth_challenges, v2_auth_challenge_payloads) and the")
-	fmt.Fprintln(&buf, "// metadata table are excluded from backups.")
+	fmt.Fprintln(&buf, "// Ephemeral tables (v2_auth_challenges, v2_auth_challenge_payloads) and the metadata table are excluded from backups")
 	fmt.Fprintln(&buf, "var backupTables = []tableSpec{")
 
 	for _, t := range tables {
@@ -500,5 +485,10 @@ func writeGenFile(path string, tables []*table) error {
 		return fmt.Errorf("formatting generated source: %w\nraw output written for debugging", err)
 	}
 
-	return os.WriteFile(path, formatted, 0o644)
+	err = os.WriteFile(path, formatted, 0o644)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

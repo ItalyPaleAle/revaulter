@@ -11,22 +11,20 @@ import (
 	"github.com/italypaleale/revaulter/pkg/db"
 )
 
-// Restore reads a backup produced by Backup and inserts all rows into conn.
+// Restore reads a backup produced by Backup and inserts all rows into conn
 //
-// The target database must already have its schema migrated to at least the
-// version recorded in the backup (i.e. RunMigrations should be called before
-// Restore). Restore returns an error if the backup was created with migrations
-// not yet applied on the target.
+// The target database must already have its schema migrated to at least the version recorded in the backup (i.e. RunMigrations should be called before Restore)
+// Restore returns an error if the backup was created with migrations not yet applied on the target
 //
-// Rows are inserted in FK-safe order inside a single transaction so that a
-// failure leaves the database unchanged.
+// Rows are inserted in FK-safe order inside a single transaction so that a failure leaves the database unchanged
 func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 	bf, err := readBackup(r)
 	if err != nil {
 		return err
 	}
 
-	if err := validateMigrations(ctx, conn, bf.Migrations); err != nil {
+	err = validateMigrations(ctx, conn, bf.Migrations)
+	if err != nil {
 		return err
 	}
 
@@ -39,10 +37,11 @@ func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 		for _, tb := range bf.Tables {
 			spec, ok := specByName[tb.Name]
 			if !ok {
-				// Unknown table: skip gracefully (forward-compat: newer backup, older binary).
+				// Unknown table: skip gracefully (forward-compat: newer backup, older binary)
 				continue
 			}
-			if err := restoreTable(ctx, tx, conn.Kind(), spec, tb); err != nil {
+			err := restoreTable(ctx, tx, conn.Kind(), spec, tb)
+			if err != nil {
 				return struct{}{}, fmt.Errorf("restoring table %q: %w", tb.Name, err)
 			}
 		}
@@ -51,10 +50,11 @@ func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 	return err
 }
 
-// readBackup reads and validates the magic header then decodes the CBOR payload.
+// readBackup reads and validates the magic header then decodes the CBOR payload
 func readBackup(r io.Reader) (BackupFile, error) {
 	var header [4]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
+	_, err := io.ReadFull(r, header[:])
+	if err != nil {
 		return BackupFile{}, fmt.Errorf("reading backup header: %w", err)
 	}
 	if header != magicHeader {
@@ -63,7 +63,8 @@ func readBackup(r io.Reader) (BackupFile, error) {
 
 	var bf BackupFile
 	dec := cbor.NewDecoder(r)
-	if err := dec.Decode(&bf); err != nil {
+	err = dec.Decode(&bf)
+	if err != nil {
 		return BackupFile{}, fmt.Errorf("decoding backup: %w", err)
 	}
 
@@ -74,8 +75,7 @@ func readBackup(r io.Reader) (BackupFile, error) {
 	return bf, nil
 }
 
-// validateMigrations checks that every migration recorded in the backup has
-// already been applied to the target database.
+// validateMigrations checks that every migration recorded in the backup has already been applied to the target database
 func validateMigrations(ctx context.Context, conn *db.DB, required []string) error {
 	if len(required) == 0 {
 		return nil
@@ -83,7 +83,8 @@ func validateMigrations(ctx context.Context, conn *db.DB, required []string) err
 
 	row := conn.QueryRow(ctx, `SELECT value FROM metadata WHERE key = 'migrations'`)
 	var raw string
-	if err := row.Scan(&raw); err != nil {
+	err := row.Scan(&raw)
+	if err != nil {
 		if conn.IsNoRowsError(err) {
 			return fmt.Errorf("target database has no migration metadata; run migrations before restoring")
 		}
@@ -91,7 +92,8 @@ func validateMigrations(ctx context.Context, conn *db.DB, required []string) err
 	}
 
 	var applied []string
-	if err := json.Unmarshal([]byte(raw), &applied); err != nil {
+	err = json.Unmarshal([]byte(raw), &applied)
+	if err != nil {
 		return fmt.Errorf("parsing target migration metadata: %w", err)
 	}
 
@@ -109,20 +111,19 @@ func validateMigrations(ctx context.Context, conn *db.DB, required []string) err
 	return nil
 }
 
-// restoreTable inserts all rows from tb into the target table via tx.
+// restoreTable inserts all rows from tb into the target table via tx
 func restoreTable(ctx context.Context, tx *db.DbTx, kind db.BackendKind, spec tableSpec, tb TableBackup) error {
 	if len(tb.Rows) == 0 {
 		return nil
 	}
 
-	// Build a column spec index so we handle any column order in the backup.
+	// Build a column spec index so we handle any column order in the backup
 	colSpecByName := make(map[string]columnSpec, len(spec.columns))
 	for _, c := range spec.columns {
 		colSpecByName[c.name] = c
 	}
 
-	// Use the column list from the backup to honour its ordering and handle any
-	// extra/missing columns gracefully across schema versions.
+	// Use the column list from the backup to honour its ordering and handle any extra/missing columns gracefully across schema versions
 	query, buildArgs := buildInsert(spec.name, tb.Columns, colSpecByName, kind)
 
 	for _, row := range tb.Rows {
@@ -130,7 +131,8 @@ func restoreTable(ctx context.Context, tx *db.DbTx, kind db.BackendKind, spec ta
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, query, args...); err != nil {
+		_, err = tx.Exec(ctx, query, args...)
+		if err != nil {
 			return err
 		}
 	}
@@ -138,10 +140,9 @@ func restoreTable(ctx context.Context, tx *db.DbTx, kind db.BackendKind, spec ta
 	return nil
 }
 
-// buildInsert constructs an INSERT statement and returns a function that maps a
-// backup row into the argument slice for that statement.
+// buildInsert constructs an INSERT statement and returns a function that maps a backup row into the argument slice for that statement
 //
-// For Postgres, uuid and jsonb columns get explicit type casts (::uuid, ::jsonb).
+// For Postgres, uuid and jsonb columns get explicit type casts (::uuid, ::jsonb)
 func buildInsert(
 	table string,
 	columns []string,
@@ -152,7 +153,8 @@ func buildInsert(
 	for i, name := range columns {
 		ph := placeholder(i+1, kind)
 		if kind == db.BackendPostgres {
-			if spec, ok := colSpecByName[name]; ok {
+			spec, ok := colSpecByName[name]
+			if ok {
 				switch spec.kind {
 				case colKindUUID:
 					ph = fmt.Sprintf("$%d::uuid", i+1)
@@ -185,7 +187,7 @@ func buildInsert(
 	return query, buildArgs
 }
 
-// placeholder returns the parameter placeholder for a 1-based index.
+// placeholder returns the parameter placeholder for a 1-based index
 func placeholder(n int, kind db.BackendKind) string {
 	if kind == db.BackendPostgres {
 		return fmt.Sprintf("$%d", n)
@@ -193,8 +195,7 @@ func placeholder(n int, kind db.BackendKind) string {
 	return "?"
 }
 
-// coerceForInsert converts a normalised backup value to the appropriate Go type
-// for the target database column, handling cross-engine boolean differences.
+// coerceForInsert converts a normalised backup value to the appropriate Go type for the target database column, handling cross-engine boolean differences
 func coerceForInsert(v any, spec columnSpec, kind db.BackendKind) any {
 	if v == nil {
 		return nil
@@ -203,7 +204,8 @@ func coerceForInsert(v any, spec columnSpec, kind db.BackendKind) any {
 	switch kind {
 	case db.BackendSQLite:
 		if spec.kind == colKindBool {
-			if b, ok := v.(bool); ok {
+			b, ok := v.(bool)
+			if ok {
 				if b {
 					return int64(1)
 				}
