@@ -368,7 +368,7 @@ func (s *Server) getBaseURL() string {
 }
 
 // Run the web server
-// Note this function is blocking, and will return only when the servers are shut down via context cancellation.
+// Note this function is blocking, and will return only when the servers are shut down via context cancellation
 func (s *Server) Run(ctx context.Context) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return errors.New("server is already running")

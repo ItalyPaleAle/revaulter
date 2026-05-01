@@ -191,9 +191,7 @@ func writeOutputFile(path string, payload []byte) error {
 }
 
 func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Client, kp *v2TransportKeyPair) (string, error) {
-	// Fetch the user's static public keys (ECDH + ML-KEM) alongside the hybrid
-	// anchor bundle so the CLI can pin the anchor on first contact and refuse
-	// any subsequent pubkey substitution.
+	// Fetch the user's static public keys (ECDH + ML-KEM) alongside the hybrid anchor bundle so the CLI can pin the anchor on first contact and refuse any subsequent pubkey substitution
 	ecdhPub, mlkemPub, err := o.fetchAndVerifyUserPubkeys(ctx, httpClient)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch user public keys: %w", err)
@@ -246,7 +244,7 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 	return res.State, nil
 }
 
-// v2PubkeyResponse mirrors the server's /v2/request/pubkey shape.
+// v2PubkeyResponse mirrors the server's /v2/request/pubkey shape
 type v2PubkeyResponse struct {
 	UserID   string          `json:"userId"`
 	EcdhP256 json.RawMessage `json:"ecdhP256"`
@@ -318,9 +316,8 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 	return ecdhPub, mlkemPub, nil
 }
 
-// verifyAndPinAnchor validates the hybrid anchor bundle in resp, verifies both signatures,
-// then checks or pins the anchor in ts. Returns pinned=true when the anchor was newly pinned;
-// the caller must save the trust store in that case.
+// verifyAndPinAnchor validates the hybrid anchor bundle in resp, verifies both signatures, then checks or pins the anchor in ts
+// Returns pinned=true when the anchor was newly pinned; the caller must save the trust store in that case
 func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, confirm func(string) (bool, error)) (pinned bool, err error) {
 	if len(resp.AnchorEs384PublicKey) == 0 || resp.AnchorMldsa87PublicKey == "" ||
 		resp.PubkeyBundleSignatureEs384 == "" || resp.PubkeyBundleSignatureMldsa87 == "" {
@@ -336,9 +333,8 @@ func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, c
 		return false, fmt.Errorf("invalid anchor public key: %w", err)
 	}
 
-	// Verify both halves of the hybrid bundle signature against the SERVER-PROVIDED
-	// anchor pubkeys. The subsequent pin check catches anchor rotation; this catches
-	// a server that serves a corrupt or mismatched bundle.
+	// Verify both halves of the hybrid bundle signature against the SERVER-PROVIDED anchor pubkeys
+	// The subsequent pin check catches anchor rotation; this catches a server that serves a corrupt or mismatched bundle
 	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(resp.AnchorEs384PublicKey)
 	if err != nil {
 		return false, fmt.Errorf("invalid anchorEs384PublicKey: %w", err)
