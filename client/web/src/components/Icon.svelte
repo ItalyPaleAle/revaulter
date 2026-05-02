@@ -50,6 +50,13 @@ const { icon, title, size = '12' }: Props = $props()
             <path d="M7 15h6" />
             <path d="M7 7h8" />
         </IconContainer>
+    {:else if icon == 'scroll-text'}
+        <IconContainer {title} {size}>
+            <path d="M15 12h-5" />
+            <path d="M15 8h-5" />
+            <path d="M19 17V5a2 2 0 0 0-2-2H4" />
+            <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3" />
+        </IconContainer>
     {:else if icon == 'check-circle'}
         <IconContainer {title} {size}>
             <circle cx="12" cy="12" r="10" />
@@ -174,6 +181,14 @@ const { icon, title, size = '12' }: Props = $props()
     {:else if icon == 'arrow-right'}
         <IconContainer {title} {size}>
             <path d="M5 12h14M13 5l7 7-7 7" />
+        </IconContainer>
+    {:else if icon == 'chevron-down'}
+        <IconContainer {title} {size}>
+            <path d="m6 9 6 6 6-6" />
+        </IconContainer>
+    {:else if icon == 'loader'}
+        <IconContainer {title} {size}>
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
         </IconContainer>
     {/if}
 </i>

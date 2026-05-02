@@ -3,6 +3,7 @@ import { Request, ResponseNotOkError } from '$lib/request'
 import type {
     EcP256PublicJwk,
     V2AddCredentialBeginResponse,
+    V2AuditEventsResponse,
     V2AuthSessionInfo,
     V2CredentialItem,
     V2LoginBeginResponse,
@@ -282,7 +283,23 @@ export async function v2DeleteSigningKey(id: string) {
     return res.data
 }
 
-/** Validates that an object represents a correct V2PendingRequestItem */
+/** Lists audit events for the currently signed-in user with cursor-based pagination */
+export async function v2AuditEvents(args: { cursor?: string; eventType?: string } = {}) {
+    const params = new URLSearchParams()
+    if (args.cursor) {
+        params.set('cursor', args.cursor)
+    }
+    if (args.eventType) {
+        params.set('eventType', args.eventType)
+    }
+    const qs = params.toString()
+
+    const url = qs ? `/v2/api/audit-events?${qs}` : '/v2/api/audit-events'
+
+    const res = await Request<V2AuditEventsResponse>(url)
+    return res.data
+}
+
 function isV2PendingRequestItem(v: unknown): v is V2PendingRequestItem {
     if (typeof v !== 'object' || v === null) {
         return false

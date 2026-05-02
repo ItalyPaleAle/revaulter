@@ -302,6 +302,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2APIGroup.GET("/signing-keys/:id", s.RouteV2APISigningKeyGet)
 	v2APIGroup.POST("/signing-keys/:id", s.RouteV2APISigningKeyUpdate)
 	v2APIGroup.DELETE("/signing-keys/:id", s.RouteV2APISigningKeyDelete)
+	v2APIGroup.GET("/audit-events", s.RouteV2APIAuditEvents)
 
 	v2AuthGroup := v2RouteGroup.Group("/auth")
 	v2AuthGroup.Use(csrfMw, authRateLimiter)

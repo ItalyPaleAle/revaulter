@@ -170,6 +170,28 @@ export type V2CredentialItem = {
     lastUsedAt: number
 }
 
+export type V2AuditEvent = {
+    id: string
+    createdAt: number
+    eventType: string
+    outcome: string
+    authMethod: string
+    actorUserId?: string
+    targetUserId?: string
+    signingKeyId?: string
+    credentialId?: string
+    requestState?: string
+    httpRequestId?: string
+    clientIp?: string
+    userAgent?: string
+    metadata: Record<string, unknown>
+}
+
+export type V2AuditEventsResponse = {
+    events: V2AuditEvent[]
+    nextCursor: string
+}
+
 export type V2AddCredentialBeginResponse = {
     challengeId: string
     challenge: string

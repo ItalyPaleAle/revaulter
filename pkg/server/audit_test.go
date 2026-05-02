@@ -25,6 +25,94 @@ func auditByType(t *testing.T, srv *Server, userID string, eventType db.EventTyp
 	return out
 }
 
+func doAuditEventsRequest(t *testing.T, client *http.Client, sessionCookie *http.Cookie, path string) (*http.Response, v2AuditEventsResponse) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), nil)
+	require.NoError(t, err)
+	req.AddCookie(sessionCookie)
+
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer res.Body.Close()
+
+	var out v2AuditEventsResponse
+	if res.StatusCode == http.StatusOK {
+		err = json.NewDecoder(res.Body).Decode(&out)
+		require.NoError(t, err)
+	} else {
+		_, err = io.Copy(io.Discard, res.Body)
+		require.NoError(t, err)
+	}
+
+	return res, out
+}
+
+func TestAuditEventsRouteFiltersEventType(t *testing.T) {
+	setTestConfig(t, "audit-route-filter.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, alice := seedV2SessionCookie(t, srv, "user-audit-route-alice", "Route Alice")
+	_, bob := seedV2SessionCookie(t, srv, "user-audit-route-bob", "Route Bob")
+
+	store := srv.db.AuditStore()
+	_, err := store.Insert(t.Context(), db.AuditEventInput{
+		EventType:   db.AuditAuthLoginFinish,
+		Outcome:     db.AuditOutcomeSuccess,
+		AuthMethod:  db.AuditAuthMethodSession,
+		ActorUserID: &alice.ID,
+	})
+	require.NoError(t, err)
+	_, err = store.Insert(t.Context(), db.AuditEventInput{
+		EventType:   db.AuditAuthLogout,
+		Outcome:     db.AuditOutcomeSuccess,
+		AuthMethod:  db.AuditAuthMethodSession,
+		ActorUserID: &alice.ID,
+	})
+	require.NoError(t, err)
+	_, err = store.Insert(t.Context(), db.AuditEventInput{
+		EventType:   db.AuditAuthLoginFinish,
+		Outcome:     db.AuditOutcomeSuccess,
+		AuthMethod:  db.AuditAuthMethodSession,
+		ActorUserID: &bob.ID,
+	})
+	require.NoError(t, err)
+
+	res, out := doAuditEventsRequest(t, client, sessionCookie, "/v2/api/audit-events?eventType=auth.login_finish")
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Len(t, out.Events, 1)
+	require.Equal(t, db.AuditAuthLoginFinish, out.Events[0].EventType)
+	require.NotNil(t, out.Events[0].ActorUserID)
+	require.Equal(t, alice.ID, *out.Events[0].ActorUserID)
+
+	res, out = doAuditEventsRequest(t, client, sessionCookie, "/v2/api/audit-events")
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	require.Len(t, out.Events, 2)
+}
+
+func TestAuditEventsRouteRejectsInvalidFilters(t *testing.T) {
+	setTestConfig(t, "audit-route-invalid.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-audit-route-invalid", "Invalid Alice")
+
+	res, _ := doAuditEventsRequest(t, client, sessionCookie, "/v2/api/audit-events?eventType=nope")
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+
+	res, _ = doAuditEventsRequest(t, client, sessionCookie, "/v2/api/audit-events?cursor=not-a-uuid")
+	require.Equal(t, http.StatusBadRequest, res.StatusCode)
+}
+
 func TestAuditRequestConfirmAndCancel(t *testing.T) {
 	setTestConfig(t, "audit-confirm.db")
 
