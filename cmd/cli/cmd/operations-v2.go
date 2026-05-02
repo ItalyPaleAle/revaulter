@@ -317,72 +317,9 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 	return ecdhPub, mlkemPub, nil
 }
 
-// verifyAndPinAnchor validates the hybrid anchor bundle in resp, verifies both signatures, then checks or pins the anchor in ts
-// Returns pinned=true when the anchor was newly pinned; the caller must save the trust store in that case
-func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, confirm func(string) (bool, error)) (pinned bool, err error) {
-	if len(resp.AnchorEs384PublicKey) == 0 || resp.AnchorMldsa87PublicKey == "" ||
-		resp.PubkeyBundleSignatureEs384 == "" || resp.PubkeyBundleSignatureMldsa87 == "" {
-		return false, errors.New("server did not return a hybrid anchor bundle; refusing to proceed (use --no-trust-store to override)")
-	}
-
-	if resp.UserID == "" {
-		return false, errors.New("server did not return userId; refusing to proceed (use --no-trust-store to override)")
-	}
-
-	es384Pub, mldsa87PubBytes, err := parseAnchorPubkeysFromWire(resp.AnchorEs384PublicKey, resp.AnchorMldsa87PublicKey)
-	if err != nil {
-		return false, fmt.Errorf("invalid anchor public key: %w", err)
-	}
-
-	// Verify both halves of the hybrid bundle signature against the **server-provided** anchor pubkeys
-	// The subsequent pin check catches anchor rotation; this catches a server that serves a corrupt or mismatched bundle
-	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(resp.AnchorEs384PublicKey)
-	if err != nil {
-		return false, fmt.Errorf("invalid anchorEs384PublicKey: %w", err)
-	}
-
-	bundlePayload := &protocolv2.PubkeyBundlePayload{
-		UserID:                 resp.UserID,
-		RequestEncEcdhPubkey:   string(resp.EcdhP256),
-		RequestEncMlkemPubkey:  resp.Mlkem768,
-		AnchorEs384Crv:         es384JWK.Crv,
-		AnchorEs384Kty:         es384JWK.Kty,
-		AnchorEs384X:           es384JWK.X,
-		AnchorEs384Y:           es384JWK.Y,
-		AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
-		WrappedKeyEpoch:        resp.WrappedKeyEpoch,
-	}
-	sigEs, sigMl, err := decodeHybridSignatures(resp.PubkeyBundleSignatureEs384, resp.PubkeyBundleSignatureMldsa87)
-	if err != nil {
-		return false, fmt.Errorf("invalid pubkey bundle signature: %w", err)
-	}
-	if err = protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl); err != nil {
-		return false, fmt.Errorf("pubkey bundle signature verification failed: %w", err)
-	}
-
-	return ts.checkOrPinAnchor(
-		server, resp.UserID,
-		es384Pub, resp.AnchorEs384PublicKey,
-		resp.AnchorMldsa87PublicKey, mldsa87PubBytes,
-		confirm,
-	)
-}
-
 // loadOrInitTrustStore resolves the trust store path and loads its contents
 func (o *v2OperationCmd) loadOrInitTrustStore() (*trustStore, string, error) {
-	path := o.flags.GetTrustStorePath()
-	if path == "" {
-		p, err := defaultTrustStorePath()
-		if err != nil {
-			return nil, "", err
-		}
-		path = p
-	}
-	ts, err := loadTrustStore(path)
-	if err != nil {
-		return nil, "", err
-	}
-	return ts, path, nil
+	return loadTrustStoreForFlags(o.flags)
 }
 
 // terminalConfirmer returns a prompt function that asks the user on stderr to accept a TOFU pin

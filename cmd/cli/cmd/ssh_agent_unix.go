@@ -111,6 +111,7 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	defer stop()
 
 	a := &revaulterSSHAgent{
+		ctx:        ctx,
 		httpClient: httpClient,
 		flags:      f,
 		log:        log,
@@ -209,6 +210,7 @@ func defaultSSHAgentSocketDir() string {
 
 // revaulterSSHAgent implements agent.Agent, routing all sign requests through Revaulter
 type revaulterSSHAgent struct {
+	ctx        context.Context
 	httpClient *http.Client
 	flags      *sshAgentFlags
 	log        *slog.Logger
@@ -216,7 +218,10 @@ type revaulterSSHAgent struct {
 
 // List returns the signing public key registered for the configured label
 func (a *revaulterSSHAgent) List() ([]*agent.Key, error) {
-	sshPub, err := a.fetchSigningPubkey(context.Background())
+	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	defer cancel()
+
+	sshPub, err := a.fetchSigningPubkey(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +235,7 @@ func (a *revaulterSSHAgent) List() ([]*agent.Key, error) {
 
 // Sign hashes data with SHA-256 and submits a sign request to the Revaulter server
 func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), a.signTimeout())
+	ctx, cancel := context.WithTimeout(a.ctx, a.signTimeout())
 	defer cancel()
 
 	err := a.validateSigningKey(ctx, key)
@@ -328,15 +333,17 @@ func (a *revaulterSSHAgent) Signers() ([]ssh.Signer, error) { return nil, sshNot
 
 // fetchSigningPubkey retrieves the auto-stored ES256 public key for the configured label
 func (a *revaulterSSHAgent) fetchSigningPubkey(parentCtx context.Context) (ssh.PublicKey, error) {
-	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
-	defer cancel()
+	err := a.verifyAnchorTrust(parentCtx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create the request
 	query := url.Values{}
 	query.Set("label", a.flags.KeyLabel)
 	query.Set("algorithm", protocolv2.SigningAlgES256)
 	pathSuffix := "signing-pubkey?" + query.Encode()
-	req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodGet, a.flags.GetServer(), a.flags.GetRequestKey(), pathSuffix, nil)
+	req, err := newV2RequestKeyHTTPRequest(parentCtx, http.MethodGet, a.flags.GetServer(), a.flags.GetRequestKey(), pathSuffix, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -373,6 +380,48 @@ func (a *revaulterSSHAgent) fetchSigningPubkey(parentCtx context.Context) (ssh.P
 	}
 
 	return sshPub, nil
+}
+
+// verifyAnchorTrust checks the pinned server anchor before trusting signing-key lookup responses
+func (a *revaulterSSHAgent) verifyAnchorTrust(ctx context.Context) error {
+	if a.flags.GetNoTrustStore() {
+		a.log.Warn("Skipping anchor pinning and hybrid bundle verification because --no-trust-store is set")
+		return nil
+	}
+
+	// Load the trust store
+	ts, path, err := loadTrustStoreForFlags(a.flags)
+	if err != nil {
+		return err
+	}
+
+	// Request the public key
+	req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodGet, a.flags.GetServer(), a.flags.GetRequestKey(), "pubkey", nil)
+	if err != nil {
+		return err
+	}
+
+	// Parse and validate the response
+	var resp v2PubkeyResponse
+	err = doJSONRequest(a.httpClient, req, &resp)
+	if err != nil {
+		return fmt.Errorf("fetch server pubkey bundle: %w", err)
+	}
+
+	pinned, err := verifyAndPinAnchor(a.flags.GetServer(), &resp, ts, nil)
+	if err != nil {
+		return fmt.Errorf("anchor trust check failed: %w", err)
+	}
+
+	// Save the updated trust store if needed
+	if pinned {
+		err = saveTrustStore(path, ts)
+		if err != nil {
+			return fmt.Errorf("save trust store: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // shellQuote returns a POSIX single-quoted shell literal
