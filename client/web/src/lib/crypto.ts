@@ -601,3 +601,53 @@ export async function ecP256JwkToPem(jwk: V2SigningJwk): Promise<string> {
 
     return `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----\n`
 }
+
+/** Converts an EC P-256 public JWK to the OpenSSH authorized_keys public-key format */
+export function ecP256JwkToSshPublicKey(jwk: V2SigningJwk, comment?: string): string {
+    const x = base64UrlToBytes(jwk.x)
+    const y = base64UrlToBytes(jwk.y)
+    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || x.length !== 32 || y.length !== 32) {
+        throw new Error('Invalid P-256 public JWK')
+    }
+
+    const keyType = 'ecdsa-sha2-nistp256'
+    const curve = 'nistp256'
+    const point = new Uint8Array(65)
+    point[0] = 0x04
+    point.set(x, 1)
+    point.set(y, 33)
+
+    const blob = sshWireStrings([new TextEncoder().encode(keyType), new TextEncoder().encode(curve), point])
+    const suffix = comment ? ` ${comment}` : ''
+    return `${keyType} ${bytesToBase64(blob)}${suffix}\n`
+}
+
+function sshWireStrings(parts: Uint8Array[]): Uint8Array {
+    let total = 0
+    for (const part of parts) {
+        total += 4 + part.length
+    }
+
+    const out = new Uint8Array(total)
+    let offset = 0
+    for (const part of parts) {
+        out[offset] = (part.length >>> 24) & 0xff
+        out[offset + 1] = (part.length >>> 16) & 0xff
+        out[offset + 2] = (part.length >>> 8) & 0xff
+        out[offset + 3] = part.length & 0xff
+        offset += 4
+        out.set(part, offset)
+        offset += part.length
+    }
+
+    return out
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+    let binary = ''
+    for (const b of bytes) {
+        binary += String.fromCharCode(b)
+    }
+
+    return btoa(binary)
+}

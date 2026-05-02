@@ -343,7 +343,9 @@ async function handleDeriveSigningKey() {
     }
 }
 
-function downloadDerived(kind: 'jwk' | 'pem') {
+type SigningKeyDownloadKind = 'jwk' | 'pem' | 'ssh'
+
+function downloadDerived(kind: SigningKeyDownloadKind) {
     downloadMenuOpenId = null
     if (!derivedKey) {
         return
@@ -362,6 +364,13 @@ function downloadDerived(kind: 'jwk' | 'pem') {
                 `${derivedKey.keyLabel}-${derivedKey.algorithm}.pem`,
                 derivedKey.pem,
                 'application/x-pem-file'
+            )
+            break
+        case 'ssh':
+            triggerDownload(
+                `${derivedKey.keyLabel}-${derivedKey.algorithm}.pub`,
+                derivedKey.sshPublicKey,
+                'text/plain'
             )
             break
         default:
@@ -395,19 +404,27 @@ async function handlePublishStored(sk: V2PublishedSigningKey) {
     }
 }
 
-async function handleDownloadStored(sk: V2PublishedSigningKey, kind: 'jwk' | 'pem') {
+async function handleDownloadStored(sk: V2PublishedSigningKey, kind: SigningKeyDownloadKind) {
     downloadMenuOpenId = null
     downloadingStoredId = sk.id
     try {
         const derived = await onDeriveSigningKey(sk.keyLabel, sk.algorithm)
-        if (kind === 'jwk') {
-            triggerDownload(
-                `${derived.keyLabel}-${derived.algorithm}.jwk.json`,
-                JSON.stringify(derived.jwk, null, 2),
-                'application/json'
-            )
-        } else {
-            triggerDownload(`${derived.keyLabel}-${derived.algorithm}.pem`, derived.pem, 'application/x-pem-file')
+        switch (kind) {
+            case 'jwk':
+                triggerDownload(
+                    `${derived.keyLabel}-${derived.algorithm}.jwk.json`,
+                    JSON.stringify(derived.jwk, null, 2),
+                    'application/json'
+                )
+                break
+            case 'pem':
+                triggerDownload(`${derived.keyLabel}-${derived.algorithm}.pem`, derived.pem, 'application/x-pem-file')
+                break
+            case 'ssh':
+                triggerDownload(`${derived.keyLabel}-${derived.algorithm}.pub`, derived.sshPublicKey, 'text/plain')
+                break
+            default:
+                throw new Error(`Unsupported kind: ${kind}`)
         }
     } finally {
         downloadingStoredId = null
@@ -909,13 +926,13 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                             Download
                                         </Button>
                                         {#if downloadMenuOpenId === 'derived'}
-                                            <div class="absolute left-0 top-full z-20 mt-1 min-w-28 overflow-hidden rounded-lg border border-neutral-200 bg-white py-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900">
+                                            <div class="absolute left-0 top-full z-20 mt-1 min-w-40 overflow-hidden rounded-lg border border-neutral-200 bg-white py-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900">
                                                 <button
                                                     type="button"
                                                     class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
                                                     onclick={() => downloadDerived('jwk')}
                                                 >
-                                                    JWK
+                                                    JSON (JWK)
                                                 </button>
                                                 <button
                                                     type="button"
@@ -923,6 +940,13 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                                     onclick={() => downloadDerived('pem')}
                                                 >
                                                     PEM
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
+                                                    onclick={() => downloadDerived('ssh')}
+                                                >
+                                                    SSH public key
                                                 </button>
                                             </div>
                                         {/if}
@@ -993,7 +1017,7 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                                         <Icon icon="download" title="Download" size="4" />
                                                     </Button>
                                                     {#if downloadMenuOpenId === sk.id}
-                                                        <div class="absolute right-0 top-full z-20 mt-1 min-w-28 overflow-hidden rounded-lg border border-neutral-200 bg-white py-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900">
+                                                        <div class="absolute right-0 top-full z-20 mt-1 min-w-40 overflow-hidden rounded-lg border border-neutral-200 bg-white py-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900">
                                                             <button
                                                                 type="button"
                                                                 class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
@@ -1007,6 +1031,13 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                                                 onclick={() => handleDownloadStored(sk, 'pem')}
                                                             >
                                                                 PEM
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
+                                                                onclick={() => handleDownloadStored(sk, 'ssh')}
+                                                            >
+                                                                SSH public key
                                                             </button>
                                                         </div>
                                                     {/if}

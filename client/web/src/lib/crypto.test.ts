@@ -12,6 +12,7 @@ import {
     deriveSigningKeyPair,
     deriveWrappingKey,
     ecP256JwkToPem,
+    ecP256JwkToSshPublicKey,
     encryptTransportEnvelope,
     generatePrimaryKey,
     parseWrappedPrimaryKeyEnvelope,
@@ -744,5 +745,39 @@ describe('ecP256JwkToPem', () => {
         expect(reJwk.crv).toBe('P-256')
         expect(reJwk.x).toBe(publicJwk.x)
         expect(reJwk.y).toBe(publicJwk.y)
+    })
+})
+
+describe('ecP256JwkToSshPublicKey', () => {
+    it('serializes a P-256 JWK as an OpenSSH authorized_keys line', async () => {
+        const { publicJwk } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k',
+            algorithm: 'ES256',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const ssh = ecP256JwkToSshPublicKey(publicJwk, 'k-ES256')
+        const parts = ssh.trim().split(' ')
+        expect(parts).toHaveLength(3)
+        expect(parts[0]).toBe('ecdsa-sha2-nistp256')
+        expect(parts[2]).toBe('k-ES256')
+
+        const blob = Uint8Array.from(atob(parts[1]), (c) => c.charCodeAt(0))
+        let offset = 0
+        const readString = () => {
+            const len = (blob[offset] << 24) | (blob[offset + 1] << 16) | (blob[offset + 2] << 8) | blob[offset + 3]
+            offset += 4
+            const out = blob.slice(offset, offset + len)
+            offset += len
+            return out
+        }
+
+        expect(new TextDecoder().decode(readString())).toBe('ecdsa-sha2-nistp256')
+        expect(new TextDecoder().decode(readString())).toBe('nistp256')
+        const point = readString()
+        expect(point[0]).toBe(0x04)
+        expect(bytesToBase64Url(point.slice(1, 33))).toBe(publicJwk.x)
+        expect(bytesToBase64Url(point.slice(33, 65))).toBe(publicJwk.y)
+        expect(offset).toBe(blob.length)
     })
 })

@@ -104,6 +104,7 @@ export type DerivedSigningKey = {
     algorithm: string
     jwk: V2SigningJwk
     pem: string
+    sshPublicKey: string
     id: string
 }
 

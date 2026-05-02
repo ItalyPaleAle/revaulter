@@ -13,6 +13,7 @@ import {
     deriveSigningKeyPair,
     deriveWrappingKey,
     ecP256JwkToPem,
+    ecP256JwkToSshPublicKey,
     generatePrimaryKey,
     parseWrappedPrimaryKeyEnvelope,
     unwrapPrimaryKey,
@@ -664,6 +665,7 @@ async function doDeriveSigningKey(keyLabel: string, algorithm: string): Promise<
         primaryKey,
     })
     const [id, pem] = await Promise.all([computeEcP256Thumbprint(publicJwk), ecP256JwkToPem(publicJwk)])
+    const sshPublicKey = ecP256JwkToSshPublicKey(publicJwk, `${keyLabel}-${algorithm}`)
 
     // Attempt to register the derived key as unpublished; if a row already exists for this (algorithm, keyLabel) the server returns 409 and we treat that as a no-op since the caller just needs the derived material returned
     try {
@@ -681,7 +683,7 @@ async function doDeriveSigningKey(keyLabel: string, algorithm: string): Promise<
     }
     await doLoadSigningKeys()
 
-    return { keyLabel, algorithm, jwk: publicJwk, pem, id }
+    return { keyLabel, algorithm, jwk: publicJwk, pem, sshPublicKey, id }
 }
 
 async function doPublishSigningKey(derived: DerivedSigningKey) {
