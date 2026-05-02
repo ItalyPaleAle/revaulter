@@ -18,14 +18,8 @@ interface Props {
     onDeleteSigningKey: (id: string) => Promise<void>
 }
 
-let {
-    signingKeys,
-    busy,
-    onDeriveSigningKey,
-    onPublishSigningKey,
-    onUnpublishSigningKey,
-    onDeleteSigningKey,
-}: Props = $props()
+let { signingKeys, busy, onDeriveSigningKey, onPublishSigningKey, onUnpublishSigningKey, onDeleteSigningKey }: Props =
+    $props()
 
 const SIGNING_ALGORITHMS = ['ES256'] as const
 
@@ -151,11 +145,7 @@ function downloadDerived(kind: SigningKeyDownloadKind) {
             )
             break
         case 'ssh':
-            triggerDownload(
-                `${derivedKey.keyLabel}-${derivedKey.algorithm}.pub`,
-                derivedKey.sshPublicKey,
-                'text/plain'
-            )
+            triggerDownload(`${derivedKey.keyLabel}-${derivedKey.algorithm}.pub`, derivedKey.sshPublicKey, 'text/plain')
             break
         default:
             throw new Error(`Unsupported kind: ${kind}`)
