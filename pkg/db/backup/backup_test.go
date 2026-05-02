@@ -203,6 +203,29 @@ func TestBackupRestoreRoundTrip_Postgres(t *testing.T) {
 	runRoundTrip(t, conn)
 }
 
+// TestRestore_RefusesNonEmptyTarget verifies Restore aborts with ErrTargetNotEmpty when the target already has migration metadata
+func TestRestore_RefusesNonEmptyTarget_SQLite(t *testing.T) {
+	runRefusesNonEmptyTarget(t, newSQLiteTestDB(t))
+}
+
+func TestRestore_RefusesNonEmptyTarget_Postgres(t *testing.T) {
+	runRefusesNonEmptyTarget(t, newPostgresTestDB(t))
+}
+
+func runRefusesNonEmptyTarget(t *testing.T, conn *db.DB) {
+	t.Helper()
+
+	// Migrate the target so metadata has a non-zero level
+	require.NoError(t, db.RunMigrations(t.Context(), conn, nil))
+
+	// Encode a fixture and try to restore — should refuse
+	var fixtureBytes bytes.Buffer
+	require.NoError(t, writeFixture(&fixtureBytes, canonicalFixture()))
+
+	err := Restore(t.Context(), conn, &fixtureBytes)
+	require.ErrorIs(t, err, ErrTargetNotEmpty)
+}
+
 func runRoundTrip(t *testing.T, conn *db.DB) {
 	t.Helper()
 

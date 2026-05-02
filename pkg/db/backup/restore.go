@@ -2,16 +2,22 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/italypaleale/go-sql-utils/adapter"
 
 	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
+
+// ErrTargetNotEmpty is returned by Restore when the target database already has data and Restore would otherwise overwrite it
+// Callers can use errors.Is to detect this specific failure mode
+var ErrTargetNotEmpty = errors.New("target database is not empty, refusing to overwrite: restore can only be performed on a fresh database")
 
 // restoreTxTimeout caps the duration of the restore transaction
 // On the SQL adapter the timeout applies to the whole transaction, so this needs to be generous enough for very large datasets
@@ -41,6 +47,16 @@ func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 	}
 	if hdr.Version != formatVersion {
 		return fmt.Errorf("unsupported backup format version %d (expected %d)", hdr.Version, formatVersion)
+	}
+
+	// Refuse to restore onto a database that already has data
+	// We detect this by looking for the metadata table and checking whether any migration level has been recorded
+	hasData, err := targetHasMigrations(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("checking target database state: %w", err)
+	}
+	if hasData {
+		return ErrTargetNotEmpty
 	}
 
 	// Bring the target database up to (and only up to) the source's schema level
@@ -180,6 +196,55 @@ func placeholder(n int, kind db.BackendKind) string {
 		return fmt.Sprintf("$%d", n)
 	}
 	return "?"
+}
+
+// targetHasMigrations reports whether conn already records an applied migration
+// The check passes (returns false) if either the metadata table is absent, or it is present but has no migrations row, or the recorded migration level is 0
+// Any other recorded level means the target has been migrated and likely contains data, so a restore would overwrite it
+func targetHasMigrations(ctx context.Context, conn *db.DB) (bool, error) {
+	exists, err := metadataTableExists(ctx, conn, conn.Kind())
+	if err != nil {
+		return false, fmt.Errorf("looking up metadata table: %w", err)
+	}
+	if !exists {
+		return false, nil
+	}
+
+	level, err := readSchemaLevel(ctx, conn)
+	if err != nil {
+		return false, err
+	}
+
+	return level > 0, nil
+}
+
+// metadataTableExists reports whether the metadata table is present in the connected schema
+func metadataTableExists(ctx context.Context, conn adapter.Querier, kind db.BackendKind) (bool, error) {
+	var (
+		query string
+		args  []any
+	)
+	switch kind {
+	case db.BackendSQLite:
+		query = `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`
+		args = []any{metadataTableName}
+	case db.BackendPostgres:
+		query = `SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1`
+		args = []any{metadataTableName}
+	default:
+		return false, fmt.Errorf("unsupported backend kind %q", kind)
+	}
+
+	row := conn.QueryRow(ctx, query, args...)
+	var dummy int
+	err := row.Scan(&dummy)
+	if conn.IsNoRowsError(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 // coerceForInsert converts a normalised backup value to the appropriate Go type for the target database column, handling cross-engine boolean differences

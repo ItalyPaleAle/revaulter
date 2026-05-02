@@ -13,6 +13,7 @@ import (
 	slogkit "github.com/italypaleale/go-kit/slog"
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 
+	"github.com/italypaleale/revaulter/cmd/revaulter/backup"
 	"github.com/italypaleale/revaulter/cmd/revaulter/healthcheck"
 	"github.com/italypaleale/revaulter/cmd/revaulter/migrate"
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
@@ -60,6 +61,18 @@ func main() {
 				slogkit.FatalError(initLogger, "Healthcheck error", err)
 				return
 			}
+			os.Exit(0)
+			return
+
+		// "backup" creates a backup of the database
+		case "backup":
+			backup.RunBackup(initLogger, os.Args[2:])
+			os.Exit(0)
+			return
+
+		// "restore" restores the database from backup
+		case "restore":
+			backup.RunRestore(initLogger, os.Args[2:])
 			os.Exit(0)
 			return
 		}
