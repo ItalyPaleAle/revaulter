@@ -9,11 +9,11 @@ Encryption keys and signing keys don't belong in environment variables or on dis
 **What you can use Revaulter for:**
 
 - Unlock encrypted disks at boot
-- Wrap database and TLS keys
-- SSH logins with a passkey-backed SSH agent
-- Sign release binaries from CI
 - Protect backup repository passwords
+- SSH logins and Git commit signing with a passkey-backed SSH agent
+- Sign release binaries from CI
 - Issue long-lived JWTs
+- Wrap database and TLS keys
 - Encrypt/decrypt arbitrary messages
 
 ![Screenshot of Revaulter, showing 3 requests pending approval: one for encrypting, one for signing, one for decrypting](./docs/img/screenshot.webp)
@@ -59,9 +59,9 @@ Integrate Revaulter into your boot process to unlock LUKS/dm-crypt volumes. A sc
 
 Wrap your [restic](https://restic.net) repository password with Revaulter and hook it into restic's `--password-command`. The backup script gets the password only after a passkey holder approves — even a fully compromised backup host can't restore the repository on its own. [See full example](./docs/06-examples.md#backing-up-with-restic) in the docs.
 
-### SSH logins with a passkey-backed SSH agent
+### SSH logins and Git commit signing with a passkey-backed SSH agent
 
-Run `revaulter ssh-agent` as your local SSH agent so SSH authentication requests are approved through Revaulter in the browser. The server gets a normal `authorized_keys` public key, while each login requires passkey approval. [See the SSH agent guide](./docs/08-ssh-agent.md) in the docs.
+Run `revaulter ssh-agent` as your local SSH agent so SSH authentication and Git SSH commit-signing requests are approved through Revaulter in the browser. SSH servers and Git use normal SSH public keys, while each login/signature requires passkey approval. [See the SSH agent guide](./docs/08-ssh-agent.md) in the docs.
 
 ### Sign release binaries from CI
 
@@ -133,7 +133,7 @@ Then start the server, open the web UI, and create your first account.
 - [REST API reference](./docs/05-rest-api-reference.md) — all endpoints with request/response schemas
 - [Examples](./docs/06-examples.md) — LUKS disk unlock at boot, encrypting files with age, restic backups, signing release manifests / binaries / JWTs, fetching a public key to verify a signature
 - [Audit events](./docs/07-audit-events.md) — durable, queryable record of security-relevant actions; schema, event types, retention, sample SQL
-- [SSH agent](./docs/08-ssh-agent.md) — use Revaulter as an SSH agent for passkey-approved SSH logins
+- [SSH agent](./docs/08-ssh-agent.md) — use Revaulter as an SSH agent for passkey-approved SSH logins and Git commit signing
 
 ## License
 

@@ -104,3 +104,44 @@ ssh prod
 ```
 
 Each authentication attempt creates a Revaulter signing request. Approve it in the browser to complete the SSH login.
+
+## 6. Sign Git commits with the same agent
+
+Git can sign commits and tags with SSH keys. Since Revaulter exposes the signing key through an SSH agent, Git can use the same agent for commit signing.
+
+Start the Revaulter SSH agent and export `SSH_AUTH_SOCK` as shown above. For Git signing, use a note that makes approval requests easy to identify:
+
+```sh
+# We are using a different key label "git-main" to keep the key used for logging into SSH servers and signing Git commits different
+revaulter ssh-agent \
+  --server https://revaulter.example.com \
+  --request-key "$REVAULTER_REQUEST_KEY" \
+  --key-label git-main \
+  --socket "$HOME/.revaulter/ssh-agent.sock"
+
+export SSH_AUTH_SOCK="$HOME/.revaulter/ssh-agent.sock"
+```
+
+Configure Git to use SSH signatures and the public key exposed by the agent:
+
+```sh
+git config --global gpg.format ssh
+git config --global user.signingkey "$(ssh-add -L | head -n1)"
+git config --global commit.gpgsign true
+```
+
+Now signed commits use Revaulter:
+
+```sh
+git commit -S -m "Much improve, so amaze, wow"
+```
+
+Each signed commit creates a Revaulter signing request. Approve it in the browser to complete the commit.
+
+If you use GitHub, GitLab, or another forge that verifies SSH commit signatures, add the same public key from `ssh-add -L` to your account as a signing key. This is separate from adding it as an SSH authentication key.
+
+If another SSH agent is configured globally, run Git from a shell where `SSH_AUTH_SOCK` points at the Revaulter socket:
+
+```sh
+SSH_AUTH_SOCK="$HOME/.revaulter/ssh-agent.sock" git commit -S -m "Update release manifest"
+```
