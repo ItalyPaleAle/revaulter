@@ -131,6 +131,14 @@ func (c *trustCmd) Run(cmd *cobra.Command, _ []string) error {
 				line = strings.ToLower(strings.TrimSpace(line))
 				return line == "y" || line == "yes", nil
 			}
+		} else {
+			server, userID := c.Server, resp.UserID
+			confirm = func(fp string) (bool, error) {
+				return false, fmt.Errorf(
+					"anchor for %s (user %s) is not pinned yet (fingerprint %s); rerun with a TTY or use --yes for non-interactive pinning",
+					server, userID, fp,
+				)
+			}
 		}
 	}
 

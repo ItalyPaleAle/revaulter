@@ -126,23 +126,27 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	// Accept connections in a background goroutine
 	go func() {
 		for {
-			conn, err := l.Accept()
-			if err != nil {
-				select {
-				case <-ctx.Done():
-					// Stop when the context is done
+			conn, lErr := l.Accept()
+			if lErr != nil {
+				if shouldStopAccepting(ctx, lErr) {
 					return
-				default:
-					log.Error("SSH agent accept error", slog.Any("err", err))
 				}
+
+				if isRetriableAcceptError(lErr) {
+					log.Warn("Retriable SSH agent accept error", slog.Any("err", lErr))
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+
+				log.Error("SSH agent accept error", slog.Any("err", lErr))
 				return
 			}
 
 			go func() {
 				defer conn.Close()
-				err := agent.ServeAgent(a, conn)
-				if err != nil && !errors.Is(err, net.ErrClosed) {
-					log.Debug("SSH agent connection closed", slog.Any("err", err))
+				rErr := agent.ServeAgent(a, conn)
+				if rErr != nil && !errors.Is(rErr, net.ErrClosed) {
+					log.Debug("SSH agent connection closed", slog.Any("err", rErr))
 				}
 			}()
 		}
@@ -154,6 +158,27 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	log.Info("SSH agent shutting down")
 
 	return nil
+}
+
+// shouldStopAccepting reports whether an accept error is part of normal shutdown
+func shouldStopAccepting(ctx context.Context, err error) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+	}
+
+	return errors.Is(err, net.ErrClosed)
+}
+
+// isRetriableAcceptError reports whether an accept error should be retried
+func isRetriableAcceptError(err error) bool {
+	return errors.Is(err, syscall.EINTR) ||
+		errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EMFILE) ||
+		errors.Is(err, syscall.ENFILE) ||
+		errors.Is(err, syscall.ENOBUFS) ||
+		errors.Is(err, syscall.ENOMEM)
 }
 
 // defaultSSHAgentSocketPath returns a socket path under a private per-user directory
