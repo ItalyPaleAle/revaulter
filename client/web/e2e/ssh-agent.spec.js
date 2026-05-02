@@ -33,7 +33,7 @@ test('ssh-agent serves the public key and approves SSH auth through Revaulter', 
     const keyLabel = 'ssh-e2e'
     let agentRun
     let serverRun
-    let sshRun
+    let sshProcess
 
     try {
         await openSettingsTab(page, 'Signing keys')
@@ -64,7 +64,7 @@ test('ssh-agent serves the public key and approves SSH auth through Revaulter', 
             authorizedKey: exportedKeys[0],
         })
 
-        sshRun = startSSHCommand({
+        sshProcess = startSSHCommand({
             address: serverRun.address,
             socketPath,
         })
@@ -73,11 +73,11 @@ test('ssh-agent serves the public key and approves SSH auth through Revaulter', 
         await expect(page.getByText(keyLabel)).toBeVisible()
         await page.getByRole('button', { name: 'Confirm' }).click()
 
-        const sshResult = await sshRun.done
+        const sshResult = await sshProcess.done
         expect(sshResult.stdout).toContain('hello from revaulter ssh e2e')
         expect(agentRun.output().stderr).toContain('Waiting for browser confirmation')
     } finally {
-        await stopProcess(sshRun)
+        await stopProcess(sshProcess)
         await stopProcess(serverRun)
         if (serverRun) {
             serverRun.cleanup()

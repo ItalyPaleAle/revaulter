@@ -77,12 +77,7 @@ func main() {
 	for {
 		conn, acceptErr := listener.Accept()
 		if acceptErr != nil {
-			netErr, ok := acceptErr.(net.Error)
-			if !ok || !netErr.Temporary() {
-				return
-			}
-
-			continue
+			return
 		}
 
 		go handleConn(conn, serverConfig, *message)

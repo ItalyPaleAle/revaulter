@@ -41,7 +41,11 @@ function spawnCaptured(command, args, options = {}) {
                 return
             }
 
-            reject(new Error(`${command} exited with ${signal || code}\n${stderr || stdout}`))
+            reject(
+                new Error(
+                    `${command} exited with non-zero status ${signal || code}\nSTDERR:\n${stderr || '(empty)'}\nSTDOUT:\n${stdout || '(empty)'}`
+                )
+            )
         })
     })
 
