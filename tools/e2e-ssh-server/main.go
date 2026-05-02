@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// This app starts a minimal SSH server for E2E tests
 func main() {
 	listenAddr := flag.String("listen", "127.0.0.1:0", "TCP listen address")
 	authorizedKeyFile := flag.String("authorized-key-file", "", "Path to an authorized_keys entry")
@@ -51,7 +53,7 @@ func main() {
 				return nil, nil
 			}
 
-			return nil, fmt.Errorf("unauthorized key")
+			return nil, errors.New("unauthorized key")
 		},
 	}
 	serverConfig.AddHostKey(hostSigner)

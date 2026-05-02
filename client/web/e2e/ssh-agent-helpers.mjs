@@ -79,13 +79,24 @@ async function waitForOutput(getOutput, predicate, errorMessage, timeoutMs = 30_
 export async function runCLITrust({ requestKey, trustStorePath, server = defaultServerURL }) {
     const trustRun = spawnCaptured(
         'go',
-        ['run', './cmd/cli', 'trust', '--server', server, '--request-key', requestKey, '--trust-store', trustStorePath, '--yes'],
+        [
+            'run',
+            './cmd/cli',
+            'trust',
+            '--server',
+            server,
+            '--request-key',
+            requestKey,
+            '--trust-store',
+            trustStorePath,
+            '--yes',
+        ],
         { env: goEnv() }
     )
     return trustRun.done
 }
 
-export async function startCLISshAgent({ keyLabel, requestKey, socketPath, trustStorePath, server = defaultServerURL }) {
+export async function startSshAgent({ keyLabel, requestKey, socketPath, trustStorePath, server = defaultServerURL }) {
     const agentRun = spawnCaptured(
         'go',
         [
@@ -109,7 +120,10 @@ export async function startCLISshAgent({ keyLabel, requestKey, socketPath, trust
     await waitForOutput(
         agentRun.output,
         (output) => {
-            return output.stderr.includes(`export SSH_AUTH_SOCK='${socketPath}'`) || output.stderr.includes(`export SSH_AUTH_SOCK=${socketPath}`)
+            return (
+                output.stderr.includes(`export SSH_AUTH_SOCK='${socketPath}'`) ||
+                output.stderr.includes(`export SSH_AUTH_SOCK=${socketPath}`)
+            )
         },
         'Timed out waiting for revaulter ssh-agent to start'
     )
@@ -129,7 +143,7 @@ export async function listSshAgentKeys(socketPath) {
     return result.stdout.trim().split('\n').filter(Boolean)
 }
 
-export async function startLocalSSHServer({ authorizedKey, message = 'hello from revaulter ssh e2e\n' }) {
+export async function startLocalSshServer({ authorizedKey, message = 'hello from revaulter ssh e2e\n' }) {
     const tempRoot = mkdtempSync(join(tmpdir(), 'revaulter-e2e-ssh-server-'))
     const authorizedKeyPath = join(tempRoot, 'authorized_key')
     writeFileSync(authorizedKeyPath, `${authorizedKey.trim()}\n`)
@@ -162,7 +176,7 @@ export async function startLocalSSHServer({ authorizedKey, message = 'hello from
     }
 }
 
-export function startSSHCommand({ address, socketPath, user = 'playwright' }) {
+export function startSshCommand({ address, socketPath, user = 'playwright' }) {
     const addressParts = address.split(':')
     const port = addressParts.pop()
     const host = addressParts.join(':')

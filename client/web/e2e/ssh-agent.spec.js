@@ -4,19 +4,13 @@ import { join } from 'node:path'
 
 import { expect, test } from '@playwright/test'
 
-import {
-    openSettingsTab,
-    registerAndReachReady,
-    resetBrowserState,
-    resetState,
-    waitForListStream,
-} from './helpers.mjs'
+import { openSettingsTab, registerAndReachReady, resetBrowserState, resetState, waitForListStream } from './helpers.mjs'
 import {
     listSshAgentKeys,
     runCLITrust,
-    startCLISshAgent,
-    startLocalSSHServer,
-    startSSHCommand,
+    startLocalSshServer,
+    startSshAgent,
+    startSshCommand,
     stopProcess,
 } from './ssh-agent-helpers.mjs'
 
@@ -36,6 +30,7 @@ test('ssh-agent serves the public key and approves SSH auth through Revaulter', 
     let sshProcess
 
     try {
+        // Create the signing key
         await openSettingsTab(page, 'Signing keys')
         await page.locator('input#signing-key-label').fill(keyLabel)
         await page.getByRole('button', { name: 'Derive key' }).click()
@@ -43,32 +38,38 @@ test('ssh-agent serves the public key and approves SSH auth through Revaulter', 
         await page.getByRole('button', { name: 'Close settings' }).click()
         await waitForListStream(page)
 
+        // Trust the anchor key locally
         await runCLITrust({
             requestKey: auth.session.requestKey,
             trustStorePath,
         })
 
-        agentRun = await startCLISshAgent({
+        // Start the SSH agent
+        agentRun = await startSshAgent({
             keyLabel,
             requestKey: auth.session.requestKey,
             socketPath,
             trustStorePath,
         })
 
+        // List the public key which is the authorized_key
         const exportedKeys = await listSshAgentKeys(socketPath)
         expect(exportedKeys).toHaveLength(1)
         expect(exportedKeys[0]).toContain('ecdsa-sha2-nistp256')
         expect(exportedKeys[0]).toContain(`revaulter/${keyLabel}`)
 
-        serverRun = await startLocalSSHServer({
+        // Start a local SSH test server
+        serverRun = await startLocalSshServer({
             authorizedKey: exportedKeys[0],
         })
 
-        sshProcess = startSSHCommand({
+        // Connect via SSH
+        sshProcess = startSshCommand({
             address: serverRun.address,
             socketPath,
         })
 
+        // Approve the request via Revaulter
         await expect(page.getByText('SSH auth', { exact: true })).toBeVisible()
         await expect(page.getByText(keyLabel)).toBeVisible()
         await page.getByRole('button', { name: 'Confirm' }).click()
