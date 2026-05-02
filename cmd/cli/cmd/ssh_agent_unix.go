@@ -62,7 +62,8 @@ agent in a non-interactive environment.`,
 func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	log := logging.LogFromContext(cmd.Context())
 
-	if err := f.Validate(); err != nil {
+	err := f.Validate()
+	if err != nil {
 		return fmt.Errorf("invalid flags: %w", err)
 	}
 
@@ -126,7 +127,8 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 			}
 			go func() {
 				defer conn.Close()
-				if err := agent.ServeAgent(a, conn); err != nil && !errors.Is(err, net.ErrClosed) {
+				err := agent.ServeAgent(a, conn)
+				if err != nil && !errors.Is(err, net.ErrClosed) {
 					log.Debug("SSH agent connection closed", slog.Any("err", err))
 				}
 			}()

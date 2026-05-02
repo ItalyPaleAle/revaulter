@@ -16,6 +16,11 @@ import (
 
 var config *Config
 
+const (
+	TLSCertFile = "tls-cert.pem"
+	TLSKeyFile  = "tls-key.pem"
+)
+
 func init() {
 	// Set the default config at startup
 	config = GetDefaultConfig()
@@ -52,10 +57,9 @@ func GetDefaultConfig() *Config {
 		LogAsJSON:           !isatty.IsTerminal(os.Stdout.Fd()),
 		Port:                port,
 		Bind:                "0.0.0.0",
-		SessionTimeout:      5 * time.Minute,
-		RequestTimeout:      5 * time.Minute,
-		OmitHealthCheckLogs: true,
-		WebAuthnRPName:      "Revaulter",
+		SessionTimeout: 5 * time.Minute,
+		RequestTimeout: 5 * time.Minute,
+		WebAuthnRPName: "Revaulter",
 	}
 }
 

@@ -96,8 +96,8 @@ func (c *trustCmd) Run(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to fetch server pubkey bundle: %w", err)
 	}
 
-	// Build a confirmer for first-contact pinning.
-	// --yes accepts without prompting (for scripts/CI); otherwise require a TTY.
+	// Build a confirmer for first-contact pinning
+	// --yes accepts without prompting (for scripts/CI); otherwise require a TTY
 	var confirm func(string) (bool, error)
 	switch {
 	case c.Yes:

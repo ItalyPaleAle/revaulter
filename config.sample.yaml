@@ -121,11 +121,11 @@ secretKey:
 ##   For example, `10.0.0.0/8`
 #trustedProxies: 
 
-## omitHealthCheckLogs (boolean)
+## logHealthChecks (boolean)
 ## Description:
-##   If true, calls to the healthcheck endpoint (`/healthz`) are not included in the logs.
+##   If true, calls to the healthcheck endpoint (`/healthz`) are included in the logs.
 ## Default: false
-#omitHealthCheckLogs: 
+#logHealthChecks: 
 
 ## trustedRequestIdHeader (string)
 ## Description:

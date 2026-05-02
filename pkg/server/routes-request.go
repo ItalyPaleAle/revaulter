@@ -39,9 +39,8 @@ type v2RequestPubkeyResponse struct {
 	EcdhP256 json.RawMessage `json:"ecdhP256"`
 	Mlkem768 string          `json:"mlkem768"`
 
-	// Hybrid anchor pubkeys + bundle self-signatures. The CLI pins the anchor pubkeys
-	// (TOFU) and verifies both signatures over the bundle to detect server-side pubkey
-	// substitution attacks.
+	// Hybrid anchor pubkeys + bundle self-signatures
+	// The CLI pins the anchor pubkeys (TOFU) and verifies both signatures over the bundle to detect server-side pubkey substitution attacks
 	AnchorEs384PublicKey         string `json:"anchorEs384PublicKey"`
 	AnchorMldsa87PublicKey       string `json:"anchorMldsa87PublicKey"`
 	WrappedKeyEpoch              int64  `json:"wrappedKeyEpoch"`

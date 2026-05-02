@@ -10,15 +10,12 @@ import (
 
 	"github.com/italypaleale/go-kit/fsnotify"
 
+	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 )
 
-const (
-	tlsCertFile   = "tls-cert.pem"
-	tlsKeyFile    = "tls-key.pem"
-	minTLSVersion = tls.VersionTLS12
-)
+const minTLSVersion = tls.VersionTLS12
 
 type tlsCertWatchFn = func(ctx context.Context) error
 
@@ -36,12 +33,14 @@ func newTLSCertProvider(path string) (*tlsCertProvider, error) {
 	var exists bool
 
 	// Check if the certificate and key exist
-	cert := filepath.Join(path, tlsCertFile)
-	if exists, _ = utils.FileExists(cert); !exists {
+	cert := filepath.Join(path, config.TLSCertFile)
+	exists, _ = utils.FileExists(cert)
+	if !exists {
 		return nil, nil
 	}
-	key := filepath.Join(path, tlsKeyFile)
-	if exists, _ = utils.FileExists(key); !exists {
+	key := filepath.Join(path, config.TLSKeyFile)
+	exists, _ = utils.FileExists(key)
+	if !exists {
 		return nil, nil
 	}
 
