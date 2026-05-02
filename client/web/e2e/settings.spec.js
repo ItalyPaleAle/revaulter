@@ -23,7 +23,7 @@ test('settings modal opens with all tabs', async ({ page }) => {
         // Tab buttons are in the nav element
         const nav = page.locator('nav')
         await expect(nav.locator('button', { hasText: 'User' })).toBeVisible()
-        await expect(nav.locator('button', { hasText: 'IP' })).toBeVisible()
+        await expect(nav.locator('button', { hasText: 'Firewall' })).toBeVisible()
         await expect(nav.locator('button', { hasText: 'Password' })).toBeVisible()
         await expect(nav.locator('button', { hasText: 'Passkeys' })).toBeVisible()
     } finally {

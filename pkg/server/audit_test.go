@@ -83,6 +83,7 @@ func TestAuditEventsRouteFiltersEventType(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	//nolint:bodyclose
 	res, out := doAuditEventsRequest(t, client, sessionCookie, "/v2/api/audit-events?eventType=auth.login_finish")
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Len(t, out.Events, 1)
@@ -90,6 +91,7 @@ func TestAuditEventsRouteFiltersEventType(t *testing.T) {
 	require.NotNil(t, out.Events[0].ActorUserID)
 	require.Equal(t, alice.ID, *out.Events[0].ActorUserID)
 
+	//nolint:bodyclose
 	res, out = doAuditEventsRequest(t, client, sessionCookie, "/v2/api/audit-events")
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Len(t, out.Events, 2)
@@ -106,9 +108,11 @@ func TestAuditEventsRouteRejectsInvalidFilters(t *testing.T) {
 
 	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-audit-route-invalid", "Invalid Alice")
 
+	//nolint:bodyclose
 	res, _ := doAuditEventsRequest(t, client, sessionCookie, "/v2/api/audit-events?eventType=nope")
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 
+	//nolint:bodyclose
 	res, _ = doAuditEventsRequest(t, client, sessionCookie, "/v2/api/audit-events?cursor=not-a-uuid")
 	require.Equal(t, http.StatusBadRequest, res.StatusCode)
 }

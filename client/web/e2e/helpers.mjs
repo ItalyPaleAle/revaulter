@@ -235,7 +235,7 @@ export async function openSettingsTab(page, tabName) {
 }
 
 export async function openAllowedIPs(page) {
-    await openSettingsTab(page, 'IP')
+    await openSettingsTab(page, 'Firewall')
 }
 
 export async function seedCredential(request, data) {
