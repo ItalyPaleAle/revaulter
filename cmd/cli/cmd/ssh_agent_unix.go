@@ -252,7 +252,7 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 		v2OperationFlagsBase: a.flags.v2OperationFlagsBase,
 	}
 	signFlags.Algorithm = protocolv2.SigningAlgES256
-	signFlags.Note = "SSH auth"
+	signFlags.Note = sshAgentSignNote(a.flags.Note)
 	signFlags.digestB64 = digestB64
 
 	op := &v2OperationCmd{
@@ -302,6 +302,15 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 	}
 
 	return sig, nil
+}
+
+// sshAgentSignNote returns the note shown to the user for SSH auth approvals
+func sshAgentSignNote(extra string) string {
+	if extra == "" {
+		return "SSH auth"
+	}
+
+	return "SSH auth " + extra
 }
 
 // validateSigningKey rejects sign requests for keys this agent did not advertise

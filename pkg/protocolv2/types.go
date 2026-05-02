@@ -18,6 +18,9 @@ const (
 	OperationSign    = "sign"
 )
 
+// MaxNoteLength is the maximum length for the user-facing request note
+const MaxNoteLength = 80
+
 // SigningAlgES256 is the JWA identifier for ECDSA using P-256 with SHA-256
 const SigningAlgES256 = "ES256"
 

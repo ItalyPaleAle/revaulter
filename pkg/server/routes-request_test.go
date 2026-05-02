@@ -176,9 +176,9 @@ func TestValidateV2CreateBodyRejectsInvalidInput(t *testing.T) {
 			name: "note too long",
 			op:   protocolv2.OperationEncrypt,
 			mutateBody: func(body *protocolv2.RequestCreateBody) {
-				body.Note = strings.Repeat("n", 41)
+				body.Note = strings.Repeat("n", protocolv2.MaxNoteLength+1)
 			},
-			wantErr: "parameter 'note' cannot be longer than 40 characters",
+			wantErr: "parameter 'note' cannot be longer than 80 characters",
 		},
 		{
 			name: "unsupported request encryption algorithm",

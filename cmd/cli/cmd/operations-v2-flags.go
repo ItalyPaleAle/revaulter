@@ -90,7 +90,7 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&f.Algorithm, "algorithm", "a", "", "algorithm identifier")
 
 	cmd.Flags().VarP(&f.Timeout, "timeout", "t", "Timeout for the operation, as a number of seconds or Go duration")
-	cmd.Flags().StringVarP(&f.Note, "note", "n", "", "Optional message displayed alongside the request (up to 40 characters)")
+	cmd.Flags().StringVarP(&f.Note, "note", "n", "", fmt.Sprintf("Optional message displayed alongside the request (up to %d characters)", protocolv2.MaxNoteLength))
 
 	cmd.Flags().StringVarP(&f.Output, "output", "o", "", "Write the result to this file path instead of stdout")
 

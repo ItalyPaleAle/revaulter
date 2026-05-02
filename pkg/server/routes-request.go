@@ -421,8 +421,8 @@ func validateV2CreateBody(op string, body *protocolv2.RequestCreateBody) error {
 	if body.Note != "" && !body.ValidateNote() {
 		return NewResponseError(http.StatusBadRequest, "parameter 'note' contains invalid characters")
 	}
-	if len(body.Note) > 40 {
-		return NewResponseError(http.StatusBadRequest, "parameter 'note' cannot be longer than 40 characters")
+	if len(body.Note) > protocolv2.MaxNoteLength {
+		return NewResponseErrorf(http.StatusBadRequest, "parameter 'note' cannot be longer than %d characters", protocolv2.MaxNoteLength)
 	}
 
 	// Validate E2EE envelope fields, and normalize all base64 to base64url (no padding)

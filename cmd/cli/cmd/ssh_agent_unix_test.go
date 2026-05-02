@@ -15,6 +15,11 @@ func TestShellQuoteEscapesSingleQuotes(t *testing.T) {
 	require.Equal(t, "'/tmp/revaulter agent/alice'\\''s key.sock'", got)
 }
 
+func TestSSHAgentSignNote(t *testing.T) {
+	require.Equal(t, "SSH auth", sshAgentSignNote(""))
+	require.Equal(t, "SSH auth prod.example.com", sshAgentSignNote("prod.example.com"))
+}
+
 func TestSSHAgentOperationContextCancelsOnShutdown(t *testing.T) {
 	shutdown := make(chan struct{})
 	a := &revaulterSSHAgent{shutdown: shutdown}
