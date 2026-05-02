@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 
@@ -549,6 +550,71 @@ func TestServerV2SigningKeyAutoStoreOnSign(t *testing.T) {
 	status, body = doGet(t, "/v2/signing-keys/"+km.ID+".pem")
 	require.Equal(t, http.StatusOK, status)
 	require.Equal(t, km.PEM, string(body))
+}
+
+func TestServerV2RequestSigningPubkeyReturnsAutoStoredKey(t *testing.T) {
+	setTestConfig(t, "v2-request-signing-pubkey.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	_, aliceUser := seedV2SessionCookie(t, srv, "user-request-signing-pubkey", "Alice")
+
+	keyLabel := "prod+ssh"
+	km := newSigningKeyMaterial(t)
+	_, err := srv.db.SigningKeyStore().AutoStoreUnpublished(t.Context(), db.InsertSigningKeyInput{
+		ID:        km.ID,
+		UserID:    aliceUser.ID,
+		Algorithm: protocolv2.SigningAlgES256,
+		KeyLabel:  keyLabel,
+		JWK:       string(km.JWKJSON),
+		PEM:       km.PEM,
+		Published: false,
+	})
+	require.NoError(t, err)
+
+	// The label contains '+', so this route must work when the client URL-encodes the query string
+	//nolint:bodyclose
+	res, out := doRequestKeyJSON(t, client, http.MethodGet, "signing-pubkey?label=prod%2Bssh&algorithm=ES256", aliceUser.RequestKey, nil)
+	require.Equal(t, http.StatusOK, res.StatusCode, "unexpected body: %v", out)
+	require.Equal(t, km.ID, out["id"])
+	require.Equal(t, keyLabel, out["keyLabel"])
+	require.Equal(t, protocolv2.SigningAlgES256, out["algorithm"])
+	require.NotNil(t, out["jwk"])
+}
+
+func TestServerV2RequestSigningPubkeyRejectsInvalidRequests(t *testing.T) {
+	setTestConfig(t, "v2-request-signing-pubkey-invalid.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	_, aliceUser := seedV2SessionCookie(t, srv, "user-request-signing-pubkey-invalid", "Alice")
+
+	tests := []struct {
+		name   string
+		query  string
+		status int
+	}{
+		{name: "missing label", query: "signing-pubkey", status: http.StatusBadRequest},
+		{name: "invalid label", query: "signing-pubkey?label=bad%20label", status: http.StatusBadRequest},
+		{name: "unsupported algorithm", query: "signing-pubkey?label=missing&algorithm=HS256", status: http.StatusBadRequest},
+		{name: "not found", query: "signing-pubkey?label=missing&algorithm=ES256", status: http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			//nolint:bodyclose
+			res, _ := doRequestKeyJSON(t, client, http.MethodGet, tt.query, aliceUser.RequestKey, nil)
+			require.Equal(t, tt.status, res.StatusCode)
+		})
+	}
 }
 
 // TestServerV2SigningKeyAutoStoreSkippedOnNonSign confirms that auto-store only

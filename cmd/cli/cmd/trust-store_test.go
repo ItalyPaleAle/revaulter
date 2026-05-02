@@ -123,7 +123,8 @@ func TestTrustStoreAnchorMismatchRefusesSilentRepin(t *testing.T) {
 	_, err = ts2.checkOrPinAnchor("https://example.test", "user-1", es384PubB, es384RawB, mlPubB64B, mlPubBytesB,
 		func(string) (bool, error) { return true, nil })
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "fingerprint mismatch")
+	require.ErrorContains(t, err, "fingerprint mismatch")
+	require.ErrorContains(t, err, path)
 
 	// Disk state must still contain the ORIGINAL pin, not the presented one
 	ts3, err := loadTrustStore(path)
@@ -187,4 +188,8 @@ func TestTrustStorePermissions(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "trust store must be 0600")
+
+	loaded, err := loadTrustStore(path)
+	require.NoError(t, err)
+	require.Equal(t, path, loaded.Path)
 }
