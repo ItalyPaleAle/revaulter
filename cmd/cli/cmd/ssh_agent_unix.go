@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -51,7 +52,8 @@ agent in a non-interactive environment.`,
 	f.BindBase(cmd)
 
 	_ = cmd.MarkFlagRequired("key-label")
-	cmd.Flags().StringVar(&f.SocketPath, "socket", "", "Path for the Unix socket (default: /tmp/revaulter-ssh-agent-<label>.sock)")
+	defaultSocketPath := filepath.Join(defaultSSHAgentSocketDir(), "ssh-agent-<key-label>.sock")
+	cmd.Flags().StringVar(&f.SocketPath, "socket", "", "Path for the Unix socket (defaults to "+defaultSocketPath+")")
 	cmd.Flags().StringVar(&f.Comment, "comment", "", `Comment attached to the key (default: "revaulter/<key-label>")`)
 
 	return cmd
@@ -71,7 +73,10 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 		f.Comment = "revaulter/" + f.KeyLabel
 	}
 	if f.SocketPath == "" {
-		f.SocketPath = "/tmp/revaulter-ssh-agent-" + f.KeyLabel + ".sock"
+		f.SocketPath, err = defaultSSHAgentSocketPath(f.KeyLabel)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Get the HTTP client
@@ -146,6 +151,32 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	log.Info("SSH agent shutting down")
 
 	return nil
+}
+
+// defaultSSHAgentSocketPath returns a socket path under a private per-user directory
+func defaultSSHAgentSocketPath(keyLabel string) (string, error) {
+	dir := defaultSSHAgentSocketDir()
+	err := os.MkdirAll(dir, 0o700)
+	if err != nil {
+		return "", fmt.Errorf("failed to create SSH agent socket directory: %w", err)
+	}
+
+	err = os.Chmod(dir, 0o700)
+	if err != nil {
+		return "", fmt.Errorf("failed to restrict SSH agent socket directory: %w", err)
+	}
+
+	return filepath.Join(dir, "ssh-agent-"+keyLabel+".sock"), nil
+}
+
+// defaultSSHAgentSocketDir returns the resolved private directory for the default socket path
+func defaultSSHAgentSocketDir() string {
+	base := os.Getenv("XDG_RUNTIME_DIR")
+	if base == "" {
+		base = filepath.Join(os.TempDir(), fmt.Sprintf("revaulter-ssh-agent-%d", os.Getuid()))
+	}
+
+	return filepath.Join(base, "revaulter")
 }
 
 // revaulterSSHAgent implements agent.Agent, routing all sign requests through Revaulter
