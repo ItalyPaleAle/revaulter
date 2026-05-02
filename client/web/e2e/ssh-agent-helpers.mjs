@@ -21,6 +21,7 @@ function spawnCaptured(command, args, options = {}) {
         cwd: options.cwd || repoRoot,
         env: options.env || process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: options.detached || false,
     })
 
     let stdout = ''
@@ -51,6 +52,7 @@ function spawnCaptured(command, args, options = {}) {
 
     return {
         child,
+        detached: options.detached || false,
         done,
         output() {
             return { stdout, stderr }
@@ -114,7 +116,7 @@ export async function startSshAgent({ keyLabel, requestKey, socketPath, trustSto
             '--trust-store',
             trustStorePath,
         ],
-        { env: goEnv() }
+        { detached: true, env: goEnv() }
     )
 
     await waitForOutput(
@@ -151,7 +153,7 @@ export async function startLocalSshServer({ authorizedKey, message = 'hello from
     const serverRun = spawnCaptured(
         'go',
         ['run', './tools/e2e-ssh-server', '--authorized-key-file', authorizedKeyPath, '--message', message],
-        { env: goEnv() }
+        { detached: true, env: goEnv() }
     )
 
     const output = await waitForOutput(
@@ -226,7 +228,31 @@ export async function stopProcess(run) {
 
     const exited = run.done.catch(() => undefined)
     if (run.child.exitCode === null && !run.child.killed) {
-        run.child.kill('SIGTERM')
+        if (run.detached && run.child.pid) {
+            try {
+                process.kill(-run.child.pid, 'SIGTERM')
+            } catch {
+                run.child.kill('SIGTERM')
+            }
+        } else {
+            run.child.kill('SIGTERM')
+        }
     }
-    await exited
+
+    const timeout = new Promise((resolve) => {
+        setTimeout(resolve, 5000)
+    })
+    const completed = await Promise.race([exited.then(() => true), timeout.then(() => false)])
+    if (!completed && run.child.exitCode === null && !run.child.killed) {
+        if (run.detached && run.child.pid) {
+            try {
+                process.kill(-run.child.pid, 'SIGKILL')
+            } catch {
+                run.child.kill('SIGKILL')
+            }
+        } else {
+            run.child.kill('SIGKILL')
+        }
+        await exited
+    }
 }
