@@ -16,9 +16,11 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -119,7 +121,7 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 		slog.String("key_label", f.KeyLabel),
 		slog.String("comment", f.Comment),
 	)
-	fmt.Fprintf(os.Stderr, "export SSH_AUTH_SOCK=%s\n", f.SocketPath)
+	fmt.Fprintf(os.Stderr, "export SSH_AUTH_SOCK=%s\n", shellQuote(f.SocketPath))
 
 	// Accept connections in a background goroutine
 	go func() {
@@ -305,7 +307,10 @@ func (a *revaulterSSHAgent) fetchSigningPubkey(parentCtx context.Context) (ssh.P
 	defer cancel()
 
 	// Create the request
-	pathSuffix := "signing-pubkey?label=" + a.flags.KeyLabel + "&algorithm=" + protocolv2.SigningAlgES256
+	query := url.Values{}
+	query.Set("label", a.flags.KeyLabel)
+	query.Set("algorithm", protocolv2.SigningAlgES256)
+	pathSuffix := "signing-pubkey?" + query.Encode()
 	req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodGet, a.flags.GetServer(), a.flags.GetRequestKey(), pathSuffix, nil)
 	if err != nil {
 		return nil, err
@@ -343,6 +348,11 @@ func (a *revaulterSSHAgent) fetchSigningPubkey(parentCtx context.Context) (ssh.P
 	}
 
 	return sshPub, nil
+}
+
+// shellQuote returns a POSIX single-quoted shell literal
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 // signTimeout returns the per-request sign timeout: flags timeout + grace, or a 5-minute default
