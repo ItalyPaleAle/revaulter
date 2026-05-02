@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -205,6 +206,11 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 	ctx, cancel := context.WithTimeout(context.Background(), a.signTimeout())
 	defer cancel()
 
+	err := a.validateSigningKey(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
 	digest := sha256.Sum256(data)
 	digestB64 := base64.RawURLEncoding.EncodeToString(digest[:])
 
@@ -263,6 +269,24 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 		Format: key.Type(),
 		Blob:   sigBlob,
 	}, nil
+}
+
+// validateSigningKey rejects sign requests for keys this agent did not advertise
+func (a *revaulterSSHAgent) validateSigningKey(ctx context.Context, key ssh.PublicKey) error {
+	if key == nil {
+		return errors.New("missing SSH public key")
+	}
+
+	advertisedKey, err := a.fetchSigningPubkey(ctx)
+	if err != nil {
+		return fmt.Errorf("fetch advertised signing key: %w", err)
+	}
+
+	if !bytes.Equal(key.Marshal(), advertisedKey.Marshal()) {
+		return errors.New("requested SSH key is not managed by this agent")
+	}
+
+	return nil
 }
 
 var sshNotSupportedError = errors.New("not supported")
