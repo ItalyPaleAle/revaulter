@@ -10,12 +10,13 @@ Encryption keys and signing keys don't belong in environment variables or on dis
 
 - Unlock encrypted disks at boot
 - Wrap database and TLS keys
+- SSH logins with a passkey-backed SSH agent
 - Sign release binaries from CI
 - Protect backup repository passwords
 - Issue long-lived JWTs
 - Encrypt/decrypt arbitrary messages
 
-![Screenshot of Revaulter, showing 3 requests pending approval: one for encrypting, one for signing, one for decrypting](./screenshot.webp)
+![Screenshot of Revaulter, showing 3 requests pending approval: one for encrypting, one for signing, one for decrypting](./docs/img/screenshot.webp)
 
 ## Usage examples
 
@@ -58,6 +59,10 @@ Integrate Revaulter into your boot process to unlock LUKS/dm-crypt volumes. A sc
 
 Wrap your [restic](https://restic.net) repository password with Revaulter and hook it into restic's `--password-command`. The backup script gets the password only after a passkey holder approves — even a fully compromised backup host can't restore the repository on its own. [See full example](./docs/06-examples.md#backing-up-with-restic) in the docs.
 
+### SSH logins with a passkey-backed SSH agent
+
+Run `revaulter ssh-agent` as your local SSH agent so SSH authentication requests are approved through Revaulter in the browser. The server gets a normal `authorized_keys` public key, while each login requires passkey approval. [See the SSH agent guide](./docs/08-ssh-agent.md) in the docs.
+
 ### Sign release binaries from CI
 
 Run `revaulter-cli sign` from a GitHub Actions workflow to produce a signature over a release artifact. The signing key never touches the runner, the workflow pauses while a maintainer approves the request from their phone, and the resulting `.sig` is a 64-byte raw `r || s` ECDSA signature that any ECDSA library can verify. [See full example](./docs/06-examples.md#signing-a-release-binary-from-github-actions) in the docs.
@@ -80,7 +85,7 @@ Revaulter publishes the public half of every signing key on a cacheable, unauthe
 
 Encryption keys are derived from the passkey in the browser (leveraging the PRF extension), they never leave the user's device. The Revaulter server is just a relay: it temporarily stores only opaque, end-to-end encrypted envelopes.
 
-![Example of a notification sent by Revaulter to a Discord channel](./notification-example.webp)
+![Example of a notification sent by Revaulter to a Discord channel](./docs/img/notification-example.webp)
 
 ## Key features
 
@@ -128,6 +133,7 @@ Then start the server, open the web UI, and create your first account.
 - [REST API reference](./docs/05-rest-api-reference.md) — all endpoints with request/response schemas
 - [Examples](./docs/06-examples.md) — LUKS disk unlock at boot, encrypting files with age, restic backups, signing release manifests / binaries / JWTs, fetching a public key to verify a signature
 - [Audit events](./docs/07-audit-events.md) — durable, queryable record of security-relevant actions; schema, event types, retention, sample SQL
+- [SSH agent](./docs/08-ssh-agent.md) — use Revaulter as an SSH agent for passkey-approved SSH logins
 
 ## License
 
