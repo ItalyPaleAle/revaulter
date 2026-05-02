@@ -34,6 +34,7 @@ import (
 
 type sshAgentFlags struct {
 	v2OperationFlagsBase
+
 	SocketPath string
 	Comment    string
 }
@@ -111,7 +112,7 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	defer stop()
 
 	a := &revaulterSSHAgent{
-		ctx:        ctx,
+		shutdown:   ctx.Done(),
 		httpClient: httpClient,
 		flags:      f,
 		log:        log,
@@ -210,7 +211,7 @@ func defaultSSHAgentSocketDir() string {
 
 // revaulterSSHAgent implements agent.Agent, routing all sign requests through Revaulter
 type revaulterSSHAgent struct {
-	ctx        context.Context
+	shutdown   <-chan struct{}
 	httpClient *http.Client
 	flags      *sshAgentFlags
 	log        *slog.Logger
@@ -218,7 +219,7 @@ type revaulterSSHAgent struct {
 
 // List returns the signing public key registered for the configured label
 func (a *revaulterSSHAgent) List() ([]*agent.Key, error) {
-	ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+	ctx, cancel := a.operationContext(30 * time.Second)
 	defer cancel()
 
 	sshPub, err := a.fetchSigningPubkey(ctx)
@@ -235,7 +236,7 @@ func (a *revaulterSSHAgent) List() ([]*agent.Key, error) {
 
 // Sign hashes data with SHA-256 and submits a sign request to the Revaulter server
 func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
-	ctx, cancel := context.WithTimeout(a.ctx, a.signTimeout())
+	ctx, cancel := a.operationContext(a.signTimeout())
 	defer cancel()
 
 	err := a.validateSigningKey(ctx, key)
@@ -321,15 +322,34 @@ func (a *revaulterSSHAgent) validateSigningKey(ctx context.Context, key ssh.Publ
 	return nil
 }
 
-var sshNotSupportedError = errors.New("not supported")
+// operationContext creates a per-agent-operation context that is cancelled on agent shutdown or timeout
+func (a *revaulterSSHAgent) operationContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	done := make(chan struct{})
+
+	go func() {
+		select {
+		case <-a.shutdown:
+			cancel()
+		case <-done:
+		}
+	}()
+
+	return ctx, func() {
+		close(done)
+		cancel()
+	}
+}
+
+var errSSHNotSupported = errors.New("not supported")
 
 // Add, Remove, RemoveAll, Lock, Unlock, Signers are not supported
-func (a *revaulterSSHAgent) Add(_ agent.AddedKey) error     { return sshNotSupportedError }
-func (a *revaulterSSHAgent) Remove(_ ssh.PublicKey) error   { return sshNotSupportedError }
-func (a *revaulterSSHAgent) RemoveAll() error               { return sshNotSupportedError }
-func (a *revaulterSSHAgent) Lock(_ []byte) error            { return sshNotSupportedError }
-func (a *revaulterSSHAgent) Unlock(_ []byte) error          { return sshNotSupportedError }
-func (a *revaulterSSHAgent) Signers() ([]ssh.Signer, error) { return nil, sshNotSupportedError }
+func (a *revaulterSSHAgent) Add(_ agent.AddedKey) error     { return errSSHNotSupported }
+func (a *revaulterSSHAgent) Remove(_ ssh.PublicKey) error   { return errSSHNotSupported }
+func (a *revaulterSSHAgent) RemoveAll() error               { return errSSHNotSupported }
+func (a *revaulterSSHAgent) Lock(_ []byte) error            { return errSSHNotSupported }
+func (a *revaulterSSHAgent) Unlock(_ []byte) error          { return errSSHNotSupported }
+func (a *revaulterSSHAgent) Signers() ([]ssh.Signer, error) { return nil, errSSHNotSupported }
 
 // fetchSigningPubkey retrieves the auto-stored ES256 public key for the configured label
 func (a *revaulterSSHAgent) fetchSigningPubkey(parentCtx context.Context) (ssh.PublicKey, error) {

@@ -202,7 +202,8 @@ func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, c
 	if err != nil {
 		return false, fmt.Errorf("invalid pubkey bundle signature: %w", err)
 	}
-	if err = protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl); err != nil {
+	err = protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl)
+	if err != nil {
 		return false, fmt.Errorf("pubkey bundle signature verification failed: %w", err)
 	}
 
