@@ -41,32 +41,32 @@ func newSshAgentCmd() *cobra.Command {
 		Short: "Run an SSH key agent that routes signing through Revaulter",
 		Long: `Starts a local SSH agent that listens on a Unix socket.
 
-SSH clients point SSH_AUTH_SOCK at the socket. When they request a signature,
-the agent sends a sign request to the Revaulter server. The user approves via
-their browser and passkey, and the resulting ECDSA signature is returned to SSH.
+SSH clients point SSH_AUTH_SOCK at the socket. When they request a signature, the agent sends a sign request to the Revaulter server. The user approves via their browser and passkey, and the resulting ECDSA signature is returned to SSH.
 
-The signing public key is auto-registered by the server after the first sign
-operation with the given key label. Run any other revaulter-cli command (e.g.
-"sign") at least once with a TTY to pin the server anchor before running the
+Note: The signing public key is auto-registered by the server after the first sign operation with the given key label. Run "revaulter trust" (or any other revaulter CLI command) at least once with a TTY to pin the server anchor before running the
 agent in a non-interactive environment.`,
 		RunE: f.Run,
 	}
 
 	f.BindBase(cmd)
+
 	_ = cmd.MarkFlagRequired("key-label")
 	cmd.Flags().StringVar(&f.SocketPath, "socket", "", "Path for the Unix socket (default: /tmp/revaulter-ssh-agent-<label>.sock)")
 	cmd.Flags().StringVar(&f.Comment, "comment", "", `Comment attached to the key (default: "revaulter/<key-label>")`)
+
 	return cmd
 }
 
 func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	log := logging.LogFromContext(cmd.Context())
 
+	// Validate the flags
 	err := f.Validate()
 	if err != nil {
 		return fmt.Errorf("invalid flags: %w", err)
 	}
 
+	// Set the default values
 	if f.Comment == "" {
 		f.Comment = "revaulter/" + f.KeyLabel
 	}
@@ -74,6 +74,7 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 		f.SocketPath = "/tmp/revaulter-ssh-agent-" + f.KeyLabel + ".sock"
 	}
 
+	// Get the HTTP client
 	httpClient, err := getV2HTTPClient(log, &f.v2OperationFlagsBase)
 	if err != nil {
 		return err
@@ -82,6 +83,7 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	// Remove stale socket file if it exists
 	_ = os.Remove(f.SocketPath)
 
+	// Create a listener on the UDS
 	l, err := net.Listen("unix", f.SocketPath)
 	if err != nil {
 		return fmt.Errorf("failed to create Unix socket %s: %w", f.SocketPath, err)
@@ -92,7 +94,8 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	}()
 
 	// Restrict socket to owner-only access
-	if err = os.Chmod(f.SocketPath, 0o600); err != nil {
+	err = os.Chmod(f.SocketPath, 0o600)
+	if err != nil {
 		return fmt.Errorf("failed to set socket permissions: %w", err)
 	}
 
@@ -112,19 +115,21 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	)
 	fmt.Fprintf(os.Stderr, "export SSH_AUTH_SOCK=%s\n", f.SocketPath)
 
-	// Accept connections until context is canceled
+	// Accept connections in a background goroutine
 	go func() {
 		for {
 			conn, err := l.Accept()
 			if err != nil {
 				select {
 				case <-ctx.Done():
+					// Stop when the context is done
 					return
 				default:
 					log.Error("SSH agent accept error", slog.Any("err", err))
 				}
 				return
 			}
+
 			go func() {
 				defer conn.Close()
 				err := agent.ServeAgent(a, conn)
@@ -135,8 +140,11 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 		}
 	}()
 
+	// Block until the context is canceled
 	<-ctx.Done()
+
 	log.Info("SSH agent shutting down")
+
 	return nil
 }
 
@@ -149,10 +157,11 @@ type revaulterSSHAgent struct {
 
 // List returns the signing public key registered for the configured label
 func (a *revaulterSSHAgent) List() ([]*agent.Key, error) {
-	sshPub, err := a.fetchSigningPubkey()
+	sshPub, err := a.fetchSigningPubkey(context.Background())
 	if err != nil {
 		return nil, err
 	}
+
 	return []*agent.Key{{
 		Format:  sshPub.Type(),
 		Blob:    sshPub.Marshal(),
@@ -186,21 +195,24 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 		return nil, fmt.Errorf("transport key pair: %w", err)
 	}
 
+	// Create the request
 	state, err := op.createRequest(ctx, a.httpClient, kp)
 	if err != nil {
 		return nil, fmt.Errorf("submit sign request: %w", err)
 	}
 
+	// Wait for the confirmation
 	a.log.Info("Waiting for browser confirmation", slog.String("state", state))
-
 	aad := buildTransportAAD(state, protocolv2.OperationSign, protocolv2.SigningAlgES256)
 	plain, err := op.getResult(ctx, a.httpClient, state, kp, aad)
 	if err != nil {
 		return nil, fmt.Errorf("sign request failed: %w", err)
 	}
 
+	// Parse the response
 	var resp v2SignResponsePayload
-	if err = json.Unmarshal(plain, &resp); err != nil {
+	err = json.Unmarshal(plain, &resp)
+	if err != nil {
 		return nil, fmt.Errorf("parse sign response: %w", err)
 	}
 
@@ -212,7 +224,9 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 	// Convert IEEE P1363 r||s (64 bytes) to the SSH ECDSA wire format: mpint r, mpint s
 	r := new(big.Int).SetBytes(sigBytes[:32])
 	s := new(big.Int).SetBytes(sigBytes[32:])
-	sigBlob := ssh.Marshal(struct{ R, S *big.Int }{R: r, S: s})
+	sigBlob := ssh.Marshal(
+		struct{ R, S *big.Int }{R: r, S: s},
+	)
 
 	return &ssh.Signature{
 		Format: key.Type(),
@@ -220,32 +234,38 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 	}, nil
 }
 
+var sshNotSupportedError = errors.New("not supported")
+
 // Add, Remove, RemoveAll, Lock, Unlock, Signers are not supported
-func (a *revaulterSSHAgent) Add(_ agent.AddedKey) error        { return errors.New("not supported") }
-func (a *revaulterSSHAgent) Remove(_ ssh.PublicKey) error      { return errors.New("not supported") }
-func (a *revaulterSSHAgent) RemoveAll() error                  { return errors.New("not supported") }
-func (a *revaulterSSHAgent) Lock(_ []byte) error               { return errors.New("not supported") }
-func (a *revaulterSSHAgent) Unlock(_ []byte) error             { return errors.New("not supported") }
-func (a *revaulterSSHAgent) Signers() ([]ssh.Signer, error)    { return nil, errors.New("not supported") }
+func (a *revaulterSSHAgent) Add(_ agent.AddedKey) error     { return sshNotSupportedError }
+func (a *revaulterSSHAgent) Remove(_ ssh.PublicKey) error   { return sshNotSupportedError }
+func (a *revaulterSSHAgent) RemoveAll() error               { return sshNotSupportedError }
+func (a *revaulterSSHAgent) Lock(_ []byte) error            { return sshNotSupportedError }
+func (a *revaulterSSHAgent) Unlock(_ []byte) error          { return sshNotSupportedError }
+func (a *revaulterSSHAgent) Signers() ([]ssh.Signer, error) { return nil, sshNotSupportedError }
 
 // fetchSigningPubkey retrieves the auto-stored ES256 public key for the configured label
-func (a *revaulterSSHAgent) fetchSigningPubkey() (ssh.PublicKey, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func (a *revaulterSSHAgent) fetchSigningPubkey(parentCtx context.Context) (ssh.PublicKey, error) {
+	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
 
+	// Create the request
 	pathSuffix := "signing-pubkey?label=" + a.flags.KeyLabel + "&algorithm=" + protocolv2.SigningAlgES256
 	req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodGet, a.flags.GetServer(), a.flags.GetRequestKey(), pathSuffix, nil)
 	if err != nil {
 		return nil, err
 	}
 
+	// Parse the response
 	var resp v2RequestSigningPubkeyClientResponse
-	if err = doJSONRequest(a.httpClient, req, &resp); err != nil {
+	err = doJSONRequest(a.httpClient, req, &resp)
+	if err != nil {
 		return nil, fmt.Errorf("fetch signing pubkey: %w", err)
 	}
 
 	var jwk protocolv2.ECP256SigningJWK
-	if err = json.Unmarshal(resp.JWK, &jwk); err != nil {
+	err = json.Unmarshal(resp.JWK, &jwk)
+	if err != nil {
 		return nil, fmt.Errorf("parse signing key JWK: %w", err)
 	}
 
@@ -266,6 +286,7 @@ func (a *revaulterSSHAgent) fetchSigningPubkey() (ssh.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build SSH public key: %w", err)
 	}
+
 	return sshPub, nil
 }
 
@@ -273,10 +294,12 @@ func (a *revaulterSSHAgent) fetchSigningPubkey() (ssh.PublicKey, error) {
 func (a *revaulterSSHAgent) signTimeout() time.Duration {
 	const defaultTimeout = 5 * time.Minute
 	const grace = 30 * time.Second
+
 	d := a.flags.GetTimeoutDuration()
 	if d > 0 {
 		return d + grace
 	}
+
 	return defaultTimeout
 }
 

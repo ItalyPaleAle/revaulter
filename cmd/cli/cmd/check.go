@@ -22,10 +22,6 @@ type checkFlags struct {
 	Timeout         durationValue
 }
 
-func init() {
-	rootCmd.AddCommand(newCheckCmd())
-}
-
 func newCheckCmd() *cobra.Command {
 	f := &checkFlags{}
 	cmd := &cobra.Command{

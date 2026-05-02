@@ -305,6 +305,7 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 	if err != nil {
 		return nil, nil, fmt.Errorf("anchor trust check failed: %w", err)
 	}
+
 	if pinned {
 		err = saveTrustStore(path, ts)
 		if err != nil {
@@ -333,7 +334,7 @@ func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, c
 		return false, fmt.Errorf("invalid anchor public key: %w", err)
 	}
 
-	// Verify both halves of the hybrid bundle signature against the SERVER-PROVIDED anchor pubkeys
+	// Verify both halves of the hybrid bundle signature against the **server-provided** anchor pubkeys
 	// The subsequent pin check catches anchor rotation; this catches a server that serves a corrupt or mismatched bundle
 	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(resp.AnchorEs384PublicKey)
 	if err != nil {
@@ -552,13 +553,6 @@ func doJSONRequest(client *http.Client, req *http.Request, out any) error {
 	return json.NewDecoder(res.Body).Decode(out)
 }
 
-// httpClientFlags is the minimal interface required to build an HTTP client
-// It is satisfied by both v2OperationFlags and *v2OperationFlagsBase
-type httpClientFlags interface {
-	GetServer() string
-	GetConnectionOptions() (insecure bool, noh2c bool)
-}
-
 func getV2HTTPClient(log *slog.Logger, flags httpClientFlags) (*http.Client, error) {
 	server := flags.GetServer()
 	insecure, noH2c := flags.GetConnectionOptions()
@@ -597,4 +591,11 @@ func getV2HTTPClient(log *slog.Logger, flags httpClientFlags) (*http.Client, err
 			base: transport,
 		},
 	}, nil
+}
+
+// httpClientFlags is the minimal interface required to build an HTTP client
+// It is satisfied by both v2OperationFlags and *v2OperationFlagsBase
+type httpClientFlags interface {
+	GetServer() string
+	GetConnectionOptions() (insecure bool, noh2c bool)
 }

@@ -3,17 +3,10 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 )
 
+// The ssh-agent command is only available on Unix systems
 func newSshAgentCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "ssh-agent",
-		Short: "Run an SSH key agent that routes signing through Revaulter",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("ssh-agent is only supported on Unix platforms")
-		},
-	}
+	return nil
 }

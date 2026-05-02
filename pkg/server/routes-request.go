@@ -456,16 +456,20 @@ func validateV2CreateBody(op string, body *protocolv2.RequestCreateBody) error {
 	return nil
 }
 
-// RouteV2RequestSigningPubkey returns the stored public key for a signing key owned by the request-key user
+// RouteV2RequestSigningPubkey is the handler for GET /v2/request/signing-pubkey
+// It returns the stored public key for a signing key owned by the request-key user
 // Query params: label (required), algorithm (optional, defaults to ES256)
 // The key is auto-stored by the server after each successful sign operation, so no extra registration step is needed
 func (s *Server) RouteV2RequestSigningPubkey(c *gin.Context) {
+	// Retrieve the user (which includes the key) from the context
 	user := getRequestUserFromCtx(c)
 	if user == nil {
+		// Should never happen
 		AbortWithErrorJSON(c, errors.New("missing request user in context"))
 		return
 	}
 
+	// Get the label from the query parameter
 	keyLabel := c.Query("label")
 	if keyLabel == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing query parameter 'label'"))
@@ -478,6 +482,7 @@ func (s *Server) RouteV2RequestSigningPubkey(c *gin.Context) {
 		return
 	}
 
+	// Get the algorithm from the query parameter (default is ES256)
 	algorithm := c.Query("algorithm")
 	if algorithm == "" {
 		algorithm = protocolv2.SigningAlgES256
@@ -490,6 +495,7 @@ func (s *Server) RouteV2RequestSigningPubkey(c *gin.Context) {
 		algorithm = canonical
 	}
 
+	// Get the key
 	rec, err := s.db.SigningKeyStore().GetByUserAndLabel(c.Request.Context(), user.ID, algorithm, canonicalLabel)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -500,6 +506,7 @@ func (s *Server) RouteV2RequestSigningPubkey(c *gin.Context) {
 		return
 	}
 
+	// Send the response
 	c.JSON(http.StatusOK, v2RequestSigningPubkeyResponse{
 		ID:        rec.ID,
 		Algorithm: rec.Algorithm,
