@@ -738,43 +738,51 @@ type v2SignResponsePayload struct {
 	Signature string `json:"signature"`
 }
 
+// parseAndValidateV2SignResponse validates response binding and returns the decoded raw ES256 r||s signature
+func parseAndValidateV2SignResponse(state, keyLabel string, plain []byte) (*v2SignResponsePayload, []byte, error) {
+	var resp v2SignResponsePayload
+	err := json.Unmarshal(plain, &resp)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid sign response JSON: %w", err)
+	}
+
+	if resp.State != state {
+		return nil, nil, errors.New("sign response state mismatch")
+	}
+	if resp.Operation != protocolv2.OperationSign {
+		return nil, nil, fmt.Errorf("unexpected operation in sign response: %q", resp.Operation)
+	}
+	if resp.Algorithm != protocolv2.SigningAlgES256 {
+		return nil, nil, fmt.Errorf("unexpected algorithm in sign response: %q", resp.Algorithm)
+	}
+	if resp.KeyLabel != keyLabel {
+		return nil, nil, fmt.Errorf("sign response keyLabel %q does not match requested %q", resp.KeyLabel, keyLabel)
+	}
+	if resp.Signature == "" {
+		return nil, nil, errors.New("sign response missing signature")
+	}
+
+	sigBytes, err := base64.RawURLEncoding.DecodeString(resp.Signature)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid signature base64url: %w", err)
+	}
+
+	// ECDSA P-256 raw r||s is exactly 64 bytes
+	if len(sigBytes) != 64 {
+		return nil, nil, fmt.Errorf("unexpected signature length: got %d bytes, want 64", len(sigBytes))
+	}
+
+	return &resp, sigBytes, nil
+}
+
 // FormatResult shapes the decrypted plaintext depending on the selected output format
 // - `json` (default) emits the indented JSON envelope produced by the browser
 // - `jws` emits `<header>.<payload>.<sig>`
 // - `raw` emits the 64 raw `r||s` bytes
 func (f *v2OperationFlagsSign) FormatResult(state string, plain []byte, format string) ([]byte, error) {
-	// Parse the JSON response
-	var resp v2SignResponsePayload
-	err := json.Unmarshal(plain, &resp)
+	_, sigBytes, err := parseAndValidateV2SignResponse(state, f.KeyLabel, plain)
 	if err != nil {
-		return nil, fmt.Errorf("invalid sign response JSON: %w", err)
-	}
-
-	// Validate the response
-	if resp.State != state {
-		return nil, errors.New("sign response state mismatch")
-	}
-	if resp.Operation != protocolv2.OperationSign {
-		return nil, fmt.Errorf("unexpected operation in sign response: %q", resp.Operation)
-	}
-	if resp.Algorithm != protocolv2.SigningAlgES256 {
-		return nil, fmt.Errorf("unexpected algorithm in sign response: %q", resp.Algorithm)
-	}
-	if resp.KeyLabel != f.KeyLabel {
-		return nil, fmt.Errorf("sign response keyLabel %q does not match requested %q", resp.KeyLabel, f.KeyLabel)
-	}
-	if resp.Signature == "" {
-		return nil, errors.New("sign response missing signature")
-	}
-
-	sigBytes, err := base64.RawURLEncoding.DecodeString(resp.Signature)
-	if err != nil {
-		return nil, fmt.Errorf("invalid signature base64url: %w", err)
-	}
-
-	// ECDSA P-256 raw r||s is exactly 64 bytes
-	if len(sigBytes) != 64 {
-		return nil, fmt.Errorf("unexpected signature length: got %d bytes, want 64", len(sigBytes))
+		return nil, err
 	}
 
 	switch format {

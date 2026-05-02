@@ -246,16 +246,10 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 		return nil, fmt.Errorf("sign request failed: %w", err)
 	}
 
-	// Parse the response
-	var resp v2SignResponsePayload
-	err = json.Unmarshal(plain, &resp)
+	// Parse and validate the response
+	_, sigBytes, err := parseAndValidateV2SignResponse(state, a.flags.KeyLabel, plain)
 	if err != nil {
-		return nil, fmt.Errorf("parse sign response: %w", err)
-	}
-
-	sigBytes, err := base64.RawURLEncoding.DecodeString(resp.Signature)
-	if err != nil || len(sigBytes) != 64 {
-		return nil, fmt.Errorf("invalid signature in response")
+		return nil, err
 	}
 
 	// Convert IEEE P1363 r||s (64 bytes) to the SSH ECDSA wire format: mpint r, mpint s
@@ -265,10 +259,16 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 		struct{ R, S *big.Int }{R: r, S: s},
 	)
 
-	return &ssh.Signature{
+	sig := &ssh.Signature{
 		Format: key.Type(),
 		Blob:   sigBlob,
-	}, nil
+	}
+	err = key.Verify(data, sig)
+	if err != nil {
+		return nil, fmt.Errorf("verify SSH signature response: %w", err)
+	}
+
+	return sig, nil
 }
 
 // validateSigningKey rejects sign requests for keys this agent did not advertise
