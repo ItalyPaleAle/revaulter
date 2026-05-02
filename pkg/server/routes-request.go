@@ -26,14 +26,21 @@ type v2RequestCreateResponse struct {
 	Pending bool   `json:"pending"`
 }
 
+// v2RequestSigningPubkeyResponse is the response for GET /v2/request/signing-pubkeys
+type v2RequestSigningPubkeyResponse struct {
+	ID        string          `json:"id"`
+	Algorithm string          `json:"algorithm"`
+	KeyLabel  string          `json:"keyLabel"`
+	JWK       json.RawMessage `json:"jwk"`
+}
+
 type v2RequestPubkeyResponse struct {
 	UserID   string          `json:"userId"`
 	EcdhP256 json.RawMessage `json:"ecdhP256"`
 	Mlkem768 string          `json:"mlkem768"`
 
-	// Hybrid anchor pubkeys + bundle self-signatures. The CLI pins the anchor pubkeys
-	// (TOFU) and verifies both signatures over the bundle to detect server-side pubkey
-	// substitution attacks.
+	// Hybrid anchor pubkeys + bundle self-signatures
+	// The CLI pins the anchor pubkeys (TOFU) and verifies both signatures over the bundle to detect server-side pubkey substitution attacks
 	AnchorEs384PublicKey         string `json:"anchorEs384PublicKey"`
 	AnchorMldsa87PublicKey       string `json:"anchorMldsa87PublicKey"`
 	WrappedKeyEpoch              int64  `json:"wrappedKeyEpoch"`
@@ -414,8 +421,8 @@ func validateV2CreateBody(op string, body *protocolv2.RequestCreateBody) error {
 	if body.Note != "" && !body.ValidateNote() {
 		return NewResponseError(http.StatusBadRequest, "parameter 'note' contains invalid characters")
 	}
-	if len(body.Note) > 40 {
-		return NewResponseError(http.StatusBadRequest, "parameter 'note' cannot be longer than 40 characters")
+	if len(body.Note) > protocolv2.MaxNoteLength {
+		return NewResponseErrorf(http.StatusBadRequest, "parameter 'note' cannot be longer than %d characters", protocolv2.MaxNoteLength)
 	}
 
 	// Validate E2EE envelope fields, and normalize all base64 to base64url (no padding)
@@ -447,4 +454,63 @@ func validateV2CreateBody(op string, body *protocolv2.RequestCreateBody) error {
 	body.EncryptedPayload = base64.RawURLEncoding.EncodeToString(encryptedPayload)
 
 	return nil
+}
+
+// RouteV2RequestSigningPubkey is the handler for GET /v2/request/signing-pubkey
+// It returns the stored public key for a signing key owned by the request-key user
+// Query params: label (required), algorithm (optional, defaults to ES256)
+// The key is auto-stored by the server after each successful sign operation, so no extra registration step is needed
+func (s *Server) RouteV2RequestSigningPubkey(c *gin.Context) {
+	// Retrieve the user (which includes the key) from the context
+	user := getRequestUserFromCtx(c)
+	if user == nil {
+		// Should never happen
+		AbortWithErrorJSON(c, errors.New("missing request user in context"))
+		return
+	}
+
+	// Get the label from the query parameter
+	keyLabel := c.Query("label")
+	if keyLabel == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "missing query parameter 'label'"))
+		return
+	}
+
+	canonicalLabel, ok := protocolv2.NormalizeAndValidateKeyLabel(keyLabel)
+	if !ok {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "invalid label"))
+		return
+	}
+
+	// Get the algorithm from the query parameter (default is ES256)
+	algorithm := c.Query("algorithm")
+	if algorithm == "" {
+		algorithm = protocolv2.SigningAlgES256
+	} else {
+		canonical, ok := protocolv2.NormalizeSigningAlgorithm(algorithm)
+		if !ok {
+			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "unsupported algorithm"))
+			return
+		}
+		algorithm = canonical
+	}
+
+	// Get the key
+	rec, err := s.db.SigningKeyStore().GetByUserAndLabel(c.Request.Context(), user.ID, algorithm, canonicalLabel)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if rec == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "signing key not found; perform a sign operation first to register the key"))
+		return
+	}
+
+	// Send the response
+	c.JSON(http.StatusOK, v2RequestSigningPubkeyResponse{
+		ID:        rec.ID,
+		Algorithm: rec.Algorithm,
+		KeyLabel:  rec.KeyLabel,
+		JWK:       json.RawMessage(rec.JWK),
+	})
 }

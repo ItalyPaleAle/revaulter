@@ -18,6 +18,7 @@ import (
 // A mismatch is always surfaced as an explicit rotation prompt — the CLI never silently re-pins
 type trustStore struct {
 	Entries map[string]trustStoreEntry `json:"entries"`
+	Path    string                     `json:"-"`
 }
 
 // trustStoreEntry is the per-target record. The fingerprint is redundant but
@@ -52,10 +53,37 @@ func defaultTrustStorePath() (string, error) {
 	return filepath.Join(base, "revaulter-cli", "trust.json"), nil
 }
 
+type trustStorePathFlags interface {
+	GetTrustStorePath() string
+}
+
+// loadTrustStoreForFlags resolves the trust store path from CLI flags and loads it
+func loadTrustStoreForFlags(flags trustStorePathFlags) (*trustStore, string, error) {
+	path := flags.GetTrustStorePath()
+	if path == "" {
+		p, err := defaultTrustStorePath()
+		if err != nil {
+			return nil, "", err
+		}
+		path = p
+	}
+
+	ts, err := loadTrustStore(path)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return ts, path, nil
+}
+
 // loadTrustStore reads the trust store from disk
 // A missing file returns an empty store; any other error (including invalid JSON) is returned
 func loadTrustStore(path string) (*trustStore, error) {
-	ts := &trustStore{Entries: make(map[string]trustStoreEntry)}
+	ts := &trustStore{
+		Entries: make(map[string]trustStoreEntry),
+		Path:    path,
+	}
+
 	// #nosec G304 -- path is controlled by the user via --trust-store or defaultTrustStorePath
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -73,6 +101,7 @@ func loadTrustStore(path string) (*trustStore, error) {
 	if ts.Entries == nil {
 		ts.Entries = make(map[string]trustStoreEntry)
 	}
+	ts.Path = path
 
 	return ts, nil
 }
@@ -109,16 +138,16 @@ func saveTrustStore(path string, ts *trustStore) error {
 		_ = os.RemoveAll(tmpPath)
 	}()
 
-	_, err = tmp.Write(b)
-	if err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("failed to write trust store: %w", err)
-	}
-
 	err = tmp.Chmod(0o600)
 	if err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("failed to chmod trust store: %w", err)
+	}
+
+	_, err = tmp.Write(b)
+	if err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("failed to write trust store: %w", err)
 	}
 
 	err = tmp.Close()
@@ -132,6 +161,58 @@ func saveTrustStore(path string, ts *trustStore) error {
 	}
 
 	return nil
+}
+
+// verifyAndPinAnchor validates the hybrid anchor bundle in resp, verifies both signatures, then checks or pins the anchor in ts
+// Returns pinned=true when the anchor was newly pinned; the caller must save the trust store in that case
+func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, confirm func(string) (bool, error)) (pinned bool, err error) {
+	if len(resp.AnchorEs384PublicKey) == 0 || resp.AnchorMldsa87PublicKey == "" ||
+		resp.PubkeyBundleSignatureEs384 == "" || resp.PubkeyBundleSignatureMldsa87 == "" {
+		return false, errors.New("server did not return a hybrid anchor bundle; refusing to proceed (use --no-trust-store to override)")
+	}
+
+	if resp.UserID == "" {
+		return false, errors.New("server did not return userId; refusing to proceed (use --no-trust-store to override)")
+	}
+
+	es384Pub, mldsa87PubBytes, err := parseAnchorPubkeysFromWire(resp.AnchorEs384PublicKey, resp.AnchorMldsa87PublicKey)
+	if err != nil {
+		return false, fmt.Errorf("invalid anchor public key: %w", err)
+	}
+
+	// Verify both halves of the hybrid bundle signature against the server-provided anchor pubkeys
+	// The subsequent pin check catches anchor rotation; this catches a server that serves a corrupt or mismatched bundle
+	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(resp.AnchorEs384PublicKey)
+	if err != nil {
+		return false, fmt.Errorf("invalid anchorEs384PublicKey: %w", err)
+	}
+
+	bundlePayload := &protocolv2.PubkeyBundlePayload{
+		UserID:                 resp.UserID,
+		RequestEncEcdhPubkey:   string(resp.EcdhP256),
+		RequestEncMlkemPubkey:  resp.Mlkem768,
+		AnchorEs384Crv:         es384JWK.Crv,
+		AnchorEs384Kty:         es384JWK.Kty,
+		AnchorEs384X:           es384JWK.X,
+		AnchorEs384Y:           es384JWK.Y,
+		AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
+		WrappedKeyEpoch:        resp.WrappedKeyEpoch,
+	}
+	sigEs, sigMl, err := decodeHybridSignatures(resp.PubkeyBundleSignatureEs384, resp.PubkeyBundleSignatureMldsa87)
+	if err != nil {
+		return false, fmt.Errorf("invalid pubkey bundle signature: %w", err)
+	}
+	err = protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl)
+	if err != nil {
+		return false, fmt.Errorf("pubkey bundle signature verification failed: %w", err)
+	}
+
+	return ts.checkOrPinAnchor(
+		server, resp.UserID,
+		es384Pub, resp.AnchorEs384PublicKey,
+		resp.AnchorMldsa87PublicKey, mldsa87PubBytes,
+		confirm,
+	)
 }
 
 // checkOrPinAnchor matches the fetched anchor pubkey pair against the trust store
@@ -159,18 +240,18 @@ func (ts *trustStore) checkOrPinAnchor(
 		// Constant-time comparison on the fingerprint hex (same length on both sides)
 		if subtle.ConstantTimeCompare([]byte(entry.Fingerprint), []byte(fp)) != 1 {
 			return false, fmt.Errorf(
-				"anchor fingerprint mismatch for %s (user %s); pinned=%s, server=%s; refusing to re-pin without explicit operator approval",
-				server, userID, entry.Fingerprint, fp,
+				"anchor fingerprint mismatch for %s (user %s); pinned=%s, server=%s; refusing to re-pin without explicit operator approval%s",
+				server, userID, entry.Fingerprint, fp, ts.trustStorePathHint(),
 			)
 		}
 
 		// Also check the pubkey components directly, so a bug in fingerprinting cannot mask a real mismatch
 		if entry.AnchorMldsa87PublicKey != mldsa87PubB64 {
-			return false, fmt.Errorf("anchor ML-DSA-87 pubkey does not match pin for %s (user %s)", server, userID)
+			return false, fmt.Errorf("anchor ML-DSA-87 pubkey does not match pin for %s (user %s)%s", server, userID, ts.trustStorePathHint())
 		}
 
 		if subtle.ConstantTimeCompare([]byte(entry.AnchorEs384PublicKey), []byte(es384Canonical)) != 1 {
-			return false, fmt.Errorf("anchor ES384 pubkey does not match pin for %s (user %s)", server, userID)
+			return false, fmt.Errorf("anchor ES384 pubkey does not match pin for %s (user %s)%s", server, userID, ts.trustStorePathHint())
 		}
 
 		return false, nil
@@ -197,4 +278,13 @@ func (ts *trustStore) checkOrPinAnchor(
 		FirstSeen:              time.Now().UTC(),
 	}
 	return true, nil
+}
+
+// trustStorePathHint returns an operator hint for anchor rotation errors
+func (ts *trustStore) trustStorePathHint() string {
+	if ts.Path == "" {
+		return ""
+	}
+
+	return "; trust store: " + ts.Path
 }

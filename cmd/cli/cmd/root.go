@@ -41,11 +41,22 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&pf.Verbose, "verbose", "V", false, "Show debug-level logs")
 
 	// Register sub-commands
-	rootCmd.AddCommand(
+	cmds := []*cobra.Command{
 		newV2OperationCmd("encrypt", "Encrypt data", func() v2OperationFlags { return &v2OperationFlagsEncrypt{} }),
 		newV2OperationCmd("decrypt", "Decrypt data", func() v2OperationFlags { return &v2OperationFlagsDecrypt{} }),
 		newV2OperationCmd("sign", "Sign data", func() v2OperationFlags { return &v2OperationFlagsSign{} }),
-	)
+		newCheckCmd(),
+		newVersionCmd(),
+		newTrustCmd(),
+	}
+
+	// The ssh-agent command is only available on Unix systems
+	sshAgentCmd := newSshAgentCmd()
+	if sshAgentCmd != nil {
+		cmds = append(cmds, sshAgentCmd)
+	}
+
+	rootCmd.AddCommand(cmds...)
 }
 
 // Run executes the root command

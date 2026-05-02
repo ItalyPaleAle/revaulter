@@ -98,6 +98,7 @@ func (s *SigningKeyStore) Create(ctx context.Context, in InsertSigningKeyInput) 
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -147,6 +148,33 @@ func (s *SigningKeyStore) AutoStoreUnpublished(ctx context.Context, in InsertSig
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
+	rec.CreatedAt = time.Unix(createdAt, 0)
+	rec.UpdatedAt = time.Unix(updatedAt, 0)
+
+	return rec, nil
+}
+
+// GetByUserAndLabel returns the signing key for the given (userID, algorithm, keyLabel) tuple
+// Returns nil if no matching row exists
+func (s *SigningKeyStore) GetByUserAndLabel(ctx context.Context, userID, algorithm, keyLabel string) (*PublishedSigningKey, error) {
+	rec := &PublishedSigningKey{}
+	var createdAt, updatedAt int64
+	err := s.db.
+		QueryRow(ctx,
+			`SELECT id, user_id, algorithm, key_label, jwk, pem, published, publication_payload, publication_signature_es384, publication_signature_mldsa87, created_at, updated_at
+				FROM v2_published_signing_keys
+				WHERE user_id = $1 AND algorithm = $2 AND key_label = $3`,
+			userID, algorithm, keyLabel,
+		).
+		Scan(&rec.ID, &rec.UserID, &rec.Algorithm, &rec.KeyLabel, &rec.JWK, &rec.PEM, &rec.Published, &rec.PublicationPayload, &rec.PublicationSignatureEs384, &rec.PublicationSignatureMldsa87, &createdAt, &updatedAt)
+	if s.db.IsNoRowsError(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -169,6 +197,7 @@ func (s *SigningKeyStore) GetByID(ctx context.Context, id string) (*PublishedSig
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -255,6 +284,7 @@ func (s *SigningKeyStore) Delete(ctx context.Context, userID, id string) (*Publi
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -282,6 +312,7 @@ func (s *SigningKeyStore) SetPublished(ctx context.Context, userID, id string, p
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 
@@ -317,6 +348,7 @@ func (s *SigningKeyStore) StorePublicationProof(ctx context.Context, userID, id,
 		return nil, err
 	}
 
+	// Set CreatedAt and UpdatedAt
 	rec.CreatedAt = time.Unix(createdAt, 0)
 	rec.UpdatedAt = time.Unix(updatedAt, 0)
 

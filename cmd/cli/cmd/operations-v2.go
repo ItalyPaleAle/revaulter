@@ -191,9 +191,7 @@ func writeOutputFile(path string, payload []byte) error {
 }
 
 func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Client, kp *v2TransportKeyPair) (string, error) {
-	// Fetch the user's static public keys (ECDH + ML-KEM) alongside the hybrid
-	// anchor bundle so the CLI can pin the anchor on first contact and refuse
-	// any subsequent pubkey substitution.
+	// Fetch the user's static public keys (ECDH + ML-KEM) alongside the hybrid anchor bundle so the CLI can pin the anchor on first contact and refuse any subsequent pubkey substitution
 	ecdhPub, mlkemPub, err := o.fetchAndVerifyUserPubkeys(ctx, httpClient)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch user public keys: %w", err)
@@ -246,7 +244,7 @@ func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Cli
 	return res.State, nil
 }
 
-// v2PubkeyResponse mirrors the server's /v2/request/pubkey shape.
+// v2PubkeyResponse mirrors the server's /v2/request/pubkey shape
 type v2PubkeyResponse struct {
 	UserID   string          `json:"userId"`
 	EcdhP256 json.RawMessage `json:"ecdhP256"`
@@ -297,64 +295,17 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 		return ecdhPub, mlkemPub, nil
 	}
 
-	// Validate that the server supplied the full hybrid anchor bundle.
-	if len(resp.AnchorEs384PublicKey) == 0 || resp.AnchorMldsa87PublicKey == "" ||
-		resp.PubkeyBundleSignatureEs384 == "" || resp.PubkeyBundleSignatureMldsa87 == "" {
-		return nil, nil, errors.New("server did not return a hybrid anchor bundle; refusing to proceed (use --no-trust-store to override)")
-	}
-
-	es384Pub, mldsa87PubBytes, err := parseAnchorPubkeysFromWire(resp.AnchorEs384PublicKey, resp.AnchorMldsa87PublicKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid anchor public key: %w", err)
-	}
-
-	if resp.UserID == "" {
-		return nil, nil, errors.New("server did not return userId; refusing to proceed (use --no-trust-store to override)")
-	}
-
-	// Verify both halves of the hybrid bundle signature against the SERVER-PROVIDED
-	// anchor pubkeys. The subsequent pin check catches anchor rotation; this catches
-	// a server that serves a corrupt or mismatched bundle.
-	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(resp.AnchorEs384PublicKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid anchorEs384PublicKey: %w", err)
-	}
-
-	bundlePayload := &protocolv2.PubkeyBundlePayload{
-		UserID:                 resp.UserID,
-		RequestEncEcdhPubkey:   string(resp.EcdhP256),
-		RequestEncMlkemPubkey:  resp.Mlkem768,
-		AnchorEs384Crv:         es384JWK.Crv,
-		AnchorEs384Kty:         es384JWK.Kty,
-		AnchorEs384X:           es384JWK.X,
-		AnchorEs384Y:           es384JWK.Y,
-		AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
-		WrappedKeyEpoch:        resp.WrappedKeyEpoch,
-	}
-	sigEs, sigMl, err := decodeHybridSignatures(resp.PubkeyBundleSignatureEs384, resp.PubkeyBundleSignatureMldsa87)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid pubkey bundle signature: %w", err)
-	}
-	err = protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl)
-	if err != nil {
-		return nil, nil, fmt.Errorf("pubkey bundle signature verification failed: %w", err)
-	}
-
 	ts, path, err := o.loadOrInitTrustStore()
 	if err != nil {
 		return nil, nil, err
 	}
 
 	confirm := o.terminalConfirmer()
-	pinned, err := ts.checkOrPinAnchor(
-		o.flags.GetServer(), resp.UserID,
-		es384Pub, resp.AnchorEs384PublicKey,
-		resp.AnchorMldsa87PublicKey, mldsa87PubBytes,
-		confirm,
-	)
+	pinned, err := verifyAndPinAnchor(o.flags.GetServer(), &resp, ts, confirm)
 	if err != nil {
 		return nil, nil, fmt.Errorf("anchor trust check failed: %w", err)
 	}
+
 	if pinned {
 		err = saveTrustStore(path, ts)
 		if err != nil {
@@ -368,19 +319,7 @@ func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClie
 
 // loadOrInitTrustStore resolves the trust store path and loads its contents
 func (o *v2OperationCmd) loadOrInitTrustStore() (*trustStore, string, error) {
-	path := o.flags.GetTrustStorePath()
-	if path == "" {
-		p, err := defaultTrustStorePath()
-		if err != nil {
-			return nil, "", err
-		}
-		path = p
-	}
-	ts, err := loadTrustStore(path)
-	if err != nil {
-		return nil, "", err
-	}
-	return ts, path, nil
+	return loadTrustStoreForFlags(o.flags)
 }
 
 // terminalConfirmer returns a prompt function that asks the user on stderr to accept a TOFU pin
@@ -551,7 +490,7 @@ func doJSONRequest(client *http.Client, req *http.Request, out any) error {
 	return json.NewDecoder(res.Body).Decode(out)
 }
 
-func getV2HTTPClient(log *slog.Logger, flags v2OperationFlags) (*http.Client, error) {
+func getV2HTTPClient(log *slog.Logger, flags httpClientFlags) (*http.Client, error) {
 	server := flags.GetServer()
 	insecure, noH2c := flags.GetConnectionOptions()
 
@@ -589,4 +528,11 @@ func getV2HTTPClient(log *slog.Logger, flags v2OperationFlags) (*http.Client, er
 			base: transport,
 		},
 	}, nil
+}
+
+// httpClientFlags is the minimal interface required to build an HTTP client
+// It is satisfied by both v2OperationFlags and *v2OperationFlagsBase
+type httpClientFlags interface {
+	GetServer() string
+	GetConnectionOptions() (insecure bool, noh2c bool)
 }

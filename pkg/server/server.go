@@ -280,6 +280,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2RequestGroup.POST("/decrypt", s.RouteV2RequestCreate("decrypt"))
 	v2RequestGroup.POST("/sign", s.RouteV2RequestCreate("sign"))
 	v2RequestGroup.GET("/pubkey", s.RouteV2RequestPubkey)
+	v2RequestGroup.GET("/signing-pubkey", s.RouteV2RequestSigningPubkey)
 	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
 
 	// Public (unauthenticated) signing key fetch endpoints, rate-limited
@@ -367,7 +368,7 @@ func (s *Server) getBaseURL() string {
 }
 
 // Run the web server
-// Note this function is blocking, and will return only when the servers are shut down via context cancellation.
+// Note this function is blocking, and will return only when the servers are shut down via context cancellation
 func (s *Server) Run(ctx context.Context) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return errors.New("server is already running")
