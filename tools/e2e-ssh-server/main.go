@@ -77,13 +77,12 @@ func main() {
 	for {
 		conn, acceptErr := listener.Accept()
 		if acceptErr != nil {
-			opErr, ok := acceptErr.(*net.OpError)
-			if ok && !opErr.Temporary() {
+			netErr, ok := acceptErr.(net.Error)
+			if !ok || !netErr.Temporary() {
 				return
 			}
-			if acceptErr != nil {
-				return
-			}
+
+			continue
 		}
 
 		go handleConn(conn, serverConfig, *message)
