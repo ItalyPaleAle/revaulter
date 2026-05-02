@@ -335,7 +335,7 @@ func (o *v2OperationCmd) terminalConfirmer() func(fingerprint string) (bool, err
 	reader := bufio.NewReader(os.Stdin)
 	return func(fingerprint string) (bool, error) {
 		fmt.Fprintf(os.Stderr, "First contact with %s.\n", o.flags.GetServer())
-		fmt.Fprintf(os.Stderr, "Anchor fingerprint (SHA-256 of ES384||ML-DSA-87 pubkeys):\n  %s\n", fingerprint)
+		fmt.Fprintf(os.Stderr, "Anchor fingerprint:\n%s\n", formatFingerprint(fingerprint, 2))
 		fmt.Fprint(os.Stderr, "Pin this anchor? [y/N]: ")
 		line, err := reader.ReadString('\n')
 		if err != nil {

@@ -126,6 +126,7 @@ export type V2AuthSessionInfo = {
     userId: string
     displayName: string
     requestKey: string
+    anchorFingerprint: string
     wrappedKeyEpoch: number
     allowedIps: string[]
     ttl: number
@@ -154,6 +155,7 @@ export type V2SessionResponse = {
     userId: string
     displayName: string
     requestKey: string
+    anchorFingerprint: string
     wrappedKeyEpoch: number
     allowedIps: string[]
     ttl: number

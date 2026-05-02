@@ -66,12 +66,13 @@ type v2AuthRegisterBeginResponse struct {
 }
 
 type v2AuthSessionInfo struct {
-	UserID          string   `json:"userId"`
-	DisplayName     string   `json:"displayName"`
-	RequestKey      string   `json:"requestKey"`
-	WrappedKeyEpoch int64    `json:"wrappedKeyEpoch"`
-	AllowedIPs      []string `json:"allowedIps"`
-	TTL             int      `json:"ttl"`
+	UserID            string   `json:"userId"`
+	DisplayName       string   `json:"displayName"`
+	RequestKey        string   `json:"requestKey"`
+	AnchorFingerprint string   `json:"anchorFingerprint"`
+	WrappedKeyEpoch   int64    `json:"wrappedKeyEpoch"`
+	AllowedIPs        []string `json:"allowedIps"`
+	TTL               int      `json:"ttl"`
 }
 
 type v2AuthRegisterFinishResponse struct {

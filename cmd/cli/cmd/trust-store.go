@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
@@ -287,4 +288,24 @@ func (ts *trustStore) trustStorePathHint() string {
 	}
 
 	return "; trust store: " + ts.Path
+}
+
+// formatFingerprint formats a hex fingerprint for display with spaces every 4 chars, newlines every 4 groups of 4, all uppercase
+func formatFingerprint(fp string, prefixSpaces int) string {
+	fp = strings.ToUpper(fp)
+	var b strings.Builder
+	linePrefix := strings.Repeat(" ", prefixSpaces)
+	b.WriteString(linePrefix)
+	for i, c := range fp {
+		if i > 0 && i%4 == 0 {
+			if i%16 == 0 {
+				b.WriteByte('\n')
+				b.WriteString(linePrefix)
+			} else {
+				b.WriteByte(' ')
+			}
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
 }

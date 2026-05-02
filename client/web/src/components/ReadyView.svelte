@@ -32,6 +32,7 @@ interface Props {
     pendingItems: V2PendingRequestItem[]
     primaryKey: Uint8Array | null
     requestKey: string
+    anchorFingerprint: string
     sessionLabel: string
     settingsBusy: boolean
     settingsError: string | null
@@ -65,6 +66,7 @@ let {
     pendingItems,
     primaryKey,
     requestKey,
+    anchorFingerprint,
     sessionLabel,
     settingsBusy,
     settingsError,
@@ -233,6 +235,7 @@ function rejectAll() {
             {userId}
             {displayName}
             {requestKey}
+            {anchorFingerprint}
             {allowedIpsText}
             {hasPassword}
             {credentials}

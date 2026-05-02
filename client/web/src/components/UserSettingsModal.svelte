@@ -14,6 +14,7 @@ interface Props {
     userId: string
     displayName: string
     requestKey: string
+    anchorFingerprint: string
     allowedIpsText: string
     hasPassword: boolean
     credentials: V2CredentialItem[]
@@ -41,6 +42,7 @@ let {
     userId,
     displayName,
     requestKey,
+    anchorFingerprint,
     allowedIpsText,
     hasPassword,
     credentials,
@@ -193,6 +195,21 @@ function copyRequestKey() {
             copied = false
         }, 2000)
     })
+}
+
+function formatFingerprint(fp: string): string {
+    const upper = fp.toUpperCase()
+    const groups: string[] = []
+    for (let i = 0; i < upper.length; i += 4) {
+        groups.push(upper.slice(i, i + 4))
+    }
+
+    const lines: string[] = []
+    for (let i = 0; i < groups.length; i += 4) {
+        lines.push(groups.slice(i, i + 4).join(' '))
+    }
+
+    return lines.join('\n')
 }
 
 function promptRegenerate() {
@@ -546,6 +563,20 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                             </div>
                         {/if}
                     </div>
+
+                    {#if anchorFingerprint}
+                        <!-- Anchor fingerprint -->
+                        <div class="space-y-2">
+                            <div class="flex items-center gap-1.5 text-sm font-medium text-neutral-900 dark:text-neutral-50">
+                                <Icon icon="fingerprint" title="Anchor fingerprint" size="4" />
+                                Anchor fingerprint
+                            </div>
+                            <pre class="mono rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-900 dark:border-neutral-800 dark:bg-neutral-950/40 dark:text-neutral-100 whitespace-pre inline-block">{formatFingerprint(anchorFingerprint)}</pre>
+                            <p class="text-xs text-neutral-500 dark:text-neutral-400">
+                                Verify this matches the fingerprint shown by the CLI on first contact
+                            </p>
+                        </div>
+                    {/if}
                 </div>
             {:else if activeTab === 'ip-restrictions'}
                 <!-- IP Restrictions tab -->

@@ -106,7 +106,7 @@ func (c *trustCmd) Run(cmd *cobra.Command, _ []string) error {
 		server, userID := c.Server, resp.UserID
 		confirm = func(fp string) (bool, error) {
 			fmt.Fprintf(os.Stderr, "Pinning anchor for %s (user %s) without confirmation (--yes).\n", server, userID)
-			fmt.Fprintf(os.Stderr, "Anchor fingerprint (SHA-256 of ES384||ML-DSA-87 pubkeys):\n  %s\n", fp)
+			fmt.Fprintf(os.Stderr, "Anchor fingerprint:\n%s\n", formatFingerprint(fp, 2))
 			return true, nil
 		}
 	default:
@@ -119,7 +119,7 @@ func (c *trustCmd) Run(cmd *cobra.Command, _ []string) error {
 			// Prompt the user for confirmation
 			confirm = func(fp string) (bool, error) {
 				fmt.Fprintf(os.Stderr, "First contact with %s (user %s).\n", server, userID)
-				fmt.Fprintf(os.Stderr, "Anchor fingerprint (SHA-256 of ES384||ML-DSA-87 pubkeys):\n  %s\n", fp)
+				fmt.Fprintf(os.Stderr, "Anchor fingerprint:\n%s\n", formatFingerprint(fp, 2))
 				fmt.Fprint(os.Stderr, "Pin this anchor? [y/N]: ")
 
 				// Read the response

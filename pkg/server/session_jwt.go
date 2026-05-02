@@ -1,7 +1,9 @@
 package server
 
 import (
+	"encoding/base64"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/db"
+	"github.com/italypaleale/revaulter/pkg/protocolv2"
 )
 
 const (
@@ -126,11 +129,46 @@ func sessionInfoFromUser(user *db.User, ttl int) *v2AuthSessionInfo {
 	}
 
 	return &v2AuthSessionInfo{
-		UserID:          user.ID,
-		DisplayName:     user.DisplayName,
-		RequestKey:      user.RequestKey,
-		WrappedKeyEpoch: user.WrappedKeyEpoch,
-		AllowedIPs:      allowedIPs,
-		TTL:             max(ttl, 0),
+		UserID:            user.ID,
+		DisplayName:       user.DisplayName,
+		RequestKey:        user.RequestKey,
+		AnchorFingerprint: computeAnchorFingerprint(user),
+		WrappedKeyEpoch:   user.WrappedKeyEpoch,
+		AllowedIPs:        allowedIPs,
+		TTL:               max(ttl, 0),
 	}
+}
+
+// computeAnchorFingerprint derives the TOFU anchor fingerprint from a user's stored anchor pubkeys
+// Returns an empty string when the user hasn't set up anchor keys yet
+func computeAnchorFingerprint(user *db.User) string {
+	if user.AnchorEs384PublicKey == "" || user.AnchorMldsa87PublicKey == "" {
+		return ""
+	}
+
+	jwk, err := protocolv2.ParseECP384PublicJWKCanonicalBody(user.AnchorEs384PublicKey)
+	if err != nil {
+		slog.Warn("Failed to parse anchor ES384 JWK for fingerprint",
+			slog.String("user_id", user.ID),
+			slog.Any("error", err),
+		)
+		return ""
+	}
+
+	ecdsaPub, err := jwk.ToECDSAPublicKey()
+	if err != nil {
+		return ""
+	}
+
+	mldsa87PubBytes, err := base64.RawURLEncoding.DecodeString(user.AnchorMldsa87PublicKey)
+	if err != nil || len(mldsa87PubBytes) != protocolv2.MLDSA87PublicKeySize {
+		return ""
+	}
+
+	fp, err := protocolv2.AnchorFingerprint(ecdsaPub, mldsa87PubBytes)
+	if err != nil {
+		return ""
+	}
+
+	return fp
 }

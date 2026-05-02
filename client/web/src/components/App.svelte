@@ -150,6 +150,7 @@ function toSessionResponse(authSession: V2AuthSessionInfo): V2SessionResponse {
         userId: authSession.userId,
         displayName: authSession.displayName,
         requestKey: authSession.requestKey,
+        anchorFingerprint: authSession.anchorFingerprint,
         wrappedKeyEpoch: authSession.wrappedKeyEpoch,
         allowedIps: authSession.allowedIps,
         ttl: authSession.ttl,
@@ -1076,6 +1077,7 @@ function sortedItems() {
             pendingItems={sortedItems()}
             {primaryKey}
             requestKey={session?.requestKey ?? ''}
+            anchorFingerprint={session?.anchorFingerprint ?? ''}
             sessionLabel={sessionLabel()}
             settingsBusy={settingsBusy}
             settingsError={settingsError}
