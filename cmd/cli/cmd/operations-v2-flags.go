@@ -65,8 +65,9 @@ type v2OperationFlagsBase struct {
 
 	// Trust store: the CLI pins the server's hybrid anchor (ES384 + ML-DSA-87) on first contact and refuses to proceed on mismatch
 	// --trust-store picks the file; --no-trust-store disables both pinning and verification.
-	TrustStorePath string
-	NoTrustStore   bool
+	TrustStorePath      string
+	NoTrustStore        bool
+	YesIKnowWhatImDoing bool
 }
 
 func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
@@ -99,6 +100,9 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 
 	cmd.Flags().StringVar(&f.TrustStorePath, "trust-store", "", "Path to the anchor trust store"+trustStoreDefault)
 	cmd.Flags().BoolVar(&f.NoTrustStore, "no-trust-store", false, "Skip anchor pinning and hybrid bundle verification (equivalent to SSH StrictHostKeyChecking=no)")
+
+	cmd.Flags().BoolVar(&f.YesIKnowWhatImDoing, "yes-i-know-what-im-doing", false, "Allow combining --insecure with --no-trust-store without an interactive confirmation")
+	_ = cmd.Flags().MarkHidden("yes-i-know-what-im-doing")
 }
 
 func (f *v2OperationFlagsBase) Validate() error {
@@ -127,6 +131,7 @@ func (f *v2OperationFlagsBase) GetOutput() string                  { return f.Ou
 func (f *v2OperationFlagsBase) GetFormat() string                  { return f.Format }
 func (f *v2OperationFlagsBase) GetTrustStorePath() string          { return f.TrustStorePath }
 func (f *v2OperationFlagsBase) GetNoTrustStore() bool              { return f.NoTrustStore }
+func (f *v2OperationFlagsBase) GetYesIKnowWhatImDoing() bool       { return f.YesIKnowWhatImDoing }
 
 type v2OperationFlags interface {
 	BindToCommand(cmd *cobra.Command)
@@ -144,6 +149,7 @@ type v2OperationFlags interface {
 	GetFormat() string
 	GetTrustStorePath() string
 	GetNoTrustStore() bool
+	GetYesIKnowWhatImDoing() bool
 }
 
 type v2OperationFlagsEncrypt struct {

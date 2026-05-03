@@ -74,6 +74,11 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid flags: %w", err)
 	}
 
+	err = confirmNoMitmProtection(o.flags)
+	if err != nil {
+		return err
+	}
+
 	httpClient, err := getV2HTTPClient(log, o.flags)
 	if err != nil {
 		return err
@@ -107,6 +112,52 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 	log.Info("Received response from server", slog.String("state", state))
 
 	return o.writeResult(state, plain)
+}
+
+type noMitmProtectionFlags interface {
+	GetConnectionOptions() (insecure bool, noh2c bool)
+	GetNoTrustStore() bool
+	GetYesIKnowWhatImDoing() bool
+}
+
+func confirmNoMitmProtection(flags noMitmProtectionFlags) error {
+	// We need to show the warning only if both --insecure and --no-trust-store are set
+	insecure, _ := flags.GetConnectionOptions()
+	if !insecure || !flags.GetNoTrustStore() {
+		return nil
+	}
+
+	// Show the warning
+	fmt.Fprintln(os.Stderr, "WARNING: --insecure and --no-trust-store disable all transport and anchor MITM protection")
+	fmt.Fprintln(os.Stderr, "A network attacker can intercept TLS and substitute public keys for this operation")
+
+	// The --yes-i-know-what-im-doing can be added for non-interactive use
+	if flags.GetYesIKnowWhatImDoing() {
+		fmt.Fprintln(os.Stderr, "Continuing because --yes-i-know-what-im-doing was provided")
+		return nil
+	}
+
+	// If there's no interactive shell, return an error
+	stdinFd := int(os.Stdin.Fd())   // #nosec G115
+	stderrFd := int(os.Stderr.Fd()) // #nosec G115
+	if !term.IsTerminal(stdinFd) || !term.IsTerminal(stderrFd) {
+		return errors.New("refusing to combine --insecure with --no-trust-store without --yes-i-know-what-im-doing")
+	}
+
+	// Ask for confirmation
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Fprint(os.Stderr, "Type 'yes' to continue without MITM protection: ")
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read answer: %w", err)
+	}
+
+	line = strings.ToLower(strings.TrimSpace(line))
+	if line != "yes" {
+		return errors.New("refusing to continue without MITM protection")
+	}
+
+	return nil
 }
 
 // v2OperationResultFormatter lets an operation override how the decrypted plaintext is shaped before being written

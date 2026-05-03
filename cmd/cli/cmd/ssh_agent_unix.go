@@ -72,6 +72,11 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("invalid flags: %w", err)
 	}
 
+	err = confirmNoMitmProtection(&f.v2OperationFlagsBase)
+	if err != nil {
+		return err
+	}
+
 	// Set the default values
 	if f.Comment == "" {
 		f.Comment = "revaulter/" + f.KeyLabel

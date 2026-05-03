@@ -33,6 +33,9 @@ type testV2Flags struct {
 	keyLabel string
 	output   string
 	format   string
+	insecure bool
+	noTrust  bool
+	yes      bool
 }
 
 func (f *testV2Flags) BindToCommand(_ *cobra.Command)     {}
@@ -44,17 +47,41 @@ func (f *testV2Flags) GetAlgorithm() string               { return f.alg }
 func (f *testV2Flags) GetTimeout() string                 { return "" }
 func (f *testV2Flags) GetTimeoutDuration() time.Duration  { return 0 }
 func (f *testV2Flags) GetNote() string                    { return "" }
-func (f *testV2Flags) GetConnectionOptions() (bool, bool) { return false, false }
+func (f *testV2Flags) GetConnectionOptions() (bool, bool) { return f.insecure, false }
 func (f *testV2Flags) GetOutput() string                  { return f.output }
 func (f *testV2Flags) GetFormat() string                  { return f.format }
 func (f *testV2Flags) GetTrustStorePath() string          { return "" }
-func (f *testV2Flags) GetNoTrustStore() bool              { return true }
+func (f *testV2Flags) GetNoTrustStore() bool              { return f.noTrust }
+func (f *testV2Flags) GetYesIKnowWhatImDoing() bool       { return f.yes }
 func (f *testV2Flags) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
 		Value:                   base64.RawURLEncoding.EncodeToString([]byte("hello")),
 		ClientTransportEcdhKey:  clientTransportEcdhKey,
 		ClientTransportMlkemKey: clientTransportMlkemKey,
 	}
+}
+
+func TestV2OperationCmdConfirmNoMitmProtection(t *testing.T) {
+	t.Run("allows safe flag combinations", func(t *testing.T) {
+		impl := &v2OperationCmd{flags: &testV2Flags{insecure: true}}
+
+		err := confirmNoMitmProtection(impl.flags)
+		require.NoError(t, err)
+	})
+
+	t.Run("requires explicit non-interactive override", func(t *testing.T) {
+		impl := &v2OperationCmd{flags: &testV2Flags{insecure: true, noTrust: true}}
+
+		err := confirmNoMitmProtection(impl.flags)
+		require.ErrorContains(t, err, "--yes-i-know-what-im-doing")
+	})
+
+	t.Run("allows explicit script override", func(t *testing.T) {
+		impl := &v2OperationCmd{flags: &testV2Flags{insecure: true, noTrust: true, yes: true}}
+
+		err := confirmNoMitmProtection(impl.flags)
+		require.NoError(t, err)
+	})
 }
 
 func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
@@ -309,6 +336,7 @@ func TestV2OperationCmdCreateAndDecryptResult(t *testing.T) {
 			server:   srv.URL,
 			keyLabel: "disk-key",
 			alg:      "A256GCM",
+			noTrust:  true,
 		},
 	}
 	kp, err := newV2TransportKeyPair()
@@ -395,6 +423,7 @@ func (f *testV2SignFlags) GetOutput() string                  { return "" }
 func (f *testV2SignFlags) GetFormat() string                  { return "json" }
 func (f *testV2SignFlags) GetTrustStorePath() string          { return "" }
 func (f *testV2SignFlags) GetNoTrustStore() bool              { return true }
+func (f *testV2SignFlags) GetYesIKnowWhatImDoing() bool       { return false }
 func (f *testV2SignFlags) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
 		Value:                   f.digestB64,
