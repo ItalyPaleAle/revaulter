@@ -109,6 +109,16 @@ func TestValidateConfig(t *testing.T) {
 		require.Error(t, err)
 		require.ErrorContains(t, err, "secret key is too short")
 	})
+
+	t.Run("fails when sessionSigningKey is too short", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"sessionSigningKey": "too-short-session",
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "session signing key is too short")
+	})
 }
 
 func TestSetSecretKey(t *testing.T) {
@@ -120,7 +130,7 @@ func TestSetSecretKey(t *testing.T) {
 		require.ErrorContains(t, err, "secret key value is empty")
 	})
 
-	t.Run("derives the prf salt and token signing key", func(t *testing.T) {
+	t.Run("derives the prf salt and generates token signing key when unset", func(t *testing.T) {
 		cfg := &Config{
 			SecretKey: testSecretKey,
 		}
@@ -135,10 +145,34 @@ func TestSetSecretKey(t *testing.T) {
 
 		octets, ok := tokenSigningKey.Octets()
 		require.True(t, ok)
-		require.Equal(t, "db8ddf38fd1528c437e3fac0de58bf997a9756cae46ce4d64c9593e26475ac96", hex.EncodeToString(octets))
+		require.Len(t, octets, 32)
+		require.NotEqual(t, make([]byte, 32), octets, "key was not empty")
 
 		kid, ok := tokenSigningKey.KeyID()
 		require.True(t, ok)
-		require.Equal(t, "MehRB3ZvRA3XKfxB", kid)
+		require.NotEmpty(t, kid)
+	})
+
+	t.Run("uses a separate session signing key when configured", func(t *testing.T) {
+		cfg := &Config{
+			SecretKey:         testSecretKey,
+			SessionSigningKey: "session-signing-key-0123456789",
+		}
+
+		err := cfg.SetSecretKey(nil)
+		require.NoError(t, err)
+
+		assert.Equal(t, "5VgVFp_QTW5WNbVFLxgANw", cfg.GetPRFSalt())
+
+		tokenSigningKey := cfg.internal.tokenSigningKey
+		require.NotNil(t, tokenSigningKey)
+
+		octets, ok := tokenSigningKey.Octets()
+		require.True(t, ok)
+		require.Equal(t, "961433ce046aad4e2618d22187ed0f450b4b686de4ad90ed9d0e5a2e0cba3046", hex.EncodeToString(octets))
+
+		kid, ok := tokenSigningKey.KeyID()
+		require.True(t, ok)
+		require.Equal(t, "CPJB5Nriy3r1JzMy", kid)
 	})
 }

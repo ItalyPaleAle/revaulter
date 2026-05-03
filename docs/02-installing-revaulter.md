@@ -40,6 +40,7 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
 | `baseUrl` | `BASEURL` | `https://localhost:<port>` | Public URL where users access the web UI. Used for webhook links and WebAuthn origin validation. |
+| `sessionSigningKey` | `SESSIONSIGNINGKEY` | Random at startup | Secret used to sign session tokens. Set this in production so sessions survive restarts. |
 | `tlsPath` | `TLSPATH` | Config file directory | Directory containing `tls-cert.pem` and `tls-key.pem`. Revaulter watches for changes and auto-reloads. |
 | `tlsCertPEM` | `TLSCERTPEM` | | PEM-encoded TLS certificate (alternative to `tlsPath`) |
 | `tlsKeyPEM` | `TLSKEYPEM` | | PEM-encoded TLS key (alternative to `tlsPath`) |
@@ -159,6 +160,16 @@ openssl rand -base64 32
 
 > 📝 **Note:** `secretKey` is **not** used to encrypt anything stored in the database. All request payloads and responses are end-to-end encrypted in the browser; the server only stores opaque envelopes.
 
+## Session signing key
+
+Generate a session signing key:
+
+```bash
+openssl rand -base64 32
+```
+
+Set `sessionSigningKey` in production so session tokens remain valid across restarts. If this value is omitted, Revaulter generates a random signing key at startup; existing sessions are invalidated whenever the process restarts.
+
 ## TLS
 
 Revaulter requires HTTPS for WebAuthn to work (browsers enforce a secure context). You have two options:
@@ -191,6 +202,7 @@ webhookUrl: "https://discord.com/api/webhooks/your-webhook-id/your-webhook-token
 webhookFormat: "discord"
 databaseDSN: "/data/revaulter.db"
 secretKey: "<your-secret-key>"
+sessionSigningKey: "<your-session-signing-key>"
 baseUrl: "https://revaulter.example.com"
 ```
 

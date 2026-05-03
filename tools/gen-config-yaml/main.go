@@ -102,7 +102,7 @@ func generateYAMLFromStruct(filePath string) error {
 			if required {
 				fmt.Fprintf(outFile, "## Required\n%s:\n\n", yamlTag)
 			} else {
-				fmt.Fprintf(outFile, "#%s: \n\n", yamlTag)
+				fmt.Fprintf(outFile, "#%s:\n\n", yamlTag)
 			}
 		}
 

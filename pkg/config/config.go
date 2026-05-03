@@ -2,10 +2,12 @@ package config
 
 import (
 	"crypto/hkdf"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"path/filepath"
@@ -73,8 +75,13 @@ type Config struct {
 	// +required
 	SecretKey string `env:"SECRETKEY" yaml:"secretKey"`
 
-	// WebAuthn RP ID for authentication.
-	// If empty, derived from `baseUrl`.
+	// Secret used to sign session tokens
+	// It's recommended to generate with `openssl rand -base64 32`
+	// If unset, Revaulter generates a random session signing key at startup, which invalidates existing sessions on restart
+	SessionSigningKey string `env:"SESSIONSIGNINGKEY" yaml:"sessionSigningKey"`
+
+	// WebAuthn RP ID for authentication
+	// If empty, derived from `baseUrl`
 	WebAuthnRPID string `env:"WEBAUTHNRPID" yaml:"webauthnRpId"`
 
 	// WebAuthn RP display name for authentication.
@@ -227,6 +234,9 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	if len(c.SecretKey) < 20 {
 		return errors.New("secret key is too short: must be at least 20 characters")
 	}
+	if c.SessionSigningKey != "" && len(c.SessionSigningKey) < 20 {
+		return errors.New("session signing key is too short: must be at least 20 characters")
+	}
 
 	// Check for invalid values
 	if c.SessionTimeout < time.Second || c.SessionTimeout > time.Hour {
@@ -254,10 +264,10 @@ func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
 	}
 	c.internal.prfSalt = base64.RawURLEncoding.EncodeToString(prfSalt)
 
-	// Use HKDF to derive the 256-bit token signing key
-	tokenSigningKeyRaw, err := hkdf.Key(sha256.New, sk, nil, "revaulter-session-token", 32)
+	// Use HKDF to derive the 256-bit token signing key from a session-specific secret
+	tokenSigningKeyRaw, err := c.tokenSigningKeyRaw(logger)
 	if err != nil {
-		return fmt.Errorf("failed to derive token signing key: %w", err)
+		return err
 	}
 
 	// Import the token signing key as a jwk.Key
@@ -270,6 +280,31 @@ func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
 	_ = c.internal.tokenSigningKey.Set(jwk.KeyIDKey, computeKeyId(tokenSigningKeyRaw))
 
 	return nil
+}
+
+func (c *Config) tokenSigningKeyRaw(logger *slog.Logger) ([]byte, error) {
+	if c.SessionSigningKey != "" {
+		// If there's a sessionSigningKey, use HKDF to derive a 256-bit key
+		tokenSigningKeyRaw, err := hkdf.Key(sha256.New, []byte(c.SessionSigningKey), nil, "revaulter-session-token", 32)
+		if err != nil {
+			return nil, fmt.Errorf("failed to derive token signing key: %w", err)
+		}
+
+		return tokenSigningKeyRaw, nil
+	}
+
+	if logger != nil {
+		logger.Warn("config entry key 'sessionSigningKey' is empty: generated a random session signing key for this process")
+	}
+
+	// Generate a random key
+	tokenSigningKeyRaw := make([]byte, 32)
+	_, err := io.ReadFull(rand.Reader, tokenSigningKeyRaw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate random token signing key: %w", err)
+	}
+
+	return tokenSigningKeyRaw, nil
 }
 
 // Returns the key ID from a key
