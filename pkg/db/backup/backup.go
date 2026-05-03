@@ -8,6 +8,7 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log/slog"
@@ -48,13 +49,17 @@ func runBackup(ctx context.Context, tx adapter.Querier, w io.Writer) error {
 		return fmt.Errorf("reading source schema level: %w", err)
 	}
 
+	// Write the magic header
 	_, err = w.Write(magicHeader[:])
 	if err != nil {
 		return fmt.Errorf("writing backup header: %w", err)
 	}
 
-	enc := encMode.NewEncoder(w)
+	// Compute the checksum as we write the backup file
+	h := sha256.New()
+	enc := encMode.NewEncoder(io.MultiWriter(w, h))
 
+	// Add the header
 	err = enc.Encode(fileHeader{
 		Version:     formatVersion,
 		CreatedAt:   time.Now().Unix(),
@@ -65,11 +70,18 @@ func runBackup(ctx context.Context, tx adapter.Querier, w io.Writer) error {
 		return fmt.Errorf("encoding file header: %w", err)
 	}
 
+	// Dump each table
 	for _, spec := range backupTables {
 		err = dumpTable(ctx, tx, spec, enc)
 		if err != nil {
 			return fmt.Errorf("dumping table %q: %w", spec.name, err)
 		}
+	}
+
+	// Write the checksum as trailer
+	_, err = w.Write(h.Sum(nil))
+	if err != nil {
+		return fmt.Errorf("writing backup checksum: %w", err)
 	}
 
 	return nil

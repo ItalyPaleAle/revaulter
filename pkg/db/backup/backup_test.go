@@ -110,7 +110,8 @@ func writeFixture(w io.Writer, fb fixtureBackup) error {
 		return err
 	}
 
-	enc := encMode.NewEncoder(w)
+	h := sha256.New()
+	enc := encMode.NewEncoder(io.MultiWriter(w, h))
 
 	err = enc.Encode(fileHeader{
 		Version:     formatVersion,
@@ -144,6 +145,11 @@ func writeFixture(w io.Writer, fb fixtureBackup) error {
 			return err
 		}
 	}
+
+	_, err = w.Write(h.Sum(nil))
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -157,7 +163,8 @@ func readFixture(t *testing.T, r io.Reader) fixtureBackup {
 	require.NoError(t, err)
 	require.Equal(t, magicHeader, magic, "magic header mismatch")
 
-	dec := decMode.NewDecoder(r)
+	checksumReader := newBackupChecksumReader(r)
+	dec := decMode.NewDecoder(checksumReader)
 
 	var hdr fileHeader
 	require.NoError(t, dec.Decode(&hdr))
@@ -188,6 +195,8 @@ func readFixture(t *testing.T, r io.Reader) fixtureBackup {
 			Rows:    rows,
 		})
 	}
+
+	require.NoError(t, checksumReader.Verify())
 	return fb
 }
 
@@ -327,6 +336,35 @@ func TestRestore_UnrecognizedColumnRejected(t *testing.T) {
 	restoreErr := Restore(t.Context(), conn, &buf)
 	require.Error(t, restoreErr)
 	require.ErrorContains(t, restoreErr, "not a recognized column")
+}
+
+func TestRestore_ChecksumMismatchRejected(t *testing.T) {
+	conn := newSQLiteTestDB(t)
+
+	var buf bytes.Buffer
+	err := writeFixture(&buf, canonicalFixture())
+	require.NoError(t, err)
+
+	raw := buf.Bytes()
+	raw[len(raw)-1] ^= 0xff
+
+	restoreErr := Restore(t.Context(), conn, bytes.NewReader(raw))
+	require.Error(t, restoreErr)
+	require.ErrorContains(t, restoreErr, "backup checksum mismatch")
+}
+
+func TestRestore_MissingChecksumRejected(t *testing.T) {
+	conn := newSQLiteTestDB(t)
+
+	var buf bytes.Buffer
+	err := writeFixture(&buf, canonicalFixture())
+	require.NoError(t, err)
+
+	raw := buf.Bytes()
+	raw = raw[:len(raw)-sha256.Size]
+
+	restoreErr := Restore(t.Context(), conn, bytes.NewReader(raw))
+	require.Error(t, restoreErr)
 }
 
 // --- DB setup ---

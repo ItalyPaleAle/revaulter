@@ -2,8 +2,11 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"strings"
 	"time"
@@ -38,7 +41,8 @@ func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 		return errBadMagic
 	}
 
-	dec := decMode.NewDecoder(r)
+	checksumReader := newBackupChecksumReader(r)
+	dec := decMode.NewDecoder(checksumReader)
 
 	var hdr fileHeader
 	err = dec.Decode(&hdr)
@@ -79,9 +83,78 @@ func Restore(ctx context.Context, conn *db.DB, r io.Reader) error {
 				return struct{}{}, fmt.Errorf("restoring table %d: %w", i, rErr)
 			}
 		}
+
+		rErr := checksumReader.Verify()
+		if rErr != nil {
+			return struct{}{}, rErr
+		}
+
 		return struct{}{}, nil
 	})
 	return err
+}
+
+// backupChecksumReader streams the backup CBOR body while withholding the final SHA-256 trailer
+type backupChecksumReader struct {
+	r       io.Reader
+	h       hash.Hash
+	trailer [sha256.Size]byte
+	buf     []byte
+}
+
+// newBackupChecksumReader wraps r so callers decode only the CBOR body and can verify the checksum after decoding
+func newBackupChecksumReader(r io.Reader) *backupChecksumReader {
+	return &backupChecksumReader{
+		r:   r,
+		h:   sha256.New(),
+		buf: make([]byte, 0, sha256.Size),
+	}
+}
+
+// Read returns CBOR body bytes and keeps the final SHA-256-sized window buffered as the trailer
+func (r *backupChecksumReader) Read(p []byte) (int, error) {
+	for len(r.buf) <= sha256.Size {
+		readBuf := make([]byte, max(len(p), sha256.Size+1))
+		n, err := r.r.Read(readBuf)
+		if n > 0 {
+			r.buf = append(r.buf, readBuf[:n]...)
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return 0, err
+		}
+	}
+
+	if len(r.buf) <= sha256.Size {
+		return 0, io.EOF
+	}
+
+	outLen := min(len(r.buf)-sha256.Size, len(p))
+	copy(p, r.buf[:outLen])
+	_, _ = r.h.Write(r.buf[:outLen])
+	r.buf = r.buf[outLen:]
+
+	return outLen, nil
+}
+
+// Verify consumes any remaining bytes and compares the withheld trailer with the streamed body hash
+func (r *backupChecksumReader) Verify() error {
+	_, err := io.Copy(io.Discard, r)
+	if err != nil {
+		return fmt.Errorf("reading backup checksum trailer: %w", err)
+	}
+	if len(r.buf) != sha256.Size {
+		return errors.New("backup body is missing checksum trailer")
+	}
+
+	copy(r.trailer[:], r.buf)
+	if subtle.ConstantTimeCompare(r.trailer[:], r.h.Sum(nil)) != 1 {
+		return errors.New("backup checksum mismatch")
+	}
+
+	return nil
 }
 
 // restoreTableBlock reads one table block (header + rows + sentinel) from dec and inserts the rows into tx
