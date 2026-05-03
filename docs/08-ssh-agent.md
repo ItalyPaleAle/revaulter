@@ -30,13 +30,15 @@ revaulter trust \
 
 ## 3. Start the SSH agent
 
-Start the agent with the same key label you created in the UI:
+Start the agent with the same key label you created in the UI.
+The default SSH-agent algorithm is `ES256` for backwards compatibility, but `Ed25519` is also supported:
 
 ```sh
 revaulter ssh-agent \
   --server https://revaulter.example.com \
   --request-key "$REVAULTER_REQUEST_KEY" \
-  --key-label ssh-main
+  --key-label ssh-main \
+  --algorithm Ed25519
 ```
 
 The agent prints an `SSH_AUTH_SOCK` export line. Run that line in the shell where you will use `ssh`:
@@ -52,6 +54,7 @@ revaulter ssh-agent \
   --server https://revaulter.example.com \
   --request-key "$REVAULTER_REQUEST_KEY" \
   --key-label ssh-main \
+  --algorithm Ed25519 \
   --socket "$HOME/.revaulter/ssh-agent.sock"
 
 export SSH_AUTH_SOCK="$HOME/.revaulter/ssh-agent.sock"
@@ -117,6 +120,7 @@ revaulter ssh-agent \
   --server https://revaulter.example.com \
   --request-key "$REVAULTER_REQUEST_KEY" \
   --key-label git-main \
+  --algorithm Ed25519 \
   --socket "$HOME/.revaulter/ssh-agent.sock"
 
 export SSH_AUTH_SOCK="$HOME/.revaulter/ssh-agent.sock"

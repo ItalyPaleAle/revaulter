@@ -305,7 +305,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 
 func (s *Server) autoStoreSigningKey(c *gin.Context, log *slog.Logger, rec *db.V2RequestRecord, pub *confirmPublicKey) {
 	// Validate the key
-	id, canonicalJWK, err := validateSigningJWKAndPEM(pub.JWK, pub.PEM)
+	id, canonicalJWK, err := validateSigningJWKAndPEM(rec.Algorithm, pub.JWK, pub.PEM)
 	if err != nil {
 		log.WarnContext(c.Request.Context(), "Skipping auto-store of signing public key: invalid payload",
 			slog.String("state", rec.State),

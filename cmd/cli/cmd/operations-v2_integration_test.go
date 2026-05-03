@@ -404,9 +404,9 @@ func TestV2OperationCmdGetResultStateMismatch(t *testing.T) {
 // testV2SignFlags mirrors testV2Flags but emits a sign-shaped inner payload
 // The sign op puts the digest in Value and leaves nonce/tag/aad empty
 type testV2SignFlags struct {
-	server    string
-	keyLabel  string
-	digestB64 string
+	server   string
+	keyLabel string
+	valueB64 string
 }
 
 func (f *testV2SignFlags) BindToCommand(_ *cobra.Command)     {}
@@ -426,7 +426,7 @@ func (f *testV2SignFlags) GetNoTrustStore() bool              { return true }
 func (f *testV2SignFlags) GetYesIKnowWhatImDoing() bool       { return false }
 func (f *testV2SignFlags) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
-		Value:                   f.digestB64,
+		Value:                   f.valueB64,
 		ClientTransportEcdhKey:  clientTransportEcdhKey,
 		ClientTransportMlkemKey: clientTransportMlkemKey,
 	}
@@ -722,9 +722,9 @@ func TestV2OperationCmdSignAndVerify(t *testing.T) {
 	impl := &v2OperationCmd{
 		Operation: protocolv2.OperationSign,
 		flags: &testV2SignFlags{
-			server:    srv.URL,
-			keyLabel:  keyLabel,
-			digestB64: digestB64,
+			server:   srv.URL,
+			keyLabel: keyLabel,
+			valueB64: digestB64,
 		},
 	}
 	kp, err := newV2TransportKeyPair()

@@ -163,7 +163,12 @@ revaulter-cli decrypt \
 
 ### `sign`
 
-Submit a signing request for approval. The CLI always pre-hashes the message with SHA-256 client-side, so only the 32-byte digest is sent to the server — the raw message is never transmitted.
+Submit a signing request for approval.
+The CLI derives the bytes sent to the browser from the selected signing algorithm:
+
+- `ES256`: the CLI hashes the input with SHA-256 and sends the 32-byte digest
+- `Ed25519`: the CLI sends the raw message bytes
+- `Ed25519ph`: the CLI hashes the input with SHA-512 and sends the 64-byte digest
 
 ```bash
 revaulter-cli sign [flags]
@@ -174,11 +179,11 @@ revaulter-cli sign [flags]
 | `--server` | `-s` | Yes | Address of the Revaulter server |
 | `--request-key` | `-k` | Yes | Per-user request key |
 | `--key-label` | `-l` | Yes | Logical key label used for signing-key derivation |
-| `--algorithm` | `-a` | Yes | Signing algorithm identifier (currently `ES256`) |
-| `--input` | `-i` | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. The CLI hashes the file contents with SHA-256 |
-| `--digest` | `-d` | One of `--input` or `--digest` is required | A pre-computed 32-byte SHA-256 digest, encoded as hex or base64url. Mutually exclusive with `--format jws` |
-| `--format` | | No | Output format: `json` (default — JSON envelope with base64url `r \|\| s` signature), `jws` (compact JWS string), or `raw` (the 64-byte `r \|\| s` signature). `jws` requires `--input` |
-| `--jws-header` | | No | JSON fragment merged into the default protected header when building a JWS from `--input`. The `alg` field is always forced to `ES256`; other fields like `kid` or `typ` can be supplied |
+| `--algorithm` | `-a` | Yes | Signing algorithm identifier: `ES256`, `Ed25519`, or `Ed25519ph` |
+| `--input` | `-i` | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. The CLI hashes or forwards the bytes according to `--algorithm` |
+| `--digest` | `-d` | One of `--input` or `--digest` is required | A pre-computed digest, encoded as hex or base64url. Supported only for `ES256` (32-byte SHA-256) and `Ed25519ph` (64-byte SHA-512). Mutually exclusive with `--format jws` |
+| `--format` | | No | Output format: `json` (default — JSON envelope with base64url signature), `jws` (compact JWS string), or `raw` (the raw 64-byte signature). `jws` requires `--input` and is supported only for `ES256` and `Ed25519` |
+| `--jws-header` | | No | JSON fragment merged into the default protected header when building a JWS from `--input`. The `alg` field is always forced to `ES256` or `EdDSA`, depending on `--algorithm` |
 | `--timeout` | `-t` | No | Timeout for the operation |
 | `--note` | `-n` | No | Message displayed alongside the request |
 | `--output` | `-o` | No | Write the result to a file instead of stdout |
@@ -249,6 +254,8 @@ revaulter-cli sign \
 
 > Note: ECDSA signatures are non-deterministic by design (a fresh random `k` per signature, per FIPS 186-5). Signing the same input twice produces two different but equally valid signatures — this is expected.
 
+> Note: `Ed25519` signatures are deterministic for a fixed key and message.
+
 ---
 
 ### `check`
@@ -288,7 +295,11 @@ When you run `revaulter-cli encrypt`, `decrypt`, or `sign`, the CLI:
 5. Long-polls for the result
 6. Decrypts the response envelope locally using its ephemeral private key
 
-For `sign` specifically, the CLI pre-hashes the input with SHA-256 before encrypting, so only the 32-byte digest is ever transmitted end-to-end. The server and the browser never see the raw message.
+For `sign` specifically, the CLI shapes the encrypted inner payload according to the selected signing algorithm:
+
+- `ES256`: 32-byte SHA-256 digest
+- `Ed25519`: raw message bytes
+- `Ed25519ph`: 64-byte SHA-512 digest
 
 The server never has access to the plaintext request or response data.
 

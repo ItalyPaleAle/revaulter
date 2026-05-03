@@ -20,6 +20,9 @@ importers:
       '@noble/curves':
         specifier: 2.2.0
         version: 2.2.0
+      '@noble/hashes':
+        specifier: 2.2.0
+        version: 2.2.0
       '@noble/post-quantum':
         specifier: 0.6.1
         version: 0.6.1

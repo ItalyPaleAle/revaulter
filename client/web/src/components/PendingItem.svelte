@@ -9,9 +9,11 @@ import {
     decryptRequestPayload,
     deriveOperationKeyBytes,
     deriveSigningKeyPair,
-    ecP256JwkToPem,
     encryptTransportEnvelope,
+    signingJwkToPem,
+    signDigestEd25519ph,
     signDigestEs256,
+    signMessageEd25519,
 } from '$lib/crypto'
 import {
     buildRequestEncAAD,
@@ -138,7 +140,7 @@ async function buildResponseEnvelope(
     // Validate the algorithm against what the operation supports
     switch (req.operation) {
         case 'sign':
-            if (req.algorithm !== 'ES256') {
+            if (!['ES256', 'Ed25519', 'Ed25519ph'].includes(req.algorithm)) {
                 throw new Error(`Unsupported signing algorithm: ${req.algorithm}`)
             }
             break
@@ -173,11 +175,8 @@ async function buildResponseEnvelope(
     let publicKey: { jwk: V2SigningJwk; pem: string } | undefined
     switch (req.operation) {
         case 'sign': {
-            // Sign operations carry only a 32-byte SHA-256 digest in `value`
+            // Sign operations carry only the algorithm-specific signing bytes in `value`
             // `nonce`, `tag`, and `additionalData` must be empty — enforced here because the server cannot inspect the decrypted inner payload
-            if (value.length !== 32) {
-                throw new Error('sign: digest must be exactly 32 bytes')
-            }
             if (input.nonce) {
                 throw new Error('sign: nonce must be empty')
             }
@@ -188,14 +187,33 @@ async function buildResponseEnvelope(
                 throw new Error('sign: additionalData must be empty')
             }
 
-            const { scalar, publicJwk } = await deriveSigningKeyPair({
+            const { secretKey, publicJwk } = await deriveSigningKeyPair({
                 userId: req.userId,
                 keyLabel: req.keyLabel,
                 algorithm: req.algorithm,
                 primaryKey,
             })
-            const signature = await signDigestEs256(scalar, value)
-            const pem = await ecP256JwkToPem(publicJwk)
+            let signature: Uint8Array
+            switch (req.algorithm) {
+                case 'ES256':
+                    if (value.length !== 32) {
+                        throw new Error('sign: ES256 digest must be exactly 32 bytes')
+                    }
+                    signature = await signDigestEs256(secretKey, value)
+                    break
+                case 'Ed25519':
+                    signature = await signMessageEd25519(secretKey, value)
+                    break
+                case 'Ed25519ph':
+                    if (value.length !== 64) {
+                        throw new Error('sign: Ed25519ph digest must be exactly 64 bytes')
+                    }
+                    signature = await signDigestEd25519ph(secretKey, value)
+                    break
+                default:
+                    throw new Error(`Unsupported signing algorithm: ${req.algorithm}`)
+            }
+            const pem = await signingJwkToPem(publicJwk)
             publicKey = { jwk: publicJwk, pem }
             resultPlain = new TextEncoder().encode(
                 JSON.stringify({
@@ -325,41 +343,57 @@ const OP_META = {
     },
 } as const
 
-/** Renders a SHA-256 digest (32 bytes, base64url) as uppercase hex with spaces */
-function formatDigest(digestB64Url: string): string {
+function formatHex(bytes: Uint8Array): string {
+    let hex = ''
+    for (let i = 0; i < bytes.length; i++) {
+        hex += bytes[i].toString(16).padStart(2, '0').toUpperCase()
+        if (i < bytes.length - 1 && (i + 1) % 2 === 0) {
+            hex += ' '
+        }
+    }
+    return hex
+}
+
+/** Renders the sign request input in a compact algorithm-aware way */
+function formatSignInput(algorithm: string, valueB64Url: string): string {
     try {
-        const bytes = base64UrlToBytes(digestB64Url)
-        if (bytes.length !== 32) {
-            return digestB64Url
-        }
-        let hex = ''
-        for (let i = 0; i < bytes.length; i++) {
-            hex += bytes[i].toString(16).padStart(2, '0').toUpperCase()
-            if (i < bytes.length - 1 && (i + 1) % 2 === 0) {
-                hex += ' '
+        const bytes = base64UrlToBytes(valueB64Url)
+        switch (algorithm) {
+            case 'ES256':
+                return bytes.length === 32 ? `SHA-256 ${formatHex(bytes)}` : valueB64Url
+            case 'Ed25519ph':
+                return bytes.length === 64 ? `SHA-512 ${formatHex(bytes)}` : valueB64Url
+            case 'Ed25519': {
+                const preview = bytes.subarray(0, Math.min(bytes.length, 24))
+                const previewHex = formatHex(preview)
+                if (bytes.length <= preview.length) {
+                    return `${bytes.length} byte message ${previewHex}`
+                }
+                return `${bytes.length} byte message ${previewHex} …`
             }
+            default:
+                return valueB64Url
         }
-        return hex
     } catch {
-        return digestB64Url
+        return valueB64Url
     }
 }
 
 /**
  * For sign requests, decrypts the E2EE inner payload so the user can review
- * the SHA-256 digest before approving.
+ * the signing input before approving.
  */
-let digestHex = $state<string | null>(null)
-let digestLoading = $state(false)
-let digestError = $state<string | null>(null)
+let signInputPreview = $state<string | null>(null)
+let signInputLoading = $state(false)
+let signInputError = $state<string | null>(null)
 $effect(() => {
     if (item.operation !== 'sign') {
         return
     }
-    if (digestHex || digestLoading || digestError) {
+    if (signInputPreview || signInputLoading || signInputError) {
         return
     }
-    digestLoading = true
+    signInputLoading = true
     void (async () => {
         try {
             const req = await ensureDetail()
@@ -373,11 +407,11 @@ $effect(() => {
                 ciphertext: req.encryptedRequest.ciphertext,
                 aad: requestEncAAD,
             })
-            digestHex = formatDigest(inner.value)
+            signInputPreview = formatSignInput(req.algorithm, inner.value)
         } catch (err) {
-            digestError = err instanceof Error ? err.message : String(err)
+            signInputError = err instanceof Error ? err.message : String(err)
         } finally {
-            digestLoading = false
+            signInputLoading = false
         }
     })()
 })
@@ -476,19 +510,21 @@ $effect(() => {
                 ></div>
             </div>
 
-            <!-- Sign digest expanded by default -->
+            <!-- Sign input preview expanded by default -->
             {#if item.operation === 'sign'}
                 <div class="mt-3.5 rounded-lg border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-800/60">
                     <div class="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-                        SHA-256 digest to sign
+                        Signing input
                     </div>
-                    {#if digestLoading}
+                    {#if signInputLoading}
                         <div class="mono text-[11px] text-neutral-500 dark:text-neutral-400">Loading…</div>
-                    {:else if digestError}
-                        <div class="text-[11px] text-rose-700 dark:text-rose-300">Could not decrypt digest: {digestError}</div>
-                    {:else if digestHex}
+                    {:else if signInputError}
+                        <div class="text-[11px] text-rose-700 dark:text-rose-300">
+                            Could not decrypt sign input: {signInputError}
+                        </div>
+                    {:else if signInputPreview}
                         <div class="mono break-all text-[11px] leading-relaxed text-neutral-900 dark:text-neutral-100">
-                            {digestHex}
+                            {signInputPreview}
                         </div>
                     {/if}
                 </div>

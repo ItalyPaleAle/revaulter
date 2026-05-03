@@ -1,7 +1,11 @@
 import { argon2id } from '@awasm/noble'
 import { mapHashToField } from '@noble/curves/abstract/modular.js'
+import { eddsa } from '@noble/curves/abstract/edwards.js'
+import { ed25519 } from '@noble/curves/ed25519.js'
 import { p256 } from '@noble/curves/nist.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
+import { sha512 as nobleSha512 } from '@noble/hashes/sha2.js'
+import { concatBytes } from '@noble/hashes/utils.js'
 
 import { deriveEcdhSharedSecret, ecP256ScalarToPublicJwk, generateTransportKeyPairJwk } from '$lib/crypto-ecdh'
 import { normalizeAeadAlgorithm } from '$lib/crypto-symmetric'
@@ -505,7 +509,7 @@ export async function decryptRequestPayload(params: {
 }
 
 /**
- * Derives a deterministic ECDSA P-256 signing scalar from the primary key.
+ * Derives a deterministic signing private key from the primary key.
  * The derivation is bound to userId, keyLabel, and algorithm, and is domain-separated from request-encryption and symmetric operation keys.
  */
 export async function deriveSigningKeyPair(params: {
@@ -513,8 +517,9 @@ export async function deriveSigningKeyPair(params: {
     keyLabel: string
     algorithm: string
     primaryKey: Uint8Array
-}): Promise<{ scalar: Uint8Array; publicJwk: V2SigningJwk }> {
-    if (params.algorithm !== 'ES256') {
+}): Promise<{ secretKey: Uint8Array; publicJwk: V2SigningJwk }> {
+    const supportedAlgorithms = ['ES256', 'Ed25519', 'Ed25519ph']
+    if (!supportedAlgorithms.includes(params.algorithm)) {
         throw new Error(`Unsupported signing algorithm: ${params.algorithm}`)
     }
 
@@ -523,25 +528,42 @@ export async function deriveSigningKeyPair(params: {
         `revaulter/v2/signingKey\nalgorithm=${params.algorithm}\nkeyLabel=${params.keyLabel}\nuserId=${params.userId}\nv=1`
     )
 
-    // Derive 384 bits so the FIPS 186-5 candidate-reduction in mapHashToField has enough input to keep modular bias negligible
-    const rawBits = await crypto.subtle.deriveBits(
+    if (params.algorithm === 'ES256') {
+        const rawBits = await crypto.subtle.deriveBits(
+            { name: 'HKDF', hash: 'SHA-256', salt: asBuf(new Uint8Array()), info: asBuf(info) },
+            ikm,
+            384
+        )
+        const secretKey = mapHashToField(new Uint8Array(rawBits), p256.Point.Fn.ORDER)
+
+        const pubBytes = p256.getPublicKey(secretKey, false)
+        if (pubBytes.length !== 65 || pubBytes[0] !== 0x04) {
+            throw new Error('Failed to derive uncompressed P-256 public key')
+        }
+        const x = bytesToBase64Url(pubBytes.subarray(1, 33))
+        const y = bytesToBase64Url(pubBytes.subarray(33, 65))
+
+        return {
+            secretKey,
+            publicJwk: { kty: 'EC', crv: 'P-256', x, y },
+        }
+    }
+
+    const seedBits = await crypto.subtle.deriveBits(
         { name: 'HKDF', hash: 'SHA-256', salt: asBuf(new Uint8Array()), info: asBuf(info) },
         ikm,
-        384
+        256
     )
-    const scalar = mapHashToField(new Uint8Array(rawBits), p256.Point.Fn.ORDER)
-
-    // Derive the uncompressed public point (0x04 || X(32) || Y(32)) from the scalar and split into JWK x/y
-    const pubBytes = p256.getPublicKey(scalar, false)
-    if (pubBytes.length !== 65 || pubBytes[0] !== 0x04) {
-        throw new Error('Failed to derive uncompressed P-256 public key')
-    }
-    const x = bytesToBase64Url(pubBytes.subarray(1, 33))
-    const y = bytesToBase64Url(pubBytes.subarray(33, 65))
+    const secretKey = new Uint8Array(seedBits)
+    const publicKey = ed25519.getPublicKey(secretKey)
 
     return {
-        scalar,
-        publicJwk: { kty: 'EC', crv: 'P-256', x, y },
+        secretKey,
+        publicJwk: {
+            kty: 'OKP',
+            crv: 'Ed25519',
+            x: bytesToBase64Url(publicKey),
+        },
     }
 }
 
@@ -562,11 +584,66 @@ export async function signDigestEs256(scalar: Uint8Array, digest: Uint8Array): P
 }
 
 /**
- * Computes the RFC 7638 JWK thumbprint for an EC P-256 public key and returns it as a base64url-encoded SHA-256 digest.
- * The thumbprint is computed only over the required members (crv, kty, x, y) in lexicographic order.
+ * Signs raw message bytes with Ed25519 and returns the raw 64-byte signature
  */
-export async function computeEcP256Thumbprint(jwk: V2SigningJwk): Promise<string> {
-    const canonical = `{"crv":${JSON.stringify(jwk.crv)},"kty":${JSON.stringify(jwk.kty)},"x":${JSON.stringify(jwk.x)},"y":${JSON.stringify(jwk.y)}}`
+export async function signMessageEd25519(secretKey: Uint8Array, message: Uint8Array): Promise<Uint8Array> {
+    const sig = ed25519.sign(message, secretKey)
+    if (sig.length !== 64) {
+        throw new Error(`Expected 64-byte Ed25519 signature, got ${sig.length}`)
+    }
+    return sig
+}
+
+const ed25519phNoRehash = (() => {
+    const adjustScalarBytes = (bytes: Uint8Array) => {
+        const out = bytes.slice()
+        out[0] &= 248
+        out[31] &= 127
+        out[31] |= 64
+        return out
+    }
+    const ed25519Domain = (data: Uint8Array, ctx: Uint8Array, phflag: boolean) => {
+        if (ctx.length > 255) {
+            throw new Error('Context is too big')
+        }
+        return concatBytes(
+            new TextEncoder().encode('SigEd25519 no Ed25519 collisions'),
+            new Uint8Array([phflag ? 1 : 0, ctx.length]),
+            ctx,
+            data
+        )
+    }
+    const identityPrehash = (message: Uint8Array) => message
+    return eddsa(ed25519.Point, nobleSha512, {
+        adjustScalarBytes,
+        domain: ed25519Domain,
+        prehash: identityPrehash,
+        zip215: true,
+    })
+})()
+
+/**
+ * Signs a pre-computed 64-byte SHA-512 digest with the Ed25519ph dom2 prefix but without re-hashing the digest
+ */
+export async function signDigestEd25519ph(secretKey: Uint8Array, digest: Uint8Array): Promise<Uint8Array> {
+    if (digest.length !== 64) {
+        throw new Error(`Expected 64-byte digest, got ${digest.length}`)
+    }
+    const sig = ed25519phNoRehash.sign(digest, secretKey)
+    if (sig.length !== 64) {
+        throw new Error(`Expected 64-byte Ed25519ph signature, got ${sig.length}`)
+    }
+    return sig
+}
+
+/**
+ * Computes the RFC 7638 JWK thumbprint for a signing public key and returns it as a base64url-encoded SHA-256 digest.
+ */
+export async function computeSigningKeyThumbprint(jwk: V2SigningJwk): Promise<string> {
+    const canonical =
+        jwk.kty === 'EC'
+            ? `{"crv":${JSON.stringify(jwk.crv)},"kty":${JSON.stringify(jwk.kty)},"x":${JSON.stringify(jwk.x)},"y":${JSON.stringify(jwk.y)}}`
+            : `{"crv":${JSON.stringify(jwk.crv)},"kty":${JSON.stringify(jwk.kty)},"x":${JSON.stringify(jwk.x)}}`
 
     const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
 
@@ -574,21 +651,29 @@ export async function computeEcP256Thumbprint(jwk: V2SigningJwk): Promise<string
 }
 
 /**
- * Converts an EC P-256 public JWK to a PEM-encoded PKIX public key.
- * The returned string is the canonical "-----BEGIN PUBLIC KEY-----" envelope suitable for standard ES256 verification libraries.
+ * Converts a signing public JWK to a PEM-encoded PKIX public key.
  */
-export async function ecP256JwkToPem(jwk: V2SigningJwk): Promise<string> {
-    // Re-import as an extractable ECDSA public key so we can export SPKI (PKIX DER)
-    const pub = await crypto.subtle.importKey(
-        'jwk',
-        { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y, ext: true } as JsonWebKey,
-        { name: 'ECDSA', namedCurve: 'P-256' },
-        true,
-        ['verify']
-    )
-    const spki = new Uint8Array(await crypto.subtle.exportKey('spki', pub))
+export async function signingJwkToPem(jwk: V2SigningJwk): Promise<string> {
+    let spki: Uint8Array
+    if (jwk.kty === 'EC') {
+        const pub = await crypto.subtle.importKey(
+            'jwk',
+            { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y, ext: true } as JsonWebKey,
+            { name: 'ECDSA', namedCurve: 'P-256' },
+            true,
+            ['verify']
+        )
+        spki = new Uint8Array(await crypto.subtle.exportKey('spki', pub))
+    } else {
+        const x = base64UrlToBytes(jwk.x)
+        if (x.length !== 32) {
+            throw new Error('Invalid Ed25519 public JWK')
+        }
+        spki = new Uint8Array(44)
+        spki.set([0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00], 0)
+        spki.set(x, 12)
+    }
 
-    // Encode DER as base64 and wrap at 64 chars per PEM convention
     let binary = ''
     for (const b of spki) {
         binary += String.fromCharCode(b)
@@ -602,22 +687,33 @@ export async function ecP256JwkToPem(jwk: V2SigningJwk): Promise<string> {
     return `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----\n`
 }
 
-/** Converts an EC P-256 public JWK to the OpenSSH authorized_keys public-key format */
-export function ecP256JwkToSshPublicKey(jwk: V2SigningJwk, comment?: string): string {
-    const x = base64UrlToBytes(jwk.x)
-    const y = base64UrlToBytes(jwk.y)
-    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256' || x.length !== 32 || y.length !== 32) {
-        throw new Error('Invalid P-256 public JWK')
+/** Converts a signing public JWK to the OpenSSH authorized_keys public-key format */
+export function signingJwkToSshPublicKey(jwk: V2SigningJwk, comment?: string): string {
+    let keyType: string
+    let blob: Uint8Array
+    if (jwk.kty === 'EC') {
+        const x = base64UrlToBytes(jwk.x)
+        const y = base64UrlToBytes(jwk.y)
+        if (jwk.crv !== 'P-256' || x.length !== 32 || y.length !== 32) {
+            throw new Error('Invalid P-256 public JWK')
+        }
+
+        keyType = 'ecdsa-sha2-nistp256'
+        const curve = 'nistp256'
+        const point = new Uint8Array(65)
+        point[0] = 0x04
+        point.set(x, 1)
+        point.set(y, 33)
+        blob = sshWireStrings([new TextEncoder().encode(keyType), new TextEncoder().encode(curve), point])
+    } else {
+        const x = base64UrlToBytes(jwk.x)
+        if (jwk.crv !== 'Ed25519' || x.length !== 32) {
+            throw new Error('Invalid Ed25519 public JWK')
+        }
+
+        keyType = 'ssh-ed25519'
+        blob = sshWireStrings([new TextEncoder().encode(keyType), x])
     }
-
-    const keyType = 'ecdsa-sha2-nistp256'
-    const curve = 'nistp256'
-    const point = new Uint8Array(65)
-    point[0] = 0x04
-    point.set(x, 1)
-    point.set(y, 33)
-
-    const blob = sshWireStrings([new TextEncoder().encode(keyType), new TextEncoder().encode(curve), point])
     const suffix = comment ? ` ${comment}` : ''
     return `${keyType} ${bytesToBase64(blob)}${suffix}\n`
 }

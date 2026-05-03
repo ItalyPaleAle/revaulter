@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/base64"
@@ -57,10 +58,38 @@ agent in a non-interactive environment.`,
 
 	_ = cmd.MarkFlagRequired("key-label")
 	defaultSocketPath := filepath.Join(defaultSSHAgentSocketDir(), "ssh-agent-<key-label>.sock")
+	algFlag := cmd.Flags().Lookup("algorithm")
+	if algFlag != nil {
+		algFlag.DefValue = protocolv2.SigningAlgES256
+		_ = algFlag.Value.Set(protocolv2.SigningAlgES256)
+		algFlag.Usage = "Signing algorithm: 'ES256' (default) or 'Ed25519'"
+	}
 	cmd.Flags().StringVar(&f.SocketPath, "socket", "", "Path for the Unix socket (defaults to "+defaultSocketPath+")")
 	cmd.Flags().StringVar(&f.Comment, "comment", "", `Comment attached to the key (default: "revaulter/<key-label>")`)
 
 	return cmd
+}
+
+func (f *sshAgentFlags) Validate() error {
+	err := f.v2OperationFlagsBase.Validate()
+	if err != nil {
+		return err
+	}
+
+	if f.Algorithm == "" {
+		f.Algorithm = protocolv2.SigningAlgES256
+	}
+
+	canonical, ok := protocolv2.NormalizeSigningAlgorithm(f.Algorithm)
+	if !ok {
+		return fmt.Errorf("unsupported signing algorithm %q", f.Algorithm)
+	}
+	if canonical == protocolv2.SigningAlgEd25519ph {
+		return errors.New("ssh-agent does not support Ed25519ph; use ES256 or Ed25519")
+	}
+	f.Algorithm = canonical
+
+	return nil
 }
 
 func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
@@ -239,7 +268,7 @@ func (a *revaulterSSHAgent) List() ([]*agent.Key, error) {
 	}}, nil
 }
 
-// Sign hashes data with SHA-256 and submits a sign request to the Revaulter server
+// Sign submits a sign request to the Revaulter server and translates the response into SSH wire format
 func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
 	ctx, cancel := a.operationContext(a.signTimeout())
 	defer cancel()
@@ -249,16 +278,22 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 		return nil, err
 	}
 
-	digest := sha256.Sum256(data)
-	digestB64 := base64.RawURLEncoding.EncodeToString(digest[:])
-
 	// Build a sign operation reusing existing request/result helpers
 	signFlags := &v2OperationFlagsSign{
 		v2OperationFlagsBase: a.flags.v2OperationFlagsBase,
 	}
-	signFlags.Algorithm = protocolv2.SigningAlgES256
+	signFlags.Algorithm = a.flags.Algorithm
 	signFlags.Note = sshAgentSignNote(a.flags.Note)
-	signFlags.digestB64 = digestB64
+	if a.flags.Algorithm == protocolv2.SigningAlgES256 {
+		digest := sha256.Sum256(data)
+		signFlags.resolvedValueB64 = base64.RawURLEncoding.EncodeToString(digest[:])
+	} else {
+		err = ensureWithinInputLimit("ssh-agent signing input", len(data))
+		if err != nil {
+			return nil, err
+		}
+		signFlags.resolvedValueB64 = base64.RawURLEncoding.EncodeToString(data)
+	}
 
 	op := &v2OperationCmd{
 		Operation: protocolv2.OperationSign,
@@ -278,28 +313,25 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 
 	// Wait for the confirmation
 	a.log.Info("Waiting for browser confirmation", slog.String("state", state))
-	aad := buildTransportAAD(state, protocolv2.OperationSign, protocolv2.SigningAlgES256)
+	aad := buildTransportAAD(state, protocolv2.OperationSign, a.flags.Algorithm)
 	plain, err := op.getResult(ctx, a.httpClient, state, kp, aad)
 	if err != nil {
 		return nil, fmt.Errorf("sign request failed: %w", err)
 	}
 
 	// Parse and validate the response
-	_, sigBytes, err := parseAndValidateV2SignResponse(state, a.flags.KeyLabel, plain)
+	_, sigBytes, err := parseAndValidateV2SignResponse(state, a.flags.KeyLabel, a.flags.Algorithm, plain)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert IEEE P1363 r||s (64 bytes) to the SSH ECDSA wire format: mpint r, mpint s
-	r := new(big.Int).SetBytes(sigBytes[:32])
-	s := new(big.Int).SetBytes(sigBytes[32:])
-	sigBlob := ssh.Marshal(
-		struct{ R, S *big.Int }{R: r, S: s},
-	)
-
-	sig := &ssh.Signature{
-		Format: key.Type(),
-		Blob:   sigBlob,
+	sig := &ssh.Signature{Format: key.Type()}
+	if a.flags.Algorithm == protocolv2.SigningAlgES256 {
+		r := new(big.Int).SetBytes(sigBytes[:32])
+		s := new(big.Int).SetBytes(sigBytes[32:])
+		sig.Blob = ssh.Marshal(struct{ R, S *big.Int }{R: r, S: s})
+	} else {
+		sig.Blob = sigBytes
 	}
 	err = key.Verify(data, sig)
 	if err != nil {
@@ -365,7 +397,7 @@ func (a *revaulterSSHAgent) Lock(_ []byte) error            { return errSSHNotSu
 func (a *revaulterSSHAgent) Unlock(_ []byte) error          { return errSSHNotSupported }
 func (a *revaulterSSHAgent) Signers() ([]ssh.Signer, error) { return nil, errSSHNotSupported }
 
-// fetchSigningPubkey retrieves the auto-stored ES256 public key for the configured label
+// fetchSigningPubkey retrieves the auto-stored signing public key for the configured label and algorithm
 func (a *revaulterSSHAgent) fetchSigningPubkey(parentCtx context.Context) (ssh.PublicKey, error) {
 	err := a.verifyAnchorTrust(parentCtx)
 	if err != nil {
@@ -375,7 +407,7 @@ func (a *revaulterSSHAgent) fetchSigningPubkey(parentCtx context.Context) (ssh.P
 	// Create the request
 	query := url.Values{}
 	query.Set("label", a.flags.KeyLabel)
-	query.Set("algorithm", protocolv2.SigningAlgES256)
+	query.Set("algorithm", a.flags.Algorithm)
 	pathSuffix := "signing-pubkey?" + query.Encode()
 	req, err := newV2RequestKeyHTTPRequest(parentCtx, http.MethodGet, a.flags.GetServer(), a.flags.GetRequestKey(), pathSuffix, nil)
 	if err != nil {
@@ -389,31 +421,53 @@ func (a *revaulterSSHAgent) fetchSigningPubkey(parentCtx context.Context) (ssh.P
 		return nil, fmt.Errorf("fetch signing pubkey: %w", err)
 	}
 
-	var jwk protocolv2.ECP256SigningJWK
-	err = json.Unmarshal(resp.JWK, &jwk)
-	if err != nil {
-		return nil, fmt.Errorf("parse signing key JWK: %w", err)
-	}
+	switch resp.Algorithm {
+	case protocolv2.SigningAlgES256:
+		var jwk protocolv2.ECP256SigningJWK
+		err = json.Unmarshal(resp.JWK, &jwk)
+		if err != nil {
+			return nil, fmt.Errorf("parse signing key JWK: %w", err)
+		}
 
-	ecdhPub, err := jwk.ToECDHPublicKey()
-	if err != nil {
-		return nil, fmt.Errorf("invalid signing public key: %w", err)
-	}
+		ecdhPub, parseErr := jwk.ToECDHPublicKey()
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid signing public key: %w", parseErr)
+		}
 
-	// Convert raw uncompressed point (04 || x || y) to *ecdsa.PublicKey
-	raw := ecdhPub.Bytes()
-	ecdsaPub := &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     new(big.Int).SetBytes(raw[1:33]),
-		Y:     new(big.Int).SetBytes(raw[33:65]),
-	}
+		raw := ecdhPub.Bytes()
+		ecdsaPub := &ecdsa.PublicKey{
+			Curve: elliptic.P256(),
+			X:     new(big.Int).SetBytes(raw[1:33]),
+			Y:     new(big.Int).SetBytes(raw[33:65]),
+		}
 
-	sshPub, err := ssh.NewPublicKey(ecdsaPub)
-	if err != nil {
-		return nil, fmt.Errorf("build SSH public key: %w", err)
-	}
+		sshPub, parseErr := ssh.NewPublicKey(ecdsaPub)
+		if parseErr != nil {
+			return nil, fmt.Errorf("build SSH public key: %w", parseErr)
+		}
+		return sshPub, nil
 
-	return sshPub, nil
+	case protocolv2.SigningAlgEd25519:
+		var jwk protocolv2.Ed25519SigningJWK
+		err = json.Unmarshal(resp.JWK, &jwk)
+		if err != nil {
+			return nil, fmt.Errorf("parse signing key JWK: %w", err)
+		}
+
+		edPub, parseErr := jwk.ToPublicKey()
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid signing public key: %w", parseErr)
+		}
+
+		sshPub, parseErr := ssh.NewPublicKey(ed25519.PublicKey(edPub))
+		if parseErr != nil {
+			return nil, fmt.Errorf("build SSH public key: %w", parseErr)
+		}
+		return sshPub, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported SSH signing algorithm %q", resp.Algorithm)
+	}
 }
 
 // verifyAnchorTrust checks the pinned server anchor before trusting signing-key lookup responses

@@ -24,10 +24,17 @@ const MaxNoteLength = 80
 // SigningAlgES256 is the JWA identifier for ECDSA using P-256 with SHA-256
 const SigningAlgES256 = "ES256"
 
+// SigningAlgEd25519 is pure Ed25519 (PureEdDSA / RFC 8032)
+const SigningAlgEd25519 = "Ed25519"
+
+// SigningAlgEd25519ph is Ed25519ph (HashEdDSA / RFC 8032, SHA-512 prehash)
+const SigningAlgEd25519ph = "Ed25519ph"
+
 // IsSupportedSigningAlgorithm reports whether alg is a signing algorithm supported by the server for the "sign" operation
 // Comparison is case-insensitive; callers that need the canonical (uppercase) form should use NormalizeSigningAlgorithm
 func IsSupportedSigningAlgorithm(alg string) bool {
-	return strings.ToUpper(alg) == SigningAlgES256
+	_, ok := NormalizeSigningAlgorithm(alg)
+	return ok
 }
 
 // NormalizeSigningAlgorithm returns the canonical form of a supported signing algorithm and reports whether the input was supported
@@ -36,6 +43,10 @@ func NormalizeSigningAlgorithm(alg string) (canonical string, ok bool) {
 	switch strings.ToUpper(alg) {
 	case SigningAlgES256:
 		return SigningAlgES256, true
+	case "ED25519":
+		return SigningAlgEd25519, true
+	case "ED25519PH":
+		return SigningAlgEd25519ph, true
 	default:
 		return "", false
 	}

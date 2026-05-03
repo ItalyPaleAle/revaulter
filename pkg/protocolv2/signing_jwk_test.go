@@ -2,6 +2,7 @@ package protocolv2
 
 import (
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -154,5 +155,117 @@ func TestParseECP256SigningPEMRejectsInvalid(t *testing.T) {
 	// Non-EC key (RSA) would round-trip through PKIX but must be rejected
 	// We simulate a malformed PKIX body which is a cheaper check than generating an RSA key
 	_, err = ParseECP256SigningPEM(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: []byte{0x01, 0x02}}))
+	require.Error(t, err)
+}
+
+func TestEd25519SigningJWKFromPublicKeyRoundTrip(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	jwk, err := Ed25519SigningJWKFromPublicKey(pub)
+	require.NoError(t, err)
+	require.Equal(t, "OKP", jwk.Kty)
+	require.Equal(t, "Ed25519", jwk.Crv)
+	require.Empty(t, jwk.D)
+
+	out, err := jwk.ToPublicKey()
+	require.NoError(t, err)
+	require.Equal(t, []byte(pub), []byte(out))
+}
+
+func TestEd25519SigningJWKThumbprintKnownAnswer(t *testing.T) {
+	jwk := Ed25519SigningJWK{
+		Kty: "OKP",
+		Crv: "Ed25519",
+		X:   "11qYAYKxCrfVS_7TyWQHOg7t2uR6TQG8R9B0O9vLh0w",
+	}
+	canonical := `{"crv":"Ed25519","kty":"OKP","x":"11qYAYKxCrfVS_7TyWQHOg7t2uR6TQG8R9B0O9vLh0w"}`
+	h := sha256.Sum256([]byte(canonical))
+	expected := base64.RawURLEncoding.EncodeToString(h[:])
+
+	got, err := jwk.Thumbprint()
+	require.NoError(t, err)
+	require.Equal(t, expected, got)
+	require.Len(t, got, 43)
+}
+
+func TestEd25519SigningJWKValidateRejectsInvalid(t *testing.T) {
+	validX := "11qYAYKxCrfVS_7TyWQHOg7t2uR6TQG8R9B0O9vLh0w"
+
+	tests := []struct {
+		name string
+		jwk  Ed25519SigningJWK
+	}{
+		{"wrong-kty", Ed25519SigningJWK{Kty: "EC", Crv: "Ed25519", X: validX}},
+		{"wrong-crv", Ed25519SigningJWK{Kty: "OKP", Crv: "X25519", X: validX}},
+		{"missing-x", Ed25519SigningJWK{Kty: "OKP", Crv: "Ed25519"}},
+		{"includes-d", Ed25519SigningJWK{Kty: "OKP", Crv: "Ed25519", X: validX, D: "secret"}},
+		{"wrong-alg", Ed25519SigningJWK{Kty: "OKP", Crv: "Ed25519", X: validX, Alg: "Ed25519"}},
+		{"wrong-use", Ed25519SigningJWK{Kty: "OKP", Crv: "Ed25519", X: validX, Use: "enc"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.jwk.ValidateSigningKey()
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestEd25519SigningJWKValidateAcceptsOptionalMetadata(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	jwk, err := Ed25519SigningJWKFromPublicKey(pub)
+	require.NoError(t, err)
+	jwk.Alg = "EdDSA"
+	jwk.Use = "sig"
+	jwk.Kid = "some-kid"
+	err = jwk.ValidateSigningKey()
+	require.NoError(t, err)
+}
+
+func TestParseEd25519SigningJWKRoundTrip(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	jwk, err := Ed25519SigningJWKFromPublicKey(pub)
+	require.NoError(t, err)
+	buf, err := json.Marshal(jwk)
+	require.NoError(t, err)
+
+	parsed, err := ParseEd25519SigningJWK(buf)
+	require.NoError(t, err)
+	require.Equal(t, jwk, parsed)
+}
+
+func TestParseEd25519SigningJWKRejectsInvalid(t *testing.T) {
+	_, err := ParseEd25519SigningJWK([]byte("not json"))
+	require.Error(t, err)
+
+	_, err = ParseEd25519SigningJWK([]byte(`{"kty":"OKP","crv":"X25519","x":"aa"}`))
+	require.Error(t, err)
+}
+
+func TestParseEd25519SigningPEMRoundTrip(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	spki, err := x509.MarshalPKIXPublicKey(pub)
+	require.NoError(t, err)
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki})
+
+	raw, err := ParseEd25519SigningPEM(pemBytes)
+	require.NoError(t, err)
+	require.Equal(t, []byte(pub), raw)
+}
+
+func TestParseEd25519SigningPEMRejectsInvalid(t *testing.T) {
+	_, err := ParseEd25519SigningPEM([]byte("not a pem"))
+	require.Error(t, err)
+
+	_, err = ParseEd25519SigningPEM(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: []byte{0}}))
+	require.Error(t, err)
+
+	_, err = ParseEd25519SigningPEM(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: []byte{0x01, 0x02}}))
 	require.Error(t, err)
 }

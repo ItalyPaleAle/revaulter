@@ -40,9 +40,12 @@ func (req *v2SigningKeyCreateRequest) Validate() (kid string, canonicalJWK []byt
 	if req.Algorithm == "" {
 		return "", nil, errors.New("missing algorithm")
 	}
-	if !protocolv2.IsSupportedSigningAlgorithm(req.Algorithm) {
+
+	canonicalAlg, ok := protocolv2.NormalizeSigningAlgorithm(req.Algorithm)
+	if !ok {
 		return "", nil, fmt.Errorf("unsupported signing algorithm %q", req.Algorithm)
 	}
+	req.Algorithm = canonicalAlg
 	if req.KeyLabel == "" {
 		return "", nil, errors.New("missing keyLabel")
 	}
@@ -54,7 +57,7 @@ func (req *v2SigningKeyCreateRequest) Validate() (kid string, canonicalJWK []byt
 	}
 	req.KeyLabel = canonicalKeyLabel
 
-	kid, canonicalJWK, err = validateSigningJWKAndPEM(req.JWK, req.PEM)
+	kid, canonicalJWK, err = validateSigningJWKAndPEM(req.Algorithm, req.JWK, req.PEM)
 	if err != nil {
 		return "", nil, err
 	}
@@ -605,8 +608,8 @@ func (s *Server) verifySigningKeyPublicationProof(ctx context.Context, as *db.Au
 	return nil
 }
 
-// validateSigningJWKAndPEM parses the JWK and PEM representations of a signing public key, checks that they refer to the same point, and returns the JWK thumbprint used as the canonical id along with a canonical re-serialization of the JWK
-func validateSigningJWKAndPEM(jwkBytes json.RawMessage, pemStr string) (kid string, canonical []byte, err error) {
+// validateSigningJWKAndPEM parses the JWK and PEM representations of a signing public key, checks that they refer to the same key material, and returns the JWK thumbprint used as the canonical id along with a canonical re-serialization of the JWK
+func validateSigningJWKAndPEM(algorithm string, jwkBytes json.RawMessage, pemStr string) (kid string, canonical []byte, err error) {
 	if len(jwkBytes) == 0 {
 		return "", nil, errors.New("missing jwk")
 	}
@@ -614,41 +617,70 @@ func validateSigningJWKAndPEM(jwkBytes json.RawMessage, pemStr string) (kid stri
 		return "", nil, errors.New("missing pem")
 	}
 
-	// Parse the key as JWK
-	jwk, err := protocolv2.ParseECP256SigningJWK(jwkBytes)
-	if err != nil {
-		return "", nil, fmt.Errorf("invalid jwk: %w", err)
-	}
+	switch algorithm {
+	case protocolv2.SigningAlgES256:
+		jwk, parseErr := protocolv2.ParseECP256SigningJWK(jwkBytes)
+		if parseErr != nil {
+			return "", nil, fmt.Errorf("invalid jwk: %w", parseErr)
+		}
 
-	// Parse the key as PEM
-	pemRaw, err := protocolv2.ParseECP256SigningPEM([]byte(pemStr))
-	if err != nil {
-		return "", nil, fmt.Errorf("invalid pem: %w", err)
-	}
+		pemRaw, parseErr := protocolv2.ParseECP256SigningPEM([]byte(pemStr))
+		if parseErr != nil {
+			return "", nil, fmt.Errorf("invalid pem: %w", parseErr)
+		}
 
-	// Get the public key
-	// This also performs additional validations to ensure the JWK represents a valid ECDH key, on-curve
-	jwkPub, err := jwk.ToECDHPublicKey()
-	if err != nil {
-		return "", nil, fmt.Errorf("invalid jwk: %w", err)
-	}
+		jwkPub, parseErr := jwk.ToECDHPublicKey()
+		if parseErr != nil {
+			return "", nil, fmt.Errorf("invalid jwk: %w", parseErr)
+		}
+		if !bytes.Equal(jwkPub.Bytes(), pemRaw) {
+			return "", nil, errors.New("jwk and pem do not match")
+		}
 
-	// Ensure the two keys are equal
-	if !bytes.Equal(jwkPub.Bytes(), pemRaw) {
-		return "", nil, errors.New("jwk and pem do not match")
-	}
+		kid, parseErr = jwk.Thumbprint()
+		if parseErr != nil {
+			return "", nil, fmt.Errorf("failed to compute thumbprint: %w", parseErr)
+		}
 
-	// Compute the key ID
-	kid, err = jwk.Thumbprint()
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to compute thumbprint: %w", err)
-	}
+		canonical, parseErr = json.Marshal(jwk)
+		if parseErr != nil {
+			return "", nil, fmt.Errorf("failed to canonicalize jwk: %w", parseErr)
+		}
 
-	// Re-encode the JWK in a canonical format
-	canonical, err = json.Marshal(jwk)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to canonicalize jwk: %w", err)
-	}
+		return kid, canonical, nil
 
-	return kid, canonical, nil
+	case protocolv2.SigningAlgEd25519, protocolv2.SigningAlgEd25519ph:
+		jwk, parseErr := protocolv2.ParseEd25519SigningJWK(jwkBytes)
+		if parseErr != nil {
+			return "", nil, fmt.Errorf("invalid jwk: %w", parseErr)
+		}
+
+		pemRaw, parseErr := protocolv2.ParseEd25519SigningPEM([]byte(pemStr))
+		if parseErr != nil {
+			return "", nil, fmt.Errorf("invalid pem: %w", parseErr)
+		}
+
+		jwkPub, parseErr := jwk.ToPublicKey()
+		if parseErr != nil {
+			return "", nil, fmt.Errorf("invalid jwk: %w", parseErr)
+		}
+		if !bytes.Equal([]byte(jwkPub), pemRaw) {
+			return "", nil, errors.New("jwk and pem do not match")
+		}
+
+		kid, parseErr = jwk.Thumbprint()
+		if parseErr != nil {
+			return "", nil, fmt.Errorf("failed to compute thumbprint: %w", parseErr)
+		}
+
+		canonical, parseErr = json.Marshal(jwk)
+		if parseErr != nil {
+			return "", nil, fmt.Errorf("failed to canonicalize jwk: %w", parseErr)
+		}
+
+		return kid, canonical, nil
+
+	default:
+		return "", nil, fmt.Errorf("unsupported signing algorithm %q", algorithm)
+	}
 }

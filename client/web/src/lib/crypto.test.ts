@@ -1,22 +1,25 @@
 import { argon2id } from '@awasm/noble'
+import { ed25519, ed25519ph } from '@noble/curves/ed25519.js'
 import { p256 } from '@noble/curves/nist.js'
 import { bytesToHex } from '@noble/curves/utils.js'
 import { describe, expect, it } from 'vitest'
 
 import {
-    computeEcP256Thumbprint,
+    computeSigningKeyThumbprint,
     decryptTransportEnvelope,
     deriveOperationKeyBytes,
     deriveRequestEncKeyPair,
     deriveRequestEncMlkemKeyPair,
     deriveSigningKeyPair,
     deriveWrappingKey,
-    ecP256JwkToPem,
-    ecP256JwkToSshPublicKey,
     encryptTransportEnvelope,
     generatePrimaryKey,
     parseWrappedPrimaryKeyEnvelope,
+    signingJwkToPem,
+    signingJwkToSshPublicKey,
+    signDigestEd25519ph,
     signDigestEs256,
+    signMessageEd25519,
     unwrapPrimaryKey,
     wrapPrimaryKey,
 } from '$lib/crypto'
@@ -530,49 +533,53 @@ describe('transport envelope encrypt/decrypt round-trip', () => {
 
 describe('deriveSigningKeyPair', () => {
     it('is deterministic for the same inputs', async () => {
-        const a = await deriveSigningKeyPair({
-            userId: 'user-1',
-            keyLabel: 'payments',
-            algorithm: 'ES256',
-            primaryKey: TEST_PRIMARY_KEY,
-        })
-        const b = await deriveSigningKeyPair({
-            userId: 'user-1',
-            keyLabel: 'payments',
-            algorithm: 'ES256',
-            primaryKey: TEST_PRIMARY_KEY,
-        })
-        expect(a.publicJwk).toStrictEqual(b.publicJwk)
+        for (const algorithm of ['ES256', 'Ed25519', 'Ed25519ph']) {
+            const a = await deriveSigningKeyPair({
+                userId: 'user-1',
+                keyLabel: 'payments',
+                algorithm,
+                primaryKey: TEST_PRIMARY_KEY,
+            })
+            const b = await deriveSigningKeyPair({
+                userId: 'user-1',
+                keyLabel: 'payments',
+                algorithm,
+                primaryKey: TEST_PRIMARY_KEY,
+            })
+            expect(a.publicJwk).toStrictEqual(b.publicJwk)
+        }
     })
 
     it('is domain-separated by userId, keyLabel, and primary key', async () => {
-        const base = await deriveSigningKeyPair({
-            userId: 'user-1',
-            keyLabel: 'payments',
-            algorithm: 'ES256',
-            primaryKey: TEST_PRIMARY_KEY,
-        })
-        const diffUser = await deriveSigningKeyPair({
-            userId: 'user-2',
-            keyLabel: 'payments',
-            algorithm: 'ES256',
-            primaryKey: TEST_PRIMARY_KEY,
-        })
-        const diffLabel = await deriveSigningKeyPair({
-            userId: 'user-1',
-            keyLabel: 'refunds',
-            algorithm: 'ES256',
-            primaryKey: TEST_PRIMARY_KEY,
-        })
-        const diffKey = await deriveSigningKeyPair({
-            userId: 'user-1',
-            keyLabel: 'payments',
-            algorithm: 'ES256',
-            primaryKey: new Uint8Array(32).fill(0xcc),
-        })
-        expect(diffUser.publicJwk).not.toStrictEqual(base.publicJwk)
-        expect(diffLabel.publicJwk).not.toStrictEqual(base.publicJwk)
-        expect(diffKey.publicJwk).not.toStrictEqual(base.publicJwk)
+        for (const algorithm of ['ES256', 'Ed25519', 'Ed25519ph']) {
+            const base = await deriveSigningKeyPair({
+                userId: 'user-1',
+                keyLabel: 'payments',
+                algorithm,
+                primaryKey: TEST_PRIMARY_KEY,
+            })
+            const diffUser = await deriveSigningKeyPair({
+                userId: 'user-2',
+                keyLabel: 'payments',
+                algorithm,
+                primaryKey: TEST_PRIMARY_KEY,
+            })
+            const diffLabel = await deriveSigningKeyPair({
+                userId: 'user-1',
+                keyLabel: 'refunds',
+                algorithm,
+                primaryKey: TEST_PRIMARY_KEY,
+            })
+            const diffKey = await deriveSigningKeyPair({
+                userId: 'user-1',
+                keyLabel: 'payments',
+                algorithm,
+                primaryKey: new Uint8Array(32).fill(0xcc),
+            })
+            expect(diffUser.publicJwk).not.toStrictEqual(base.publicJwk)
+            expect(diffLabel.publicJwk).not.toStrictEqual(base.publicJwk)
+            expect(diffKey.publicJwk).not.toStrictEqual(base.publicJwk)
+        }
     })
 
     it('rejects unsupported algorithms', async () => {
@@ -586,18 +593,26 @@ describe('deriveSigningKeyPair', () => {
         ).rejects.toThrow(/Unsupported signing algorithm/)
     })
 
-    it('returns a P-256 public JWK without the private scalar', async () => {
-        const { publicJwk } = await deriveSigningKeyPair({
+    it('returns algorithm-appropriate public JWKs without private material', async () => {
+        const es256 = await deriveSigningKeyPair({
             userId: 'u',
-            keyLabel: 'k',
+            keyLabel: 'k-es',
             algorithm: 'ES256',
             primaryKey: TEST_PRIMARY_KEY,
         })
-        expect(publicJwk.kty).toBe('EC')
-        expect(publicJwk.crv).toBe('P-256')
-        expect(publicJwk.x).toBeTruthy()
-        expect(publicJwk.y).toBeTruthy()
-        expect((publicJwk as Record<string, unknown>).d).toBeUndefined()
+        expect(es256.publicJwk.kty).toBe('EC')
+        expect(es256.publicJwk.crv).toBe('P-256')
+        expect((es256.publicJwk as Record<string, unknown>).d).toBeUndefined()
+
+        const ed25519Key = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k-ed',
+            algorithm: 'Ed25519',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        expect(ed25519Key.publicJwk.kty).toBe('OKP')
+        expect(ed25519Key.publicJwk.crv).toBe('Ed25519')
+        expect((ed25519Key.publicJwk as Record<string, unknown>).d).toBeUndefined()
     })
 })
 
@@ -614,7 +629,7 @@ describe('signDigestEs256', () => {
     }
 
     it('produces a 64-byte raw r||s signature that verifies against the supplied digest', async () => {
-        const { scalar, publicJwk } = await deriveSigningKeyPair({
+        const { secretKey, publicJwk } = await deriveSigningKeyPair({
             userId: 'u',
             keyLabel: 'k',
             algorithm: 'ES256',
@@ -622,9 +637,13 @@ describe('signDigestEs256', () => {
         })
         const digest = new Uint8Array(32)
         crypto.getRandomValues(digest)
-        const sig = await signDigestEs256(scalar, digest)
+        const sig = await signDigestEs256(secretKey, digest)
         expect(sig).toBeInstanceOf(Uint8Array)
         expect(sig.length).toBe(64)
+        expect(publicJwk.kty).toBe('EC')
+        if (publicJwk.kty !== 'EC') {
+            throw new Error('expected EC signing key')
+        }
 
         // Verify with prehash:false because the browser now signs the digest directly without re-hashing
         const pubBytes = publicKeyBytesFromJwk(publicJwk)
@@ -633,7 +652,7 @@ describe('signDigestEs256', () => {
     })
 
     it('does not verify when the digest is treated as a message that should be hashed (regression check for the prior bug)', async () => {
-        const { scalar, publicJwk } = await deriveSigningKeyPair({
+        const { secretKey, publicJwk } = await deriveSigningKeyPair({
             userId: 'u',
             keyLabel: 'k',
             algorithm: 'ES256',
@@ -641,7 +660,11 @@ describe('signDigestEs256', () => {
         })
         const digest = new Uint8Array(32)
         crypto.getRandomValues(digest)
-        const sig = await signDigestEs256(scalar, digest)
+        const sig = await signDigestEs256(secretKey, digest)
+        expect(publicJwk.kty).toBe('EC')
+        if (publicJwk.kty !== 'EC') {
+            throw new Error('expected EC signing key')
+        }
         const pubBytes = publicKeyBytesFromJwk(publicJwk)
 
         // Under the old (buggy) WebCrypto path the browser signed SHA-256(digest)
@@ -652,18 +675,62 @@ describe('signDigestEs256', () => {
     })
 
     it('rejects digests that are not 32 bytes', async () => {
-        const { scalar } = await deriveSigningKeyPair({
+        const { secretKey } = await deriveSigningKeyPair({
             userId: 'u',
             keyLabel: 'k',
             algorithm: 'ES256',
             primaryKey: TEST_PRIMARY_KEY,
         })
-        await expect(signDigestEs256(scalar, new Uint8Array(31))).rejects.toThrow(/32-byte digest/)
-        await expect(signDigestEs256(scalar, new Uint8Array(33))).rejects.toThrow(/32-byte digest/)
+        await expect(signDigestEs256(secretKey, new Uint8Array(31))).rejects.toThrow(/32-byte digest/)
+        await expect(signDigestEs256(secretKey, new Uint8Array(33))).rejects.toThrow(/32-byte digest/)
     })
 })
 
-describe('computeEcP256Thumbprint', () => {
+describe('signMessageEd25519', () => {
+    it('matches noble Ed25519 signatures over raw message bytes', async () => {
+        const { secretKey, publicJwk } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k',
+            algorithm: 'Ed25519',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const msg = new TextEncoder().encode('hello ed25519')
+        const sig = await signMessageEd25519(secretKey, msg)
+        expect(sig.length).toBe(64)
+        expect(sig).toStrictEqual(ed25519.sign(msg, secretKey))
+        expect(ed25519.verify(sig, msg, base64UrlToBytes(publicJwk.x))).toBe(true)
+    })
+})
+
+describe('signDigestEd25519ph', () => {
+    it('matches standard Ed25519ph signing of the original message digest', async () => {
+        const { secretKey, publicJwk } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k',
+            algorithm: 'Ed25519ph',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const msg = new TextEncoder().encode('hello ed25519ph')
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-512', msg as BufferSource))
+        const sig = await signDigestEd25519ph(secretKey, digest)
+        expect(sig.length).toBe(64)
+        expect(sig).toStrictEqual(ed25519ph.sign(msg, secretKey))
+        expect(ed25519ph.verify(sig, msg, base64UrlToBytes(publicJwk.x))).toBe(true)
+    })
+
+    it('rejects digests that are not 64 bytes', async () => {
+        const { secretKey } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k',
+            algorithm: 'Ed25519ph',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        await expect(signDigestEd25519ph(secretKey, new Uint8Array(63))).rejects.toThrow(/64-byte digest/)
+        await expect(signDigestEd25519ph(secretKey, new Uint8Array(65))).rejects.toThrow(/64-byte digest/)
+    })
+})
+
+describe('computeSigningKeyThumbprint', () => {
     it('matches the expected base64url-encoded SHA-256 over the canonical JWK', async () => {
         const jwk = {
             kty: 'EC' as const,
@@ -675,7 +742,7 @@ describe('computeEcP256Thumbprint', () => {
         const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))
         const expected = bytesToBase64Url(new Uint8Array(hash))
 
-        const got = await computeEcP256Thumbprint(jwk)
+        const got = await computeSigningKeyThumbprint(jwk)
         expect(got).toBe(expected)
 
         // base64url-unpadded length for 32 bytes is 43 chars
@@ -689,8 +756,8 @@ describe('computeEcP256Thumbprint', () => {
             algorithm: 'ES256',
             primaryKey: TEST_PRIMARY_KEY,
         })
-        const a = await computeEcP256Thumbprint(publicJwk)
-        const b = await computeEcP256Thumbprint(publicJwk)
+        const a = await computeSigningKeyThumbprint(publicJwk)
+        const b = await computeSigningKeyThumbprint(publicJwk)
         expect(a).toBe(b)
     })
 
@@ -707,13 +774,13 @@ describe('computeEcP256Thumbprint', () => {
             algorithm: 'ES256',
             primaryKey: TEST_PRIMARY_KEY,
         })
-        const tp1 = await computeEcP256Thumbprint(k1.publicJwk)
-        const tp2 = await computeEcP256Thumbprint(k2.publicJwk)
+        const tp1 = await computeSigningKeyThumbprint(k1.publicJwk)
+        const tp2 = await computeSigningKeyThumbprint(k2.publicJwk)
         expect(tp1).not.toBe(tp2)
     })
 })
 
-describe('ecP256JwkToPem', () => {
+describe('signingJwkToPem', () => {
     it('round-trips through SPKI back to the same public JWK', async () => {
         const { publicJwk } = await deriveSigningKeyPair({
             userId: 'u',
@@ -721,9 +788,13 @@ describe('ecP256JwkToPem', () => {
             algorithm: 'ES256',
             primaryKey: TEST_PRIMARY_KEY,
         })
-        const pem = await ecP256JwkToPem(publicJwk)
+        const pem = await signingJwkToPem(publicJwk)
         expect(pem.startsWith('-----BEGIN PUBLIC KEY-----\n')).toBe(true)
         expect(pem.endsWith('-----END PUBLIC KEY-----\n')).toBe(true)
+        expect(publicJwk.kty).toBe('EC')
+        if (publicJwk.kty !== 'EC') {
+            throw new Error('expected EC signing key')
+        }
 
         // Lines between the envelope must be pure base64 wrapped at 64 chars
         const body = pem.replace('-----BEGIN PUBLIC KEY-----\n', '').replace('-----END PUBLIC KEY-----\n', '')
@@ -746,9 +817,21 @@ describe('ecP256JwkToPem', () => {
         expect(reJwk.x).toBe(publicJwk.x)
         expect(reJwk.y).toBe(publicJwk.y)
     })
+
+    it('serializes an Ed25519 public JWK as PKIX PEM', async () => {
+        const { publicJwk } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k-ed',
+            algorithm: 'Ed25519',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const pem = await signingJwkToPem(publicJwk)
+        expect(pem.startsWith('-----BEGIN PUBLIC KEY-----\n')).toBe(true)
+        expect(pem.endsWith('-----END PUBLIC KEY-----\n')).toBe(true)
+    })
 })
 
-describe('ecP256JwkToSshPublicKey', () => {
+describe('signingJwkToSshPublicKey', () => {
     it('serializes a P-256 JWK as an OpenSSH authorized_keys line', async () => {
         const { publicJwk } = await deriveSigningKeyPair({
             userId: 'u',
@@ -756,11 +839,15 @@ describe('ecP256JwkToSshPublicKey', () => {
             algorithm: 'ES256',
             primaryKey: TEST_PRIMARY_KEY,
         })
-        const ssh = ecP256JwkToSshPublicKey(publicJwk, 'k-ES256')
+        const ssh = signingJwkToSshPublicKey(publicJwk, 'k-ES256')
         const parts = ssh.trim().split(' ')
         expect(parts).toHaveLength(3)
         expect(parts[0]).toBe('ecdsa-sha2-nistp256')
         expect(parts[2]).toBe('k-ES256')
+        expect(publicJwk.kty).toBe('EC')
+        if (publicJwk.kty !== 'EC') {
+            throw new Error('expected EC signing key')
+        }
 
         const blob = Uint8Array.from(atob(parts[1]), (c) => c.charCodeAt(0))
         let offset = 0
@@ -779,5 +866,19 @@ describe('ecP256JwkToSshPublicKey', () => {
         expect(bytesToBase64Url(point.slice(1, 33))).toBe(publicJwk.x)
         expect(bytesToBase64Url(point.slice(33, 65))).toBe(publicJwk.y)
         expect(offset).toBe(blob.length)
+    })
+
+    it('serializes an Ed25519 JWK as an OpenSSH authorized_keys line', async () => {
+        const { publicJwk } = await deriveSigningKeyPair({
+            userId: 'u',
+            keyLabel: 'k-ed',
+            algorithm: 'Ed25519',
+            primaryKey: TEST_PRIMARY_KEY,
+        })
+        const ssh = signingJwkToSshPublicKey(publicJwk, 'k-Ed25519')
+        const parts = ssh.trim().split(' ')
+        expect(parts).toHaveLength(3)
+        expect(parts[0]).toBe('ssh-ed25519')
+        expect(parts[2]).toBe('k-Ed25519')
     })
 })

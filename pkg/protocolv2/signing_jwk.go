@@ -2,6 +2,7 @@ package protocolv2
 
 import (
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -168,4 +169,139 @@ func ParseECP256SigningPEM(pemBytes []byte) ([]byte, error) {
 	}
 
 	return nil, errors.New("PEM public key is not an ECDSA key")
+}
+
+// Ed25519SigningJWK is the public JWK format for a published Ed25519 signing key
+type Ed25519SigningJWK struct {
+	Kty string `json:"kty"`
+	Crv string `json:"crv"`
+	X   string `json:"x"`
+
+	Alg string `json:"alg,omitempty"`
+	Use string `json:"use,omitempty"`
+	Kid string `json:"kid,omitempty"`
+
+	// D must never be set on a published key — it is the private scalar/seed material
+	D string `json:"d,omitempty"`
+}
+
+// ValidateSigningKey enforces the structural and algorithmic constraints for a published Ed25519 signing JWK
+func (j *Ed25519SigningJWK) ValidateSigningKey() error {
+	if j.Kty != "OKP" {
+		return fmt.Errorf("invalid JWK 'kty': %q", j.Kty)
+	}
+	if j.Crv != "Ed25519" {
+		return fmt.Errorf("invalid JWK 'crv': %q", j.Crv)
+	}
+	if j.X == "" {
+		return errors.New("JWK is missing 'x'")
+	}
+	if j.D != "" {
+		return errors.New("JWK must not include private member 'd'")
+	}
+	if j.Alg != "" && j.Alg != "EdDSA" {
+		return fmt.Errorf("invalid JWK 'alg': %q", j.Alg)
+	}
+	if j.Use != "" && j.Use != "sig" {
+		return fmt.Errorf("invalid JWK 'use': %q", j.Use)
+	}
+
+	_, err := decodeB64URLFixed(j.X, ed25519.PublicKeySize)
+	if err != nil {
+		return fmt.Errorf("invalid JWK 'x': %w", err)
+	}
+
+	return nil
+}
+
+// ToPublicKey converts the signing JWK into an ed25519.PublicKey
+func (j *Ed25519SigningJWK) ToPublicKey() (ed25519.PublicKey, error) {
+	err := j.ValidateSigningKey()
+	if err != nil {
+		return nil, err
+	}
+
+	x, err := decodeB64URLFixed(j.X, ed25519.PublicKeySize)
+	if err != nil {
+		return nil, fmt.Errorf("invalid JWK 'x': %w", err)
+	}
+
+	return ed25519.PublicKey(x), nil
+}
+
+// Thumbprint returns the RFC 7638 JWK thumbprint of the signing key as a base64url-encoded SHA-256 digest
+// The thumbprint is computed only over the required members (crv, kty, x) in lexicographic order
+func (j *Ed25519SigningJWK) Thumbprint() (string, error) {
+	err := j.ValidateSigningKey()
+	if err != nil {
+		return "", err
+	}
+
+	canonical, err := json.Marshal(struct {
+		Crv string `json:"crv"`
+		Kty string `json:"kty"`
+		X   string `json:"x"`
+	}{Crv: j.Crv, Kty: j.Kty, X: j.X})
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize JWK for thumbprint: %w", err)
+	}
+
+	h := sha256.Sum256(canonical)
+	return base64.RawURLEncoding.EncodeToString(h[:]), nil
+}
+
+// Ed25519SigningJWKFromPublicKey converts an Ed25519 public key to a JWK
+func Ed25519SigningJWKFromPublicKey(pk ed25519.PublicKey) (Ed25519SigningJWK, error) {
+	if len(pk) != ed25519.PublicKeySize {
+		return Ed25519SigningJWK{}, fmt.Errorf("unexpected Ed25519 key encoding length: %d", len(pk))
+	}
+
+	return Ed25519SigningJWK{
+		Kty: "OKP",
+		Crv: "Ed25519",
+		X:   base64.RawURLEncoding.EncodeToString(pk),
+	}, nil
+}
+
+// ParseEd25519SigningJWK parses and validates a JWK from JSON bytes
+func ParseEd25519SigningJWK(raw []byte) (Ed25519SigningJWK, error) {
+	var j Ed25519SigningJWK
+	err := json.Unmarshal(raw, &j)
+	if err != nil {
+		return Ed25519SigningJWK{}, fmt.Errorf("invalid JWK JSON: %w", err)
+	}
+
+	err = j.ValidateSigningKey()
+	if err != nil {
+		return Ed25519SigningJWK{}, err
+	}
+
+	return j, nil
+}
+
+// ParseEd25519SigningPEM parses a PEM-encoded PKIX public key and returns the raw Ed25519 public key bytes
+func ParseEd25519SigningPEM(pemBytes []byte) ([]byte, error) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return nil, errors.New("invalid PEM: no block found")
+	}
+
+	if block.Type != "PUBLIC KEY" {
+		return nil, fmt.Errorf("invalid PEM block type: %q", block.Type)
+	}
+
+	pk, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("invalid PKIX public key: %w", err)
+	}
+
+	edPub, ok := pk.(ed25519.PublicKey)
+	if !ok {
+		return nil, errors.New("PEM public key is not an Ed25519 key")
+	}
+	if len(edPub) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("public key must be %d bytes", ed25519.PublicKeySize)
+	}
+
+	return []byte(edPub), nil
 }

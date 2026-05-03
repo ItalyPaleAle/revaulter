@@ -21,7 +21,7 @@ interface Props {
 let { signingKeys, busy, onDeriveSigningKey, onPublishSigningKey, onUnpublishSigningKey, onDeleteSigningKey }: Props =
     $props()
 
-const SIGNING_ALGORITHMS = ['ES256'] as const
+const SIGNING_ALGORITHMS = ['ES256', 'Ed25519', 'Ed25519ph'] as const
 
 let derivingKey = $state(false)
 let deriveLabel = $state('')
@@ -86,6 +86,10 @@ function shortenId(id: string): string {
         return id
     }
     return `${id.slice(0, 8)}…${id.slice(-8)}`
+}
+
+function supportsSshPublicKey(algorithm: string): boolean {
+    return algorithm !== 'Ed25519ph'
 }
 
 function publicFetchUrl(id: string, kind: 'jwk' | 'pem'): string {
@@ -319,13 +323,15 @@ function isDerivedPublished(): boolean {
                                 >
                                     PEM
                                 </button>
-                                <button
-                                    type="button"
-                                    class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
-                                    onclick={() => downloadDerived('ssh')}
-                                >
-                                    SSH public key
-                                </button>
+                                {#if supportsSshPublicKey(derivedKey.algorithm)}
+                                    <button
+                                        type="button"
+                                        class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
+                                        onclick={() => downloadDerived('ssh')}
+                                    >
+                                        SSH public key
+                                    </button>
+                                {/if}
                             </div>
                         {/if}
                     </div>
@@ -409,13 +415,15 @@ function isDerivedPublished(): boolean {
                                             >
                                                 PEM
                                             </button>
-                                            <button
-                                                type="button"
-                                                class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
-                                                onclick={() => handleDownloadStored(sk, 'ssh')}
-                                            >
-                                                SSH public key
-                                            </button>
+                                            {#if supportsSshPublicKey(sk.algorithm)}
+                                                <button
+                                                    type="button"
+                                                    class="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-neutral-900 transition hover:bg-neutral-100 dark:text-neutral-50 dark:hover:bg-neutral-800"
+                                                    onclick={() => handleDownloadStored(sk, 'ssh')}
+                                                >
+                                                    SSH public key
+                                                </button>
+                                            {/if}
                                         </div>
                                     {/if}
                                 </div>

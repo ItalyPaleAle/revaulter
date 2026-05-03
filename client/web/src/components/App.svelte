@@ -7,15 +7,15 @@ import ReadyView from '$components/ReadyView.svelte'
 
 import { argon2idCost } from '$lib/argon2id-cost'
 import {
-    computeEcP256Thumbprint,
+    computeSigningKeyThumbprint,
     deriveRequestEncKeyPair,
     deriveRequestEncMlkemKeyPair,
     deriveSigningKeyPair,
     deriveWrappingKey,
-    ecP256JwkToPem,
-    ecP256JwkToSshPublicKey,
     generatePrimaryKey,
     parseWrappedPrimaryKeyEnvelope,
+    signingJwkToPem,
+    signingJwkToSshPublicKey,
     unwrapPrimaryKey,
     wrapPrimaryKey,
 } from '$lib/crypto'
@@ -664,8 +664,8 @@ async function doDeriveSigningKey(keyLabel: string, algorithm: string): Promise<
         algorithm,
         primaryKey,
     })
-    const [id, pem] = await Promise.all([computeEcP256Thumbprint(publicJwk), ecP256JwkToPem(publicJwk)])
-    const sshPublicKey = ecP256JwkToSshPublicKey(publicJwk, `${keyLabel}-${algorithm}`)
+    const [id, pem] = await Promise.all([computeSigningKeyThumbprint(publicJwk), signingJwkToPem(publicJwk)])
+    const sshPublicKey = algorithm === 'Ed25519ph' ? '' : signingJwkToSshPublicKey(publicJwk, `${keyLabel}-${algorithm}`)
 
     // Attempt to register the derived key as unpublished; if a row already exists for this (algorithm, keyLabel) the server returns 409 and we treat that as a no-op since the caller just needs the derived material returned
     try {

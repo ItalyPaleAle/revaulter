@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -585,7 +586,7 @@ type v2OperationFlagsSign struct {
 	JwsHeader string
 
 	// Resolved state after Validate()
-	digestB64         string // base64url-encoded 32-byte SHA-256 digest of the signing input
+	resolvedValueB64  string // base64url-encoded bytes sent to the browser's signing primitive
 	jwsOutput         bool   // emit compact JWS
 	jwsHeaderSegment  string // base64url header segment
 	jwsPayloadSegment string // base64url payload segment
@@ -598,9 +599,9 @@ func (f *v2OperationFlagsSign) BindToCommand(cmd *cobra.Command) {
 	_ = cmd.MarkFlagRequired("algorithm")
 	_ = cmd.MarkFlagRequired("key-label")
 
-	cmd.Flag("format").Usage = "Output format: 'json' (default: JSON envelope with base64url r||s signature), 'jws' (compact JWS string), or 'raw' (64-byte r||s signature). 'jws' requires --input"
+	cmd.Flag("format").Usage = "Output format: 'json' (default: JSON envelope with base64url signature), 'jws' (compact JWS string), or 'raw' (raw 64-byte signature). 'jws' requires --input and is supported only for ES256 and Ed25519"
 	cmd.Flags().StringVarP(&f.Input, "input", "i", "", "Path to the message file to sign; use '-' to read from stdin")
-	cmd.Flags().StringVarP(&f.Digest, "digest", "d", "", "Pre-computed SHA-256 digest (hex or base64url, 32 bytes)")
+	cmd.Flags().StringVarP(&f.Digest, "digest", "d", "", "Pre-computed digest (hex or base64url): 32-byte SHA-256 for ES256, 64-byte SHA-512 for Ed25519ph")
 	cmd.Flags().StringVar(&f.JwsHeader, "jws-header", "", "Optional JSON fragment merged into the default protected header when building a JWS from --input")
 	cmd.MarkFlagsMutuallyExclusive("input", "digest")
 }
@@ -614,7 +615,7 @@ func (f *v2OperationFlagsSign) Validate() error {
 	// Accept any case, but normalize to the canonical form so the AAD the CLI computes locally matches what the browser sees after the server normalizes too
 	canonical, ok := protocolv2.NormalizeSigningAlgorithm(f.Algorithm)
 	if !ok {
-		return fmt.Errorf("unsupported signing algorithm %q (only %q is supported)", f.Algorithm, protocolv2.SigningAlgES256)
+		return fmt.Errorf("unsupported signing algorithm %q", f.Algorithm)
 	}
 
 	f.Algorithm = canonical
@@ -643,8 +644,14 @@ func (f *v2OperationFlagsSign) Validate() error {
 		return fmt.Errorf("invalid --format %q: sign supports 'json', 'jws', or 'raw'", f.Format)
 	}
 
+	if f.Algorithm == protocolv2.SigningAlgEd25519 && f.Digest != "" {
+		return errors.New("--digest is not supported for Ed25519; use --input so the raw message bytes can be signed")
+	}
 	if f.jwsOutput && f.Digest != "" {
 		return errors.New("--format jws requires --input (digest alone is not enough to reconstruct the JWS signing input)")
+	}
+	if f.jwsOutput && f.Algorithm == protocolv2.SigningAlgEd25519ph {
+		return errors.New("--format jws is not supported for Ed25519ph")
 	}
 
 	switch {
@@ -667,23 +674,30 @@ func readMaybeStdin(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// resolveFromInput reads the message file (or stdin) and computes its SHA-256
+// resolveFromInput reads the message file (or stdin) and derives the algorithm-specific bytes to sign
 // When the output format is JWS, a protected header is constructed so the signing input is "<header>.<payload>" in JWS compact form
 func (f *v2OperationFlagsSign) resolveFromInput() error {
 	data, err := readMaybeStdin(f.Input)
 	if err != nil {
 		return fmt.Errorf("failed to read input: %w", err)
 	}
+	err = ensureWithinInputLimit("input", len(data))
+	if err != nil {
+		return err
+	}
 
 	if !f.jwsOutput {
-		sum := sha256.Sum256(data)
-		f.digestB64 = base64.RawURLEncoding.EncodeToString(sum[:])
+		valueB64, resolveErr := encodeSignInputValue(f.Algorithm, data)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		f.resolvedValueB64 = valueB64
 		return nil
 	}
 
 	// Build the JWS protected header, starting from the default and merging any user-supplied header JSON
-	// The `alg` field is always forced to ES256
-	header := map[string]any{"alg": protocolv2.SigningAlgES256}
+	// The `alg` field is always forced to the JOSE algorithm that matches the selected signing algorithm
+	header := map[string]any{"alg": signJWSProtectedAlg(f.Algorithm)}
 	if f.JwsHeader != "" {
 		var user map[string]any
 		err = json.Unmarshal([]byte(f.JwsHeader), &user)
@@ -691,7 +705,7 @@ func (f *v2OperationFlagsSign) resolveFromInput() error {
 			return fmt.Errorf("invalid --jws-header JSON: %w", err)
 		}
 		maps.Copy(header, user)
-		header["alg"] = protocolv2.SigningAlgES256
+		header["alg"] = signJWSProtectedAlg(f.Algorithm)
 	}
 
 	headerJSON, err := json.Marshal(header)
@@ -702,13 +716,39 @@ func (f *v2OperationFlagsSign) resolveFromInput() error {
 	f.jwsHeaderSegment = base64.RawURLEncoding.EncodeToString(headerJSON)
 	f.jwsPayloadSegment = base64.RawURLEncoding.EncodeToString(data)
 
-	sum := sha256.Sum256([]byte(f.jwsHeaderSegment + "." + f.jwsPayloadSegment))
-	f.digestB64 = base64.RawURLEncoding.EncodeToString(sum[:])
+	signingInput := []byte(f.jwsHeaderSegment + "." + f.jwsPayloadSegment)
+	valueB64, resolveErr := encodeSignInputValue(f.Algorithm, signingInput)
+	if resolveErr != nil {
+		return resolveErr
+	}
+	f.resolvedValueB64 = valueB64
 
 	return nil
 }
 
-// resolveFromDigest decodes a pre-computed 32-byte SHA-256 digest from hex or base64url
+func encodeSignInputValue(algorithm string, data []byte) (string, error) {
+	switch algorithm {
+	case protocolv2.SigningAlgES256:
+		sum := sha256.Sum256(data)
+		return base64.RawURLEncoding.EncodeToString(sum[:]), nil
+	case protocolv2.SigningAlgEd25519:
+		return base64.RawURLEncoding.EncodeToString(data), nil
+	case protocolv2.SigningAlgEd25519ph:
+		sum := sha512.Sum512(data)
+		return base64.RawURLEncoding.EncodeToString(sum[:]), nil
+	default:
+		return "", fmt.Errorf("unsupported signing algorithm %q", algorithm)
+	}
+}
+
+func signJWSProtectedAlg(algorithm string) string {
+	if algorithm == protocolv2.SigningAlgEd25519 {
+		return "EdDSA"
+	}
+	return protocolv2.SigningAlgES256
+}
+
+// resolveFromDigest decodes a pre-computed digest from hex or base64url
 func (f *v2OperationFlagsSign) resolveFromDigest() error {
 	raw, err := hex.DecodeString(f.Digest)
 	if err != nil {
@@ -718,24 +758,33 @@ func (f *v2OperationFlagsSign) resolveFromDigest() error {
 		}
 	}
 
-	if len(raw) != sha256.Size {
-		return fmt.Errorf("invalid --digest length: expected %d bytes, got %d", sha256.Size, len(raw))
+	expectedSize := 0
+	switch f.Algorithm {
+	case protocolv2.SigningAlgES256:
+		expectedSize = sha256.Size
+	case protocolv2.SigningAlgEd25519ph:
+		expectedSize = sha512.Size
+	default:
+		return fmt.Errorf("unsupported signing algorithm %q", f.Algorithm)
+	}
+	if len(raw) != expectedSize {
+		return fmt.Errorf("invalid --digest length: expected %d bytes, got %d", expectedSize, len(raw))
 	}
 
-	f.digestB64 = base64.RawURLEncoding.EncodeToString(raw)
+	f.resolvedValueB64 = base64.RawURLEncoding.EncodeToString(raw)
 	return nil
 }
 
 func (f *v2OperationFlagsSign) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
 	return protocolv2.RequestPayloadInner{
-		Value:                   f.digestB64,
+		Value:                   f.resolvedValueB64,
 		ClientTransportEcdhKey:  clientTransportEcdhKey,
 		ClientTransportMlkemKey: clientTransportMlkemKey,
 	}
 }
 
 // v2SignResponsePayload is the JSON shape produced by the browser after signing
-// `signature` carries the base64url-encoded raw r||s bytes
+// `signature` carries the base64url-encoded raw signature bytes
 type v2SignResponsePayload struct {
 	State     string `json:"state"`
 	Operation string `json:"operation"`
@@ -744,8 +793,8 @@ type v2SignResponsePayload struct {
 	Signature string `json:"signature"`
 }
 
-// parseAndValidateV2SignResponse validates response binding and returns the decoded raw ES256 r||s signature
-func parseAndValidateV2SignResponse(state, keyLabel string, plain []byte) (*v2SignResponsePayload, []byte, error) {
+// parseAndValidateV2SignResponse validates response binding and returns the decoded raw signature
+func parseAndValidateV2SignResponse(state, keyLabel, algorithm string, plain []byte) (*v2SignResponsePayload, []byte, error) {
 	var resp v2SignResponsePayload
 	err := json.Unmarshal(plain, &resp)
 	if err != nil {
@@ -758,7 +807,7 @@ func parseAndValidateV2SignResponse(state, keyLabel string, plain []byte) (*v2Si
 	if resp.Operation != protocolv2.OperationSign {
 		return nil, nil, fmt.Errorf("unexpected operation in sign response: %q", resp.Operation)
 	}
-	if resp.Algorithm != protocolv2.SigningAlgES256 {
+	if resp.Algorithm != algorithm {
 		return nil, nil, fmt.Errorf("unexpected algorithm in sign response: %q", resp.Algorithm)
 	}
 	if resp.KeyLabel != keyLabel {
@@ -773,7 +822,6 @@ func parseAndValidateV2SignResponse(state, keyLabel string, plain []byte) (*v2Si
 		return nil, nil, fmt.Errorf("invalid signature base64url: %w", err)
 	}
 
-	// ECDSA P-256 raw r||s is exactly 64 bytes
 	if len(sigBytes) != 64 {
 		return nil, nil, fmt.Errorf("unexpected signature length: got %d bytes, want 64", len(sigBytes))
 	}
@@ -784,9 +832,9 @@ func parseAndValidateV2SignResponse(state, keyLabel string, plain []byte) (*v2Si
 // FormatResult shapes the decrypted plaintext depending on the selected output format
 // - `json` (default) emits the indented JSON envelope produced by the browser
 // - `jws` emits `<header>.<payload>.<sig>`
-// - `raw` emits the 64 raw `r||s` bytes
+// - `raw` emits the 64 raw signature bytes
 func (f *v2OperationFlagsSign) FormatResult(state string, plain []byte, format string) ([]byte, error) {
-	_, sigBytes, err := parseAndValidateV2SignResponse(state, f.KeyLabel, plain)
+	_, sigBytes, err := parseAndValidateV2SignResponse(state, f.KeyLabel, f.Algorithm, plain)
 	if err != nil {
 		return nil, err
 	}

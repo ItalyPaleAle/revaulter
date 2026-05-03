@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -41,14 +42,22 @@ func TestSignValidateRejectsUnsupportedAlgorithm(t *testing.T) {
 }
 
 func TestSignValidateAlgorithmCaseInsensitive(t *testing.T) {
-	for _, alg := range []string{"es256", "Es256", "ES256", "eS256"} {
+	for _, alg := range []string{"es256", "Es256", "ES256", "eS256", "ed25519", "ED25519PH"} {
 		t.Run(alg, func(t *testing.T) {
 			f := newSignFlagsWithRequired(t)
 			f.Algorithm = alg
-			f.Digest = strings.Repeat("aa", 32)
+			if strings.EqualFold(alg, protocolv2.SigningAlgEd25519) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "msg.bin")
+				require.NoError(t, os.WriteFile(path, []byte("case-test"), 0o600))
+				f.Input = path
+			} else {
+				f.Digest = strings.Repeat("aa", 64)
+				if strings.EqualFold(alg, protocolv2.SigningAlgES256) {
+					f.Digest = strings.Repeat("aa", 32)
+				}
+			}
 			require.NoError(t, f.Validate())
-			// Validate normalizes to the canonical form so AAD computed locally matches the canonical string the server stores
-			require.Equal(t, protocolv2.SigningAlgES256, f.Algorithm)
 		})
 	}
 }
@@ -79,7 +88,7 @@ func TestSignValidateDigestAcceptsHexAndBase64url(t *testing.T) {
 		f.Digest = hex.EncodeToString(raw[:])
 		err := f.Validate()
 		require.NoError(t, err)
-		require.Equal(t, base64.RawURLEncoding.EncodeToString(raw[:]), f.digestB64)
+		require.Equal(t, base64.RawURLEncoding.EncodeToString(raw[:]), f.resolvedValueB64)
 	})
 
 	t.Run("base64url", func(t *testing.T) {
@@ -87,7 +96,7 @@ func TestSignValidateDigestAcceptsHexAndBase64url(t *testing.T) {
 		f.Digest = base64.RawURLEncoding.EncodeToString(raw[:])
 		err := f.Validate()
 		require.NoError(t, err)
-		require.Equal(t, base64.RawURLEncoding.EncodeToString(raw[:]), f.digestB64)
+		require.Equal(t, base64.RawURLEncoding.EncodeToString(raw[:]), f.resolvedValueB64)
 	})
 }
 
@@ -120,10 +129,40 @@ func TestSignValidateInputFileComputesDigest(t *testing.T) {
 	require.NoError(t, err)
 
 	expected := sha256.Sum256(msg)
-	require.Equal(t, base64.RawURLEncoding.EncodeToString(expected[:]), f.digestB64)
+	require.Equal(t, base64.RawURLEncoding.EncodeToString(expected[:]), f.resolvedValueB64)
 	// No JWS requested, so the JWS segments must remain empty
 	require.Empty(t, f.jwsHeaderSegment)
 	require.Empty(t, f.jwsPayloadSegment)
+}
+
+func TestSignValidateInputFileKeepsRawBytesForEd25519(t *testing.T) {
+	dir := t.TempDir()
+	msg := []byte("pure-ed25519-message")
+	path := filepath.Join(dir, "msg.bin")
+	require.NoError(t, os.WriteFile(path, msg, 0o600))
+
+	f := newSignFlagsWithRequired(t)
+	f.Algorithm = protocolv2.SigningAlgEd25519
+	f.Input = path
+	err := f.Validate()
+	require.NoError(t, err)
+	require.Equal(t, base64.RawURLEncoding.EncodeToString(msg), f.resolvedValueB64)
+}
+
+func TestSignValidateInputFileComputesSHA512ForEd25519ph(t *testing.T) {
+	dir := t.TempDir()
+	msg := []byte("prehash-message")
+	path := filepath.Join(dir, "msg.bin")
+	require.NoError(t, os.WriteFile(path, msg, 0o600))
+
+	f := newSignFlagsWithRequired(t)
+	f.Algorithm = protocolv2.SigningAlgEd25519ph
+	f.Input = path
+	err := f.Validate()
+	require.NoError(t, err)
+
+	expected := sha512.Sum512(msg)
+	require.Equal(t, base64.RawURLEncoding.EncodeToString(expected[:]), f.resolvedValueB64)
 }
 
 func TestSignValidateFormatJwsWithInputBuildsSegments(t *testing.T) {
@@ -148,9 +187,9 @@ func TestSignValidateFormatJwsWithInputBuildsSegments(t *testing.T) {
 	require.NoError(t, json.Unmarshal(hdrJSON, &hdr))
 	require.Equal(t, "ES256", hdr["alg"])
 
-	// Digest must be SHA-256 of "<header>.<payload>"
+	// Value must be SHA-256 of "<header>.<payload>"
 	expected := sha256.Sum256([]byte(f.jwsHeaderSegment + "." + f.jwsPayloadSegment))
-	require.Equal(t, base64.RawURLEncoding.EncodeToString(expected[:]), f.digestB64)
+	require.Equal(t, base64.RawURLEncoding.EncodeToString(expected[:]), f.resolvedValueB64)
 }
 
 func TestSignValidateFormatJwsMergesUserHeader(t *testing.T) {
@@ -198,6 +237,50 @@ func TestSignValidateFormatJwsRejectsDigest(t *testing.T) {
 	require.Contains(t, err.Error(), "requires --input")
 }
 
+func TestSignValidateFormatJwsUsesEdDSAForEd25519(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "msg.bin")
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+
+	f := newSignFlagsWithRequired(t)
+	f.Algorithm = protocolv2.SigningAlgEd25519
+	f.Input = path
+	f.Format = "jws"
+	err := f.Validate()
+	require.NoError(t, err)
+
+	hdrJSON, err := base64.RawURLEncoding.DecodeString(f.jwsHeaderSegment)
+	require.NoError(t, err)
+	var hdr map[string]any
+	require.NoError(t, json.Unmarshal(hdrJSON, &hdr))
+	require.Equal(t, "EdDSA", hdr["alg"])
+}
+
+func TestSignValidateRejectsDigestForEd25519(t *testing.T) {
+	f := newSignFlagsWithRequired(t)
+	f.Algorithm = protocolv2.SigningAlgEd25519
+	f.Digest = strings.Repeat("aa", 32)
+
+	err := f.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "--digest is not supported for Ed25519")
+}
+
+func TestSignValidateRejectsJWSForEd25519ph(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "msg.bin")
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+
+	f := newSignFlagsWithRequired(t)
+	f.Algorithm = protocolv2.SigningAlgEd25519ph
+	f.Input = path
+	f.Format = "jws"
+
+	err := f.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not supported for Ed25519ph")
+}
+
 func TestSignValidateFormatUnknownRejected(t *testing.T) {
 	f := newSignFlagsWithRequired(t)
 	f.Digest = strings.Repeat("aa", 32)
@@ -215,7 +298,7 @@ func TestSignInnerPayloadCarriesOnlyDigestAndTransportKeys(t *testing.T) {
 	transportJWK := protocolv2.ECP256PublicJWK{Kty: "EC", Crv: "P-256", X: "x", Y: "y"}
 	inner := f.InnerPayload(transportJWK, "mlkem-ct")
 
-	require.Equal(t, f.digestB64, inner.Value)
+	require.Equal(t, f.resolvedValueB64, inner.Value)
 	require.Empty(t, inner.Nonce, "sign payloads must leave nonce empty")
 	require.Empty(t, inner.Tag, "sign payloads must leave tag empty")
 	require.Empty(t, inner.AdditionalData, "sign payloads must leave additionalData empty")
@@ -225,12 +308,12 @@ func TestSignInnerPayloadCarriesOnlyDigestAndTransportKeys(t *testing.T) {
 
 // --- FormatResult ---
 
-func newSignResponse(t *testing.T, state, keyLabel string, sig []byte) []byte {
+func newSignResponse(t *testing.T, state, keyLabel, algorithm string, sig []byte) []byte {
 	t.Helper()
 	b, err := json.Marshal(map[string]any{
 		"state":     state,
 		"operation": protocolv2.OperationSign,
-		"algorithm": protocolv2.SigningAlgES256,
+		"algorithm": algorithm,
 		"keyLabel":  keyLabel,
 		"signature": base64.RawURLEncoding.EncodeToString(sig),
 	})
@@ -247,7 +330,7 @@ func TestSignFormatResultRawEmitsRawBytes(t *testing.T) {
 	for i := range sig {
 		sig[i] = byte(i)
 	}
-	plain := newSignResponse(t, "state-1", f.KeyLabel, sig)
+	plain := newSignResponse(t, "state-1", f.KeyLabel, f.Algorithm, sig)
 	out, err := f.FormatResult("state-1", plain, "raw")
 	require.NoError(t, err)
 	require.Equal(t, sig, out, "--format raw must emit the 64 r||s bytes verbatim")
@@ -259,7 +342,7 @@ func TestSignFormatResultJSONEmitsIndentedEnvelope(t *testing.T) {
 	require.NoError(t, f.Validate())
 
 	sig := make([]byte, 64)
-	plain := newSignResponse(t, "state-1", f.KeyLabel, sig)
+	plain := newSignResponse(t, "state-1", f.KeyLabel, f.Algorithm, sig)
 	out, err := f.FormatResult("state-1", plain, "json")
 	require.NoError(t, err)
 	require.Contains(t, string(out), "\n \"state\": \"state-1\"")
@@ -282,7 +365,7 @@ func TestSignFormatResultJwsEmitsCompactJWS(t *testing.T) {
 	for i := range sig {
 		sig[i] = byte(i + 1)
 	}
-	plain := newSignResponse(t, "state-jws", f.KeyLabel, sig)
+	plain := newSignResponse(t, "state-jws", f.KeyLabel, f.Algorithm, sig)
 	out, err := f.FormatResult("state-jws", plain, "jws")
 	require.NoError(t, err)
 
@@ -301,7 +384,7 @@ func TestSignFormatResultUnknownFormat(t *testing.T) {
 	f.Digest = strings.Repeat("00", 32)
 	require.NoError(t, f.Validate())
 
-	plain := newSignResponse(t, "state-x", f.KeyLabel, make([]byte, 64))
+	plain := newSignResponse(t, "state-x", f.KeyLabel, f.Algorithm, make([]byte, 64))
 	_, err := f.FormatResult("state-x", plain, "bogus")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported format")
@@ -315,7 +398,7 @@ func TestSignFormatResultValidatesResponseFields(t *testing.T) {
 	sig := make([]byte, 64)
 
 	t.Run("state mismatch", func(t *testing.T) {
-		plain := newSignResponse(t, "state-b", f.KeyLabel, sig)
+		plain := newSignResponse(t, "state-b", f.KeyLabel, f.Algorithm, sig)
 		_, err := f.FormatResult("state-a", plain, "json")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "state mismatch")
@@ -350,14 +433,14 @@ func TestSignFormatResultValidatesResponseFields(t *testing.T) {
 	})
 
 	t.Run("keyLabel mismatch", func(t *testing.T) {
-		plain := newSignResponse(t, "state-x", "other-label", sig)
+		plain := newSignResponse(t, "state-x", "other-label", f.Algorithm, sig)
 		_, err := f.FormatResult("state-x", plain, "json")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "keyLabel")
 	})
 
 	t.Run("signature wrong length", func(t *testing.T) {
-		plain := newSignResponse(t, "state-x", f.KeyLabel, make([]byte, 63))
+		plain := newSignResponse(t, "state-x", f.KeyLabel, f.Algorithm, make([]byte, 63))
 		_, err := f.FormatResult("state-x", plain, "json")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "signature length")
