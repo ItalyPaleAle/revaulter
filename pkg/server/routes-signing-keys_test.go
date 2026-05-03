@@ -55,6 +55,30 @@ func newSigningKeyMaterial(t *testing.T) testSigningKeyMaterial {
 	}
 }
 
+func TestV2SigningKeyRequestsHaveProofOnlyWhenComplete(t *testing.T) {
+	createReq := &v2SigningKeyCreateRequest{
+		PublicationPayload: "payload",
+	}
+	require.False(t, createReq.HasProof())
+
+	createReq.PublicationSignatureEs384 = "es384"
+	require.False(t, createReq.HasProof())
+
+	createReq.PublicationSignatureMldsa87 = "mldsa87"
+	require.True(t, createReq.HasProof())
+
+	setPublishedReq := &v2SigningKeySetPublishedRequest{
+		PublicationPayload: "payload",
+	}
+	require.False(t, setPublishedReq.HasProof())
+
+	setPublishedReq.PublicationSignatureEs384 = "es384"
+	require.False(t, setPublishedReq.HasProof())
+
+	setPublishedReq.PublicationSignatureMldsa87 = "mldsa87"
+	require.True(t, setPublishedReq.HasProof())
+}
+
 func TestServerV2SigningKeyPublishAndFetch(t *testing.T) {
 	setTestConfig(t, "v2-signing-keys.db")
 

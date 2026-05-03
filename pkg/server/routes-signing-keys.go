@@ -33,7 +33,7 @@ type v2SigningKeyCreateRequest struct {
 
 // HasProof reports whether the request carries all three publication-proof fields
 func (req *v2SigningKeyCreateRequest) HasProof() bool {
-	return req.PublicationPayload != "" || req.PublicationSignatureEs384 != "" || req.PublicationSignatureMldsa87 != ""
+	return req.PublicationPayload != "" && req.PublicationSignatureEs384 != "" && req.PublicationSignatureMldsa87 != ""
 }
 
 func (req *v2SigningKeyCreateRequest) Validate() (kid string, canonicalJWK []byte, err error) {
@@ -92,7 +92,7 @@ type v2SigningKeySetPublishedRequest struct {
 }
 
 func (req *v2SigningKeySetPublishedRequest) HasProof() bool {
-	return req.PublicationPayload != "" || req.PublicationSignatureEs384 != "" || req.PublicationSignatureMldsa87 != ""
+	return req.PublicationPayload != "" && req.PublicationSignatureEs384 != "" && req.PublicationSignatureMldsa87 != ""
 }
 
 type v2SigningKeyDeleteResponse struct {
