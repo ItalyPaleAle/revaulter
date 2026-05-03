@@ -343,6 +343,8 @@ const OP_META = {
     },
 } as const
 
+const ED25519_MESSAGE_PREVIEW_BYTES = 24
+
 function formatHex(bytes: Uint8Array): string {
     let hex = ''
     for (let i = 0; i < bytes.length; i++) {
@@ -364,7 +366,7 @@ function formatSignInput(algorithm: string, valueB64Url: string): string {
             case 'Ed25519ph':
                 return bytes.length === 64 ? `SHA-512 ${formatHex(bytes)}` : valueB64Url
             case 'Ed25519': {
-                const preview = bytes.subarray(0, Math.min(bytes.length, 24))
+                const preview = bytes.subarray(0, Math.min(bytes.length, ED25519_MESSAGE_PREVIEW_BYTES))
                 const previewHex = formatHex(preview)
                 if (bytes.length <= preview.length) {
                     return `${bytes.length} byte message ${previewHex}`

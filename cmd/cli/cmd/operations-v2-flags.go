@@ -742,10 +742,14 @@ func encodeSignInputValue(algorithm string, data []byte) (string, error) {
 }
 
 func signJWSProtectedAlg(algorithm string) string {
-	if algorithm == protocolv2.SigningAlgEd25519 {
+	switch algorithm {
+	case protocolv2.SigningAlgEd25519:
 		return "EdDSA"
+	case protocolv2.SigningAlgES256:
+		return protocolv2.SigningAlgES256
+	default:
+		panic("signJWSProtectedAlg called for unsupported JWS algorithm: " + algorithm)
 	}
-	return protocolv2.SigningAlgES256
 }
 
 // resolveFromDigest decodes a pre-computed digest from hex or base64url

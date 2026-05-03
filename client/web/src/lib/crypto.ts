@@ -594,7 +594,7 @@ export async function signMessageEd25519(secretKey: Uint8Array, message: Uint8Ar
     return sig
 }
 
-const ed25519phNoRehash = (() => {
+const ed25519phScheme = (() => {
     const adjustScalarBytes = (bytes: Uint8Array) => {
         const out = bytes.slice()
         out[0] &= 248
@@ -629,7 +629,7 @@ export async function signDigestEd25519ph(secretKey: Uint8Array, digest: Uint8Ar
     if (digest.length !== 64) {
         throw new Error(`Expected 64-byte digest, got ${digest.length}`)
     }
-    const sig = ed25519phNoRehash.sign(digest, secretKey)
+    const sig = ed25519phScheme.sign(digest, secretKey)
     if (sig.length !== 64) {
         throw new Error(`Expected 64-byte Ed25519ph signature, got ${sig.length}`)
     }
