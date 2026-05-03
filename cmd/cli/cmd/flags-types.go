@@ -55,9 +55,10 @@ func (d *durationValue) String() string {
 }
 
 func (d *durationValue) MarshalJSON() ([]byte, error) {
-	if d.isEmpty() {
+	if d == nil || d.isEmpty() {
 		return []byte(`null`), nil
 	}
+
 	return json.Marshal(time.Duration(*d))
 }
 

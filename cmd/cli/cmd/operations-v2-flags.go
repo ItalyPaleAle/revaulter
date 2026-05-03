@@ -608,7 +608,7 @@ func (f *v2OperationFlagsSign) Validate() error {
 	// Accept any case, but normalize to the canonical form so the AAD the CLI computes locally matches what the browser sees after the server normalizes too
 	canonical, ok := protocolv2.NormalizeSigningAlgorithm(f.Algorithm)
 	if !ok {
-		return fmt.Errorf("unsupported signing algorithm %q (only %q is supported in v1)", f.Algorithm, protocolv2.SigningAlgES256)
+		return fmt.Errorf("unsupported signing algorithm %q (only %q is supported)", f.Algorithm, protocolv2.SigningAlgES256)
 	}
 
 	f.Algorithm = canonical
