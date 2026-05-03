@@ -60,6 +60,12 @@ License: CC0
         animation-delay: -0.15s;
     }
 
+    @media (prefers-reduced-motion: reduce) {
+        .lds-ring div {
+            animation: none;
+        }
+    }
+
     @keyframes lds-ring {
         0% {
             transform: rotate(0deg);

@@ -265,4 +265,10 @@ function rejectAll() {
     .live-dot {
         animation: pulse-ring 2s ease-in-out infinite;
     }
+
+    @media (prefers-reduced-motion: reduce) {
+        .live-dot {
+            animation: none;
+        }
+    }
 </style>
