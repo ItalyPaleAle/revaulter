@@ -4,3 +4,4 @@ ARG TARGETARCH
 COPY .bin/linux-${TARGETARCH}/revaulter /bin
 HEALTHCHECK CMD ["/bin/revaulter", "healthcheck"]
 CMD ["/bin/revaulter"]
+ENTRYPOINT ["/bin/revaulter"]
