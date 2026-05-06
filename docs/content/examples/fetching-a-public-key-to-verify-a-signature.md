@@ -111,7 +111,7 @@ func main() {
 
 {{< /tab >}}
 
-{{< tab title="OpenSSL " >}}
+{{< tab title="OpenSSL" >}}
 OpenSSL's `dgst -verify` requires DER-encoded signatures, so wrap the raw bytes once:
 
 ```bash
