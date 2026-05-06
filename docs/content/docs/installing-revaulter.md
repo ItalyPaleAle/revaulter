@@ -10,7 +10,7 @@ Revaulter is distributed as a container image and runs as a single-container ser
 - A container runtime (Docker, Podman, etc.)
 - A database: **SQLite** or **PostgreSQL**
 - HTTPS access for the web UI
-- A webhook endpoint for notifications (Discord, Slack, or any HTTP endpoint)
+- Optional: a webhook endpoint for notifications (Discord, Slack, or any HTTP endpoint)
 
 > HTTPS is required for Revaulter because it uses WebCrypto.
 > You can either configure Revaulter to start a HTTPS server (which requires providing TLS certificates to Revaulter directly) or use a reverse proxy that performs TLS termination, such as Caddy, Traefik, Nginx, etc.
@@ -37,7 +37,6 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 
 | Key | Env var | Description |
 |-----|---------|-------------|
-| `webhookUrl` | `WEBHOOKURL` | Webhook endpoint for notifications |
 | `databaseDSN` | `DATABASEDSN` | Database connection string (see [Database](#database) below) |
 | `secretKey` | `SECRETKEY` | Instance-wide secret for key derivation (see [Secret key](#secret-key) below) |
 
@@ -55,6 +54,7 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
+| `webhookUrl` | `WEBHOOKURL` | | Webhook endpoint for notifications. Leave unset to disable webhook notifications. |
 | `webhookFormat` | `WEBHOOKFORMAT` | `plain` | Webhook format: `plain`, `slack`, or `discord` |
 | `webhookKey` | `WEBHOOKKEY` | | Value sent as `Authorization` header on webhook requests (include the scheme, e.g. `Bearer abc123`) |
 | `port` | `PORT` | `8080` | Port to bind to |
@@ -149,12 +149,17 @@ volumes:
 With a `config.yaml`:
 
 ```yaml
-webhookUrl: "https://discord.com/api/webhooks/your-webhook-id/your-webhook-token"
-webhookFormat: "discord"
 databaseDSN: "/data/revaulter.db"
 secretKey: "<your-secret-key>"
 sessionSigningKey: "<your-session-signing-key>"
 baseUrl: "https://revaulter.example.com"
+```
+
+To enable Discord notifications, add:
+
+```yaml
+webhookUrl: "https://discord.com/api/webhooks/your-webhook-id/your-webhook-token"
+webhookFormat: "discord"
 ```
 
 If you want Revaulter to handle TLS directly:

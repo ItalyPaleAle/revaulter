@@ -17,7 +17,7 @@ sequenceDiagram
 
     CLI->>S: 1. Submit encrypt or decrypt request
     S-->>S: Store E2EE request in database
-    S-)B: 2. Send webhook notification<br/>(Discord / Slack / webhook)
+    S-)B: 2. Optionally send webhook notification<br/>(Discord / Slack / webhook)
     B->>S: 3. User opens web UI, authenticates with passkey
     S-->>B: Return pending request
     Note over B: 4. Browser derives key from passkey,<br/>performs crypto locally (WebCrypto)
@@ -27,7 +27,7 @@ sequenceDiagram
 ```
 
 1. A CLI or script submits an encrypt or decrypt request to Revaulter, identified by a per-user request key.
-2. Revaulter stores the End-to-End Encrypted (E2EE) request in its database and sends a webhook notification to the passkey holder.
+2. Revaulter stores the End-to-End Encrypted (E2EE) request in its database and, if configured, sends a webhook notification to the passkey holder.
 3. The user opens the Revaulter web UI and authenticates with their WebAuthn passkey (with optional password second factor).
 4. The browser derives the encryption key from the passkey via WebAuthn PRF, performs the cryptographic operation locally using WebCrypto, and encrypts the result back to the CLI. The server never sees the plaintext or the user's keys.
 5. The encrypted result is relayed back to the CLI, which decrypts it locally using its ephemeral private key.
@@ -48,7 +48,7 @@ For a full description of the cryptographic architecture, see [Cryptography arch
 
 ## Self-hosted
 
-Revaulter is designed to run on your own infrastructure. You deploy the server, you own the database, and you control access. There are no external dependencies or third-party services required beyond what you configure (e.g., a webhook endpoint for notifications).
+Revaulter is designed to run on your own infrastructure. You deploy the server, you own the database, and you control access. There are no external dependencies or third-party services required beyond what you configure.
 
 Requirements are minimal:
 
@@ -82,7 +82,7 @@ Encryption/decryption keys and signing keys are derived deterministically from t
 
 ## Webhook notifications
 
-When a request is submitted, Revaulter sends a webhook notification so the passkey holder knows a request is waiting. Three formats are supported:
+When `webhookUrl` is configured, Revaulter sends a webhook notification after a request is submitted so the passkey holder knows a request is waiting. Three formats are supported:
 
 - `plain`: Plain text body (`text/plain`), works with any generic webhook consumer
 - `slack`: Slack-compatible JSON payload, works with Slack and Slack-compatible services

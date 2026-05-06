@@ -40,14 +40,23 @@ func TestValidateConfig(t *testing.T) {
 		require.ErrorContains(t, err, "'databaseDSN' missing")
 	})
 
-	t.Run("fails without webhookUrl", func(t *testing.T) {
+	t.Run("succeeds without webhookUrl", func(t *testing.T) {
 		t.Cleanup(SetTestConfig(map[string]any{
 			"webhookUrl": "",
 		}))
 
 		err := config.Validate(nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("fails when webhookUrl has a disallowed scheme", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"webhookUrl": "ftp://test.local",
+		}))
+
+		err := config.Validate(nil)
 		require.Error(t, err)
-		require.ErrorContains(t, err, "'webhookUrl' missing")
+		require.ErrorContains(t, err, "'webhookUrl' has disallowed scheme")
 	})
 
 	t.Run("fails with sessionTimeout too small", func(t *testing.T) {

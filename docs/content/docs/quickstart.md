@@ -25,11 +25,12 @@ services:
 Create a minimal `config.yaml`:
 
 ```yaml
-webhookUrl: "https://discord.com/api/webhooks/..."
 databaseDSN: "/data/revaulter.db"
 secretKey: "<generate with: openssl rand -base64 32>"
 baseUrl: "https://revaulter.example.com"
 ```
+
+To send notifications when requests are waiting, add `webhookUrl` and optionally `webhookFormat`.
 
 Then start the server with `docker compose up`, open the web UI, and create your first account.
 

@@ -67,6 +67,27 @@ func TestWebhook(t *testing.T) {
 		}
 	}
 
+	t.Run("disabled when webhookUrl is empty", func(t *testing.T) {
+		t.Cleanup(config.SetTestConfig(map[string]any{
+			"webhookUrl": "",
+		}))
+
+		reqCh := make(chan *http.Request, 1)
+		rtt.SetReqCh(reqCh)
+
+		err := wh.SendWebhook(ctx, getWebhookRequest())
+		require.NoError(t, err)
+
+		select {
+		case req := <-reqCh:
+			if req != nil {
+				req.Body.Close()
+			}
+			t.Fatal("unexpected webhook request")
+		default:
+		}
+	})
+
 	t.Run("format plain", basicTestFn(map[string]any{
 		"webhookFormat": "plain",
 	}, func(t *testing.T, r *http.Request) {

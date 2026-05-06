@@ -181,7 +181,11 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			Note:      body.Note,
 		})
 
-		// Notify users via webhook in background
+		// Notify users via webhook in background when configured
+		if config.Get().WebhookUrl == "" {
+			return
+		}
+
 		go func() {
 			displayName := user.DisplayName
 			if displayName == "" {

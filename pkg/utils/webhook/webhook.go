@@ -125,6 +125,9 @@ func (w *webhookClient) SetBaseURL(val string) {
 func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) error {
 	cfg := config.Get()
 	webhookUrl := cfg.WebhookUrl
+	if webhookUrl == "" {
+		return nil
+	}
 
 	// Validate the webhook URL scheme
 	// The custom net.Dialer.Control on the HTTP transport enforces the private-IP block at connect time

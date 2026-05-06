@@ -1,8 +1,8 @@
 ## webhookUrl (string)
 ## Description:
 ##   Endpoint of the webhook, where notifications are sent to.
-## Required
-webhookUrl:
+##   Leave unset to disable webhook notifications.
+#webhookUrl:
 
 ## webhookFormat (string)
 ## Description:

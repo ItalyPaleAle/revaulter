@@ -888,6 +888,46 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 	}
 }
 
+func TestServerV2CreateRequestSkipsWebhookWhenDisabled(t *testing.T) {
+	setTestConfig(t, "v2-webhook-disabled.db", map[string]any{
+		"webhookUrl": "",
+	})
+
+	webhookRequests := make(chan *webhook.WebhookRequest, 1)
+	srv := newTestServer(t, &mockWebhook{requests: webhookRequests}, nil, nil)
+	require.NotNil(t, srv)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	clientPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	clientJWK, err := protocolv2.ECP256PublicJWKFromECDH(clientPriv.PublicKey())
+	require.NoError(t, err)
+
+	_, aliceUser := seedV2SessionCookie(t, srv, "user-alice-disabled-webhook", "Alice")
+
+	createBody := newV2CreateRequestBody("disk-key", "A256GCM", clientJWK)
+	body, err := json.Marshal(createBody)
+	require.NoError(t, err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d/v2/request/encrypt", testServerPort), bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+aliceUser.RequestKey)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusAccepted, res.StatusCode)
+
+	select {
+	case msg := <-webhookRequests:
+		require.Nil(t, msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T) {
 	setTestConfig(t, "v2-expiry-callback.db")
 

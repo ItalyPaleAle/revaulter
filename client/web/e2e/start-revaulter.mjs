@@ -38,7 +38,6 @@ const e2eToken = process.env.REVAULTER_E2E_TOKEN || 'playwright-e2e-token-fixed'
 writeFileSync(
     configPath,
     [
-        'webhookUrl: "http://127.0.0.1:9/webhook"',
         `baseUrl: "http://localhost:${port}"`,
         'bind: "127.0.0.1"',
         `port: ${port}`,
