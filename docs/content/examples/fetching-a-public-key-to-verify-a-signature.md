@@ -40,12 +40,16 @@ Any JOSE library works against the JWK form. See the [release-manifest JWS secti
 
 `sign --format raw` emits a 64-byte signature. Most ECDSA libraries accept it directly:
 
-<details>
-<summary><strong>Python (<code>cryptography</code>)</strong></summary>
+{{< tabs >}}
+{{< tab title="Python" >}}
+
+This example uses the `cryptography` package:
 
 ```bash
 pip install cryptography
 ```
+
+Code:
 
 ```python
 from cryptography.hazmat.primitives import hashes, serialization
@@ -66,10 +70,9 @@ with open("dist/myapp-linux-amd64", "rb") as f:
 print("OK")
 ```
 
-</details>
+{{< /tab >}}
 
-<details>
-<summary><strong>Go</strong></summary>
+{{< tab title="Go" >}}
 
 ```go
 package main
@@ -106,11 +109,9 @@ func main() {
 }
 ```
 
-</details>
+{{< /tab >}}
 
-<details>
-<summary><strong>OpenSSL (after DER conversion)</strong></summary>
-
+{{< tab title="OpenSSL " >}}
 OpenSSL's `dgst -verify` requires DER-encoded signatures, so wrap the raw bytes once:
 
 ```bash
@@ -128,7 +129,8 @@ openssl dgst -sha256 \
   dist/myapp-linux-amd64
 ```
 
-</details>
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Optional: full anchor-signed verification
 
