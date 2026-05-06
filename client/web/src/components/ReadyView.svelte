@@ -114,7 +114,7 @@ function rejectAll() {
         <div>
             <h1 class="mb-4 inline-flex items-center gap-2.5">
                 <Logo size={38} />
-                <span class="text-[30px] font-semibold leading-tigh tracking-tight text-neutral-950 dark:text-neutral-50">Pending approvals</span>
+                <span class="text-lg sm:text-3xl font-semibold leading-tigh tracking-tight text-neutral-950 dark:text-neutral-50">Pending approvals</span>
             </h1>
             <p class="text-sm text-neutral-500 dark:text-neutral-400">
                 Review inbound encrypt, decrypt, and signing requests for

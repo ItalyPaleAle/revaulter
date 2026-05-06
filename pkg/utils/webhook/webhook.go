@@ -126,6 +126,7 @@ func (w *webhookClient) SendWebhook(ctx context.Context, data *WebhookRequest) e
 	cfg := config.Get()
 	webhookUrl := cfg.WebhookUrl
 	if webhookUrl == "" {
+		// Webhooks are disabled, just return
 		return nil
 	}
 
