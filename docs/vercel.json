@@ -4,14 +4,8 @@
     "buildCommand": "sh build.sh",
     "devCommand": "npm run dev -- -p $PORT",
     "cleanUrls": false,
-    "framework": "hugo",
-    "outputDirectory": "public",
+    "framework": null,
     "redirects": [],
-    "rewrites": [
-        { "source": "/pls/index.js", "destination": "/api/pls-script" },
-        { "source": "/pls/index.:hash([a-fA-F0-9]{1,6}).js", "destination": "/api/pls-script" },
-        { "source": "/pls/api/:match*", "destination": "/api/pls-api" }
-    ],
     "headers": [
         {
             "source": "/(.*?)",

@@ -46,23 +46,11 @@ ensure_go() {
 
 echo "\033[0;1mBuilding for environment: \033[0;1;35mproduction\033[0;0m"
 
+export GOCACHE="$PWD/.cache/go-build"
+
 ensure_go
 
 echo "\033[0;1mGo version\033[0;0m"
 go version
 
-echo "\033[0;1mHugo version\033[0;0m"
-hugo version
-
-# Remove old compiled data
-echo "\033[0;1mCleaning destination directory...\033[0;0m"
-rm -rf public
-
-# Compile the code with the "production" environment
-echo "\033[0;1mBuilding...\033[0;0m"
-hugo --environment=production --minify
-
-# Remove files that shouldn't be published
-echo "\033[0;1mRemoving unnecessary files...\033[0;0m"
-rm -v public/*.sh || true
-rm -v public/**/.gitignore || true
+go run github.com/italypaleale/hugo-assets/cmd/vercel-docs-build

@@ -6,9 +6,7 @@
     "dev": "hugo server",
     "build": "hugo --gc --minify --cleanDestinationDir"
   },
-  "dependencies": {
-    "@vercel/functions": "3.4.4"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "24.12.2"
   }
