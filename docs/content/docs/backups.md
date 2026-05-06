@@ -34,7 +34,7 @@ revaulter restore --in /backups/revaulter-2026-05-01.bak
 
 The `restore` command applies migrations up to the schema level recorded in the backup before inserting rows; any newer migrations bundled with the binary are left for the application to run on its next startup. Restoring into a database that already contains data is not supported — restore into a fresh database.
 
-> Stop the running Revaulter instance before restoring into its database.
+> ⚠️ **Warning:** Stop the running Revaulter instance before restoring into its database.
 
 ## Direct database backups
 
