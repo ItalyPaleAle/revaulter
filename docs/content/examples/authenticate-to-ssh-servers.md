@@ -33,13 +33,15 @@ revaulter trust \
 
 ## 3. Start the SSH agent
 
-Start the agent with the same key label you created in the UI:
+Start the agent with the same key label you created in the UI.
+The default SSH-agent algorithm is `ES256`, but `Ed25519` is also supported:
 
 ```sh
 revaulter ssh-agent \
   --server https://revaulter.example.com \
   --request-key "$REVAULTER_REQUEST_KEY" \
-  --key-label ssh-main
+  --key-label ssh-main \
+  --algorithm ES256
 ```
 
 The agent prints an `SSH_AUTH_SOCK` export line. Run that line in the shell where you will use `ssh`:

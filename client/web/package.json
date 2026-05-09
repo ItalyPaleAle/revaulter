@@ -22,7 +22,7 @@
   },
   "packageManager": "pnpm@10.30.1",
   "dependencies": {
-    "@awasm/noble": "0.1.1",
+    "@awasm/noble": "0.1.2",
     "@fontsource-variable/geist": "5.2.8",
     "@fontsource-variable/geist-mono": "5.2.7",
     "@noble/curves": "2.2.0",
@@ -33,7 +33,7 @@
     "tailwindcss": "4.2.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.12",
+    "@biomejs/biome": "2.4.14",
     "@playwright/test": "1.59.1",
     "@sveltejs/vite-plugin-svelte": "7.0.0",
     "@tailwindcss/vite": "4.2.2",
@@ -42,14 +42,14 @@
     "@types/node": "24.12.2",
     "cross-replace": "0.2.0",
     "cssnano": "7.1.5",
-    "postcss": "8.5.10",
+    "postcss": "8.5.13",
     "postcss-import": "16.1.1",
     "postcss-url": "10.1.3",
     "svelte": "5.55.5",
-    "svelte-check": "4.4.6",
+    "svelte-check": "4.4.7",
     "typescript": "6.0.3",
     "vite": "8.0.10",
-    "vite-bundle-analyzer": "1.3.7",
+    "vite-bundle-analyzer": "1.3.8",
     "vite-plugin-pwa": "1.2.0",
     "vite-plugin-sri-gen": "1.4.1",
     "vitest": "4.1.5"
