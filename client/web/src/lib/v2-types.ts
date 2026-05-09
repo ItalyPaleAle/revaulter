@@ -71,7 +71,7 @@ export type V2RequestDetail = {
     encryptedRequest: V2RequestEncEnvelope
 }
 
-export type V2SigningJwk = {
+export type V2EcP256SigningJwk = {
     kty: 'EC'
     crv: 'P-256'
     x: string
@@ -80,6 +80,17 @@ export type V2SigningJwk = {
     use?: 'sig'
     kid?: string
 }
+
+export type V2Ed25519SigningJwk = {
+    kty: 'OKP'
+    crv: 'Ed25519'
+    x: string
+    alg?: 'EdDSA'
+    use?: 'sig'
+    kid?: string
+}
+
+export type V2SigningJwk = V2EcP256SigningJwk | V2Ed25519SigningJwk
 
 export type V2PublishedSigningKey = {
     id: string
