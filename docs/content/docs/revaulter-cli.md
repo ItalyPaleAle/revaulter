@@ -259,6 +259,108 @@ revaulter-cli sign \
 
 ---
 
+### `trust`
+
+Pin a Revaulter server's anchor public keys in the local trust store using TOFU (Trust On First Use).
+
+```bash
+revaulter-cli trust [flags]
+```
+
+The CLI fetches the server's hybrid anchor bundle (ES384 + ML-DSA-87), verifies its signatures, and pins the anchor fingerprint. Subsequent commands (`encrypt`, `decrypt`, `sign`, `ssh-agent`) verify the pinned anchor and refuse to proceed if it changes unexpectedly. If the anchor is already pinned and matches, the command verifies it and exits successfully.
+
+Run this once when first connecting to a server. In interactive use the CLI displays the fingerprint and prompts for confirmation. For non-interactive use, pass `--yes` to automatically accept the key (you will not be able to verify the key, however)
+
+The default trust store path is `<user-config-dir>/revaulter-cli/trust.json` (e.g. `~/.config/revaulter-cli/trust.json` on Linux). Override it with the `TRUST_STORE_PATH` environment variable or the `--trust-store` flag.
+
+| Flag | Short | Required | Description |
+|------|-------|----------|-------------|
+| `--server` | `-s` | Yes | Address of the Revaulter server |
+| `--request-key` | `-k` | Yes | Per-user request key used to authenticate with the server |
+| `--trust-store` | | No | Path to the anchor trust store file (defaults to `<user-config-dir>/revaulter-cli/trust.json`) |
+| `--yes` | `-y` | No | Accept the anchor fingerprint without prompting (for non-interactive use) |
+| `--insecure` | | No | Skip TLS certificate validation |
+| `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
+| `--verbose` | `-V` | No | Show debug-level logs |
+
+**Example (interactive — prompts for confirmation):**
+
+```bash
+revaulter-cli trust \
+  --server https://revaulter.example.com \
+  --request-key AbCdEf0123456789GhIj
+```
+
+**Example (non-interactive — pin without prompting):**
+
+```bash
+revaulter-cli trust \
+  --server https://revaulter.example.com \
+  --request-key AbCdEf0123456789GhIj \
+  --yes
+```
+
+> The `encrypt`, `decrypt`, `sign`, and `ssh-agent` commands also accept `--trust-store` to point at a non-default trust store, and `--no-trust-store` to skip anchor verification entirely (equivalent to SSH's `StrictHostKeyChecking=no`).
+
+---
+
+### `ssh-agent`
+
+Run a local SSH agent that routes signing requests through Revaulter. Available on Unix systems only (Linux, macOS, BSD).
+
+```bash
+revaulter-cli ssh-agent [flags]
+```
+
+Starts a Unix-socket SSH agent. SSH clients with `SSH_AUTH_SOCK` pointed at the socket route each signing request through Revaulter, where the key holder approves it in the browser with a passkey. The private signing key is never exported: only public keys are stored on the server, and only signatures are returned to the agent. The signing public key for the chosen `--key-label` must already exist: create it from the web UI under **Settings → Signing keys**.
+
+> Note: Pin the server anchor with `revaulter-cli trust` before running the agent, especially in non-interactive environments.
+
+For a full setup walkthrough (including installing the public key in `authorized_keys`), see [Authenticate to SSH servers](/examples/authenticate-to-ssh-servers/).
+
+| Flag | Short | Required | Description |
+|------|-------|----------|-------------|
+| `--server` | `-s` | Yes | Address of the Revaulter server |
+| `--request-key` | `-k` | Yes | Per-user request key |
+| `--key-label` | `-l` | Yes | Logical key label for the signing key |
+| `--algorithm` | `-a` | No | Signing algorithm: `ES256` (default) or `Ed25519`. `Ed25519ph` is not supported by the SSH agent |
+| `--socket` | | No | Path to the Unix socket (defaults to `$XDG_RUNTIME_DIR/revaulter/ssh-agent-<key-label>.sock`, or a private per-user directory under `$TMPDIR` if `XDG_RUNTIME_DIR` is unset). The socket is created with `0600` permissions |
+| `--comment` | | No | Comment attached to the SSH key (default: `revaulter/<key-label>`) |
+| `--timeout` | `-t` | No | Per-sign-operation timeout (number of seconds or Go duration; defaults to 5 minutes) |
+| `--note` | `-n` | No | Extra text appended to the approval note shown in the browser (the note is always prefixed with `SSH auth`) |
+| `--trust-store` | | No | Path to the anchor trust store file |
+| `--no-trust-store` | | No | Skip anchor pinning and hybrid bundle verification (equivalent to SSH's `StrictHostKeyChecking=no`) |
+| `--insecure` | | No | Skip TLS certificate validation |
+| `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
+| `--verbose` | `-V` | No | Show debug-level logs |
+
+**Example:**
+
+```bash
+revaulter-cli ssh-agent \
+  --server https://revaulter.example.com \
+  --request-key AbCdEf0123456789GhIj \
+  --key-label ssh-main \
+  --algorithm ES256
+```
+
+On startup the agent prints an `export SSH_AUTH_SOCK=...` line on stderr; evaluate it in the shell where you will use `ssh`:
+
+```bash
+export SSH_AUTH_SOCK='/run/user/1000/revaulter/ssh-agent-ssh-main.sock'
+ssh user@prod.example.com
+```
+
+To list the SSH public key managed by the agent (for example to copy into `~/.ssh/authorized_keys`):
+
+```bash
+SSH_AUTH_SOCK=/run/user/1000/revaulter/ssh-agent-ssh-main.sock ssh-add -L
+```
+
+The agent stops on `Ctrl-C` or `SIGTERM` and removes its socket on exit.
+
+---
+
 ### `check`
 
 Verify that a Revaulter server is serving unmodified web client assets, signed by this repo's release workflow. See [Verifying the web client's integrity](/advanced/web-client-integrity/) for a deeper explanation of the trust model and when to run this.
