@@ -352,81 +352,6 @@ const OP_META = {
     },
 } as const
 
-function formatHex(bytes: Uint8Array): string {
-    let hex = ''
-    for (let i = 0; i < bytes.length; i++) {
-        hex += bytes[i].toString(16).padStart(2, '0').toUpperCase()
-        if (i < bytes.length - 1 && (i + 1) % 2 === 0) {
-            hex += ' '
-        }
-    }
-    return hex
-}
-
-/** Renders the sign request input in a compact algorithm-aware way */
-function formatSignInput(algorithm: string, valueB64Url: string): string {
-    try {
-        const bytes = base64UrlToBytes(valueB64Url)
-        switch (algorithm) {
-            case 'ES256':
-                return bytes.length === 32 ? `SHA-256 ${formatHex(bytes)}` : valueB64Url
-
-            case 'Ed25519ph':
-                return bytes.length === 64 ? `SHA-512 ${formatHex(bytes)}` : valueB64Url
-
-            case 'Ed25519': {
-                // Show a limited preview of 24 bytes
-                const preview = bytes.subarray(0, Math.min(bytes.length, 24))
-                const previewHex = formatHex(preview)
-                if (bytes.length <= preview.length) {
-                    return `${bytes.length} byte message ${previewHex}`
-                }
-                return `${bytes.length} byte message ${previewHex} …`
-            }
-            default:
-                return valueB64Url
-        }
-    } catch {
-        return valueB64Url
-    }
-}
-
-/**
- * For sign requests, decrypts the E2EE inner payload so the user can review the signing input before approving.
- */
-let signInputPreview = $state<string | null>(null)
-let signInputLoading = $state(false)
-let signInputError = $state<string | null>(null)
-$effect(() => {
-    if (item.operation !== 'sign') {
-        return
-    }
-    if (signInputPreview || signInputLoading || signInputError) {
-        return
-    }
-    signInputLoading = true
-    void (async () => {
-        try {
-            const req = await ensureDetail()
-            const requestEncAAD = buildRequestEncAAD(req.algorithm, req.keyLabel, req.operation)
-            const inner = await decryptRequestPayload({
-                userId: req.userId,
-                primaryKey,
-                cliEphemeralPublicKey: req.encryptedRequest.cliEphemeralPublicKey,
-                mlkemCiphertext: req.encryptedRequest.mlkemCiphertext,
-                nonce: req.encryptedRequest.nonce,
-                ciphertext: req.encryptedRequest.ciphertext,
-                aad: requestEncAAD,
-            })
-            signInputPreview = formatSignInput(req.algorithm, inner.value)
-        } catch (err) {
-            signInputError = err instanceof Error ? err.message : String(err)
-        } finally {
-            signInputLoading = false
-        }
-    })()
-})
-
 function expiresIn(item: V2PendingRequestItem) {
     return formatDistanceStrict(new Date(item.expiry * 1000), new Date(now), { addSuffix: true })
 }
@@ -520,26 +445,6 @@ $effect(() => {
                     style={`width: ${ttlPercent(item)}%;`}
                 ></div>
             </div>
-
-            <!-- Sign input preview expanded by default -->
-            {#if item.operation === 'sign'}
-                <div class="mt-3.5 rounded-lg border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-800/60">
-                    <div class="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
-                        Signing input
-                    </div>
-                    {#if signInputLoading}
-                        <div class="mono text-[11px] text-neutral-500 dark:text-neutral-400">Loading…</div>
-                    {:else if signInputError}
-                        <div class="text-[11px] text-rose-700 dark:text-rose-300">
-                            Could not decrypt sign input: {signInputError}
-                        </div>
-                    {:else if signInputPreview}
-                        <div class="mono break-all text-[11px] leading-relaxed text-neutral-900 dark:text-neutral-100">
-                            {signInputPreview}
-                        </div>
-                    {/if}
-                </div>
-            {/if}
 
             {#if error}
                 <div class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">

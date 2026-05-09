@@ -35,8 +35,8 @@ disableKinds = ["rss"]
 
 [params]
   description        = "Encrypt, decrypt, and sign with passkeys"
-  github_url         = "https://github.com/itaypaleale/revaulter"
-  github_repo        = "https://github.com/itaypaleale/revaulter"
+  github_url         = "https://github.com/ItalyPaleAle/revaulter"
+  github_repo        = "https://github.com/ItalyPaleAle/revaulter"
   github_branch      = "main"
   PlausibleAnalytics = true
 
