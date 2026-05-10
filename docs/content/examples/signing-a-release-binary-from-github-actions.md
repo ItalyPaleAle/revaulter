@@ -1,6 +1,6 @@
 ---
 title: "Signing a release binary from GitHub Actions"
-weight: 36
+weight: 37
 ---
 
 You can wire `revaulter-cli sign` into a GitHub Actions release workflow to sign release binaries (or archives, container manifests…) without exposing the signing key to the runner. The signing key lives in the maintainer's passkey, and the workflow blocks until the maintainer approves on their phone.

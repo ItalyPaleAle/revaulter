@@ -1,6 +1,6 @@
 ---
 title: "Fetching a public key to verify a signature"
-weight: 38
+weight: 39
 ---
 
 Revaulter exposes the public half of every published signing key on an unauthenticated, cacheable endpoint. Verifiers fetch it once, pin it locally, and from then on can verify signatures fully offline.

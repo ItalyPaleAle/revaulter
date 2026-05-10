@@ -1,6 +1,6 @@
 ---
 title: "Encrypting large files with age and Revaulter"
-weight: 33
+weight: 34
 ---
 
 [age](https://github.com/FiloSottile/age) is a file encryption tool. You can use Revaulter to wrap the age private key so that decrypting files requires passkey approval.

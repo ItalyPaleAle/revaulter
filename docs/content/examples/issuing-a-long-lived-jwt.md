@@ -1,6 +1,6 @@
 ---
 title: "Issuing a long-lived JWT"
-weight: 37
+weight: 38
 ---
 
 Sometimes a service needs a JWT that lives for hours or days: for example, a service-to-service credential, an installer license, or a break-glass admin token. Revaulter's `sign --format jws` makes this a passkey-approved operation: the issuing host never holds the signing key, and the maintainer reviews the exact claims before approving.

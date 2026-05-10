@@ -1,6 +1,6 @@
 ---
 title: "Backing up with restic"
-weight: 34
+weight: 35
 ---
 
 [restic](https://restic.net) uses a single password to derive its repository encryption key. Storing that password unattended on the backup host largely defeats the point of having backups: anyone who pops the host gets the repository. Wrapping the password with Revaulter means the backup script gets the password only after a passkey holder approves.

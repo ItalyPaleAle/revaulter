@@ -10,7 +10,7 @@ Encryption keys and signing keys don't belong in environment variables or on dis
 **What you can use Revaulter for:**
 
 - [Encrypt/decrypt messages, secrets, keys](/examples/encrypt-and-decrypt-short-messages)
-- [Unlock encrypted disks at boot](/examples/unlocking-luks-encrypted-drives-at-boot)
+- Unlock [LUKS-encrypted disks at boot](/examples/unlocking-luks-encrypted-drives-at-boot) or those [using native ZFS encryption](/examples/unlocking-zfs-encrypted-datasets-at-boot/)
 - [Protect backup repository passwords](/examples/backing-up-with-restic)
 - [SSH logins with a passkey-backed SSH agent](/examples/authenticate-to-ssh-servers)
 - [Sign release binaries from CI](/examples/signing-a-release-binary-from-github-actions)

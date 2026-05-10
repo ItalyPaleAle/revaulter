@@ -1,6 +1,6 @@
 ---
 title: "Signing a release manifest with JWS"
-weight: 35
+weight: 36
 ---
 
 You can use Revaulter's `sign` operation with `--format jws` to produce a passkey-approved compact JWS. ES256 is a standard JOSE algorithm, so the output is verifiable by any JWT/JOSE library without any hand-rolled signature conversion.
