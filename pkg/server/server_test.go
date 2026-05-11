@@ -30,13 +30,13 @@ import (
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/gin-gonic/gin"
+	"github.com/italypaleale/go-kit/webhook"
 	"github.com/stretchr/testify/require"
 
 	"github.com/italypaleale/revaulter/pkg/config"
 	"github.com/italypaleale/revaulter/pkg/db"
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils/bufconn"
-	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
 const (
@@ -845,7 +845,7 @@ func TestServerV2SecurityAndExpiryScenarios(t *testing.T) {
 func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 	setTestConfig(t, "v2-webhook.db")
 
-	webhookRequests := make(chan *webhook.WebhookRequest, 1)
+	webhookRequests := make(chan webhook.MessageProvider, 1)
 	srv := newTestServer(t, &mockWebhook{requests: webhookRequests}, nil, nil)
 	require.NotNil(t, srv)
 	startTestServer(t, srv)
@@ -877,9 +877,10 @@ func TestServerV2CreateRequestSendsWebhook(t *testing.T) {
 	select {
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not receive webhook notification")
-	case msg := <-webhookRequests:
+	case data := <-webhookRequests:
+		msg, ok := data.(*webhookRequest)
+		require.True(t, ok)
 		require.NotNil(t, msg)
-		require.Equal(t, "v2", msg.Flow)
 		require.Equal(t, "encrypt", msg.OperationName)
 		require.Equal(t, "Alice", msg.AssignedUser)
 		require.Equal(t, "disk-key", msg.KeyLabel)
@@ -893,8 +894,7 @@ func TestServerV2CreateRequestSkipsWebhookWhenDisabled(t *testing.T) {
 		"webhookUrl": "",
 	})
 
-	webhookRequests := make(chan *webhook.WebhookRequest, 1)
-	srv := newTestServer(t, &mockWebhook{requests: webhookRequests}, nil, nil)
+	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
 	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
@@ -920,12 +920,6 @@ func TestServerV2CreateRequestSkipsWebhookWhenDisabled(t *testing.T) {
 		res.Body.Close()
 	}()
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
-
-	select {
-	case msg := <-webhookRequests:
-		require.Nil(t, msg)
-	case <-time.After(100 * time.Millisecond):
-	}
 }
 
 func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T) {
@@ -1069,9 +1063,6 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	log := slog.
 		New(slog.NewTextHandler(io.MultiWriter(os.Stdout, logDest), nil)).
 		With(slog.String("app", "test"))
-	if wh == nil {
-		wh = &mockWebhook{}
-	}
 
 	cert, key, err := getSelfSignedTLSCredentials()
 	require.NoError(t, err, "cannot get TLS credentials")
@@ -1086,9 +1077,14 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	err = db.RunMigrations(t.Context(), dbConn, log)
 	require.NoError(t, err)
 
+	var webhookClient webhook.Webhook
+	if wh != nil {
+		webhookClient = wh
+	}
+
 	srv, err := NewServer(NewServerOpts{
 		Log:     log,
-		Webhook: wh,
+		Webhook: webhookClient,
 		DB:      dbConn,
 	})
 	require.NoError(t, err)
@@ -1386,18 +1382,14 @@ func getSelfSignedTLSCredentials() (certPem []byte, keyPem []byte, err error) {
 
 // mockWebhook implements the Webhook interface
 type mockWebhook struct {
-	requests chan *webhook.WebhookRequest
+	requests chan webhook.MessageProvider
 }
 
-func (w mockWebhook) SendWebhook(_ context.Context, data *webhook.WebhookRequest) error {
+func (w mockWebhook) SendWebhook(_ context.Context, data webhook.MessageProvider) error {
 	if w.requests != nil {
 		w.requests <- data
 	}
 	return nil
-}
-
-func (w mockWebhook) SetBaseURL(val string) {
-	// Nop
 }
 
 // testValidWrappedAnchorEnvelope returns a syntactically valid wrapped-anchor envelope for tests

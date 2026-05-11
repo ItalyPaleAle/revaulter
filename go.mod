@@ -1,6 +1,6 @@
 module github.com/italypaleale/revaulter
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/caarlos0/env/v11 v11.4.0
@@ -11,7 +11,7 @@ require (
 	github.com/go-chi/httprate v0.15.0
 	github.com/go-webauthn/webauthn v0.17.0
 	github.com/google/uuid v1.6.0
-	github.com/italypaleale/go-kit v0.0.0-20260326154118-cba072650bb2
+	github.com/italypaleale/go-kit v0.0.0-20260511001815-92def3c19421
 	github.com/italypaleale/go-sql-utils v0.2.3
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.9.2
@@ -41,7 +41,6 @@ require (
 	golang.org/x/net v0.53.0
 	golang.org/x/term v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
-	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
 	modernc.org/sqlite v1.49.1
 )
 
@@ -170,6 +169,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260406210006-6f92a3bedf2d // indirect
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
+	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5 // indirect
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

@@ -19,6 +19,7 @@ import (
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/italypaleale/go-kit/eventqueue"
 	slogkit "github.com/italypaleale/go-kit/slog"
+	"github.com/italypaleale/go-kit/webhook"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -33,7 +34,6 @@ import (
 	"github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/utils/broker"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
-	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
 const (
@@ -207,9 +207,6 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to load TLS configuration: %w", err)
 	}
-
-	// Set the baseURL in the webhook
-	s.webhook.SetBaseURL(s.getBaseURL())
 
 	// Create the Gin router and add various middlewares
 	s.appRouter = gin.New()

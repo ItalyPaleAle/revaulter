@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v4/jwk"
@@ -228,6 +229,15 @@ func (c *Config) Validate(logger *slog.Logger) error {
 		if parsedWebhook.Scheme != "http" && parsedWebhook.Scheme != "https" {
 			return fmt.Errorf("config entry key 'webhookUrl' has disallowed scheme %q: only http and https are permitted", parsedWebhook.Scheme)
 		}
+	}
+
+	// Normalize and validate webhook format
+	c.WebhookFormat = strings.ToLower(c.WebhookFormat)
+	switch c.WebhookFormat {
+	case "discord", "slack", "plain", "":
+		// All good
+	default:
+		return errors.New("config entry key 'webhookFormat' is invalid")
 	}
 
 	// Ensure that the secret key is at least 20-character long (although ideally it's 32 or more, but enforcing some minimum standard)

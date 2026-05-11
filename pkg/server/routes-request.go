@@ -18,7 +18,6 @@ import (
 	"github.com/italypaleale/revaulter/pkg/protocolv2"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
-	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
 type v2RequestCreateResponse struct {
@@ -182,7 +181,8 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 		})
 
 		// Notify users via webhook in background when configured
-		if config.Get().WebhookUrl == "" {
+		if s.webhook == nil {
+			// Webhooks not configured, skip
 			return
 		}
 
@@ -194,8 +194,8 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 
 			// Use a background context because the request's context is canceled when the handler returns
 			webhookCtx := trace.ContextWithSpan(context.Background(), span)
-			webhookErr := s.webhook.SendWebhook(webhookCtx, &webhook.WebhookRequest{
-				Flow:          "v2",
+			webhookErr := s.webhook.SendWebhook(webhookCtx, &webhookRequest{
+				BaseURL:       s.getBaseURL(),
 				OperationName: operation,
 				AssignedUser:  displayName,
 				KeyLabel:      body.KeyLabel,

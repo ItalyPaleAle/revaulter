@@ -11,6 +11,7 @@ import (
 	"github.com/italypaleale/go-kit/servicerunner"
 	"github.com/italypaleale/go-kit/signals"
 	slogkit "github.com/italypaleale/go-kit/slog"
+	"github.com/italypaleale/go-kit/webhook"
 	"go.opentelemetry.io/contrib/exporters/autoexport"
 
 	"github.com/italypaleale/revaulter/cmd/revaulter/backup"
@@ -22,7 +23,6 @@ import (
 	revaultermetrics "github.com/italypaleale/revaulter/pkg/metrics"
 	"github.com/italypaleale/revaulter/pkg/server"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
-	"github.com/italypaleale/revaulter/pkg/utils/webhook"
 )
 
 func main() {
@@ -109,8 +109,20 @@ func main() {
 	ctx := logging.LogToContext(context.Background(), log)
 	ctx = signals.SignalContext(ctx)
 
-	// Init the webhook object
-	webhook := webhook.NewWebhook()
+	// Init the whc object
+	var whc webhook.Webhook
+	if conf.WebhookUrl != "" {
+		whc, err = webhook.NewWebhook(webhook.NewWebhookOpts{
+			URL:    conf.WebhookUrl,
+			Key:    conf.WebhookKey,
+			Format: webhook.WebhookFormat(conf.WebhookFormat),
+			Logger: log.With(slog.String("component", "webhook")),
+		})
+		if err != nil {
+			slogkit.FatalError(log, "Failed to create webhook client", err)
+			return
+		}
+	}
 
 	// Initialize the database
 	connCtx, connCancel := context.WithTimeout(ctx, 20*time.Second)
@@ -156,7 +168,7 @@ func main() {
 	// Create the Server object
 	srv, err := server.NewServer(server.NewServerOpts{
 		Log:           log,
-		Webhook:       webhook,
+		Webhook:       whc,
 		Metrics:       metrics,
 		TraceExporter: traceExporter,
 		DB:            dbConn,

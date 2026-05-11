@@ -79,3 +79,7 @@ When compiling or testing code that imports use Go 1.26+ and set `GOEXPERIMENT=j
 ```sh
 go test -tags unit ./...
 ```
+
+## Git
+
+Do not stage or unstage changes unless the user explicitly asks you to.
