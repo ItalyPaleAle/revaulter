@@ -3,22 +3,22 @@ module github.com/italypaleale/revaulter
 go 1.26.3
 
 require (
-	github.com/caarlos0/env/v11 v11.4.0
+	github.com/caarlos0/env/v11 v11.4.1
 	github.com/cloudflare/circl v1.6.3
-	github.com/fxamacker/cbor/v2 v2.9.1
+	github.com/fxamacker/cbor/v2 v2.9.2
 	github.com/gin-contrib/location/v2 v2.0.1
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-chi/httprate v0.15.0
-	github.com/go-webauthn/webauthn v0.17.0
+	github.com/go-webauthn/webauthn v0.17.2
 	github.com/google/uuid v1.6.0
-	github.com/italypaleale/go-kit v0.0.0-20260511001815-92def3c19421
+	github.com/italypaleale/go-kit v0.0.0-20260512155023-2b9ee55c7685
 	github.com/italypaleale/go-sql-utils v0.2.3
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jinzhu/copier v0.4.0
-	github.com/lestrrat-go/jwx/v4 v4.0.0
+	github.com/lestrrat-go/jwx/v4 v4.0.1
 	github.com/lmittmann/tint v1.1.3
-	github.com/mattn/go-isatty v0.0.21
+	github.com/mattn/go-isatty v0.0.22
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/sigstore/protobuf-specs v0.5.1
@@ -37,11 +37,11 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.19.0
 	go.opentelemetry.io/otel/sdk/metric v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
-	golang.org/x/crypto v0.50.0
-	golang.org/x/net v0.53.0
-	golang.org/x/term v0.42.0
+	golang.org/x/crypto v0.51.0
+	golang.org/x/net v0.54.0
+	golang.org/x/term v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.49.1
+	modernc.org/sqlite v1.50.0
 )
 
 require (
@@ -163,8 +163,8 @@ require (
 	golang.org/x/arch v0.25.0 // indirect
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260406210006-6f92a3bedf2d // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260406210006-6f92a3bedf2d // indirect
 	google.golang.org/grpc v1.80.0 // indirect

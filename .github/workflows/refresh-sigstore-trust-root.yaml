@@ -78,10 +78,13 @@ jobs:
         if: steps.diff.outputs.changed == 'true'
         with:
           go-version-file: "go.mod"
+          # Do not cache in release workflows
+          cache: false
 
       - name: Verify integrity tests still pass with the new trust root
         if: steps.diff.outputs.changed == 'true'
-        run: go test -tags unit ./pkg/integrity/...
+        run: |
+          go test -tags unit ./pkg/integrity/...
 
       - name: Open pull request
         if: steps.diff.outputs.changed == 'true'

@@ -147,14 +147,9 @@ func loadMigrationScripts(migrationsFS embed.FS, driver string) ([]migrationScri
 			return nil, fmt.Errorf("failed to read embedded migration %q: %w", path, err)
 		}
 
-		sql := strings.TrimSpace(string(data))
-		if sql == "" {
-			continue
-		}
-
 		scripts = append(scripts, migrationScript{
 			name: name,
-			sql:  sql,
+			sql:  string(data),
 		})
 	}
 
