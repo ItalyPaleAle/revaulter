@@ -25,8 +25,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 
 	"github.com/italypaleale/revaulter/pkg/buildinfo"
 	"github.com/italypaleale/revaulter/pkg/config"
@@ -429,16 +427,18 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	s.appSrv.Handler = s.appRouter
 	if s.tlsConfig != nil {
 		// Using TLS
-		s.appSrv.Handler = s.appRouter
 		s.appSrv.TLSConfig = s.tlsConfig
 	} else {
 		// Not using TLS
-		// Here we also need to enable HTTP/2 Cleartext
+		// Enable HTTP/2 cleartext (h2c) so clients on a trusted network can still negotiate HTTP/2
 		log.WarnContext(ctx, "Starting app server without TLS - this is not recommended unless Revaulter is exposed through a proxy that offers TLS termination")
-		h2s := &http2.Server{}
-		s.appSrv.Handler = h2c.NewHandler(s.appRouter, h2s)
+		protocols := &http.Protocols{}
+		protocols.SetHTTP1(true)
+		protocols.SetUnencryptedHTTP2(true)
+		s.appSrv.Protocols = protocols
 	}
 
 	// Create the listener if we don't have one already
