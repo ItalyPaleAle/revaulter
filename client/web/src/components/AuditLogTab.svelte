@@ -14,6 +14,24 @@ let auditHasMore = $state(false)
 let auditError = $state<string | null>(null)
 let loaded = $state(false)
 let selectedEventType = $state('')
+let copiedId = $state<string | null>(null)
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null
+
+async function copyToClipboard(value: string) {
+    try {
+        await navigator.clipboard.writeText(value)
+        copiedId = value
+        if (copyResetTimer) {
+            clearTimeout(copyResetTimer)
+        }
+        copyResetTimer = setTimeout(() => {
+            copiedId = null
+            copyResetTimer = null
+        }, 2000)
+    } catch {
+        // Clipboard write can fail in insecure contexts; silently ignore
+    }
+}
 
 const eventTypeOptions = [
     'auth.register_finish',
@@ -142,13 +160,63 @@ function resourceLabel(entry: V2AuditEvent): string {
     return 'Account'
 }
 
+function metadataString(entry: V2AuditEvent, key: string): string {
+    const value = entry.metadata?.[key]
+    if (typeof value !== 'string' || value === '') {
+        return ''
+    }
+    return value
+}
+
+function requestKeyLabel(entry: V2AuditEvent): string {
+    if (!entry.requestState) {
+        return ''
+    }
+    return metadataString(entry, 'keyLabel')
+}
+
+function requestNote(entry: V2AuditEvent): string {
+    if (!entry.requestState) {
+        return ''
+    }
+    return metadataString(entry, 'note')
+}
+
 function shortenId(id: string): string {
     if (id.length <= 16) {
         return id
     }
     return `${id.slice(0, 8)}…${id.slice(-8)}`
 }
+
+function resourceCopyTarget(entry: V2AuditEvent): { value: string; label: string } | null {
+    if (entry.requestState) {
+        return { value: entry.requestState, label: 'request ID' }
+    }
+    if (entry.signingKeyId) {
+        return { value: entry.signingKeyId, label: 'signing key ID' }
+    }
+    if (entry.credentialId) {
+        return { value: entry.credentialId, label: 'passkey ID' }
+    }
+    return null
+}
 </script>
+
+{#snippet copyButton(value: string, label: string)}
+    <button
+        type="button"
+        class="flex shrink-0 cursor-pointer items-center justify-center rounded p-0.5 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-50"
+        aria-label={`Copy ${label}`}
+        onclick={() => copyToClipboard(value)}
+    >
+        {#if copiedId === value}
+            <Icon icon="check" title="Copied" size="3.5" />
+        {:else}
+            <Icon icon="copy" title={`Copy ${label}`} size="3.5" />
+        {/if}
+    </button>
+{/snippet}
 
 <div class="space-y-4">
     <div>
@@ -213,8 +281,26 @@ function shortenId(id: string): string {
                             <td class="whitespace-nowrap px-4 py-2.5 text-xs text-neutral-900 dark:text-neutral-50" title={entry.eventType}>
                                 {eventTypeLabel(entry.eventType)}
                             </td>
-                            <td class="mono whitespace-nowrap px-4 py-2.5 text-xs text-neutral-600 dark:text-neutral-400" title={entry.requestState || entry.signingKeyId || entry.credentialId || 'Account'}>
-                                {resourceLabel(entry)}
+                            <td class="px-4 py-2.5 text-xs text-neutral-600 dark:text-neutral-400">
+                                <div class="flex items-center gap-1.5">
+                                    <span class="mono whitespace-nowrap" title={entry.requestState || entry.signingKeyId || entry.credentialId || 'Account'}>
+                                        {resourceLabel(entry)}
+                                    </span>
+                                    {#if resourceCopyTarget(entry)}
+                                        {@const copyTarget = resourceCopyTarget(entry)!}
+                                        {@render copyButton(copyTarget.value, copyTarget.label)}
+                                    {/if}
+                                </div>
+                                {#if requestKeyLabel(entry)}
+                                    <div class="mt-0.5 max-w-xs truncate text-neutral-500 dark:text-neutral-400" title={requestKeyLabel(entry)}>
+                                        Key: {requestKeyLabel(entry)}
+                                    </div>
+                                {/if}
+                                {#if requestNote(entry)}
+                                    <div class="mt-0.5 max-w-xs truncate text-neutral-500 dark:text-neutral-400" title={requestNote(entry)}>
+                                        Note: {requestNote(entry)}
+                                    </div>
+                                {/if}
                             </td>
                             <td class="whitespace-nowrap px-4 py-2.5">
                                 <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {auditOutcomeClass(entry.outcome)}">

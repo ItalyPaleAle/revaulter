@@ -62,10 +62,7 @@ func (s *Server) executeRequestExpiryEvent(ev requestExpiryEvent) {
 		ActorUserID:  rec.UserID,
 		TargetUserID: rec.UserID,
 		RequestState: ev.State,
-		Metadata: jsonMetadata(map[string]any{
-			"operation": rec.Operation,
-			"algorithm": rec.Algorithm,
-		}),
+		Metadata:     requestAuditMetadata(rec.Operation, rec.Algorithm, rec.KeyLabel, rec.Note),
 	})
 
 	s.lock.Lock()

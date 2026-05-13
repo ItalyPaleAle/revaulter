@@ -59,16 +59,18 @@ Naming convention is `<area>.<verb>` with both halves in `snake_case`. The full 
 
 | event_type | When it fires |
 |---|---|
-| `request.create` | CLI/API submits a new encrypt/decrypt/sign request. Metadata: `{operation, algorithm, key_label}` |
-| `request.confirm` | User approves a pending request. Metadata: `{operation, algorithm}` |
-| `request.cancel` | User cancels a pending request. Metadata: `{operation, algorithm}` |
-| `request.expire` | TTL elapses and the background goroutine marks the request expired. `auth_method=system` |
+| `request.create` | CLI/API submits a new encrypt/decrypt/sign request. Metadata: `{operation, algorithm, keyLabel, note?}` |
+| `request.confirm` | User approves a pending request. Metadata: `{operation, algorithm, keyLabel, note?}` |
+| `request.cancel` | User cancels a pending request. Metadata: `{operation, algorithm, keyLabel, note?}` |
+| `request.expire` | TTL elapses and the background goroutine marks the request expired. `auth_method=system`. Metadata: `{operation, algorithm, keyLabel, note?}` |
+
+The `note` field is only included when the original request carried a non-empty user-facing note.
 
 ### Signing keys
 
 | event_type | When it fires |
 |---|---|
-| `signing_key.create` | User explicitly creates/uploads a signing key. Metadata: `{algorithm, key_label, published, has_proof}` |
+| `signing_key.create` | User explicitly creates/uploads a signing key. Metadata: `{algorithm, keyLabel, published, hasProof}` |
 | `signing_key.publish` | Existing row flipped to `published=true` |
 | `signing_key.unpublish` | Existing row flipped back to `published=false` |
 | `signing_key.delete` | Row deleted |

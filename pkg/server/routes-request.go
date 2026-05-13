@@ -132,11 +132,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 				AuthMethod:   db.AuditAuthMethodRequestKey,
 				ActorUserID:  user.ID,
 				RequestState: state,
-				Metadata: jsonMetadata(map[string]any{
-					"operation": operation,
-					"algorithm": body.Algorithm,
-					"keyLabel":  body.KeyLabel,
-				}),
+				Metadata:     requestAuditMetadata(operation, body.Algorithm, body.KeyLabel, body.Note),
 			})
 			if rErr != nil {
 				return struct{}{}, rErr

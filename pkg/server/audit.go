@@ -152,3 +152,17 @@ func jsonMetadata(payload map[string]any) json.RawMessage {
 	}
 	return b
 }
+
+// requestAuditMetadata builds the metadata payload shared by all request.* audit events
+// The note is omitted when empty so the metadata payload stays compact
+func requestAuditMetadata(operation, algorithm, keyLabel, note string) json.RawMessage {
+	payload := map[string]any{
+		"operation": operation,
+		"algorithm": algorithm,
+		"keyLabel":  keyLabel,
+	}
+	if note != "" {
+		payload["note"] = note
+	}
+	return jsonMetadata(payload)
+}
