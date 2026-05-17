@@ -9,14 +9,14 @@ require (
 	github.com/gin-contrib/location/v2 v2.0.1
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-chi/httprate v0.15.0
-	github.com/go-webauthn/webauthn v0.17.2
+	github.com/go-webauthn/webauthn v0.17.3
 	github.com/google/uuid v1.6.0
-	github.com/italypaleale/go-kit v0.0.0-20260512155023-2b9ee55c7685
+	github.com/italypaleale/go-kit v0.0.0-20260513154451-c08403a9ddbd
 	github.com/italypaleale/go-sql-utils v0.2.3
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/jinzhu/copier v0.4.0
-	github.com/lestrrat-go/jwx/v4 v4.0.1
+	github.com/lestrrat-go/jwx/v4 v4.0.2
 	github.com/lmittmann/tint v1.1.3
 	github.com/mattn/go-isatty v0.0.22
 	github.com/mitchellh/go-homedir v1.1.0
@@ -41,7 +41,7 @@ require (
 	golang.org/x/net v0.54.0
 	golang.org/x/term v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.50.0
+	modernc.org/sqlite v1.50.1
 )
 
 require (
@@ -90,7 +90,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/go-webauthn/x v0.2.3 // indirect
+	github.com/go-webauthn/x v0.2.5 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
@@ -170,7 +170,7 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5 // indirect
-	modernc.org/libc v1.72.0 // indirect
+	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
