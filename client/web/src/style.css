@@ -2,6 +2,12 @@
 @import "@fontsource-variable/geist-mono/wght.css";
 @import "tailwindcss";
 
+/* Variant for coarse pointers (touch devices). Used to bump form fields up to
+   16px on phones/tablets: iOS Safari (and some Android browsers) auto-zoom the
+   viewport when a focused field has a font-size below 16px, which otherwise
+   leaves the page zoomed in after signing in. */
+@custom-variant coarse (@media (pointer: coarse));
+
 :root {
     color-scheme: light dark;
     --app-bg: #fafafa;
@@ -59,21 +65,6 @@ kbd,
 pre,
 samp {
     font-family: "Geist Mono Variable", "Geist Mono", ui-monospace, Menlo, monospace;
-}
-
-/* iOS Safari (and some Android browsers) automatically zoom the viewport in
-   when a form field whose font-size is below 16px receives focus. Our inputs
-   use `text-sm` (14px) for a tighter look, which triggers this zoom on touch
-   devices and leaves the user zoomed in after signing in, forcing them to zoom
-   back out by hand. On coarse-pointer (touch) devices, bump form controls to
-   16px to suppress the auto-zoom. `!important` is needed to win over Tailwind's
-   font-size utilities. */
-@media (pointer: coarse) {
-    input,
-    select,
-    textarea {
-        font-size: 16px !important;
-    }
 }
 
 ::selection {

@@ -425,7 +425,7 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                     </div>
 
                     <textarea
-                        class="mono min-h-40 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-950 outline-none transition focus:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-50 dark:focus:border-neutral-300"
+                        class="mono min-h-40 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm coarse:text-base text-neutral-950 outline-none transition focus:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-50 dark:focus:border-neutral-300"
                         value={allowedIpsText}
                         oninput={(event) => {
                             onAllowedIpsTextInput((event.currentTarget as HTMLTextAreaElement).value)

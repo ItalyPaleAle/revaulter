@@ -258,7 +258,7 @@ function isDerivedPublished(): boolean {
                     id="signing-key-algorithm"
                     bind:value={deriveAlgorithm}
                     disabled={busy || derivingKey}
-                    class="h-10.5 w-full rounded-lg border border-neutral-300 bg-white px-3 text-sm text-neutral-950 outline-none transition focus:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-50 dark:focus:border-neutral-300"
+                    class="h-10.5 w-full rounded-lg border border-neutral-300 bg-white px-3 text-sm coarse:text-base text-neutral-950 outline-none transition focus:border-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-50 dark:focus:border-neutral-300"
                 >
                     {#each SIGNING_ALGORITHMS as alg}
                         <option value={alg}>{alg}</option>
