@@ -1072,7 +1072,7 @@ func (s *Server) RouteV2AuthAddCredentialBegin(c *gin.Context) {
 		ChallengeID: res.challenge.ID,
 		Challenge:   res.session.Challenge,
 		ExpiresAt:   res.challenge.ExpiresAt.Unix(),
-		Options:     res.creation,
+		Options:     credentialCreationWithoutExclusions(res.creation),
 		BasePrfSalt: config.Get().GetPRFSalt(),
 	})
 }
@@ -1081,6 +1081,20 @@ type addCredentialBeginRes struct {
 	creation  *protocol.CredentialCreation
 	session   *webauthnlib.SessionData
 	challenge *db.AuthChallenge
+}
+
+func credentialCreationWithoutExclusions(creation *protocol.CredentialCreation) any {
+	if creation == nil {
+		return nil
+	}
+
+	// Copy the top-level creation options so the WebAuthn session stored in the challenge still keeps its original exclusion list
+	// This is intentionally shallow because we only replace the excludeCredentials slice header on the response sent to the browser
+	// Keeping excludeCredentials out of the add-passkey browser ceremony avoids browsers rejecting the request when another provider already has an existing passkey (e.g. Chromium-based ones)
+	// Duplicate credential IDs are still rejected server-side when the add-passkey finish request is verified
+	copy := *creation
+	copy.Response.CredentialExcludeList = nil
+	return &copy
 }
 
 func (s *Server) addCredentialBegin(ctx context.Context, tx *db.DbTx, userID string, req *v2AuthAddCredentialBeginRequest) (addCredentialBeginRes, error) {
@@ -1271,6 +1285,15 @@ func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCreden
 		return addCredentialFinishRes{}, err
 	}
 	credID := base64.RawURLEncoding.EncodeToString(cred.ID)
+
+	// Retrieve the list of existing credentials to make sure that the same one isn't already registered
+	existingCredential, err := as.GetCredentialByCredentialID(c.Request.Context(), credID, vals.userID)
+	if err != nil {
+		return addCredentialFinishRes{}, err
+	}
+	if existingCredential != nil {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusConflict, "Credential is already registered")
+	}
 
 	// Verify the attestation against the stored anchor pubkeys
 	// This is what binds the new credential to the user's identity root

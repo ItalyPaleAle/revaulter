@@ -64,3 +64,23 @@ func TestInitWebAuthnIgnoresWildcardOriginsForRelatedOriginRequests(t *testing.T
 	assert.Empty(t, wa.Config.RPTopOrigins)
 	assert.Equal(t, protocol.TopOriginExplicitVerificationMode, wa.Config.RPTopOriginVerificationMode)
 }
+
+func TestCredentialCreationWithoutExclusionsRemovesBrowserExclusionList(t *testing.T) {
+	creation := &protocol.CredentialCreation{
+		Response: protocol.PublicKeyCredentialCreationOptions{
+			Challenge: protocol.URLEncodedBase64("challenge"),
+			CredentialExcludeList: []protocol.CredentialDescriptor{
+				{
+					Type:         protocol.PublicKeyCredentialType,
+					CredentialID: protocol.URLEncodedBase64("existing-credential"),
+				},
+			},
+		},
+	}
+
+	res, ok := credentialCreationWithoutExclusions(creation).(*protocol.CredentialCreation)
+	require.True(t, ok)
+	require.NotSame(t, creation, res)
+	assert.Empty(t, res.Response.CredentialExcludeList)
+	assert.Len(t, creation.Response.CredentialExcludeList, 1)
+}
