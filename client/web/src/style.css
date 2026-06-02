@@ -2,10 +2,8 @@
 @import "@fontsource-variable/geist-mono/wght.css";
 @import "tailwindcss";
 
-/* Variant for coarse pointers (touch devices). Used to bump form fields up to
-   16px on phones/tablets: iOS Safari (and some Android browsers) auto-zoom the
-   viewport when a focused field has a font-size below 16px, which otherwise
-   leaves the page zoomed in after signing in. */
+/* Variant for coarse pointers (touch devices)
+   Used to bump form fields up to 16px on phones/tablets: iOS Safari (and some Android browsers) auto-zoom the viewport when a focused field has a font-size below 16px, which otherwise leaves the page zoomed in after signing in */
 @custom-variant coarse (@media (pointer: coarse));
 
 :root {
