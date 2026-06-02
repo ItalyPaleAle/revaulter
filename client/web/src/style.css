@@ -61,6 +61,21 @@ samp {
     font-family: "Geist Mono Variable", "Geist Mono", ui-monospace, Menlo, monospace;
 }
 
+/* iOS Safari (and some Android browsers) automatically zoom the viewport in
+   when a form field whose font-size is below 16px receives focus. Our inputs
+   use `text-sm` (14px) for a tighter look, which triggers this zoom on touch
+   devices and leaves the user zoomed in after signing in, forcing them to zoom
+   back out by hand. On coarse-pointer (touch) devices, bump form controls to
+   16px to suppress the auto-zoom. `!important` is needed to win over Tailwind's
+   font-size utilities. */
+@media (pointer: coarse) {
+    input,
+    select,
+    textarea {
+        font-size: 16px !important;
+    }
+}
+
 ::selection {
     background: oklch(0.85 0.1 252);
     color: #0a0a0a;
