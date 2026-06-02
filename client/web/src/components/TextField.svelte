@@ -41,6 +41,6 @@ let {
     {required}
     {type}
     bind:value
-    class={`h-10.5 w-full rounded-lg border border-neutral-300 bg-white px-3 text-sm text-neutral-900 outline-none transition-colors focus:border-neutral-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-50 dark:focus:border-neutral-300 ${className}`}
+    class={`h-10.5 w-full rounded-lg border border-neutral-300 bg-white px-3 text-sm coarse:text-base text-neutral-900 outline-none transition-colors focus:border-neutral-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-50 dark:focus:border-neutral-300 ${className}`}
     oninput={oninput}
 />

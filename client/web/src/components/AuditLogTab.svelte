@@ -230,7 +230,7 @@ function resourceCopyTarget(entry: V2AuditEvent): { value: string; label: string
         <label class="flex min-w-56 flex-col gap-1.5 text-xs font-medium text-neutral-600 dark:text-neutral-300">
             Event
             <select
-                class="h-9 rounded-lg border border-neutral-300 bg-white px-3 text-[13px] text-neutral-900 outline-none transition focus:border-neutral-900 focus:ring-2 focus:ring-neutral-200 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-50 dark:focus:border-neutral-300 dark:focus:ring-neutral-800"
+                class="h-9 rounded-lg border border-neutral-300 bg-white px-3 text-[13px] coarse:text-base text-neutral-900 outline-none transition focus:border-neutral-900 focus:ring-2 focus:ring-neutral-200 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-50 dark:focus:border-neutral-300 dark:focus:ring-neutral-800"
                 value={selectedEventType}
                 onchange={handleEventTypeChange}
                 disabled={auditLoading}
