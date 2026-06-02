@@ -31,6 +31,7 @@ import (
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/gin-gonic/gin"
 	"github.com/italypaleale/go-kit/webhook"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/italypaleale/revaulter/pkg/config"
@@ -1623,6 +1624,26 @@ func TestServerV2CredentialLifecycle(t *testing.T) {
 	}
 
 	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+
+	// Add-credential registration options for existing users must include a non-empty WebAuthn user name
+	// Some hardware authenticator paths reject creation requests that synced passkey providers accept more leniently
+	res, body := doPostJSON(t, "/v2/auth/credentials/add/begin", map[string]any{
+		"credentialName": "YubiKey",
+	}, sessionCookie)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	options, ok := body["options"].(map[string]any)
+	assert.True(t, ok)
+	publicKey, ok := options["publicKey"].(map[string]any)
+	assert.True(t, ok)
+	user, ok := publicKey["user"].(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "user-alice", user["name"])
+	assert.Equal(t, "Alice", user["displayName"])
+	assert.NotContains(t, publicKey, "excludeCredentials")
 
 	// List credentials — should have 1
 	res, creds := doGetJSONArray(t, "/v2/auth/credentials", sessionCookie)

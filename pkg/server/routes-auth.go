@@ -1995,6 +1995,7 @@ func loadWebAuthnUser(ctx context.Context, as *db.AuthStore, user *db.User) (*v2
 
 	return &v2WebAuthnUser{
 		id:          decodedUserID,
+		userID:      user.ID,
 		displayName: displayName,
 		credentials: creds,
 	}, nil
