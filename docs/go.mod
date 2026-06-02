@@ -1,5 +1,7 @@
 module github.com/italypaleale/revaulter/docs
 
-go 1.26.2
+go 1.26.3
 
-require github.com/italypaleale/hugo-assets v0.0.0-20260509150359-8f0bee530d32 // indirect
+tool github.com/italypaleale/hugo-assets
+
+require github.com/italypaleale/hugo-assets v0.0.0-20260602023240-f2fe9535d121 // indirect
