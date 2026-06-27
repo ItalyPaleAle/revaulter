@@ -1,7 +1,7 @@
-module github.com/italypaleale/revaulter/docs
+module github.com/italypaleale/tsiam/docs
 
 go 1.26.3
 
-tool github.com/italypaleale/hugo-assets
+tool github.com/italypaleale/hugo-assets/cmd/vercel-docs-build
 
-require github.com/italypaleale/hugo-assets v0.0.0-20260602023240-f2fe9535d121 // indirect
+require github.com/italypaleale/hugo-assets v0.0.0-20260625101919-30edcdce5680 // indirect
