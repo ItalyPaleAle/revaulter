@@ -37,37 +37,37 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 
 | Key | Env var | Description |
 |-----|---------|-------------|
-| `databaseDSN` | `DATABASEDSN` | Database connection string (see [Database](#database) below) |
-| `secretKey` | `SECRETKEY` | Instance-wide secret for key derivation (see [Secret key](#secret-key) below) |
+| `databaseDSN` | `REVAULTER_DATABASEDSN` | Database connection string (see [Database](#database) below) |
+| `secretKey` | `REVAULTER_SECRETKEY` | Instance-wide secret for key derivation (see [Secret key](#secret-key) below) |
 
 ### Recommended configuration
 
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
-| `baseUrl` | `BASEURL` | `https://localhost:<port>` | Public URL where users access the web UI. Used for webhook links and WebAuthn origin validation. |
-| `sessionSigningKey` | `SESSIONSIGNINGKEY` | Random at startup | Secret used to sign session tokens. Set this in production so sessions survive restarts. |
-| `tlsPath` | `TLSPATH` | Config file directory | Directory containing `tls-cert.pem` and `tls-key.pem`. Revaulter watches for changes and auto-reloads. |
-| `tlsCertPEM` | `TLSCERTPEM` | | PEM-encoded TLS certificate (alternative to `tlsPath`) |
-| `tlsKeyPEM` | `TLSKEYPEM` | | PEM-encoded TLS key (alternative to `tlsPath`) |
+| `baseUrl` | `REVAULTER_BASEURL` | `https://localhost:<port>` | Public URL where users access the web UI. Used for webhook links and WebAuthn origin validation. |
+| `sessionSigningKey` | `REVAULTER_SESSIONSIGNINGKEY` | Random at startup | Secret used to sign session tokens. Set this in production so sessions survive restarts. |
+| `tlsPath` | `REVAULTER_TLSPATH` | Config file directory | Directory containing `tls-cert.pem` and `tls-key.pem`. Revaulter watches for changes and auto-reloads. |
+| `tlsCertPEM` | `REVAULTER_TLSCERTPEM` | | PEM-encoded TLS certificate (alternative to `tlsPath`) |
+| `tlsKeyPEM` | `REVAULTER_TLSKEYPEM` | | PEM-encoded TLS key (alternative to `tlsPath`) |
 
 ### Optional configuration
 
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
-| `webhookUrl` | `WEBHOOKURL` | | Webhook endpoint for notifications. Leave unset to disable webhook notifications. |
-| `webhookFormat` | `WEBHOOKFORMAT` | `plain` | Webhook format: `plain`, `slack`, or `discord` |
-| `webhookKey` | `WEBHOOKKEY` | | Value sent as `Authorization` header on webhook requests (include the scheme, e.g. `Bearer abc123`) |
-| `port` | `PORT` | `8080` | Port to bind to |
-| `bind` | `BIND` | `0.0.0.0` | Address/interface to bind to |
-| `disableSignup` | `DISABLESIGNUP` | `false` | Disable creation of new user accounts |
-| `sessionTimeout` | `SESSIONTIMEOUT` | `5m` | Session duration before re-authentication is required (max: `1h`) |
-| `requestTimeout` | `REQUESTTIMEOUT` | `5m` | Default timeout for requests (can be overridden per-request; max: `24h`) |
-| `trustedProxies` | `TRUSTEDPROXIES` | | Comma-separated list of IPs/CIDRs to trust for `X-Forwarded-*` headers |
-| `forceSecureCookies` | `FORCESECURECOOKIES` | `false` | Force the `Secure` flag on cookies (set to `true` when behind a TLS-terminating reverse proxy) |
-| `trustedRequestIdHeader` | `TRUSTEDREQUESTIDHEADER` | | Header to trust as request ID (e.g. `X-Request-ID`, `CF-Ray`) |
-| `logHealthChecks` | `LOGHEALTHCHECKS` | `false` | Include `/healthz` requests in the request logs |
-| `logLevel` | `LOGLEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
-| `logAsJson` | `LOGASJSON` | auto | Emit JSON logs (defaults to `true` when no TTY is attached) |
+| `webhookUrl` | `REVAULTER_WEBHOOKURL` | | Webhook endpoint for notifications. Leave unset to disable webhook notifications. |
+| `webhookFormat` | `REVAULTER_WEBHOOKFORMAT` | `plain` | Webhook format: `plain`, `slack`, or `discord` |
+| `webhookKey` | `REVAULTER_WEBHOOKKEY` | | Value sent as `Authorization` header on webhook requests (include the scheme, e.g. `Bearer abc123`) |
+| `port` | `REVAULTER_PORT` or `PORT` | `8080` | Port to bind to |
+| `bind` | `REVAULTER_BIND` | `0.0.0.0` | Address/interface to bind to |
+| `disableSignup` | `REVAULTER_DISABLESIGNUP` | `false` | Disable creation of new user accounts |
+| `sessionTimeout` | `REVAULTER_SESSIONTIMEOUT` | `5m` | Session duration before re-authentication is required (max: `1h`) |
+| `requestTimeout` | `REVAULTER_REQUESTTIMEOUT` | `5m` | Default timeout for requests (can be overridden per-request; max: `24h`) |
+| `trustedProxies` | `REVAULTER_TRUSTEDPROXIES` | | Comma-separated list of IPs/CIDRs to trust for `X-Forwarded-*` headers |
+| `forceSecureCookies` | `REVAULTER_FORCESECURECOOKIES` | `false` | Force the `Secure` flag on cookies (set to `true` when behind a TLS-terminating reverse proxy) |
+| `trustedRequestIdHeader` | `REVAULTER_TRUSTEDREQUESTIDHEADER` | | Header to trust as request ID (e.g. `X-Request-ID`, `CF-Ray`) |
+| `logHealthChecks` | `REVAULTER_LOGHEALTHCHECKS` | `false` | Include `/healthz` requests in the request logs |
+| `logLevel` | `REVAULTER_LOGLEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
+| `logAsJson` | `REVAULTER_LOGASJSON` | auto | Emit JSON logs (defaults to `true` when no TTY is attached) |
 
 ### Optional WebAuthn configuration
 
@@ -75,9 +75,9 @@ These settings are necessary in some scenarios only. Revaulter derives sensible 
 
 | Key | Env var | Default | Description |
 |-----|---------|---------|-------------|
-| `webauthnRpId` | `WEBAUTHNRPID` | Derived from `baseUrl` | WebAuthn Relying Party ID |
-| `webauthnRpName` | `WEBAUTHNRPNAME` | `Revaulter` | WebAuthn Relying Party display name |
-| `webauthnOrigins` | `WEBAUTHNORIGINS` | `baseUrl` | Allowed WebAuthn origins |
+| `webauthnRpId` | `REVAULTER_WEBAUTHNRPID` | Derived from `baseUrl` | WebAuthn Relying Party ID |
+| `webauthnRpName` | `REVAULTER_WEBAUTHNRPNAME` | `Revaulter` | WebAuthn Relying Party display name |
+| `webauthnOrigins` | `REVAULTER_WEBAUTHNORIGINS` | `baseUrl` | Allowed WebAuthn origins |
 
 ## Database
 
