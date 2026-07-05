@@ -1,0 +1,21 @@
+{
+  "baseURL": "https://revaulter.italypaleale.me/",
+  "title": "Revaulter",
+  "locale": "en-us",
+  "description": "Encrypt, decrypt, and sign with passkeys",
+  "plausibleAnalytics": true,
+  "github": {
+    "url": "https://github.com/ItalyPaleAle/revaulter",
+    "repo": "https://github.com/ItalyPaleAle/revaulter",
+    "branch": "main"
+  },
+  "theme": {
+    "scheme": "rust",
+    "iconLight": "icon-light.svg",
+    "iconDark": "icon-dark.svg",
+    "favicon": "icon-light.svg"
+  },
+  "imageMounts": [
+    { "source": "img", "target": "assets/docs/img" }
+  ]
+}
