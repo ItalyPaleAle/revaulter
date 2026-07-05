@@ -68,21 +68,17 @@ func getLogger(ctx context.Context, cfg *config.Config) (log *slog.Logger, shutd
 
 	// Create the handler
 	var handler slog.Handler
-	switch {
-	case cfg.LogAsJSON:
+	if cfg.LogAsJSON {
 		// Log as JSON if configured
 		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 			Level: level,
 		})
-	case isatty.IsTerminal(os.Stdout.Fd()):
+	} else {
 		// Enable colors if we have a TTY
 		handler = tint.NewHandler(os.Stdout, &tint.Options{
 			Level:      level,
 			TimeFormat: time.StampMilli,
-		})
-	default:
-		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: level,
+			NoColor:    !isatty.IsTerminal(os.Stdout.Fd()),
 		})
 	}
 
