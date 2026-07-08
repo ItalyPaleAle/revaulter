@@ -1264,6 +1264,31 @@ func signSigningKeyPublication(t *testing.T, anchor *testAnchorKeyPair, payload 
 	return canonicalBody, sigEsB64, sigMlB64
 }
 
+// signPubkeyBundle signs a pubkey-bundle payload under the supplied anchor and returns base64url ES384 + ML-DSA-87 signatures, mirroring what the browser produces at signup
+func signPubkeyBundle(t *testing.T, anchor *testAnchorKeyPair, payload *protocolv2.PubkeyBundlePayload) (sigEsB64, sigMlB64 string) {
+	t.Helper()
+
+	msg := protocolv2.CanonicalPubkeyBundleMessage(payload)
+
+	digest := sha512.Sum384(msg)
+	r, s, err := ecdsa.Sign(rand.Reader, anchor.Es384Priv, digest[:])
+	require.NoError(t, err)
+	sig := make([]byte, protocolv2.ES384SignatureSize)
+	const half = protocolv2.ES384SignatureSize / 2
+	rBytes := r.Bytes()
+	sBytes := s.Bytes()
+	copy(sig[half-len(rBytes):half], rBytes)
+	copy(sig[protocolv2.ES384SignatureSize-len(sBytes):], sBytes)
+	sigEsB64 = base64.RawURLEncoding.EncodeToString(sig)
+
+	mlSig := make([]byte, protocolv2.MLDSA87SignatureSize)
+	err = mldsa87.SignTo(anchor.Mldsa87Priv, msg, nil, false, mlSig)
+	require.NoError(t, err)
+	sigMlB64 = base64.RawURLEncoding.EncodeToString(mlSig)
+
+	return sigEsB64, sigMlB64
+}
+
 func startTestServer(t *testing.T, srv *Server) {
 	t.Helper()
 
@@ -1692,4 +1717,83 @@ func TestServerV2CredentialLifecycle(t *testing.T) {
 		res2.Body.Close()
 	}()
 	require.Equal(t, http.StatusNotFound, res2.StatusCode)
+}
+
+// Regression test for https://github.com/ItalyPaleAle/revaulter/issues/23
+// The pubkey bundle is signed once at signup with wrappedKeyEpoch=1 and never re-signed, so after the user's live epoch advances (e.g. a password change rotated the wrapped keys) the /v2/request/pubkey response must still advertise the epoch the signature was created over, or the CLI's verification of the otherwise-valid bundle fails
+func TestServerV2RequestPubkeyBundleVerifiesAfterEpochAdvance(t *testing.T) {
+	setTestConfig(t, "v2-pubkey-epoch.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	_, user := seedV2SessionCookie(t, srv, "user-pubkey-epoch", "Pubkey Epoch")
+	anchor := seedV2AnchorForUser(t, srv, user.ID)
+
+	// Sign the bundle over the stored request-enc pubkeys at the bundle epoch, as the browser does at signup, and store the signatures like finalize-signup would
+	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(anchor.Es384JWKBody)
+	require.NoError(t, err)
+	signedPayload := &protocolv2.PubkeyBundlePayload{
+		UserID:                 user.ID,
+		RequestEncEcdhPubkey:   user.RequestEncEcdhPubkey,
+		RequestEncMlkemPubkey:  user.RequestEncMlkemPubkey,
+		AnchorEs384Crv:         es384JWK.Crv,
+		AnchorEs384Kty:         es384JWK.Kty,
+		AnchorEs384X:           es384JWK.X,
+		AnchorEs384Y:           es384JWK.Y,
+		AnchorMldsa87PublicKey: anchor.Mldsa87PubBase64,
+		WrappedKeyEpoch:        protocolv2.PubkeyBundleWrappedKeyEpoch,
+	}
+	sigEsB64, sigMlB64 := signPubkeyBundle(t, anchor, signedPayload)
+	_, err = srv.db.Exec(t.Context(),
+		`UPDATE v2_users SET pubkey_bundle_signature_es384 = $1, pubkey_bundle_signature_mldsa87 = $2 WHERE id = $3`,
+		sigEsB64, sigMlB64, user.ID,
+	)
+	require.NoError(t, err)
+
+	// Advance the user's wrapped-key epoch, like a password change with advanceEpoch does
+	newEpoch, err := srv.db.AuthStore().AdvanceWrappedKeyEpoch(t.Context(), user.ID)
+	require.NoError(t, err)
+	require.Greater(t, newEpoch, protocolv2.PubkeyBundleWrappedKeyEpoch)
+
+	// Fetch the pubkey bundle like the CLI does
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/request/pubkey", testServerPort), nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+user.RequestKey)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+
+	var resp v2RequestPubkeyResponse
+	require.NoError(t, json.NewDecoder(res.Body).Decode(&resp))
+
+	// The advertised epoch must be the one bound into the signature, not the advanced live epoch
+	require.Equal(t, protocolv2.PubkeyBundleWrappedKeyEpoch, resp.WrappedKeyEpoch)
+
+	// Reconstruct the payload from the response exactly like a CLI that trusts the advertised epoch, and verify both signature legs
+	respJWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(resp.AnchorEs384PublicKey)
+	require.NoError(t, err)
+	verifyPayload := &protocolv2.PubkeyBundlePayload{
+		UserID:                 resp.UserID,
+		RequestEncEcdhPubkey:   string(resp.EcdhP256),
+		RequestEncMlkemPubkey:  resp.Mlkem768,
+		AnchorEs384Crv:         respJWK.Crv,
+		AnchorEs384Kty:         respJWK.Kty,
+		AnchorEs384X:           respJWK.X,
+		AnchorEs384Y:           respJWK.Y,
+		AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
+		WrappedKeyEpoch:        resp.WrappedKeyEpoch,
+	}
+	es384Pub, mldsa87PubBytes, err := parseAnchorPubkeys(resp.AnchorEs384PublicKey, resp.AnchorMldsa87PublicKey)
+	require.NoError(t, err)
+	sigEs, sigMl, err := parseHybridSignatures(resp.PubkeyBundleSignatureEs384, resp.PubkeyBundleSignatureMldsa87)
+	require.NoError(t, err)
+	require.NoError(t, protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, verifyPayload, sigEs, sigMl))
 }

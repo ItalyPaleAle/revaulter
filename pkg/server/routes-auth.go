@@ -1774,7 +1774,7 @@ func (s *Server) finalizeSetup(c *gin.Context, tx *db.DbTx, vals finalizeSetupVa
 		AnchorEs384X:           es384JWK.X,
 		AnchorEs384Y:           es384JWK.Y,
 		AnchorMldsa87PublicKey: vals.req.AnchorMldsa87PublicKey,
-		WrappedKeyEpoch:        1,
+		WrappedKeyEpoch:        protocolv2.PubkeyBundleWrappedKeyEpoch,
 	}
 	err = protocolv2.VerifyHybridBundle(vals.anchorEs384Pub, vals.mldsa87PubBytes, bundlePayload, vals.bundleSigEs, vals.bundleSigMl)
 	if err != nil {

@@ -188,6 +188,8 @@ func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, c
 		return false, fmt.Errorf("invalid anchorEs384PublicKey: %w", err)
 	}
 
+	// The bundle signature is always bound to WrappedKeyEpoch = PubkeyBundleWrappedKeyEpoch (it is created once at signup and never re-signed), so the payload is reconstructed with that constant rather than the server-reported epoch
+	// Servers used to echo the user's live epoch here, which advances on password changes and would make verification fail for a signature that is still valid
 	bundlePayload := &protocolv2.PubkeyBundlePayload{
 		UserID:                 resp.UserID,
 		RequestEncEcdhPubkey:   string(resp.EcdhP256),
@@ -197,7 +199,7 @@ func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, c
 		AnchorEs384X:           es384JWK.X,
 		AnchorEs384Y:           es384JWK.Y,
 		AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
-		WrappedKeyEpoch:        resp.WrappedKeyEpoch,
+		WrappedKeyEpoch:        protocolv2.PubkeyBundleWrappedKeyEpoch,
 	}
 	sigEs, sigMl, err := decodeHybridSignatures(resp.PubkeyBundleSignatureEs384, resp.PubkeyBundleSignatureMldsa87)
 	if err != nil {

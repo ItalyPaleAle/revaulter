@@ -134,21 +134,29 @@ The shape varies per operation. All `value`/`nonce`/`tag`/`additionalData` field
 
 ### `GET /v2/request/pubkey`
 
-Get the user's static public encryption keys. The CLI uses these to encrypt request payloads end-to-end.
+Get the user's static public encryption keys, along with the hybrid anchor public keys and the pubkey bundle signatures. The CLI uses the encryption keys to encrypt request payloads end-to-end, pins the anchor keys (TOFU), and verifies both bundle signatures to detect server-side pubkey substitution.
 
 **Response:** `200 OK`
 
 ```json
 {
+  "userId": "<uuid>",
   "ecdhP256": {
     "kty": "EC",
     "crv": "P-256",
     "x": "<base64url>",
     "y": "<base64url>"
   },
-  "mlkem768": "<base64url>"
+  "mlkem768": "<base64url>",
+  "anchorEs384PublicKey": "<canonical JWK body>",
+  "anchorMldsa87PublicKey": "<base64url>",
+  "wrappedKeyEpoch": 1,
+  "pubkeyBundleSignatureEs384": "<base64url>",
+  "pubkeyBundleSignatureMldsa87": "<base64url>"
 }
 ```
+
+`wrappedKeyEpoch` is the epoch bound into the pubkey bundle signatures. The bundle is signed once at signup (always at epoch `1`) and is never re-signed, so this value does not track the user's live wrapped-key epoch, which advances on password changes.
 
 Returns `412 Precondition Failed` if the user has not completed signup (no encryption keys configured).
 

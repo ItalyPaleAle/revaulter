@@ -6,7 +6,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha512"
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -175,6 +177,83 @@ func TestTrustStoreFailsClosedOnNoConfirm(t *testing.T) {
 
 	_, err = ts.checkOrPinAnchor("https://example.test", "user-1", es384Pub, es384Raw, mlPubB64, mlPubBytes, nil)
 	require.Error(t, err, "first contact with nil confirmer must refuse")
+}
+
+// signTestBundle signs a pubkey-bundle payload with both anchor legs and returns base64url-encoded signatures, mirroring what the browser produces at signup
+func signTestBundle(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa87.PrivateKey, payload *protocolv2.PubkeyBundlePayload) (sigEsB64, sigMlB64 string) {
+	t.Helper()
+
+	msg := protocolv2.CanonicalPubkeyBundleMessage(payload)
+
+	digest := sha512.Sum384(msg)
+	r, s, err := ecdsa.Sign(rand.Reader, esPriv, digest[:])
+	require.NoError(t, err)
+	sig := make([]byte, protocolv2.ES384SignatureSize)
+	const half = protocolv2.ES384SignatureSize / 2
+	rBytes := r.Bytes()
+	sBytes := s.Bytes()
+	copy(sig[half-len(rBytes):half], rBytes)
+	copy(sig[protocolv2.ES384SignatureSize-len(sBytes):], sBytes)
+
+	mlSig := make([]byte, protocolv2.MLDSA87SignatureSize)
+	err = mldsa87.SignTo(mlPriv, msg, nil, false, mlSig)
+	require.NoError(t, err)
+
+	return base64.RawURLEncoding.EncodeToString(sig), base64.RawURLEncoding.EncodeToString(mlSig)
+}
+
+// Regression test for https://github.com/ItalyPaleAle/revaulter/issues/23
+// The bundle signature is permanently bound to wrappedKeyEpoch=1 (it is created once at signup), but servers that predate the fix echo the user's live epoch in /v2/request/pubkey, which advances on password changes
+// Verification must therefore ignore the advertised epoch and reconstruct the payload with the protocol constant
+func TestVerifyAndPinAnchorIgnoresAdvertisedEpoch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "trust.json")
+
+	ts, err := loadTrustStore(path)
+	require.NoError(t, err)
+
+	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+	jwk, err := protocolv2.ECP384PublicJWKFromECDSA(&esPriv.PublicKey)
+	require.NoError(t, err)
+	es384Body := jwk.CanonicalBody()
+
+	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	mlPubBytes, err := mlPub.MarshalBinary()
+	require.NoError(t, err)
+	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPubBytes)
+
+	ecdhJSON := `{"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}`
+	mlkemB64 := base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes"))
+
+	sigEs, sigMl := signTestBundle(t, esPriv, mlPriv, &protocolv2.PubkeyBundlePayload{
+		UserID:                 "user-1",
+		RequestEncEcdhPubkey:   ecdhJSON,
+		RequestEncMlkemPubkey:  mlkemB64,
+		AnchorEs384Crv:         jwk.Crv,
+		AnchorEs384Kty:         jwk.Kty,
+		AnchorEs384X:           jwk.X,
+		AnchorEs384Y:           jwk.Y,
+		AnchorMldsa87PublicKey: mlPubB64,
+		WrappedKeyEpoch:        protocolv2.PubkeyBundleWrappedKeyEpoch,
+	})
+
+	resp := &v2PubkeyResponse{
+		UserID:                 "user-1",
+		EcdhP256:               json.RawMessage(ecdhJSON),
+		Mlkem768:               mlkemB64,
+		AnchorEs384PublicKey:   es384Body,
+		AnchorMldsa87PublicKey: mlPubB64,
+		// A server that predates the fix reports the user's live epoch here — several rotations past the epoch the bundle was signed over
+		WrappedKeyEpoch:              5,
+		PubkeyBundleSignatureEs384:   sigEs,
+		PubkeyBundleSignatureMldsa87: sigMl,
+	}
+
+	pinned, err := verifyAndPinAnchor("https://example.test", resp, ts, func(string) (bool, error) { return true, nil })
+	require.NoError(t, err)
+	require.True(t, pinned)
 }
 
 func TestTrustStorePermissions(t *testing.T) {

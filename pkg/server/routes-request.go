@@ -224,13 +224,14 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 	}
 
 	// Send the response
+	// WrappedKeyEpoch must be the epoch bound into the stored bundle signature (always PubkeyBundleWrappedKeyEpoch), not the user's live epoch: the bundle is signed once at signup and never re-signed, while the live epoch advances on every password change, which would make the CLI's signature verification fail
 	c.JSON(http.StatusOK, v2RequestPubkeyResponse{
 		UserID:                       user.ID,
 		EcdhP256:                     json.RawMessage(user.RequestEncEcdhPubkey),
 		Mlkem768:                     user.RequestEncMlkemPubkey,
 		AnchorEs384PublicKey:         user.AnchorEs384PublicKey,
 		AnchorMldsa87PublicKey:       user.AnchorMldsa87PublicKey,
-		WrappedKeyEpoch:              user.WrappedKeyEpoch,
+		WrappedKeyEpoch:              protocolv2.PubkeyBundleWrappedKeyEpoch,
 		PubkeyBundleSignatureEs384:   user.PubkeyBundleSignatureEs384,
 		PubkeyBundleSignatureMldsa87: user.PubkeyBundleSignatureMldsa87,
 	})

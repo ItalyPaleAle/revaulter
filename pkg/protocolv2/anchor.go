@@ -26,6 +26,11 @@ const (
 	WrappedAnchorAADFmt = "revaulter/v2/wrapped-anchor\nuserId=%s\nv=1"
 )
 
+// PubkeyBundleWrappedKeyEpoch is the wrappedKeyEpoch value bound into every pubkey bundle signature
+// The bundle is hybrid-signed exactly once, in the browser at signup, when the user's epoch is always 1; the anchor and request-encryption pubkeys it covers are immutable afterwards, so the signature is never regenerated
+// The user's live wrapped-key epoch advances on password changes (it tracks re-wraps of the primary key, not the bundle), so verifiers must reconstruct the signed payload with this constant, NOT the user's current epoch
+const PubkeyBundleWrappedKeyEpoch int64 = 1
+
 // Fixed sizes for the PQ and classical legs of the hybrid anchor
 const (
 	MLDSA87PublicKeySize = mldsa87.PublicKeySize // 2592
