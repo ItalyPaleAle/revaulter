@@ -55,7 +55,8 @@ export type AttestationPayload = {
 }
 
 // PubkeyBundlePayload mirrors pkg/protocolv2.PubkeyBundlePayloadV2
-// The web client only ever produces new bundles, so it always signs the v2 shape; the legacy v1 shape (wrappedKeyEpoch line instead of v) exists only on rows created by older releases and is verified server- and CLI-side
+// The web client only ever produces new bundles, so it always signs the v2 shape
+// The legacy v1 shape (wrappedKeyEpoch line instead of v) exists only on rows created by older releases and is verified server- and CLI-side
 export type PubkeyBundlePayload = {
     userId: string
     requestEncEcdhPubkey: string
