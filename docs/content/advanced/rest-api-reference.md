@@ -134,21 +134,32 @@ The shape varies per operation. All `value`/`nonce`/`tag`/`additionalData` field
 
 ### `GET /v2/request/pubkey`
 
-Get the user's static public encryption keys. The CLI uses these to encrypt request payloads end-to-end.
+Get the user's static public encryption keys, along with the hybrid anchor public keys and the pubkey bundle signatures. The CLI uses the encryption keys to encrypt request payloads end-to-end, pins the anchor keys (TOFU), and verifies both bundle signatures to detect server-side pubkey substitution.
 
 **Response:** `200 OK`
 
 ```json
 {
+  "userId": "<uuid>",
   "ecdhP256": {
     "kty": "EC",
     "crv": "P-256",
     "x": "<base64url>",
     "y": "<base64url>"
   },
-  "mlkem768": "<base64url>"
+  "mlkem768": "<base64url>",
+  "anchorEs384PublicKey": "<canonical JWK body>",
+  "anchorMldsa87PublicKey": "<base64url>",
+  "wrappedKeyEpoch": 1,
+  "pubkeyBundleVersion": 2,
+  "pubkeyBundleSignatureEs384": "<base64url>",
+  "pubkeyBundleSignatureMldsa87": "<base64url>"
 }
 ```
+
+`pubkeyBundleVersion` tells the verifier which canonical payload the bundle signatures cover: `1` (legacy, the payload binds `wrappedKeyEpoch`) or `2` (the payload binds an explicit `v` line). The bundle is signed once at signup and is never re-signed.
+
+`wrappedKeyEpoch` is retained for older CLIs that verify version-1 bundles: it is the epoch bound into v1 signatures, which is always `1`. It does not track the user's live wrapped-key epoch, which advances on password changes.
 
 Returns `412 Precondition Failed` if the user has not completed signup (no encryption keys configured).
 
@@ -497,9 +508,20 @@ Upload the user's wrapped primary key and static public encryption keys after re
     "y": "<base64url>"
   },
   "requestEncMlkemPubkey": "<base64url>",
-  "wrappedPrimaryKey": "<base64url>"
+  "wrappedPrimaryKey": "<base64url>",
+  "anchorEs384PublicKey": "<canonical JWK body>",
+  "anchorMldsa87PublicKey": "<base64url>",
+  "pubkeyBundleSignatureEs384": "<base64url>",
+  "pubkeyBundleSignatureMldsa87": "<base64url>",
+  "pubkeyBundleVersion": 2,
+  "wrappedAnchorKey": "<base64url>",
+  "attestationPayload": "<canonical body>",
+  "attestationSignatureEs384": "<base64url>",
+  "attestationSignatureMldsa87": "<base64url>"
 }
 ```
+
+`pubkeyBundleVersion` selects the canonical payload the bundle signatures cover: `1` (legacy - binds `wrappedKeyEpoch`, which is always `1` at signup) or `2` (binds an explicit `v` line instead). Current clients always sign version `2`. When omitted, `1` is assumed for compatibility with older clients.
 
 **Response:** `200 OK`
 

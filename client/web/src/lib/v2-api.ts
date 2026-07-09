@@ -64,6 +64,7 @@ export async function v2FinalizeSignup(args: {
     anchorMldsa87PublicKey: string
     pubkeyBundleSignatureEs384: string
     pubkeyBundleSignatureMldsa87: string
+    pubkeyBundleVersion: number
     wrappedAnchorKey: string
     attestationPayload: string
     attestationSignatureEs384: string
@@ -76,6 +77,7 @@ export async function v2FinalizeSignup(args: {
         anchorMldsa87PublicKey: args.anchorMldsa87PublicKey,
         pubkeyBundleSignatureEs384: args.pubkeyBundleSignatureEs384,
         pubkeyBundleSignatureMldsa87: args.pubkeyBundleSignatureMldsa87,
+        pubkeyBundleVersion: args.pubkeyBundleVersion,
         wrappedAnchorKey: args.wrappedAnchorKey,
         attestationPayload: args.attestationPayload,
         attestationSignatureEs384: args.attestationSignatureEs384,

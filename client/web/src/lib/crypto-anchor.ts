@@ -15,6 +15,11 @@ const SIGNING_KEY_PUBLICATION_PREFIX = 'revaulter/v2/signing-key-publication\n'
 // Bump only when the canonical body shape changes in a backwards-incompatible way
 export const SIGNING_KEY_PUBLICATION_VERSION = 1
 
+// Version mirrored from pkg/protocolv2.PubkeyBundleVersion2
+// New signups always sign the v2 payload, which binds an explicit `v` line instead of the legacy wrappedKeyEpoch (that epoch tracked unrelated key re-wraps and was always 1 in the signed bytes)
+// The version is sent alongside the signatures at finalize-signup so the server and CLI reconstruct the exact signed payload
+export const PUBKEY_BUNDLE_VERSION = 2
+
 // Fixed sizes mirrored from pkg/protocolv2.
 const P384_COORD_SIZE = 48
 const ES384_SIG_SIZE = 96
@@ -49,6 +54,9 @@ export type AttestationPayload = {
     createdAt: number
 }
 
+// PubkeyBundlePayload mirrors pkg/protocolv2.PubkeyBundlePayloadV2
+// The web client only ever produces new bundles, so it always signs the v2 shape
+// The legacy v1 shape (wrappedKeyEpoch line instead of v) exists only on rows created by older releases and is verified server- and CLI-side
 export type PubkeyBundlePayload = {
     userId: string
     requestEncEcdhPubkey: string
@@ -58,7 +66,7 @@ export type PubkeyBundlePayload = {
     anchorEs384X: string
     anchorEs384Y: string
     anchorMldsa87PublicKey: string
-    wrappedKeyEpoch: number
+    v: number
 }
 
 // SigningKeyPublicationPayload mirrors pkg/protocolv2.SigningKeyPublicationPayload
@@ -328,7 +336,7 @@ function canonicalAttestationMessage(body: string): Uint8Array {
  * This is the body that (with the domain-separation prefix) is signed by both anchor legs
  */
 export function pubkeyBundlePayloadCanonicalBody(payload: PubkeyBundlePayload): string {
-    // Field order must exactly match pkg/protocolv2.PubkeyBundlePayload canonical body
+    // Field order must exactly match pkg/protocolv2.PubkeyBundlePayloadV2 canonical body
     return [
         `userId=${payload.userId}`,
         `requestEncEcdhPubkey=${payload.requestEncEcdhPubkey}`,
@@ -338,7 +346,7 @@ export function pubkeyBundlePayloadCanonicalBody(payload: PubkeyBundlePayload): 
         `anchorEs384X=${payload.anchorEs384X}`,
         `anchorEs384Y=${payload.anchorEs384Y}`,
         `anchorMldsa87PublicKey=${payload.anchorMldsa87PublicKey}`,
-        `wrappedKeyEpoch=${payload.wrappedKeyEpoch}`,
+        `v=${payload.v}`,
     ].join('\n')
 }
 

@@ -53,15 +53,15 @@ func canonicalFixture() fixtureBackup {
 	const ts = int64(1700000000)
 
 	return fixtureBackup{
-		SchemaLevel: 1,
+		SchemaLevel: 2,
 		Tables: []fixtureTable{
 			tableFixture("v2_audit_events", [][]any{
 				{fxAuditID1, ts, "auth.login.finish", "success", "session", fxUserAID, fxUserAID, nil, nil, fxRequestID, "http-1", "127.0.0.1", "ua/1.0", `{"flow":"webauthn"}`},
 				{fxAuditID2, ts + 1, "auth.logout", "success", "session", fxUserBID, nil, nil, nil, nil, nil, nil, nil, `{}`},
 			}),
 			tableFixture("v2_users", [][]any{
-				{fxUserAID, "Alice", "active", "wa-A", "rk-A", "ecdh-A", "mlkem-A", "es384-A", "mldsa-A", "sig-es-A", "sig-mldsa-A", int64(1), "10.0.0.0/8", true, ts, ts},
-				{fxUserBID, "Bob", "active", "wa-B", "rk-B", "", "", "", "", "", "", int64(2), "", false, ts - 100, ts - 50},
+				{fxUserAID, "Alice", "active", "wa-A", "rk-A", "ecdh-A", "mlkem-A", "es384-A", "mldsa-A", "sig-es-A", "sig-mldsa-A", int64(1), "10.0.0.0/8", true, ts, ts, int64(1)},
+				{fxUserBID, "Bob", "active", "wa-B", "rk-B", "", "", "", "", "", "", int64(2), "", false, ts - 100, ts - 50, int64(2)},
 			}),
 			tableFixture("v2_published_signing_keys", [][]any{
 				{fxSigningID, fxUserAID, "ES384", "label-1", `{"jwk":1}`, "PEMDATA", true, "pub-payload", "pub-sig-es", "pub-sig-mldsa", ts, ts},

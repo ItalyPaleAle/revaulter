@@ -24,6 +24,7 @@ import {
     anchorEs384JwkToString,
     anchorMldsa87PubToString,
     generateAnchorKeyPair,
+    PUBKEY_BUNDLE_VERSION,
     SIGNING_KEY_PUBLICATION_VERSION,
     serializeAnchorSecret,
     signCredentialAttestationHybrid,
@@ -534,7 +535,7 @@ async function doSetPassword() {
             anchorEs384X: anchor.es384.publicKeyJwk.x,
             anchorEs384Y: anchor.es384.publicKeyJwk.y,
             anchorMldsa87PublicKey: anchorMldsa87Str,
-            wrappedKeyEpoch: 1,
+            v: PUBKEY_BUNDLE_VERSION,
         })
 
         // Sign the first-credential attestation with the fresh anchor.
@@ -554,6 +555,7 @@ async function doSetPassword() {
             anchorMldsa87PublicKey: anchorMldsa87Str,
             pubkeyBundleSignatureEs384: bundleSig.sigEs384,
             pubkeyBundleSignatureMldsa87: bundleSig.sigMldsa87,
+            pubkeyBundleVersion: PUBKEY_BUNDLE_VERSION,
             wrappedAnchorKey: wrappedAnchor,
             attestationPayload: attestSig.canonicalBody,
             attestationSignatureEs384: attestSig.sigEs384,

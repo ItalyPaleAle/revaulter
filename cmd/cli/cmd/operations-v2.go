@@ -303,9 +303,12 @@ type v2PubkeyResponse struct {
 
 	AnchorEs384PublicKey         string `json:"anchorEs384PublicKey"`
 	AnchorMldsa87PublicKey       string `json:"anchorMldsa87PublicKey"`
-	WrappedKeyEpoch              int64  `json:"wrappedKeyEpoch"`
 	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`
 	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
+
+	// pubkeyBundleVersion selects the canonical payload the signatures cover
+	// Servers that predate versioning omit it, which means v1
+	PubkeyBundleVersion int64 `json:"pubkeyBundleVersion"`
 }
 
 func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClient *http.Client) (*ecdh.PublicKey, *mlkem.EncapsulationKey768, error) {

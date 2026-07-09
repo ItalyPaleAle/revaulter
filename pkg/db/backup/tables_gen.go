@@ -43,6 +43,7 @@ var backupTables = []tableSpec{
 			{name: "ready", kind: colKindBool},
 			{name: "created_at", kind: colKindText},
 			{name: "updated_at", kind: colKindText},
+			{name: "pubkey_bundle_version", kind: colKindText},
 		},
 	},
 	{
