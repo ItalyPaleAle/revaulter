@@ -157,7 +157,7 @@ Get the user's static public encryption keys, along with the hybrid anchor publi
 }
 ```
 
-`pubkeyBundleVersion` tells the verifier which canonical payload the bundle signatures cover: `1` (legacy; the payload binds `wrappedKeyEpoch`) or `2` (the payload binds an explicit `v` line). The bundle is signed once at signup and is never re-signed.
+`pubkeyBundleVersion` tells the verifier which canonical payload the bundle signatures cover: `1` (legacy, the payload binds `wrappedKeyEpoch`) or `2` (the payload binds an explicit `v` line). The bundle is signed once at signup and is never re-signed.
 
 `wrappedKeyEpoch` is retained for older CLIs that verify version-1 bundles: it is the epoch bound into v1 signatures, which is always `1`. It does not track the user's live wrapped-key epoch, which advances on password changes.
 
@@ -521,7 +521,7 @@ Upload the user's wrapped primary key and static public encryption keys after re
 }
 ```
 
-`pubkeyBundleVersion` selects the canonical payload the bundle signatures cover: `1` (legacy; binds `wrappedKeyEpoch`, which is always `1` at signup) or `2` (binds an explicit `v` line instead). When omitted, `1` is assumed for compatibility with older clients; current clients always sign version `2`.
+`pubkeyBundleVersion` selects the canonical payload the bundle signatures cover: `1` (legacy - binds `wrappedKeyEpoch`, which is always `1` at signup) or `2` (binds an explicit `v` line instead). Current clients always sign version `2`. When omitted, `1` is assumed for compatibility with older clients.
 
 **Response:** `200 OK`
 

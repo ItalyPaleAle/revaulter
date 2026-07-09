@@ -193,14 +193,15 @@ func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, c
 		return false, fmt.Errorf("invalid pubkey bundle signature: %w", err)
 	}
 
-	// The bundle is signed once at signup and never re-signed; the advertised pubkeyBundleVersion (absent on servers that predate versioning, meaning v1) selects the canonical payload to reconstruct
+	// The bundle is signed once at signup and never re-signed
+	// The advertised pubkeyBundleVersion (absent on servers that predate versioning, i.e. v1) selects the canonical payload to reconstruct
 	version := resp.PubkeyBundleVersion
 	if version == 0 {
 		version = protocolv2.PubkeyBundleVersion1
 	}
 	switch version {
 	case protocolv2.PubkeyBundleVersion1:
-		// Legacy payload: always bound to WrappedKeyEpoch = PubkeyBundleWrappedKeyEpoch, so it is reconstructed with that constant rather than the server-reported epoch
+		// Legacy payload: always bound to WrappedKeyEpoch = 1, so it is reconstructed with that constant rather than the server-reported epoch
 		// Servers used to echo the user's live epoch in the response, which advances on password changes and would make verification fail for a signature that is still valid
 		bundlePayload := &protocolv2.PubkeyBundlePayload{
 			UserID:                 resp.UserID,
@@ -228,7 +229,7 @@ func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, c
 		}
 		err = protocolv2.VerifyHybridBundleV2(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl)
 	default:
-		return false, fmt.Errorf("server advertised unsupported pubkey bundle version %d; upgrade revaulter-cli", version)
+		return false, fmt.Errorf("server advertised unsupported pubkey bundle version %d - please upgrade revaulter-cli", version)
 	}
 	if err != nil {
 		return false, fmt.Errorf("pubkey bundle signature verification failed: %w", err)

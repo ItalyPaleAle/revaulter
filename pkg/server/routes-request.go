@@ -40,10 +40,9 @@ type v2RequestPubkeyResponse struct {
 
 	// Hybrid anchor pubkeys + bundle self-signatures
 	// The CLI pins the anchor pubkeys (TOFU) and verifies both signatures over the bundle to detect server-side pubkey substitution attacks
-	// pubkeyBundleVersion tells the verifier which canonical payload the signatures cover: 1 (legacy, binds wrappedKeyEpoch) or 2 (binds an explicit v line)
+	AnchorEs384PublicKey   string `json:"anchorEs384PublicKey"`
+	AnchorMldsa87PublicKey string `json:"anchorMldsa87PublicKey"`
 	// wrappedKeyEpoch is retained for CLIs that predate versioning and only ever reflects the epoch bound into v1 signatures (always 1), NOT the user's live epoch
-	AnchorEs384PublicKey         string `json:"anchorEs384PublicKey"`
-	AnchorMldsa87PublicKey       string `json:"anchorMldsa87PublicKey"`
 	WrappedKeyEpoch              int64  `json:"wrappedKeyEpoch"`
 	PubkeyBundleVersion          int64  `json:"pubkeyBundleVersion"`
 	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`

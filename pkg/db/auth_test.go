@@ -113,6 +113,7 @@ func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
 				WrappedPrimaryKey:     "canary-1",
 				RequestEncEcdhPubkey:  `{"kty":"EC","crv":"P-256","x":"test","y":"test"}`,
 				RequestEncMlkemPubkey: "dGVzdC1tbGtlbS1wdWJrZXk",
+				PubkeyBundleVersion:   2,
 			})
 			require.NoError(t, err)
 
@@ -121,6 +122,7 @@ func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
 				WrappedPrimaryKey:     "canary-2",
 				RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 				RequestEncMlkemPubkey: "dGVzdA",
+				PubkeyBundleVersion:   2,
 			})
 			require.ErrorIs(t, err, ErrAlreadyFinalized)
 
@@ -165,6 +167,7 @@ func TestAuthStoreRegenerateRequestKey(t *testing.T) {
 				UserID:                "user-1",
 				RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 				RequestEncMlkemPubkey: "mlkem-pub",
+				PubkeyBundleVersion:   2,
 			})
 			require.NoError(t, err)
 
@@ -477,6 +480,7 @@ func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
 				WrappedPrimaryKey:     "canary-ready",
 				RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 				RequestEncMlkemPubkey: "mlkem-ready",
+				PubkeyBundleVersion:   2,
 			})
 			require.NoError(t, err)
 
@@ -531,6 +535,7 @@ func TestAuthStoreUpdateDisplayName(t *testing.T) {
 				UserID:                "user-1",
 				RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 				RequestEncMlkemPubkey: "mlkem-pub",
+				PubkeyBundleVersion:   2,
 			})
 			require.NoError(t, err)
 
@@ -584,6 +589,7 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 				WrappedPrimaryKey:     "initial-key",
 				RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 				RequestEncMlkemPubkey: "mlkem-pub",
+				PubkeyBundleVersion:   2,
 			})
 			require.NoError(t, err)
 
@@ -649,6 +655,7 @@ func TestAuthStoreCredentialWrappedKeyEpochRotation(t *testing.T) {
 				WrappedPrimaryKey:     "wrapped-1-v1",
 				RequestEncEcdhPubkey:  `{"kty":"EC"}`,
 				RequestEncMlkemPubkey: "mlkem-pub",
+				PubkeyBundleVersion:   2,
 			})
 			require.NoError(t, err)
 

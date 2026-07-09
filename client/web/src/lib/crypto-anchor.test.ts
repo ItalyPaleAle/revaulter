@@ -136,7 +136,7 @@ describe('hybrid attestation signatures', () => {
     })
 
     it('produces a stable canonical pubkey bundle body with ordered key=value lines', () => {
-        // This must byte-match the expected body in pkg/protocolv2/anchor_test.go::TestPubkeyBundlePayloadV2CanonicalBody (modulo values)
+        // This must byte-match the expected body in pkg/protocolv2/anchor_test.go TestPubkeyBundlePayloadV2CanonicalBody (modulo values)
         const payload: PubkeyBundlePayload = {
             userId: 'u-1',
             requestEncEcdhPubkey: 'ecdh',

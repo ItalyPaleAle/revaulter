@@ -27,9 +27,11 @@ const (
 )
 
 // Pubkey bundle signature versions
-// The bundle is hybrid-signed exactly once, in the browser at signup; the anchor and request-encryption pubkeys it covers are immutable afterwards, so the signature is never regenerated
-// Version 1 (legacy) bound the user's wrapped-key epoch into the signed payload, which was always 1 at signup; the live epoch advances on password changes (it tracks re-wraps of the primary key, not the bundle), so verifiers of v1 bundles must reconstruct the payload with PubkeyBundleWrappedKeyEpoch, NOT the user's current epoch
-// Version 2 drops the epoch entirely and instead binds an explicit `v` line, so the signed bytes carry an authenticated format version
+// The bundle is hybrid-signed exactly once, in the browser at signup
+// The anchor and request-encryption pubkeys it covers are immutable afterwards, so the signature is never regenerated
+// V1 (legacy) bound the user's wrapped-key epoch into the signed payload, which was always 1 at signup
+// The live epoch advances on password changes (it tracks re-wraps of the primary key, not the bundle), so verifiers of v1 bundles must reconstruct the payload with PubkeyBundleWrappedKeyEpoch, NOT the user's current epoch
+// V2 drops the epoch entirely and instead binds an explicit `v` line, so the signed bytes carry an authenticated format version
 const (
 	PubkeyBundleVersion1 int64 = 1
 	PubkeyBundleVersion2 int64 = 2
@@ -49,7 +51,7 @@ const (
 )
 
 // AttestationPayload is the canonicalized payload that the anchor signs when a new credential is enrolled
-// The order is load-bearing: client and server must produce identical bytes
+// The order is critical: client and server must produce identical bytes
 type AttestationPayload struct {
 	UserID                  string `key:"userId"`
 	CredentialID            string `key:"credentialId"`
@@ -97,7 +99,7 @@ func ParseAttestationPayload(body string) (AttestationPayload, error) {
 }
 
 // PubkeyBundlePayload is the canonicalized payload that the anchor signs to bind the user's long-lived transport pubkeys and the anchor pubkeys together into a single hybrid-signed bundle
-// The order is load-bearing: client and server must produce identical bytes
+// The order is critical: client and server must produce identical bytes
 // The ES384 anchor pubkey is flattened to its JWK members (crv, kty, x, y) so every field stays on a single line, consistent with every other key=value canonical body in this codebase
 type PubkeyBundlePayload struct {
 	UserID                 string `key:"userId"`
@@ -164,9 +166,9 @@ func ParsePubkeyBundlePayload(body string) (PubkeyBundlePayload, error) {
 	return p, nil
 }
 
-// PubkeyBundlePayloadV2 is the version-2 canonicalized pubkey-bundle payload
-// It replaces the legacy wrappedKeyEpoch line (which carried no verifiable meaning — the bundle is signed once at signup and the epoch tracks unrelated key re-wraps) with an explicit `v` line, so the signed bytes carry an authenticated format version
-// The order is load-bearing: client and server must produce identical bytes; `v` is last, matching SigningKeyPublicationPayload
+// PubkeyBundlePayloadV2 is the v2 canonicalized pubkey-bundle payload
+// It replaces the legacy wrappedKeyEpoch line (which carried no actual _raison d'etre_) with an explicit `v` line, so the signed bytes carry an authenticated format version
+// The order is critical: client and server must produce identical bytes
 type PubkeyBundlePayloadV2 struct {
 	UserID                 string `key:"userId"`
 	RequestEncEcdhPubkey   string `key:"requestEncEcdhPubkey"`
@@ -295,11 +297,12 @@ func VerifyHybridBundle(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, paylo
 }
 
 // VerifyHybridBundleV2 verifies both legs of the hybrid signature covering the canonical v2 pubkey-bundle message
-// The same SECURITY caveats as VerifyHybridBundle apply: this is a consistency check only, and callers MUST independently bind the anchor pubkeys to the principal they represent
+// The same security caveats as VerifyHybridBundle apply: this is a consistency check only, and callers MUST independently bind the anchor pubkeys to the principal they represent
 func VerifyHybridBundleV2(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload *PubkeyBundlePayloadV2, sigEs384 []byte, sigMldsa87 []byte) error {
 	if payload.V != PubkeyBundleVersion2 {
 		return fmt.Errorf("unsupported pubkey bundle version %d", payload.V)
 	}
+
 	msg := CanonicalPubkeyBundleMessageV2(payload)
 	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
 }

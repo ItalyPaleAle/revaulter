@@ -263,6 +263,7 @@ func TestParsePubkeyBundlePayloadV2RejectsV1Body(t *testing.T) {
 	// A v1 canonical body (ends with wrappedKeyEpoch=...) must not parse as v2, and vice versa: the strict key check is what keeps the two formats unambiguous under the shared domain-separation prefix
 	_, err := ParsePubkeyBundlePayloadV2(testBundlePayload().CanonicalBody())
 	require.Error(t, err)
+
 	_, err = ParsePubkeyBundlePayload(testBundlePayloadV2().CanonicalBody())
 	require.Error(t, err)
 }

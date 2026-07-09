@@ -230,6 +230,7 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 						WrappedPrimaryKey:     wrappedKey,
 						RequestEncEcdhPubkey:  string(requestEncJWKJSON),
 						RequestEncMlkemPubkey: base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey-" + req.UserID)),
+						PubkeyBundleVersion:   2,
 					},
 				)
 				if err != nil && !errors.Is(err, db.ErrAlreadyFinalized) {

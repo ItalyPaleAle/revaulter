@@ -25,7 +25,7 @@ jobs:
   build-and-sign:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with: { go-version: '1.26' }
 

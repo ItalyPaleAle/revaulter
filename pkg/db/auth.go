@@ -52,11 +52,10 @@ type User struct {
 	AnchorMldsa87PublicKey       string
 	PubkeyBundleSignatureEs384   string
 	PubkeyBundleSignatureMldsa87 string
-	// PubkeyBundleVersion is the version of the canonical payload the stored bundle signatures cover: 1 (legacy, binds wrappedKeyEpoch) or 2 (binds an explicit v line)
-	PubkeyBundleVersion int64
-	WrappedKeyEpoch     int64
-	AllowedIPs          []string
-	Ready               bool
+	PubkeyBundleVersion          int64
+	WrappedKeyEpoch              int64
+	AllowedIPs                   []string
+	Ready                        bool
 }
 
 type AuthChallenge struct {
@@ -124,11 +123,10 @@ type FinalizeSignupInput struct {
 	AnchorMldsa87PublicKey       string
 	PubkeyBundleSignatureEs384   string
 	PubkeyBundleSignatureMldsa87 string
-	// PubkeyBundleVersion is the payload version the bundle signatures cover; the caller (which verified the signatures) must set it to 1 or 2
-	PubkeyBundleVersion         int64
-	AttestationPayload          string
-	AttestationSignatureEs384   string
-	AttestationSignatureMldsa87 string
+	PubkeyBundleVersion          int64
+	AttestationPayload           string
+	AttestationSignatureEs384    string
+	AttestationSignatureMldsa87  string
 }
 
 var (
@@ -418,12 +416,6 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 		panic("FinalizeSignup must be invoked in a transaction")
 	}
 
-	// Default to the legacy payload version when the caller did not set one explicitly
-	bundleVersion := in.PubkeyBundleVersion
-	if bundleVersion == 0 {
-		bundleVersion = 1
-	}
-
 	now := time.Now().Unix()
 	updatedUser := &User{}
 	var allowedIPsCSV string
@@ -445,7 +437,7 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 			in.RequestEncEcdhPubkey, in.RequestEncMlkemPubkey,
 			in.AnchorEs384PublicKey, in.AnchorMldsa87PublicKey,
 			in.PubkeyBundleSignatureEs384, in.PubkeyBundleSignatureMldsa87,
-			bundleVersion, now, in.UserID,
+			in.PubkeyBundleVersion, now, in.UserID,
 		).
 		Scan(
 			&updatedUser.ID,

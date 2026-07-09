@@ -1153,6 +1153,8 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 				WrappedPrimaryKey:     "test-wrapped-primary-key",
 				RequestEncEcdhPubkey:  string(requestEncJWKJSON),
 				RequestEncMlkemPubkey: base64.RawURLEncoding.EncodeToString([]byte("test-mlkem-pubkey")),
+				// Use legacy version
+				PubkeyBundleVersion: 1,
 			},
 		)
 		require.NoError(t, err)
@@ -1169,6 +1171,7 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 	token, err := signAuthSessionToken(signed)
 	require.NoError(t, err)
 
+	//#nosec G124 -- test code
 	return &http.Cookie{
 		Name:  sessionCookieNameSecure,
 		Value: token,
@@ -1267,12 +1270,14 @@ func signSigningKeyPublication(t *testing.T, anchor *testAnchorKeyPair, payload 
 // signPubkeyBundle signs a legacy (v1) pubkey-bundle payload under the supplied anchor and returns base64url ES384 + ML-DSA-87 signatures, mirroring what the browser produces at signup
 func signPubkeyBundle(t *testing.T, anchor *testAnchorKeyPair, payload *protocolv2.PubkeyBundlePayload) (sigEsB64, sigMlB64 string) {
 	t.Helper()
+
 	return signHybridMessage(t, anchor, protocolv2.CanonicalPubkeyBundleMessage(payload))
 }
 
 // signPubkeyBundleV2 signs a v2 pubkey-bundle payload under the supplied anchor and returns base64url ES384 + ML-DSA-87 signatures, mirroring what the browser produces at signup
 func signPubkeyBundleV2(t *testing.T, anchor *testAnchorKeyPair, payload *protocolv2.PubkeyBundlePayloadV2) (sigEsB64, sigMlB64 string) {
 	t.Helper()
+
 	return signHybridMessage(t, anchor, protocolv2.CanonicalPubkeyBundleMessageV2(payload))
 }
 
@@ -1782,7 +1787,8 @@ func TestServerV2RequestPubkeyBundleVerifiesAfterEpochAdvance(t *testing.T) {
 	require.Equal(t, http.StatusOK, res.StatusCode)
 
 	var resp v2RequestPubkeyResponse
-	require.NoError(t, json.NewDecoder(res.Body).Decode(&resp))
+	err = json.NewDecoder(res.Body).Decode(&resp)
+	require.NoError(t, err)
 
 	// The advertised epoch must be the one bound into the signature, not the advanced live epoch, and the row seeded without an explicit version must advertise the legacy v1 format
 	require.Equal(t, protocolv2.PubkeyBundleWrappedKeyEpoch, resp.WrappedKeyEpoch)
@@ -1858,7 +1864,8 @@ func TestServerV2RequestPubkeyBundleV2VerifiesAfterEpochAdvance(t *testing.T) {
 	require.Equal(t, http.StatusOK, res.StatusCode)
 
 	var resp v2RequestPubkeyResponse
-	require.NoError(t, json.NewDecoder(res.Body).Decode(&resp))
+	err = json.NewDecoder(res.Body).Decode(&resp)
+	require.NoError(t, err)
 	require.Equal(t, protocolv2.PubkeyBundleVersion2, resp.PubkeyBundleVersion)
 
 	// Reconstruct the v2 payload from the response exactly like the CLI does and verify both signature legs

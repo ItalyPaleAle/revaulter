@@ -108,7 +108,6 @@ type v2AuthFinalizeSignupRequest struct {
 	AnchorMldsa87PublicKey string `json:"anchorMldsa87PublicKey"`
 
 	// Self-signatures by the anchor over the canonical pubkey bundle
-	// pubkeyBundleVersion selects the canonical payload the signatures cover: 1 (legacy, binds wrappedKeyEpoch; the default when omitted) or 2 (binds an explicit v line)
 	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`
 	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
 	PubkeyBundleVersion          int64  `json:"pubkeyBundleVersion"`
@@ -1847,6 +1846,7 @@ func verifySignupPubkeyBundle(vals finalizeSetupVals) (int64, error) {
 		return 0, NewResponseErrorf(http.StatusBadRequest, "invalid anchorEs384PublicKey: %v", err)
 	}
 
+	// If the client did not provide a bundle version, assume legacy version 1
 	version := vals.req.PubkeyBundleVersion
 	if version == 0 {
 		version = protocolv2.PubkeyBundleVersion1

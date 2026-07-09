@@ -2,6 +2,8 @@ module github.com/italypaleale/revaulter
 
 go 1.26.4
 
+tool github.com/fchimpan/gomod-age
+
 require (
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/cloudflare/circl v1.6.4
@@ -59,6 +61,7 @@ require (
 	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352 // indirect
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/fchimpan/gomod-age v0.1.1-0.20260405015303-09005169a479 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
