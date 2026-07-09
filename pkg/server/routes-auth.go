@@ -108,8 +108,10 @@ type v2AuthFinalizeSignupRequest struct {
 	AnchorMldsa87PublicKey string `json:"anchorMldsa87PublicKey"`
 
 	// Self-signatures by the anchor over the canonical pubkey bundle
+	// pubkeyBundleVersion selects the canonical payload the signatures cover: 1 (legacy, binds wrappedKeyEpoch; the default when omitted) or 2 (binds an explicit v line)
 	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`
 	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
+	PubkeyBundleVersion          int64  `json:"pubkeyBundleVersion"`
 
 	// First-credential attestation signed by the anchor
 	WrappedAnchorKey            string `json:"wrappedAnchorKey"`
@@ -1760,25 +1762,9 @@ func (s *Server) finalizeSetup(c *gin.Context, tx *db.DbTx, vals finalizeSetupVa
 
 	// Bundle self-signature: the anchor signs its own wire-format representation
 	// This is what the CLI verifies on every request
-	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(vals.req.AnchorEs384PublicKey)
+	bundleVersion, err := verifySignupPubkeyBundle(vals)
 	if err != nil {
-		return finalizeSetupRes{}, NewResponseErrorf(http.StatusBadRequest, "invalid anchorEs384PublicKey: %v", err)
-	}
-
-	bundlePayload := &protocolv2.PubkeyBundlePayload{
-		UserID:                 vals.userID,
-		RequestEncEcdhPubkey:   string(vals.req.RequestEncEcdhPubkey),
-		RequestEncMlkemPubkey:  vals.req.RequestEncMlkemPubkey,
-		AnchorEs384Crv:         es384JWK.Crv,
-		AnchorEs384Kty:         es384JWK.Kty,
-		AnchorEs384X:           es384JWK.X,
-		AnchorEs384Y:           es384JWK.Y,
-		AnchorMldsa87PublicKey: vals.req.AnchorMldsa87PublicKey,
-		WrappedKeyEpoch:        protocolv2.PubkeyBundleWrappedKeyEpoch,
-	}
-	err = protocolv2.VerifyHybridBundle(vals.anchorEs384Pub, vals.mldsa87PubBytes, bundlePayload, vals.bundleSigEs, vals.bundleSigMl)
-	if err != nil {
-		return finalizeSetupRes{}, NewResponseErrorf(http.StatusBadRequest, "pubkey bundle signature verification failed: %v", err)
+		return finalizeSetupRes{}, err
 	}
 
 	// Verify the hybrid attestation signature first, then compare every signed field against server-derived expected values
@@ -1818,6 +1804,7 @@ func (s *Server) finalizeSetup(c *gin.Context, tx *db.DbTx, vals finalizeSetupVa
 		AnchorMldsa87PublicKey:       vals.req.AnchorMldsa87PublicKey,
 		PubkeyBundleSignatureEs384:   vals.req.PubkeyBundleSignatureEs384,
 		PubkeyBundleSignatureMldsa87: vals.req.PubkeyBundleSignatureMldsa87,
+		PubkeyBundleVersion:          bundleVersion,
 		AttestationPayload:           vals.req.AttestationPayload,
 		AttestationSignatureEs384:    vals.req.AttestationSignatureEs384,
 		AttestationSignatureMldsa87:  vals.req.AttestationSignatureMldsa87,
@@ -1850,6 +1837,57 @@ func (s *Server) finalizeSetup(c *gin.Context, tx *db.DbTx, vals finalizeSetupVa
 	return finalizeSetupRes{
 		user: user,
 	}, nil
+}
+
+// verifySignupPubkeyBundle reconstructs the canonical pubkey-bundle payload for the version requested at signup and verifies both hybrid signature legs
+// Returns the normalized version (an omitted version means the legacy v1 payload) that must be stored alongside the signatures, so verifiers can later rebuild the exact signed bytes
+func verifySignupPubkeyBundle(vals finalizeSetupVals) (int64, error) {
+	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(vals.req.AnchorEs384PublicKey)
+	if err != nil {
+		return 0, NewResponseErrorf(http.StatusBadRequest, "invalid anchorEs384PublicKey: %v", err)
+	}
+
+	version := vals.req.PubkeyBundleVersion
+	if version == 0 {
+		version = protocolv2.PubkeyBundleVersion1
+	}
+
+	switch version {
+	case protocolv2.PubkeyBundleVersion1:
+		// Legacy payload: binds the wrapped-key epoch, which is always 1 at signup and stays 1 in the signed bytes forever (the live epoch advances on password changes but the bundle is never re-signed)
+		bundlePayload := &protocolv2.PubkeyBundlePayload{
+			UserID:                 vals.userID,
+			RequestEncEcdhPubkey:   string(vals.req.RequestEncEcdhPubkey),
+			RequestEncMlkemPubkey:  vals.req.RequestEncMlkemPubkey,
+			AnchorEs384Crv:         es384JWK.Crv,
+			AnchorEs384Kty:         es384JWK.Kty,
+			AnchorEs384X:           es384JWK.X,
+			AnchorEs384Y:           es384JWK.Y,
+			AnchorMldsa87PublicKey: vals.req.AnchorMldsa87PublicKey,
+			WrappedKeyEpoch:        protocolv2.PubkeyBundleWrappedKeyEpoch,
+		}
+		err = protocolv2.VerifyHybridBundle(vals.anchorEs384Pub, vals.mldsa87PubBytes, bundlePayload, vals.bundleSigEs, vals.bundleSigMl)
+	case protocolv2.PubkeyBundleVersion2:
+		bundlePayload := &protocolv2.PubkeyBundlePayloadV2{
+			UserID:                 vals.userID,
+			RequestEncEcdhPubkey:   string(vals.req.RequestEncEcdhPubkey),
+			RequestEncMlkemPubkey:  vals.req.RequestEncMlkemPubkey,
+			AnchorEs384Crv:         es384JWK.Crv,
+			AnchorEs384Kty:         es384JWK.Kty,
+			AnchorEs384X:           es384JWK.X,
+			AnchorEs384Y:           es384JWK.Y,
+			AnchorMldsa87PublicKey: vals.req.AnchorMldsa87PublicKey,
+			V:                      protocolv2.PubkeyBundleVersion2,
+		}
+		err = protocolv2.VerifyHybridBundleV2(vals.anchorEs384Pub, vals.mldsa87PubBytes, bundlePayload, vals.bundleSigEs, vals.bundleSigMl)
+	default:
+		return 0, NewResponseErrorf(http.StatusBadRequest, "unsupported pubkeyBundleVersion %d", version)
+	}
+	if err != nil {
+		return 0, NewResponseErrorf(http.StatusBadRequest, "pubkey bundle signature verification failed: %v", err)
+	}
+
+	return version, nil
 }
 
 func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2WebAuthnUser, cred *webauthnlib.Credential) error {

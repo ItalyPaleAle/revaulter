@@ -1264,11 +1264,21 @@ func signSigningKeyPublication(t *testing.T, anchor *testAnchorKeyPair, payload 
 	return canonicalBody, sigEsB64, sigMlB64
 }
 
-// signPubkeyBundle signs a pubkey-bundle payload under the supplied anchor and returns base64url ES384 + ML-DSA-87 signatures, mirroring what the browser produces at signup
+// signPubkeyBundle signs a legacy (v1) pubkey-bundle payload under the supplied anchor and returns base64url ES384 + ML-DSA-87 signatures, mirroring what the browser produces at signup
 func signPubkeyBundle(t *testing.T, anchor *testAnchorKeyPair, payload *protocolv2.PubkeyBundlePayload) (sigEsB64, sigMlB64 string) {
 	t.Helper()
+	return signHybridMessage(t, anchor, protocolv2.CanonicalPubkeyBundleMessage(payload))
+}
 
-	msg := protocolv2.CanonicalPubkeyBundleMessage(payload)
+// signPubkeyBundleV2 signs a v2 pubkey-bundle payload under the supplied anchor and returns base64url ES384 + ML-DSA-87 signatures, mirroring what the browser produces at signup
+func signPubkeyBundleV2(t *testing.T, anchor *testAnchorKeyPair, payload *protocolv2.PubkeyBundlePayloadV2) (sigEsB64, sigMlB64 string) {
+	t.Helper()
+	return signHybridMessage(t, anchor, protocolv2.CanonicalPubkeyBundleMessageV2(payload))
+}
+
+// signHybridMessage signs a canonical (already domain-separated) message with both anchor legs and returns base64url-encoded signatures
+func signHybridMessage(t *testing.T, anchor *testAnchorKeyPair, msg []byte) (sigEsB64, sigMlB64 string) {
+	t.Helper()
 
 	digest := sha512.Sum384(msg)
 	r, s, err := ecdsa.Sign(rand.Reader, anchor.Es384Priv, digest[:])
@@ -1774,8 +1784,9 @@ func TestServerV2RequestPubkeyBundleVerifiesAfterEpochAdvance(t *testing.T) {
 	var resp v2RequestPubkeyResponse
 	require.NoError(t, json.NewDecoder(res.Body).Decode(&resp))
 
-	// The advertised epoch must be the one bound into the signature, not the advanced live epoch
+	// The advertised epoch must be the one bound into the signature, not the advanced live epoch, and the row seeded without an explicit version must advertise the legacy v1 format
 	require.Equal(t, protocolv2.PubkeyBundleWrappedKeyEpoch, resp.WrappedKeyEpoch)
+	require.Equal(t, protocolv2.PubkeyBundleVersion1, resp.PubkeyBundleVersion)
 
 	// Reconstruct the payload from the response exactly like a CLI that trusts the advertised epoch, and verify both signature legs
 	respJWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(resp.AnchorEs384PublicKey)
@@ -1796,4 +1807,174 @@ func TestServerV2RequestPubkeyBundleVerifiesAfterEpochAdvance(t *testing.T) {
 	sigEs, sigMl, err := parseHybridSignatures(resp.PubkeyBundleSignatureEs384, resp.PubkeyBundleSignatureMldsa87)
 	require.NoError(t, err)
 	require.NoError(t, protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, verifyPayload, sigEs, sigMl))
+}
+
+// Same regression scenario as above, but for a user whose bundle was signed with the v2 payload (explicit v line, no epoch): the response must advertise version 2 and the reconstructed v2 payload must verify regardless of the user's live epoch
+func TestServerV2RequestPubkeyBundleV2VerifiesAfterEpochAdvance(t *testing.T) {
+	setTestConfig(t, "v2-pubkey-epoch-v2.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	_, user := seedV2SessionCookie(t, srv, "user-pubkey-epoch-v2", "Pubkey Epoch V2")
+	anchor := seedV2AnchorForUser(t, srv, user.ID)
+
+	es384JWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(anchor.Es384JWKBody)
+	require.NoError(t, err)
+	signedPayload := &protocolv2.PubkeyBundlePayloadV2{
+		UserID:                 user.ID,
+		RequestEncEcdhPubkey:   user.RequestEncEcdhPubkey,
+		RequestEncMlkemPubkey:  user.RequestEncMlkemPubkey,
+		AnchorEs384Crv:         es384JWK.Crv,
+		AnchorEs384Kty:         es384JWK.Kty,
+		AnchorEs384X:           es384JWK.X,
+		AnchorEs384Y:           es384JWK.Y,
+		AnchorMldsa87PublicKey: anchor.Mldsa87PubBase64,
+		V:                      protocolv2.PubkeyBundleVersion2,
+	}
+	sigEsB64, sigMlB64 := signPubkeyBundleV2(t, anchor, signedPayload)
+	_, err = srv.db.Exec(t.Context(),
+		`UPDATE v2_users SET pubkey_bundle_signature_es384 = $1, pubkey_bundle_signature_mldsa87 = $2, pubkey_bundle_version = $3 WHERE id = $4`,
+		sigEsB64, sigMlB64, protocolv2.PubkeyBundleVersion2, user.ID,
+	)
+	require.NoError(t, err)
+
+	// Advance the user's wrapped-key epoch, like a password change with advanceEpoch does
+	_, err = srv.db.AuthStore().AdvanceWrappedKeyEpoch(t.Context(), user.ID)
+	require.NoError(t, err)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/request/pubkey", testServerPort), nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+user.RequestKey)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+
+	var resp v2RequestPubkeyResponse
+	require.NoError(t, json.NewDecoder(res.Body).Decode(&resp))
+	require.Equal(t, protocolv2.PubkeyBundleVersion2, resp.PubkeyBundleVersion)
+
+	// Reconstruct the v2 payload from the response exactly like the CLI does and verify both signature legs
+	respJWK, err := protocolv2.ParseECP384PublicJWKCanonicalBody(resp.AnchorEs384PublicKey)
+	require.NoError(t, err)
+	verifyPayload := &protocolv2.PubkeyBundlePayloadV2{
+		UserID:                 resp.UserID,
+		RequestEncEcdhPubkey:   string(resp.EcdhP256),
+		RequestEncMlkemPubkey:  resp.Mlkem768,
+		AnchorEs384Crv:         respJWK.Crv,
+		AnchorEs384Kty:         respJWK.Kty,
+		AnchorEs384X:           respJWK.X,
+		AnchorEs384Y:           respJWK.Y,
+		AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
+		V:                      resp.PubkeyBundleVersion,
+	}
+	es384Pub, mldsa87PubBytes, err := parseAnchorPubkeys(resp.AnchorEs384PublicKey, resp.AnchorMldsa87PublicKey)
+	require.NoError(t, err)
+	sigEs, sigMl, err := parseHybridSignatures(resp.PubkeyBundleSignatureEs384, resp.PubkeyBundleSignatureMldsa87)
+	require.NoError(t, err)
+	require.NoError(t, protocolv2.VerifyHybridBundleV2(es384Pub, mldsa87PubBytes, verifyPayload, sigEs, sigMl))
+}
+
+// TestVerifySignupPubkeyBundle exercises the version dispatch used by /v2/auth/finalize-signup: an omitted version means the legacy v1 payload, version 2 selects the v-line payload, anything else is rejected, and signatures over the wrong payload version fail
+func TestVerifySignupPubkeyBundle(t *testing.T) {
+	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	mlPubBytes, err := mlPub.MarshalBinary()
+	require.NoError(t, err)
+	anchor := &testAnchorKeyPair{Es384Priv: esPriv, Mldsa87Priv: mlPriv}
+
+	es384JWK, err := protocolv2.ECP384PublicJWKFromECDSA(&esPriv.PublicKey)
+	require.NoError(t, err)
+	es384Body := es384JWK.CanonicalBody()
+	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPubBytes)
+
+	const userID = "user-bundle-versions"
+	ecdhJSON := `{"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}`
+	mlkemB64 := base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes"))
+
+	newVals := func(version int64, sigEsB64, sigMlB64 string) finalizeSetupVals {
+		sigEs, sigErr := base64.RawURLEncoding.DecodeString(sigEsB64)
+		require.NoError(t, sigErr)
+		sigMl, sigErr := base64.RawURLEncoding.DecodeString(sigMlB64)
+		require.NoError(t, sigErr)
+		return finalizeSetupVals{
+			userID: userID,
+			req: &v2AuthFinalizeSignupRequest{
+				RequestEncEcdhPubkey:   json.RawMessage(ecdhJSON),
+				RequestEncMlkemPubkey:  mlkemB64,
+				AnchorEs384PublicKey:   es384Body,
+				AnchorMldsa87PublicKey: mlPubB64,
+				PubkeyBundleVersion:    version,
+			},
+			anchorEs384Pub:  &esPriv.PublicKey,
+			mldsa87PubBytes: mlPubBytes,
+			bundleSigEs:     sigEs,
+			bundleSigMl:     sigMl,
+		}
+	}
+
+	sigV1Es, sigV1Ml := signPubkeyBundle(t, anchor, &protocolv2.PubkeyBundlePayload{
+		UserID:                 userID,
+		RequestEncEcdhPubkey:   ecdhJSON,
+		RequestEncMlkemPubkey:  mlkemB64,
+		AnchorEs384Crv:         es384JWK.Crv,
+		AnchorEs384Kty:         es384JWK.Kty,
+		AnchorEs384X:           es384JWK.X,
+		AnchorEs384Y:           es384JWK.Y,
+		AnchorMldsa87PublicKey: mlPubB64,
+		WrappedKeyEpoch:        protocolv2.PubkeyBundleWrappedKeyEpoch,
+	})
+	sigV2Es, sigV2Ml := signPubkeyBundleV2(t, anchor, &protocolv2.PubkeyBundlePayloadV2{
+		UserID:                 userID,
+		RequestEncEcdhPubkey:   ecdhJSON,
+		RequestEncMlkemPubkey:  mlkemB64,
+		AnchorEs384Crv:         es384JWK.Crv,
+		AnchorEs384Kty:         es384JWK.Kty,
+		AnchorEs384X:           es384JWK.X,
+		AnchorEs384Y:           es384JWK.Y,
+		AnchorMldsa87PublicKey: mlPubB64,
+		V:                      protocolv2.PubkeyBundleVersion2,
+	})
+
+	t.Run("v1 signature with omitted version", func(t *testing.T) {
+		version, vErr := verifySignupPubkeyBundle(newVals(0, sigV1Es, sigV1Ml))
+		require.NoError(t, vErr)
+		require.Equal(t, protocolv2.PubkeyBundleVersion1, version)
+	})
+
+	t.Run("v1 signature with explicit version", func(t *testing.T) {
+		version, vErr := verifySignupPubkeyBundle(newVals(1, sigV1Es, sigV1Ml))
+		require.NoError(t, vErr)
+		require.Equal(t, protocolv2.PubkeyBundleVersion1, version)
+	})
+
+	t.Run("v2 signature with version 2", func(t *testing.T) {
+		version, vErr := verifySignupPubkeyBundle(newVals(2, sigV2Es, sigV2Ml))
+		require.NoError(t, vErr)
+		require.Equal(t, protocolv2.PubkeyBundleVersion2, version)
+	})
+
+	t.Run("v1 signature claimed as version 2 fails", func(t *testing.T) {
+		_, vErr := verifySignupPubkeyBundle(newVals(2, sigV1Es, sigV1Ml))
+		require.ErrorContains(t, vErr, "signature verification failed")
+	})
+
+	t.Run("v2 signature claimed as version 1 fails", func(t *testing.T) {
+		_, vErr := verifySignupPubkeyBundle(newVals(1, sigV2Es, sigV2Ml))
+		require.ErrorContains(t, vErr, "signature verification failed")
+	})
+
+	t.Run("unsupported version rejected", func(t *testing.T) {
+		_, vErr := verifySignupPubkeyBundle(newVals(3, sigV2Es, sigV2Ml))
+		require.ErrorContains(t, vErr, "unsupported pubkeyBundleVersion")
+	})
 }

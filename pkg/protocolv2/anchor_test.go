@@ -40,6 +40,20 @@ func testBundlePayload() *PubkeyBundlePayload {
 	}
 }
 
+func testBundlePayloadV2() *PubkeyBundlePayloadV2 {
+	return &PubkeyBundlePayloadV2{
+		UserID:                 "user-123",
+		RequestEncEcdhPubkey:   `{"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}`,
+		RequestEncMlkemPubkey:  base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes")),
+		AnchorEs384Crv:         "P-384",
+		AnchorEs384Kty:         "EC",
+		AnchorEs384X:           "aaa",
+		AnchorEs384Y:           "bbb",
+		AnchorMldsa87PublicKey: base64.RawURLEncoding.EncodeToString([]byte("mldsa87-pub-bytes")),
+		V:                      PubkeyBundleVersion2,
+	}
+}
+
 func signES384Raw(t *testing.T, priv *ecdsa.PrivateKey, msg []byte) []byte {
 	t.Helper()
 	digest := sha512.Sum384(msg)
@@ -224,6 +238,35 @@ func TestParsePubkeyBundlePayloadRejectsMalformed(t *testing.T) {
 	}
 }
 
+func TestPubkeyBundlePayloadV2CanonicalBody(t *testing.T) {
+	body := testBundlePayloadV2().CanonicalBody()
+	expected := "userId=user-123\n" +
+		`requestEncEcdhPubkey={"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}` + "\n" +
+		"requestEncMlkemPubkey=" + base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes")) + "\n" +
+		"anchorEs384Crv=P-384\n" +
+		"anchorEs384Kty=EC\n" +
+		"anchorEs384X=aaa\n" +
+		"anchorEs384Y=bbb\n" +
+		"anchorMldsa87PublicKey=" + base64.RawURLEncoding.EncodeToString([]byte("mldsa87-pub-bytes")) + "\n" +
+		"v=2"
+	require.Equal(t, expected, body)
+}
+
+func TestParsePubkeyBundlePayloadV2RoundTrip(t *testing.T) {
+	in := testBundlePayloadV2()
+	out, err := ParsePubkeyBundlePayloadV2(in.CanonicalBody())
+	require.NoError(t, err)
+	require.Equal(t, *in, out)
+}
+
+func TestParsePubkeyBundlePayloadV2RejectsV1Body(t *testing.T) {
+	// A v1 canonical body (ends with wrappedKeyEpoch=...) must not parse as v2, and vice versa: the strict key check is what keeps the two formats unambiguous under the shared domain-separation prefix
+	_, err := ParsePubkeyBundlePayloadV2(testBundlePayload().CanonicalBody())
+	require.Error(t, err)
+	_, err = ParsePubkeyBundlePayload(testBundlePayloadV2().CanonicalBody())
+	require.Error(t, err)
+}
+
 func TestHybridAttestationRoundTrip(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
@@ -295,6 +338,34 @@ func TestHybridBundleRoundTripAndTamper(t *testing.T) {
 	tamp.AnchorEs384X = "malicious"
 	err = VerifyHybridBundle(&esPriv.PublicKey, mlPubBytes, tamp, sigEs, sigMl)
 	require.Error(t, err)
+}
+
+func TestHybridBundleV2RoundTripAndTamper(t *testing.T) {
+	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	mlPubBytes, err := mlPub.MarshalBinary()
+	require.NoError(t, err)
+
+	payload := testBundlePayloadV2()
+	msg := CanonicalPubkeyBundleMessageV2(payload)
+	sigEs := signES384Raw(t, esPriv, msg)
+	sigMl := signMLDSA87(t, mlPriv, msg)
+
+	require.NoError(t, VerifyHybridBundleV2(&esPriv.PublicKey, mlPubBytes, payload, sigEs, sigMl))
+
+	// Swapping the anchor ES384 pubkey inside the payload breaks both sigs.
+	tamp := *payload
+	tamp.AnchorEs384X = "malicious"
+	err = VerifyHybridBundleV2(&esPriv.PublicKey, mlPubBytes, &tamp, sigEs, sigMl)
+	require.Error(t, err)
+
+	// A claimed version other than 2 is rejected before any signature check.
+	wrongV := *payload
+	wrongV.V = 3
+	err = VerifyHybridBundleV2(&esPriv.PublicKey, mlPubBytes, &wrongV, sigEs, sigMl)
+	require.ErrorContains(t, err, "unsupported pubkey bundle version")
 }
 
 func TestAnchorFingerprintStable(t *testing.T) {

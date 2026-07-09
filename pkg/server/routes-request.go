@@ -40,9 +40,12 @@ type v2RequestPubkeyResponse struct {
 
 	// Hybrid anchor pubkeys + bundle self-signatures
 	// The CLI pins the anchor pubkeys (TOFU) and verifies both signatures over the bundle to detect server-side pubkey substitution attacks
+	// pubkeyBundleVersion tells the verifier which canonical payload the signatures cover: 1 (legacy, binds wrappedKeyEpoch) or 2 (binds an explicit v line)
+	// wrappedKeyEpoch is retained for CLIs that predate versioning and only ever reflects the epoch bound into v1 signatures (always 1), NOT the user's live epoch
 	AnchorEs384PublicKey         string `json:"anchorEs384PublicKey"`
 	AnchorMldsa87PublicKey       string `json:"anchorMldsa87PublicKey"`
 	WrappedKeyEpoch              int64  `json:"wrappedKeyEpoch"`
+	PubkeyBundleVersion          int64  `json:"pubkeyBundleVersion"`
 	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`
 	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
 }
@@ -224,7 +227,7 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 	}
 
 	// Send the response
-	// WrappedKeyEpoch must be the epoch bound into the stored bundle signature (always PubkeyBundleWrappedKeyEpoch), not the user's live epoch: the bundle is signed once at signup and never re-signed, while the live epoch advances on every password change, which would make the CLI's signature verification fail
+	// WrappedKeyEpoch must be the epoch bound into v1 bundle signatures (always PubkeyBundleWrappedKeyEpoch), not the user's live epoch: the bundle is signed once at signup and never re-signed, while the live epoch advances on every password change, which would make the CLI's signature verification fail
 	c.JSON(http.StatusOK, v2RequestPubkeyResponse{
 		UserID:                       user.ID,
 		EcdhP256:                     json.RawMessage(user.RequestEncEcdhPubkey),
@@ -232,6 +235,7 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 		AnchorEs384PublicKey:         user.AnchorEs384PublicKey,
 		AnchorMldsa87PublicKey:       user.AnchorMldsa87PublicKey,
 		WrappedKeyEpoch:              protocolv2.PubkeyBundleWrappedKeyEpoch,
+		PubkeyBundleVersion:          user.PubkeyBundleVersion,
 		PubkeyBundleSignatureEs384:   user.PubkeyBundleSignatureEs384,
 		PubkeyBundleSignatureMldsa87: user.PubkeyBundleSignatureMldsa87,
 	})

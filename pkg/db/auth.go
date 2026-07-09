@@ -52,9 +52,11 @@ type User struct {
 	AnchorMldsa87PublicKey       string
 	PubkeyBundleSignatureEs384   string
 	PubkeyBundleSignatureMldsa87 string
-	WrappedKeyEpoch              int64
-	AllowedIPs                   []string
-	Ready                        bool
+	// PubkeyBundleVersion is the version of the canonical payload the stored bundle signatures cover: 1 (legacy, binds wrappedKeyEpoch) or 2 (binds an explicit v line)
+	PubkeyBundleVersion int64
+	WrappedKeyEpoch     int64
+	AllowedIPs          []string
+	Ready               bool
 }
 
 type AuthChallenge struct {
@@ -122,9 +124,11 @@ type FinalizeSignupInput struct {
 	AnchorMldsa87PublicKey       string
 	PubkeyBundleSignatureEs384   string
 	PubkeyBundleSignatureMldsa87 string
-	AttestationPayload           string
-	AttestationSignatureEs384    string
-	AttestationSignatureMldsa87  string
+	// PubkeyBundleVersion is the payload version the bundle signatures cover; the caller (which verified the signatures) must set it to 1 or 2
+	PubkeyBundleVersion         int64
+	AttestationPayload          string
+	AttestationSignatureEs384   string
+	AttestationSignatureMldsa87 string
 }
 
 var (
@@ -184,12 +188,12 @@ func (s *AuthStore) getUser(ctx context.Context, column string, value string) (*
 		user          User
 		allowedIPsCSV string
 	)
-	query := `SELECT id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, wrapped_key_epoch, allowed_ips, ready
+	query := `SELECT id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, pubkey_bundle_version, wrapped_key_epoch, allowed_ips, ready
 		FROM v2_users
 		WHERE ` + column + ` = $1`
 	err := s.db.
 		QueryRow(ctx, query, value).
-		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &user.AnchorEs384PublicKey, &user.AnchorMldsa87PublicKey, &user.PubkeyBundleSignatureEs384, &user.PubkeyBundleSignatureMldsa87, &user.WrappedKeyEpoch, &allowedIPsCSV, &user.Ready)
+		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &user.AnchorEs384PublicKey, &user.AnchorMldsa87PublicKey, &user.PubkeyBundleSignatureEs384, &user.PubkeyBundleSignatureMldsa87, &user.PubkeyBundleVersion, &user.WrappedKeyEpoch, &allowedIPsCSV, &user.Ready)
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
@@ -414,6 +418,12 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 		panic("FinalizeSignup must be invoked in a transaction")
 	}
 
+	// Default to the legacy payload version when the caller did not set one explicitly
+	bundleVersion := in.PubkeyBundleVersion
+	if bundleVersion == 0 {
+		bundleVersion = 1
+	}
+
 	now := time.Now().Unix()
 	updatedUser := &User{}
 	var allowedIPsCSV string
@@ -426,15 +436,16 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 				anchor_mldsa87_public_key = $4,
 				pubkey_bundle_signature_es384 = $5,
 				pubkey_bundle_signature_mldsa87 = $6,
+				pubkey_bundle_version = $7,
 				ready = true,
-				updated_at = $7
-			WHERE id = $8 AND ready = false
+				updated_at = $8
+			WHERE id = $9 AND ready = false
 			RETURNING
-				id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, wrapped_key_epoch, allowed_ips, ready`,
+				id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, pubkey_bundle_version, wrapped_key_epoch, allowed_ips, ready`,
 			in.RequestEncEcdhPubkey, in.RequestEncMlkemPubkey,
 			in.AnchorEs384PublicKey, in.AnchorMldsa87PublicKey,
 			in.PubkeyBundleSignatureEs384, in.PubkeyBundleSignatureMldsa87,
-			now, in.UserID,
+			bundleVersion, now, in.UserID,
 		).
 		Scan(
 			&updatedUser.ID,
@@ -448,6 +459,7 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 			&updatedUser.AnchorMldsa87PublicKey,
 			&updatedUser.PubkeyBundleSignatureEs384,
 			&updatedUser.PubkeyBundleSignatureMldsa87,
+			&updatedUser.PubkeyBundleVersion,
 			&updatedUser.WrappedKeyEpoch,
 			&allowedIPsCSV,
 			&updatedUser.Ready,

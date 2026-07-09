@@ -179,11 +179,20 @@ func TestTrustStoreFailsClosedOnNoConfirm(t *testing.T) {
 	require.Error(t, err, "first contact with nil confirmer must refuse")
 }
 
-// signTestBundle signs a pubkey-bundle payload with both anchor legs and returns base64url-encoded signatures, mirroring what the browser produces at signup
+// signTestBundle signs a legacy (v1) pubkey-bundle payload with both anchor legs and returns base64url-encoded signatures, mirroring what the browser produces at signup
 func signTestBundle(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa87.PrivateKey, payload *protocolv2.PubkeyBundlePayload) (sigEsB64, sigMlB64 string) {
 	t.Helper()
+	return signTestBundleMessage(t, esPriv, mlPriv, protocolv2.CanonicalPubkeyBundleMessage(payload))
+}
 
-	msg := protocolv2.CanonicalPubkeyBundleMessage(payload)
+// signTestBundleV2 signs a v2 pubkey-bundle payload with both anchor legs and returns base64url-encoded signatures
+func signTestBundleV2(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa87.PrivateKey, payload *protocolv2.PubkeyBundlePayloadV2) (sigEsB64, sigMlB64 string) {
+	t.Helper()
+	return signTestBundleMessage(t, esPriv, mlPriv, protocolv2.CanonicalPubkeyBundleMessageV2(payload))
+}
+
+func signTestBundleMessage(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa87.PrivateKey, msg []byte) (sigEsB64, sigMlB64 string) {
+	t.Helper()
 
 	digest := sha512.Sum384(msg)
 	r, s, err := ecdsa.Sign(rand.Reader, esPriv, digest[:])
@@ -254,6 +263,76 @@ func TestVerifyAndPinAnchorIgnoresAdvertisedEpoch(t *testing.T) {
 	pinned, err := verifyAndPinAnchor("https://example.test", resp, ts, func(string) (bool, error) { return true, nil })
 	require.NoError(t, err)
 	require.True(t, pinned)
+}
+
+// TestVerifyAndPinAnchorBundleV2 covers bundles signed with the v2 payload (explicit v line, no epoch): the CLI must verify them when the server advertises pubkeyBundleVersion=2, and must refuse versions it does not know
+func TestVerifyAndPinAnchorBundleV2(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "trust.json")
+
+	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+	jwk, err := protocolv2.ECP384PublicJWKFromECDSA(&esPriv.PublicKey)
+	require.NoError(t, err)
+	es384Body := jwk.CanonicalBody()
+
+	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	mlPubBytes, err := mlPub.MarshalBinary()
+	require.NoError(t, err)
+	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPubBytes)
+
+	ecdhJSON := `{"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}`
+	mlkemB64 := base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes"))
+
+	sigEs, sigMl := signTestBundleV2(t, esPriv, mlPriv, &protocolv2.PubkeyBundlePayloadV2{
+		UserID:                 "user-1",
+		RequestEncEcdhPubkey:   ecdhJSON,
+		RequestEncMlkemPubkey:  mlkemB64,
+		AnchorEs384Crv:         jwk.Crv,
+		AnchorEs384Kty:         jwk.Kty,
+		AnchorEs384X:           jwk.X,
+		AnchorEs384Y:           jwk.Y,
+		AnchorMldsa87PublicKey: mlPubB64,
+		V:                      protocolv2.PubkeyBundleVersion2,
+	})
+
+	newResp := func(version int64) *v2PubkeyResponse {
+		return &v2PubkeyResponse{
+			UserID:                 "user-1",
+			EcdhP256:               json.RawMessage(ecdhJSON),
+			Mlkem768:               mlkemB64,
+			AnchorEs384PublicKey:   es384Body,
+			AnchorMldsa87PublicKey: mlPubB64,
+			// v2 responses still carry a wrappedKeyEpoch field for older CLIs; its value must be irrelevant here
+			WrappedKeyEpoch:              1,
+			PubkeyBundleVersion:          version,
+			PubkeyBundleSignatureEs384:   sigEs,
+			PubkeyBundleSignatureMldsa87: sigMl,
+		}
+	}
+
+	t.Run("verifies and pins a v2 bundle", func(t *testing.T) {
+		ts, tsErr := loadTrustStore(path)
+		require.NoError(t, tsErr)
+		pinned, vErr := verifyAndPinAnchor("https://example.test", newResp(2), ts, func(string) (bool, error) { return true, nil })
+		require.NoError(t, vErr)
+		require.True(t, pinned)
+	})
+
+	t.Run("v2 signature advertised as v1 fails closed", func(t *testing.T) {
+		ts, tsErr := loadTrustStore(path)
+		require.NoError(t, tsErr)
+		_, vErr := verifyAndPinAnchor("https://example.test", newResp(0), ts, func(string) (bool, error) { return true, nil })
+		require.ErrorContains(t, vErr, "signature verification failed")
+	})
+
+	t.Run("unknown version fails closed", func(t *testing.T) {
+		ts, tsErr := loadTrustStore(path)
+		require.NoError(t, tsErr)
+		_, vErr := verifyAndPinAnchor("https://example.test", newResp(3), ts, func(string) (bool, error) { return true, nil })
+		require.ErrorContains(t, vErr, "unsupported pubkey bundle version")
+	})
 }
 
 func TestTrustStorePermissions(t *testing.T) {

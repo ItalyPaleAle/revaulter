@@ -26,10 +26,17 @@ const (
 	WrappedAnchorAADFmt = "revaulter/v2/wrapped-anchor\nuserId=%s\nv=1"
 )
 
-// PubkeyBundleWrappedKeyEpoch is the wrappedKeyEpoch value bound into every pubkey bundle signature
-// The bundle is hybrid-signed exactly once, in the browser at signup, when the user's epoch is always 1; the anchor and request-encryption pubkeys it covers are immutable afterwards, so the signature is never regenerated
-// The user's live wrapped-key epoch advances on password changes (it tracks re-wraps of the primary key, not the bundle), so verifiers must reconstruct the signed payload with this constant, NOT the user's current epoch
-const PubkeyBundleWrappedKeyEpoch int64 = 1
+// Pubkey bundle signature versions
+// The bundle is hybrid-signed exactly once, in the browser at signup; the anchor and request-encryption pubkeys it covers are immutable afterwards, so the signature is never regenerated
+// Version 1 (legacy) bound the user's wrapped-key epoch into the signed payload, which was always 1 at signup; the live epoch advances on password changes (it tracks re-wraps of the primary key, not the bundle), so verifiers of v1 bundles must reconstruct the payload with PubkeyBundleWrappedKeyEpoch, NOT the user's current epoch
+// Version 2 drops the epoch entirely and instead binds an explicit `v` line, so the signed bytes carry an authenticated format version
+const (
+	PubkeyBundleVersion1 int64 = 1
+	PubkeyBundleVersion2 int64 = 2
+
+	// PubkeyBundleWrappedKeyEpoch is the wrappedKeyEpoch value bound into every v1 pubkey bundle signature
+	PubkeyBundleWrappedKeyEpoch int64 = 1
+)
 
 // Fixed sizes for the PQ and classical legs of the hybrid anchor
 const (
@@ -157,6 +164,39 @@ func ParsePubkeyBundlePayload(body string) (PubkeyBundlePayload, error) {
 	return p, nil
 }
 
+// PubkeyBundlePayloadV2 is the version-2 canonicalized pubkey-bundle payload
+// It replaces the legacy wrappedKeyEpoch line (which carried no verifiable meaning — the bundle is signed once at signup and the epoch tracks unrelated key re-wraps) with an explicit `v` line, so the signed bytes carry an authenticated format version
+// The order is load-bearing: client and server must produce identical bytes; `v` is last, matching SigningKeyPublicationPayload
+type PubkeyBundlePayloadV2 struct {
+	UserID                 string `key:"userId"`
+	RequestEncEcdhPubkey   string `key:"requestEncEcdhPubkey"`
+	RequestEncMlkemPubkey  string `key:"requestEncMlkemPubkey"`
+	AnchorEs384Crv         string `key:"anchorEs384Crv"`
+	AnchorEs384Kty         string `key:"anchorEs384Kty"`
+	AnchorEs384X           string `key:"anchorEs384X"`
+	AnchorEs384Y           string `key:"anchorEs384Y"`
+	AnchorMldsa87PublicKey string `key:"anchorMldsa87PublicKey"`
+	V                      int64  `key:"v"`
+}
+
+// CanonicalBody encodes the v2 pubkey-bundle payload as ordered key=value lines separated by '\n', with no trailing newline
+// This is the body that (with the domain-separation prefix) is signed by both anchor legs
+func (p PubkeyBundlePayloadV2) CanonicalBody() string {
+	return canonicalBodyFromTaggedFields(p)
+}
+
+// ParsePubkeyBundlePayloadV2 parses a canonical body string back into a PubkeyBundlePayloadV2
+// The input must list every expected key in the documented order, exactly once, separated by '\n', with no trailing newline
+func ParsePubkeyBundlePayloadV2(body string) (PubkeyBundlePayloadV2, error) {
+	var p PubkeyBundlePayloadV2
+	err := parseTaggedFields(body, &p)
+	if err != nil {
+		return p, err
+	}
+
+	return p, nil
+}
+
 func parseTaggedFields(body string, out any) error {
 	v := reflect.ValueOf(out)
 	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Struct {
@@ -221,6 +261,16 @@ func CanonicalPubkeyBundleMessage(payload *PubkeyBundlePayload) []byte {
 	return out
 }
 
+// CanonicalPubkeyBundleMessageV2 returns the domain-separated, canonically-encoded v2 bundle message signed by both anchor legs
+// The domain-separation prefix is shared with v1: the two formats cannot be confused because the canonical bodies differ (v1 ends with a wrappedKeyEpoch line, v2 with a v line) and parsing is strict about keys and order
+func CanonicalPubkeyBundleMessageV2(payload *PubkeyBundlePayloadV2) []byte {
+	body := payload.CanonicalBody()
+	out := make([]byte, len(PubkeyBundlePrefix)+len(body))
+	copy(out[0:len(PubkeyBundlePrefix)], PubkeyBundlePrefix)
+	copy(out[len(PubkeyBundlePrefix):], body)
+	return out
+}
+
 // VerifyHybridAttestation verifies that both legs of the hybrid signature cover the canonical attestation message
 // Both must validate; if either fails the call returns an error describing which legs rejected the signature
 //
@@ -241,6 +291,16 @@ func VerifyHybridAttestation(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, 
 // Callers MUST independently bind the anchor pubkeys to the principal they represent (e.g., by pinning them at registration and comparing on subsequent use) before trusting the payload.
 func VerifyHybridBundle(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload *PubkeyBundlePayload, sigEs384 []byte, sigMldsa87 []byte) error {
 	msg := CanonicalPubkeyBundleMessage(payload)
+	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
+}
+
+// VerifyHybridBundleV2 verifies both legs of the hybrid signature covering the canonical v2 pubkey-bundle message
+// The same SECURITY caveats as VerifyHybridBundle apply: this is a consistency check only, and callers MUST independently bind the anchor pubkeys to the principal they represent
+func VerifyHybridBundleV2(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload *PubkeyBundlePayloadV2, sigEs384 []byte, sigMldsa87 []byte) error {
+	if payload.V != PubkeyBundleVersion2 {
+		return fmt.Errorf("unsupported pubkey bundle version %d", payload.V)
+	}
+	msg := CanonicalPubkeyBundleMessageV2(payload)
 	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
 }
 

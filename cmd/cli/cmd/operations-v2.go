@@ -301,9 +301,12 @@ type v2PubkeyResponse struct {
 	EcdhP256 json.RawMessage `json:"ecdhP256"`
 	Mlkem768 string          `json:"mlkem768"`
 
-	AnchorEs384PublicKey         string `json:"anchorEs384PublicKey"`
-	AnchorMldsa87PublicKey       string `json:"anchorMldsa87PublicKey"`
-	WrappedKeyEpoch              int64  `json:"wrappedKeyEpoch"`
+	AnchorEs384PublicKey   string `json:"anchorEs384PublicKey"`
+	AnchorMldsa87PublicKey string `json:"anchorMldsa87PublicKey"`
+	// wrappedKeyEpoch is legacy and unused for verification: v1 bundle signatures always bind epoch 1, and servers that predate versioning echoed the user's live epoch here, so its value cannot be trusted
+	WrappedKeyEpoch int64 `json:"wrappedKeyEpoch"`
+	// pubkeyBundleVersion selects the canonical payload the signatures cover; servers that predate versioning omit it, which means v1
+	PubkeyBundleVersion          int64  `json:"pubkeyBundleVersion"`
 	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`
 	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
 }

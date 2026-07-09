@@ -8,6 +8,7 @@ import {
     attestationPayloadCanonicalBody,
     generateAnchorKeyPair,
     type PubkeyBundlePayload,
+    PUBKEY_BUNDLE_VERSION,
     parseAnchorSecret,
     parseWrappedAnchorEnvelope,
     pubkeyBundlePayloadCanonicalBody,
@@ -128,13 +129,14 @@ describe('hybrid attestation signatures', () => {
             anchorEs384X: kp.es384.publicKeyJwk.x,
             anchorEs384Y: kp.es384.publicKeyJwk.y,
             anchorMldsa87PublicKey: anchorMldsa87PubToString(kp.mldsa87.publicKey),
-            wrappedKeyEpoch: 1,
+            v: PUBKEY_BUNDLE_VERSION,
         })
         expect(sig.sigEs384).toBeTruthy()
         expect(sig.sigMldsa87).toBeTruthy()
     })
 
     it('produces a stable canonical pubkey bundle body with ordered key=value lines', () => {
+        // This must byte-match the expected body in pkg/protocolv2/anchor_test.go::TestPubkeyBundlePayloadV2CanonicalBody (modulo values)
         const payload: PubkeyBundlePayload = {
             userId: 'u-1',
             requestEncEcdhPubkey: 'ecdh',
@@ -144,7 +146,7 @@ describe('hybrid attestation signatures', () => {
             anchorEs384X: 'aaa',
             anchorEs384Y: 'bbb',
             anchorMldsa87PublicKey: 'mldsa87',
-            wrappedKeyEpoch: 2,
+            v: PUBKEY_BUNDLE_VERSION,
         }
         expect(pubkeyBundlePayloadCanonicalBody(payload)).toBe(
             [
@@ -156,7 +158,7 @@ describe('hybrid attestation signatures', () => {
                 'anchorEs384X=aaa',
                 'anchorEs384Y=bbb',
                 'anchorMldsa87PublicKey=mldsa87',
-                'wrappedKeyEpoch=2',
+                'v=2',
             ].join('\n')
         )
     })

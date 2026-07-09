@@ -188,24 +188,48 @@ func verifyAndPinAnchor(server string, resp *v2PubkeyResponse, ts *trustStore, c
 		return false, fmt.Errorf("invalid anchorEs384PublicKey: %w", err)
 	}
 
-	// The bundle signature is always bound to WrappedKeyEpoch = PubkeyBundleWrappedKeyEpoch (it is created once at signup and never re-signed), so the payload is reconstructed with that constant rather than the server-reported epoch
-	// Servers used to echo the user's live epoch here, which advances on password changes and would make verification fail for a signature that is still valid
-	bundlePayload := &protocolv2.PubkeyBundlePayload{
-		UserID:                 resp.UserID,
-		RequestEncEcdhPubkey:   string(resp.EcdhP256),
-		RequestEncMlkemPubkey:  resp.Mlkem768,
-		AnchorEs384Crv:         es384JWK.Crv,
-		AnchorEs384Kty:         es384JWK.Kty,
-		AnchorEs384X:           es384JWK.X,
-		AnchorEs384Y:           es384JWK.Y,
-		AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
-		WrappedKeyEpoch:        protocolv2.PubkeyBundleWrappedKeyEpoch,
-	}
 	sigEs, sigMl, err := decodeHybridSignatures(resp.PubkeyBundleSignatureEs384, resp.PubkeyBundleSignatureMldsa87)
 	if err != nil {
 		return false, fmt.Errorf("invalid pubkey bundle signature: %w", err)
 	}
-	err = protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl)
+
+	// The bundle is signed once at signup and never re-signed; the advertised pubkeyBundleVersion (absent on servers that predate versioning, meaning v1) selects the canonical payload to reconstruct
+	version := resp.PubkeyBundleVersion
+	if version == 0 {
+		version = protocolv2.PubkeyBundleVersion1
+	}
+	switch version {
+	case protocolv2.PubkeyBundleVersion1:
+		// Legacy payload: always bound to WrappedKeyEpoch = PubkeyBundleWrappedKeyEpoch, so it is reconstructed with that constant rather than the server-reported epoch
+		// Servers used to echo the user's live epoch in the response, which advances on password changes and would make verification fail for a signature that is still valid
+		bundlePayload := &protocolv2.PubkeyBundlePayload{
+			UserID:                 resp.UserID,
+			RequestEncEcdhPubkey:   string(resp.EcdhP256),
+			RequestEncMlkemPubkey:  resp.Mlkem768,
+			AnchorEs384Crv:         es384JWK.Crv,
+			AnchorEs384Kty:         es384JWK.Kty,
+			AnchorEs384X:           es384JWK.X,
+			AnchorEs384Y:           es384JWK.Y,
+			AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
+			WrappedKeyEpoch:        protocolv2.PubkeyBundleWrappedKeyEpoch,
+		}
+		err = protocolv2.VerifyHybridBundle(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl)
+	case protocolv2.PubkeyBundleVersion2:
+		bundlePayload := &protocolv2.PubkeyBundlePayloadV2{
+			UserID:                 resp.UserID,
+			RequestEncEcdhPubkey:   string(resp.EcdhP256),
+			RequestEncMlkemPubkey:  resp.Mlkem768,
+			AnchorEs384Crv:         es384JWK.Crv,
+			AnchorEs384Kty:         es384JWK.Kty,
+			AnchorEs384X:           es384JWK.X,
+			AnchorEs384Y:           es384JWK.Y,
+			AnchorMldsa87PublicKey: resp.AnchorMldsa87PublicKey,
+			V:                      protocolv2.PubkeyBundleVersion2,
+		}
+		err = protocolv2.VerifyHybridBundleV2(es384Pub, mldsa87PubBytes, bundlePayload, sigEs, sigMl)
+	default:
+		return false, fmt.Errorf("server advertised unsupported pubkey bundle version %d; upgrade revaulter-cli", version)
+	}
 	if err != nil {
 		return false, fmt.Errorf("pubkey bundle signature verification failed: %w", err)
 	}
