@@ -3,8 +3,12 @@ baseURL = "https://revaulter.italypaleale.me/"
 locale = "en-us"
 title = "Revaulter"
 disableKinds = ["rss"]
+enableRobotsTXT = true
 
 [module]
+  [module.hugoVersion]
+    extended = true
+    min = '0.164.0'
   [[module.mounts]]
     source = "img"
     target = "assets/docs/img"
@@ -35,6 +39,9 @@ disableKinds = ["rss"]
   github_repo = "https://github.com/ItalyPaleAle/revaulter"
   github_branch = "main"
   PlausibleAnalytics = true
+
+  [params.robots]
+    llmsTXT = true
 
   [params.theme]
     scheme = "rust"

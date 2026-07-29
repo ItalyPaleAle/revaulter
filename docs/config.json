@@ -15,6 +15,10 @@
     "iconDark": "icon-dark.svg",
     "favicon": "icon-light.svg"
   },
+  "robots": {
+    "llmsTXT": true,
+    "disallow": []
+  },
   "imageMounts": [
     { "source": "img", "target": "assets/docs/img" }
   ]
