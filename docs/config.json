@@ -7,7 +7,8 @@
   "github": {
     "url": "https://github.com/ItalyPaleAle/revaulter",
     "repo": "https://github.com/ItalyPaleAle/revaulter",
-    "branch": "main"
+    "branch": "main",
+    "path": "docs"
   },
   "theme": {
     "scheme": "rust",
