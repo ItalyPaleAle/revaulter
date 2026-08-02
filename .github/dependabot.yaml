@@ -1,0 +1,33 @@
+version: 2
+
+updates:
+  # GitHub Actions used by the workflows in .github/workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    labels:
+      - dependencies
+    groups:
+      # A single PR for all action bumps, so they can be reviewed together
+      actions:
+        patterns:
+          - "*"
+
+  # Base images in Dockerfile and Dockerfile-cli
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    labels:
+      - dependencies
+    groups:
+      base-images:
+        patterns:
+          - "*"
