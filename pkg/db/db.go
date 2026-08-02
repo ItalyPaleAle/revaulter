@@ -12,11 +12,23 @@ import (
 	"github.com/italypaleale/go-sql-utils/adapter"
 	postgresadapter "github.com/italypaleale/go-sql-utils/adapter/postgres"
 	sqladapter "github.com/italypaleale/go-sql-utils/adapter/sql"
+	"github.com/italypaleale/go-sql-utils/instrument"
+	instrumentpostgres "github.com/italypaleale/go-sql-utils/instrument/postgres"
+	instrumentsqlite "github.com/italypaleale/go-sql-utils/instrument/sqlite"
 	sqliteutils "github.com/italypaleale/go-sql-utils/sqlite"
 	transactions "github.com/italypaleale/go-sql-utils/transactions/adapter"
 	"github.com/italypaleale/revaulter/pkg/utils/logging"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// instrumentOptions builds the OpenTelemetry tracing and query-logging options for a database component
+func instrumentOptions(component string) *instrument.Options {
+	return &instrument.Options{
+		Log:           slog.Default().With(slog.String("component", component)),
+		QueryLog:      true,
+		SlowThreshold: 500 * time.Millisecond,
+	}
+}
 
 type BackendKind string
 
@@ -174,6 +186,7 @@ func Open(ctx context.Context, connString string) (*DB, error) {
 		if cfg.ConnConfig.ConnectTimeout == 0 {
 			cfg.ConnConfig.ConnectTimeout = 10 * time.Second
 		}
+		cfg.ConnConfig.Tracer = instrumentpostgres.NewTracer(instrumentOptions("postgres"), cfg.ConnConfig.Tracer)
 		conn, err := pgxpool.NewWithConfig(ctx, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to Postgres: %w", err)
@@ -186,10 +199,14 @@ func Open(ctx context.Context, connString string) (*DB, error) {
 
 	// Default to sqlite
 	default:
-		conn, err := sqliteutils.Connect(sqliteutils.ConnectOpts{
+		connector, err := sqliteutils.NewConnector(sqliteutils.ConnectOpts{
 			ConnString: connString,
 			Logger:     slog.Default().With(slog.String("component", "sqliteutils")),
 		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to open SQLite database: %w", err)
+		}
+		conn, err := instrumentsqlite.Open(connector, instrumentOptions("sqlite"))
 		if err != nil {
 			return nil, fmt.Errorf("failed to open SQLite database: %w", err)
 		}
