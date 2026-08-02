@@ -19,7 +19,7 @@ func SlogHandler(logAsJSON bool, level slog.Leveler, dest io.Writer) slog.Handle
 		})
 	case isatty.IsTerminal(os.Stdout.Fd()):
 		// Enable colors if we have a TTY
-		return tint.NewHandler(dest, &tint.Options{
+		return tint.NewTextHandler(dest, &tint.Options{
 			Level:      level,
 			TimeFormat: time.StampMilli,
 		})

@@ -1,7 +1,14 @@
 {
-  "age": "6d",
+  "age": "7d",
   "ignore": [
     "github.com/italypaleale/*",
     "golang.org/x/*"
+  ],
+  "allow": [
+    {
+      "module": "github.com/sigstore/sigstore-go",
+      "version": "v1.3.0",
+      "reason": ""
+    }
   ]
 }
