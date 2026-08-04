@@ -1,4 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <title>Revaulter icon</title>
   <rect width="180" height="180" fill="#0a0a0a"></rect>
   <circle cx="90" cy="90" r="44" fill="none" stroke="#fafafa" stroke-width="6"></circle>
   <path d="M70 70 L90 90 L70 110" fill="none" stroke="#fafafa" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"></path>
