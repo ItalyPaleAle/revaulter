@@ -8,7 +8,6 @@ import (
 )
 
 // Wrapped anchor envelope schema: the decoded body is newline `key=value` in alphabetical order over exactly the required fields
-// `v=1` is the only supported version; `nonce` is base64url of exactly 12 bytes; `ciphertext` is non-empty base64url
 // Keep in sync with the browser emitter/parser in client/web/src/lib/crypto-anchor.ts
 const (
 	wrappedAnchorNonceSize = 12
@@ -51,16 +50,19 @@ func validateWrappedAnchorEnvelope(wrapped string) error {
 		seen[key] = value
 	}
 
+	// `v=1` is the only supported version
 	v := seen["v"]
 	if v != wrappedAnchorVersion {
 		return fmt.Errorf("unsupported version %q", v)
 	}
 
+	// nonce is base64url of exactly 12 bytes
 	nonceB64 := seen["nonce"]
 	if nonceB64 == "" {
 		return errors.New("empty nonce")
 	}
 
+	// ciphertext is non-empty base64url
 	ciphertextB64 := seen["ciphertext"]
 	if ciphertextB64 == "" {
 		return errors.New("empty ciphertext")

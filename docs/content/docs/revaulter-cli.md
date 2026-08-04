@@ -39,7 +39,7 @@ revaulter-cli encrypt [flags]
 ```
 
 | Flag | Short | Required | Description |
-|------|-------|----------|-------------|
+| ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
 | `--request-key` | `-k` | Yes | Per-user request key (shown in the web UI after registration) |
 | `--key-label` | `-l` | Yes | Logical key label used for key derivation |
@@ -101,7 +101,7 @@ revaulter-cli decrypt [flags]
 ```
 
 | Flag | Short | Required | Description |
-|------|-------|----------|-------------|
+| ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
 | `--request-key` | `-k` | Yes | Per-user request key (shown in the web UI after registration) |
 | `--key-label` | `-l` | Yes | Logical key label used for key derivation |
@@ -176,12 +176,12 @@ revaulter-cli sign [flags]
 ```
 
 | Flag | Short | Required | Description |
-|------|-------|----------|-------------|
+| ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
 | `--request-key` | `-k` | Yes | Per-user request key |
 | `--key-label` | `-l` | Yes | Logical key label used for signing-key derivation |
 | `--algorithm` | `-a` | Yes | Signing algorithm identifier: `ES256`, `Ed25519`, or `Ed25519ph` |
-| `--input` | `-i` | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. With ES256 and Ed25519ph, the CLI hashes the file's contents locally.|
+| `--input` | `-i` | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. With ES256 and Ed25519ph, the CLI hashes the file's contents locally. |
 | `--digest` | `-d` | One of `--input` or `--digest` is required | A pre-computed digest, encoded as hex or base64url. Supported only for `ES256` (32-byte SHA-256) and `Ed25519ph` (64-byte SHA-512). Mutually exclusive with `--format jws` |
 | `--format` | | No | Output format: `json` (default — JSON envelope with base64url signature), `jws` (compact JWS string), or `raw` (the raw 64-byte signature). `jws` requires `--input` and is supported only for `ES256` and `Ed25519` |
 | `--jws-header` | | No | JSON fragment merged into the default protected header when building a JWS from `--input`. The `alg` field is always forced to `ES256` or `EdDSA`, depending on `--algorithm` |
@@ -274,7 +274,7 @@ Run this once when first connecting to a server. In interactive use the CLI disp
 The default trust store path is `<user-config-dir>/revaulter-cli/trust.json` (e.g. `~/.config/revaulter-cli/trust.json` on Linux). Override it with the `TRUST_STORE_PATH` environment variable or the `--trust-store` flag.
 
 | Flag | Short | Required | Description |
-|------|-------|----------|-------------|
+| ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
 | `--request-key` | `-k` | Yes | Per-user request key used to authenticate with the server |
 | `--trust-store` | | No | Path to the anchor trust store file (defaults to `<user-config-dir>/revaulter-cli/trust.json`) |
@@ -312,14 +312,14 @@ Run a local SSH agent that routes signing requests through Revaulter. Available 
 revaulter-cli ssh-agent [flags]
 ```
 
-Starts a Unix-socket SSH agent. SSH clients with `SSH_AUTH_SOCK` pointed at the socket route each signing request through Revaulter, where the key holder approves it in the browser with a passkey. The private signing key is never exported: only public keys are stored on the server, and only signatures are returned to the agent. The signing public key for the chosen `--key-label` must already exist: create it from the web UI under **Settings → Signing keys**.
+Starts a Unix-socket SSH agent. SSH clients with `SSH_AUTH_SOCK` pointed at the socket route each signing request through Revaulter, where the key holder approves it in the browser with a passkey. The private signing key is never exported: only public keys are stored on the server, and only signatures are returned to the agent. The signing public key for the chosen `--key-label` must already exist and be published: create and publish it from the web UI under **Settings → Signing keys**.
 
 > Note: Pin the server anchor with `revaulter-cli trust` before running the agent, especially in non-interactive environments.
 
 For a full setup walkthrough (including installing the public key in `authorized_keys`), see [Authenticate to SSH servers](/examples/authenticate-to-ssh-servers/).
 
 | Flag | Short | Required | Description |
-|------|-------|----------|-------------|
+| ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
 | `--request-key` | `-k` | Yes | Per-user request key |
 | `--key-label` | `-l` | Yes | Logical key label for the signing key |
@@ -327,7 +327,7 @@ For a full setup walkthrough (including installing the public key in `authorized
 | `--socket` | | No | Path to the Unix socket (defaults to `$XDG_RUNTIME_DIR/revaulter/ssh-agent-<key-label>.sock`, or a private per-user directory under `$TMPDIR` if `XDG_RUNTIME_DIR` is unset). The socket is created with `0600` permissions |
 | `--comment` | | No | Comment attached to the SSH key (default: `revaulter/<key-label>`) |
 | `--timeout` | `-t` | No | Per-sign-operation timeout (number of seconds or Go duration; defaults to 5 minutes) |
-| `--note` | `-n` | No | Extra text appended to the approval note shown in the browser (the note is always prefixed with `SSH auth`) |
+| `--note` | `-n` | No | Extra text appended to the approval note shown in the browser (the note is always prefixed with `SSH auth`, leaving at most 71 characters) |
 | `--trust-store` | | No | Path to the anchor trust store file |
 | `--no-trust-store` | | No | Skip anchor pinning and hybrid bundle verification (equivalent to SSH's `StrictHostKeyChecking=no`) |
 | `--insecure` | | No | Skip TLS certificate validation |
@@ -370,7 +370,7 @@ revaulter-cli check --server https://revaulter.example.com
 ```
 
 | Flag | Short | Required | Description |
-|------|-------|----------|-------------|
+| ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
 | `--timeout` | `-t` | No | Overall timeout for the check (e.g. `60s`, `2m`); defaults to 60s |
 | `--insecure` | | No | Skip TLS certificate validation |

@@ -27,10 +27,13 @@ type v2RequestCreateResponse struct {
 
 // v2RequestSigningPubkeyResponse is the response for GET /v2/request/signing-pubkeys
 type v2RequestSigningPubkeyResponse struct {
-	ID        string          `json:"id"`
-	Algorithm string          `json:"algorithm"`
-	KeyLabel  string          `json:"keyLabel"`
-	JWK       json.RawMessage `json:"jwk"`
+	ID                          string          `json:"id"`
+	Algorithm                   string          `json:"algorithm"`
+	KeyLabel                    string          `json:"keyLabel"`
+	JWK                         json.RawMessage `json:"jwk"`
+	PublicationPayload          string          `json:"publicationPayload,omitempty"`
+	PublicationSignatureEs384   string          `json:"publicationSignatureEs384,omitempty"`
+	PublicationSignatureMldsa87 string          `json:"publicationSignatureMldsa87,omitempty"`
 }
 
 type v2RequestPubkeyResponse struct {
@@ -511,10 +514,14 @@ func (s *Server) RouteV2RequestSigningPubkey(c *gin.Context) {
 	}
 
 	// Send the response
+	// The publication proof is included when the row carries one, so the caller can verify the key against the user's pinned anchor
 	c.JSON(http.StatusOK, v2RequestSigningPubkeyResponse{
-		ID:        rec.ID,
-		Algorithm: rec.Algorithm,
-		KeyLabel:  rec.KeyLabel,
-		JWK:       json.RawMessage(rec.JWK),
+		ID:                          rec.ID,
+		Algorithm:                   rec.Algorithm,
+		KeyLabel:                    rec.KeyLabel,
+		JWK:                         json.RawMessage(rec.JWK),
+		PublicationPayload:          rec.PublicationPayload,
+		PublicationSignatureEs384:   rec.PublicationSignatureEs384,
+		PublicationSignatureMldsa87: rec.PublicationSignatureMldsa87,
 	})
 }

@@ -30,11 +30,15 @@ test('ssh-agent serves the public key and approves SSH auth through Revaulter', 
     let sshProcess
 
     try {
-        // Create the signing key
+        // Create the signing key and publish it
+        // Publishing attaches the anchor-signed proof the agent requires before it will advertise the key
         await openSettingsTab(page, 'Signing keys')
         await page.locator('input#signing-key-label').fill(keyLabel)
         await page.getByRole('button', { name: 'Derive key' }).click()
         await expect(page.getByText('Derived key')).toBeVisible()
+        // Publish from the stored-keys row: its accessible name is unambiguous
+        await page.getByRole('button', { name: 'Publish key' }).click()
+        await expect(page.getByText(`Signing key "${keyLabel}" published.`)).toBeVisible()
         await page.getByRole('button', { name: 'Close settings' }).click()
         await waitForListStream(page)
 
@@ -83,6 +87,47 @@ test('ssh-agent serves the public key and approves SSH auth through Revaulter', 
         if (serverRun) {
             serverRun.cleanup()
         }
+        await stopProcess(agentRun)
+        rmSync(tmpRoot, { recursive: true, force: true })
+        await auth.passkey.dispose()
+    }
+})
+
+test('ssh-agent refuses to advertise a signing key that has not been published', async ({ page }) => {
+    // An auto-stored or merely derived key carries no anchor-signed publication proof
+    // Advertising it anyway would let a compromised server hand back a key of its own, which the user would then copy into authorized_keys
+    const auth = await registerAndReachReady(page, 'SSH Agent Unpublished User')
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'revaulter-e2e-ssh-agent-unpublished-'))
+    const trustStorePath = join(tmpRoot, 'trust.json')
+    const socketPath = join(tmpRoot, 'agent.sock')
+    const keyLabel = 'ssh-e2e-unpublished'
+    let agentRun
+
+    try {
+        // Derive the signing key but deliberately leave it unpublished
+        await openSettingsTab(page, 'Signing keys')
+        await page.locator('input#signing-key-label').fill(keyLabel)
+        await page.getByRole('button', { name: 'Derive key' }).click()
+        await expect(page.getByText('Derived key')).toBeVisible()
+        await page.getByRole('button', { name: 'Close settings' }).click()
+        await waitForListStream(page)
+
+        await runCLITrust({
+            requestKey: auth.session.requestKey,
+            trustStorePath,
+        })
+
+        // The agent starts fine: the key is only fetched when a client asks for it
+        agentRun = await startSshAgent({
+            keyLabel,
+            requestKey: auth.session.requestKey,
+            socketPath,
+            trustStorePath,
+        })
+
+        await expect(listSshAgentKeys(socketPath)).rejects.toThrow()
+        expect(agentRun.output().stderr).toContain('no publication proof')
+    } finally {
         await stopProcess(agentRun)
         rmSync(tmpRoot, { recursive: true, force: true })
         await auth.passkey.dispose()

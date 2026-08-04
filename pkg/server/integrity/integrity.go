@@ -1,15 +1,17 @@
 // Package integrity carries the web client integrity artifacts that get embedded into the server binary at release time
-// ManifestBytes is the raw text manifest; BundleBytes is the cosign keyless signing bundle
-// Both files are populated by the release workflow before `go build`; in dev builds they are empty / stub values and the server reports hasIntegrity=false
 package integrity
 
 import (
 	_ "embed"
 )
 
+// Both files are populated by the release workflow before `go build`
+// In dev builds they are empty / stub values and the server reports hasIntegrity=false
 var (
+	// ManifestBytes is the raw text manifest
 	//go:embed manifest.txt
 	ManifestBytes []byte
+	// BundleBytes is the cosign keyless signing bundle
 	//go:embed manifest.sigstore.json
 	BundleBytes []byte
 )

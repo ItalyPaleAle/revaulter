@@ -459,3 +459,35 @@ func TestSignFormatResultValidatesResponseFields(t *testing.T) {
 		require.Contains(t, err.Error(), "missing signature")
 	})
 }
+
+// TestParseAndValidateV2SignResponseSigningKeyID pins the signingKeyId passthrough
+func TestParseAndValidateV2SignResponseSigningKeyID(t *testing.T) {
+	sig := make([]byte, 64)
+
+	// The field travels inside the E2EE envelope and is what the SSH agent compares against the key the server advertised, so it must survive parsing verbatim
+	t.Run("parses the signing key id", func(t *testing.T) {
+		b, err := json.Marshal(map[string]any{
+			"state":        "state-1",
+			"operation":    protocolv2.OperationSign,
+			"algorithm":    protocolv2.SigningAlgES256,
+			"keyLabel":     "label-test",
+			"signingKeyId": "kid-abc",
+			"signature":    base64.RawURLEncoding.EncodeToString(sig),
+		})
+		require.NoError(t, err)
+
+		resp, gotSig, err := parseAndValidateV2SignResponse("state-1", "label-test", protocolv2.SigningAlgES256, b)
+		require.NoError(t, err)
+		require.Equal(t, "kid-abc", resp.SigningKeyID)
+		require.Equal(t, sig, gotSig)
+	})
+
+	t.Run("leaves the signing key id empty when the web client omits it", func(t *testing.T) {
+		// Callers that require the binding (the SSH agent) reject the empty value themselves, so parsing must not fail here
+		plain := newSignResponse(t, "state-1", "label-test", protocolv2.SigningAlgES256, sig)
+
+		resp, _, err := parseAndValidateV2SignResponse("state-1", "label-test", protocolv2.SigningAlgES256, plain)
+		require.NoError(t, err)
+		require.Empty(t, resp.SigningKeyID)
+	})
+}

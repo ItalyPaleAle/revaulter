@@ -1,0 +1,125 @@
+{
+    "$comment": [
+        "Shared test vectors for every byte string that the Go and TypeScript implementations must construct identically.",
+        "These cover the canonical bodies and domain-separated messages that anchor signatures are computed over, the AEAD additional authenticated data, and RFC 7638 JWK thumbprints.",
+        "A mismatch between the two implementations means signatures produced by the browser will not verify in Go (or vice versa), so both test suites read this file and assert against it:",
+        "  - Go:         pkg/protocolv2/canonical_vectors_test.go and cmd/cli/cmd/canonical_vectors_test.go",
+        "  - TypeScript: client/web/src/lib/canonical-vectors.test.ts",
+        "If a value here changes, the wire format changed, and every already-issued signature over the old bytes stops verifying."
+    ],
+    "es384JwkCanonicalBody": [
+        {
+            "name": "anchor ES384 public JWK",
+            "jwk": {
+                "kty": "EC",
+                "crv": "P-384",
+                "x": "es384-x-value",
+                "y": "es384-y-value"
+            },
+            "canonicalBody": "crv=P-384\nkty=EC\nx=es384-x-value\ny=es384-y-value"
+        }
+    ],
+    "attestation": [
+        {
+            "name": "credential attestation",
+            "payload": {
+                "userId": "user-vec-1",
+                "credentialId": "cred-vec-2",
+                "credentialPublicKeyHash": "aGFzaC12ZWMtMw",
+                "wrappedKeyEpoch": 7,
+                "createdAt": 1730000000
+            },
+            "canonicalBody": "userId=user-vec-1\ncredentialId=cred-vec-2\ncredentialPublicKeyHash=aGFzaC12ZWMtMw\nwrappedKeyEpoch=7\ncreatedAt=1730000000",
+            "message": "revaulter/v2/cred-attest\nuserId=user-vec-1\ncredentialId=cred-vec-2\ncredentialPublicKeyHash=aGFzaC12ZWMtMw\nwrappedKeyEpoch=7\ncreatedAt=1730000000"
+        }
+    ],
+    "pubkeyBundleV2": [
+        {
+            "name": "pubkey bundle v2",
+            "payload": {
+                "userId": "user-vec-1",
+                "requestEncEcdhPubkey": "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"ecdh-x\",\"y\":\"ecdh-y\"}",
+                "requestEncMlkemPubkey": "bWxrZW0tdmVj",
+                "anchorEs384Crv": "P-384",
+                "anchorEs384Kty": "EC",
+                "anchorEs384X": "es384-x-value",
+                "anchorEs384Y": "es384-y-value",
+                "anchorMldsa87PublicKey": "bWxkc2E4Ny12ZWM",
+                "v": 2
+            },
+            "canonicalBody": "userId=user-vec-1\nrequestEncEcdhPubkey={\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"ecdh-x\",\"y\":\"ecdh-y\"}\nrequestEncMlkemPubkey=bWxrZW0tdmVj\nanchorEs384Crv=P-384\nanchorEs384Kty=EC\nanchorEs384X=es384-x-value\nanchorEs384Y=es384-y-value\nanchorMldsa87PublicKey=bWxkc2E4Ny12ZWM\nv=2",
+            "message": "revaulter/v2/pubkey-bundle\nuserId=user-vec-1\nrequestEncEcdhPubkey={\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"ecdh-x\",\"y\":\"ecdh-y\"}\nrequestEncMlkemPubkey=bWxrZW0tdmVj\nanchorEs384Crv=P-384\nanchorEs384Kty=EC\nanchorEs384X=es384-x-value\nanchorEs384Y=es384-y-value\nanchorMldsa87PublicKey=bWxkc2E4Ny12ZWM\nv=2"
+        }
+    ],
+    "signingKeyPublication": [
+        {
+            "name": "signing key publication proof",
+            "payload": {
+                "userId": "user-vec-1",
+                "algorithm": "ES256",
+                "keyLabel": "vectors+label",
+                "keyId": "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U",
+                "wrappedKeyEpoch": 7,
+                "createdAt": 1730000000,
+                "v": 1
+            },
+            "canonicalBody": "userId=user-vec-1\nalgorithm=ES256\nkeyLabel=vectors+label\nkeyId=oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U\nwrappedKeyEpoch=7\ncreatedAt=1730000000\nv=1",
+            "message": "revaulter/v2/signing-key-publication\nuserId=user-vec-1\nalgorithm=ES256\nkeyLabel=vectors+label\nkeyId=oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U\nwrappedKeyEpoch=7\ncreatedAt=1730000000\nv=1"
+        }
+    ],
+    "transportAad": [
+        {
+            "name": "sign operation",
+            "state": "state-vec-1",
+            "operation": "sign",
+            "algorithm": "ES256",
+            "aad": "algorithm=ES256\noperation=sign\nstate=state-vec-1\nv=1"
+        },
+        {
+            "name": "encrypt operation",
+            "state": "state-vec-2",
+            "operation": "encrypt",
+            "algorithm": "A256GCM",
+            "aad": "algorithm=A256GCM\noperation=encrypt\nstate=state-vec-2\nv=1"
+        }
+    ],
+    "requestEncAad": [
+        {
+            "name": "encrypt operation",
+            "algorithm": "A256GCM",
+            "keyLabel": "vectors+label",
+            "operation": "encrypt",
+            "aad": "algorithm=A256GCM\nkeyLabel=vectors+label\noperation=encrypt\nv=1"
+        },
+        {
+            "name": "sign operation",
+            "algorithm": "ES256",
+            "keyLabel": "vectors+label",
+            "operation": "sign",
+            "aad": "algorithm=ES256\nkeyLabel=vectors+label\noperation=sign\nv=1"
+        }
+    ],
+    "jwkThumbprint": [
+        {
+            "name": "ES256 signing key",
+            "jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+                "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+            },
+            "canonicalJwk": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\",\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\"}",
+            "thumbprint": "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U"
+        },
+        {
+            "name": "Ed25519 signing key",
+            "jwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+            },
+            "canonicalJwk": "{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\"}",
+            "thumbprint": "P7IdLIpiTZiFaIoOSqbX3JrSyps3hvZ4Y2SieP96XIY"
+        }
+    ]
+}

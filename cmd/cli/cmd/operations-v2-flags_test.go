@@ -325,7 +325,8 @@ func TestEncryptMessageRejectsOversizeInput(t *testing.T) {
 }
 
 func TestEncryptMessageAcceptsExactlyMaxSize(t *testing.T) {
-	// Exactly maxInputBytes is allowed; only strictly greater trips the guard
+	// Exactly maxInputBytes is allowed
+	// Only strictly greater trips the guard
 	exact := make([]byte, maxInputBytes)
 	for i := range exact {
 		exact[i] = 'a'
@@ -537,4 +538,31 @@ func TestDecryptFormatResultRejectsAlgorithmMismatch(t *testing.T) {
 	_, err := f.FormatResult("state-1", plain, "raw")
 	require.Error(t, err)
 	require.ErrorContains(t, err, "does not match requested")
+}
+
+// TestBaseValidateNoteLength pins the client-side note limit shared by every v2 operation
+// Without it an oversize --note only fails server-side, after the request has already been built and encrypted
+func TestBaseValidateNoteLength(t *testing.T) {
+	t.Run("accepts a note at the limit", func(t *testing.T) {
+		f := newEncryptFlagsWithRequired(t)
+		f.Note = strings.Repeat("n", protocolv2.MaxNoteLength)
+		require.NoError(t, f.Validate())
+	})
+
+	t.Run("rejects a note over the limit", func(t *testing.T) {
+		f := newEncryptFlagsWithRequired(t)
+		f.Note = strings.Repeat("n", protocolv2.MaxNoteLength+1)
+
+		err := f.Validate()
+		require.ErrorContains(t, err, "note cannot be longer than")
+	})
+
+	t.Run("applies to sign as well", func(t *testing.T) {
+		f := newSignFlagsWithRequired(t)
+		f.Digest = strings.Repeat("00", 32)
+		f.Note = strings.Repeat("n", protocolv2.MaxNoteLength+1)
+
+		err := f.Validate()
+		require.ErrorContains(t, err, "note cannot be longer than")
+	})
 }

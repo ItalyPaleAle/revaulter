@@ -327,7 +327,7 @@ export function attestationPayloadCanonicalBody(payload: AttestationPayload): st
     ].join('\n')
 }
 
-function canonicalAttestationMessage(body: string): Uint8Array {
+export function canonicalAttestationMessage(body: string): Uint8Array {
     return new TextEncoder().encode(CRED_ATTEST_PREFIX + body)
 }
 
@@ -350,7 +350,7 @@ export function pubkeyBundlePayloadCanonicalBody(payload: PubkeyBundlePayload): 
     ].join('\n')
 }
 
-function canonicalPubkeyBundleMessage(body: string): Uint8Array {
+export function canonicalPubkeyBundleMessage(body: string): Uint8Array {
     return new TextEncoder().encode(PUBKEY_BUNDLE_PREFIX + body)
 }
 
@@ -395,7 +395,7 @@ export function signingKeyPublicationPayloadCanonicalBody(payload: SigningKeyPub
     ].join('\n')
 }
 
-function canonicalSigningKeyPublicationMessage(body: string): Uint8Array {
+export function canonicalSigningKeyPublicationMessage(body: string): Uint8Array {
     return new TextEncoder().encode(SIGNING_KEY_PUBLICATION_PREFIX + body)
 }
 

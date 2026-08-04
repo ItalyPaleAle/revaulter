@@ -201,10 +201,21 @@ func TestVerifySigningKeyPublicResponse(t *testing.T) {
 			Mldsa87PubBytes:   mlPubBytes,
 			ExpectedUserID:    payload.UserID,
 			ExpectedAlgorithm: payload.Algorithm,
+			ExpectedKeyLabel:  payload.KeyLabel,
 			ExpectedKeyID:     payload.KeyID,
 		})
 		require.NoError(t, err)
 		require.Equal(t, *payload, out)
+	})
+
+	t.Run("rejects mismatched keyLabel", func(t *testing.T) {
+		// A proof issued for one label must not be accepted for another, so a server cannot replay the proof of a key the user did publish onto a label they did not
+		_, err := VerifySigningKeyPublicResponse(body, sigEsB64, sigMlB64, SigningKeyPublicResponseVerifyOptions{
+			Es384Pub:         &esPriv.PublicKey,
+			Mldsa87PubBytes:  mlPubBytes,
+			ExpectedKeyLabel: "a-different-label",
+		})
+		require.ErrorContains(t, err, "keyLabel")
 	})
 
 	t.Run("rejects a missing publication proof", func(t *testing.T) {

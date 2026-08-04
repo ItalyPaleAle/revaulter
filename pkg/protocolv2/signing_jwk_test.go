@@ -89,10 +89,38 @@ func TestECP256SigningJWKValidateRejectsInvalid(t *testing.T) {
 		{"includes-d", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: validX, Y: validY, D: "secret"}},
 		{"wrong-alg", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: validX, Y: validY, Alg: "ES384"}},
 		{"wrong-use", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: validX, Y: validY, Use: "enc"}},
+		{"x-not-base64url", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: "not base64!", Y: validY}},
+		{"y-not-base64url", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: validX, Y: "not base64!"}},
+		{"x-wrong-length", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: base64.RawURLEncoding.EncodeToString(make([]byte, 31)), Y: validY}},
+		{"y-wrong-length", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: validX, Y: base64.RawURLEncoding.EncodeToString(make([]byte, 33))}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Error(t, tt.jwk.ValidateSigningKey())
+		})
+	}
+}
+
+// TestECP256SigningJWKThumbprintRejectsJSONInjection guards the hand-rolled canonical JSON in Thumbprint
+// ValidateSigningKey must reject coordinates carrying JSON-significant characters, so Thumbprint is self-contained and does not depend on the caller having run ToECDHPublicKey first
+func TestECP256SigningJWKThumbprintRejectsJSONInjection(t *testing.T) {
+	const validX = "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU"
+	const validY = "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+
+	tests := []struct {
+		name string
+		jwk  ECP256SigningJWK
+	}{
+		{"quote-in-x", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: `","kty":"evil`, Y: validY}},
+		{"quote-in-y", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: validX, Y: `","kty":"evil`}},
+		{"backslash-in-x", ECP256SigningJWK{Kty: "EC", Crv: "P-256", X: `abc\def`, Y: validY}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Error(t, tt.jwk.ValidateSigningKey())
+
+			_, err := tt.jwk.Thumbprint()
+			require.Error(t, err, "Thumbprint must not build canonical JSON from unvalidated coordinates")
 		})
 	}
 }

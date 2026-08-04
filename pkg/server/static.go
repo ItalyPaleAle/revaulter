@@ -51,7 +51,7 @@ func prepareStaticResponse(c *gin.Context) (ok bool) {
 func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 	// Normalize the request path before use
 	// Backslashes are converted to forward slashes because some browsers parse "\" as "/" in Location headers, which would let "\evil.com" be interpreted as the protocol-relative URL "//evil.com"
-	// path.Clean collapses "..", duplicate slashes, and trailing slashes; prefixing "/" ensures the cleaned result is a host-relative absolute path
+	// path.Clean collapses "..", duplicate slashes, and trailing slashes, then prefixes with "/" and ensures the cleaned result is a host-relative absolute path
 	reqPath = path.Clean("/" + strings.ReplaceAll(reqPath, `\`, "/"))
 	reqPath = strings.TrimPrefix(reqPath, "/")
 
@@ -180,7 +180,7 @@ func setPageSecurityHeaders(w http.ResponseWriter) {
 	// Content-Security-Policy:
 	//   default-src 'none'  — deny everything not explicitly allowed
 	//   script-src 'self' 'wasm-unsafe-eval'
-	//                       — JS only from same origin (Vite/SRI bundles); 'wasm-unsafe-eval' is required for mlkem-wasm
+	//                       — JS only from same origin (Vite/SRI bundles) - 'wasm-unsafe-eval' is required for mlkem-wasm
 	//   style-src 'self'    — CSS only from same origin (Tailwind bundle)
 	//   img-src 'self'      — images from same origin
 	//   font-src 'self'     — fonts from same origin

@@ -14,7 +14,7 @@ var (
 func init() {
 	// Explicit allow-list overrides the block list
 	// CGNAT (RFC 6598) 100.64.0.0/10 is widely used as legitimate routable address space by Tailscale and similar overlays
-	// fd7a:115c:a1e0::/48 is Tailscale's well-known ULA subset; it is nominally inside fc00::/7 but is used for legitimate cross-host traffic
+	// fd7a:115c:a1e0::/48 is Tailscale's well-known ULA subset (it is nominally inside fc00::/7 but is used for legitimate cross-host traffic)
 	ipAllowRanges = mustParseCIDRs([]string{
 		"100.64.0.0/10",
 		"fd7a:115c:a1e0::/48",
@@ -41,7 +41,7 @@ func init() {
 		"::/128",        // unspecified address
 		"::1/128",       // loopback
 		"2001:db8::/32", // documentation (RFC 3849)
-		"fc00::/7",      // unique local address (RFC 4193); Tailscale subset carved out above
+		"fc00::/7",      // unique local address (RFC 4193) - Tailscale subset carved out above
 		"fe80::/10",     // link-local (RFC 4291)
 		"ff00::/8",      // multicast (RFC 4291)
 	})

@@ -1435,7 +1435,7 @@ func (w mockWebhook) SendWebhook(_ context.Context, data webhook.MessageProvider
 
 // testValidWrappedAnchorEnvelope returns a syntactically valid wrapped-anchor envelope for tests
 // The envelope is the one enforced by validateWrappedAnchorEnvelope: alphabetical newline `key=value` lines wrapped in base64url
-// The ciphertext is not a real AES-GCM output; these tests exercise route-level structural validation, not decryption
+// The ciphertext is not a real AES-GCM output: these tests exercise route-level structural validation, not decryption
 func testValidWrappedAnchorEnvelope(t *testing.T) string {
 	t.Helper()
 	ciphertext := base64.RawURLEncoding.EncodeToString([]byte("test-ciphertext"))

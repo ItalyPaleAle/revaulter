@@ -14,11 +14,11 @@ Create the signing key before using the SSH agent:
 1. Open the Revaulter web UI and sign in.
 2. Open **Settings**.
 3. Go to **Signing keys**.
-4. Create or generate a signing key for the key label you want to use, for example `ssh-main`.
-
-![Screenshot of the Revaulter settings UI, inside the "Signing keys", showing the creation of a signing key called "ssh-main"](/docs/img/create-signing-key.webp)
-
-Note: you do not need to publish the key for SSH agent use.
+4. Create or generate a signing key for the key label you want to use, for example `ssh-main`.  
+   ![Screenshot of the Revaulter settings UI, inside the "Signing keys", showing the creation of a signing key called "ssh-main"](/docs/img/create-signing-key.webp)
+5. Publish the key.  
+   Publishing is required for SSH agent use. It attaches an anchor-signed publication proof to the key, and the agent refuses to advertise a key that does not carry one.  
+   Without that proof the agent has no way to tell your key apart from one the server made up, and a substituted key copied into `authorized_keys` would authorize whoever controls it.
 
 ## 2. Trust the server anchor
 

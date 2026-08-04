@@ -6,13 +6,14 @@ import Icon from '$components/Icon.svelte'
 import LoadingSpinner from '$components/LoadingSpinner.svelte'
 
 import {
+    computeSigningKeyThumbprint,
     decryptRequestPayload,
     deriveOperationKeyBytes,
     deriveSigningKeyPair,
     encryptTransportEnvelope,
-    signingJwkToPem,
     signDigestEd25519ph,
     signDigestEs256,
+    signingJwkToPem,
     signMessageEd25519,
 } from '$lib/crypto'
 import {
@@ -222,7 +223,10 @@ async function buildResponseEnvelope(
                     throw new Error(`Unsupported signing algorithm: ${req.algorithm}`)
             }
 
-            const pem = await signingJwkToPem(publicJwk)
+            const [pem, signingKeyId] = await Promise.all([
+                signingJwkToPem(publicJwk),
+                computeSigningKeyThumbprint(publicJwk),
+            ])
             publicKey = { jwk: publicJwk, pem }
             resultPlain = new TextEncoder().encode(
                 JSON.stringify({
@@ -230,6 +234,7 @@ async function buildResponseEnvelope(
                     operation: req.operation,
                     algorithm: req.algorithm,
                     keyLabel: req.keyLabel,
+                    signingKeyId,
                     signature: bytesToBase64Url(signature),
                 })
             )

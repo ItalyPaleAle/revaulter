@@ -99,6 +99,7 @@ type SigningKeyPublicResponseVerifyOptions struct {
 	// An empty value here means "do not check" and weakens the verification, so callers should always populate every field they have an expectation for
 	ExpectedUserID    string
 	ExpectedAlgorithm string
+	ExpectedKeyLabel  string
 	ExpectedKeyID     string
 }
 
@@ -129,6 +130,9 @@ func VerifySigningKeyPublicResponse(payloadStr string, sigEsB64, sigMlB64 string
 	}
 	if opts.ExpectedAlgorithm != "" && payload.Algorithm != opts.ExpectedAlgorithm {
 		return SigningKeyPublicationPayload{}, fmt.Errorf("publication algorithm %q does not match expected %q", payload.Algorithm, opts.ExpectedAlgorithm)
+	}
+	if opts.ExpectedKeyLabel != "" && payload.KeyLabel != opts.ExpectedKeyLabel {
+		return SigningKeyPublicationPayload{}, fmt.Errorf("publication keyLabel %q does not match expected %q", payload.KeyLabel, opts.ExpectedKeyLabel)
 	}
 	if opts.ExpectedKeyID != "" && payload.KeyID != opts.ExpectedKeyID {
 		return SigningKeyPublicationPayload{}, fmt.Errorf("publication keyId %q does not match expected %q", payload.KeyID, opts.ExpectedKeyID)

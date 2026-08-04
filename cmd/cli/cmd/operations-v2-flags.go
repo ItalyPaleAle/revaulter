@@ -117,6 +117,11 @@ func (f *v2OperationFlagsBase) Validate() error {
 	}
 	f.KeyLabel = canonicalKeyLabel
 
+	// Enforce the server's note limit client-side so an oversize note fails here rather than with a 400 after the request is built
+	if len(f.Note) > protocolv2.MaxNoteLength {
+		return fmt.Errorf("note cannot be longer than %d characters (got %d)", protocolv2.MaxNoteLength, len(f.Note))
+	}
+
 	return nil
 }
 
@@ -805,6 +810,9 @@ type v2SignResponsePayload struct {
 	Algorithm string `json:"algorithm"`
 	KeyLabel  string `json:"keyLabel"`
 	Signature string `json:"signature"`
+
+	// SigningKeyID is the RFC 7638 thumbprint of the key the browser actually signed with
+	SigningKeyID string `json:"signingKeyId"`
 }
 
 // parseAndValidateV2SignResponse validates response binding and returns the decoded raw signature

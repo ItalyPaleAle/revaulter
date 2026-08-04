@@ -608,6 +608,49 @@ func TestServerV2RequestSigningPubkeyReturnsAutoStoredKey(t *testing.T) {
 	require.Equal(t, keyLabel, out["keyLabel"])
 	require.Equal(t, protocolv2.SigningAlgES256, out["algorithm"])
 	require.NotNil(t, out["jwk"])
+
+	// Auto-stored rows carry no publication proof, so the proof fields must be absent
+	// Clients that bind the key to a pinned anchor (the SSH agent) rely on this to tell a proven key from an unproven one
+	require.NotContains(t, out, "publicationPayload")
+	require.NotContains(t, out, "publicationSignatureEs384")
+	require.NotContains(t, out, "publicationSignatureMldsa87")
+}
+
+// TestServerV2RequestSigningPubkeyReturnsPublicationProof asserts the endpoint surfaces the stored proof
+func TestServerV2RequestSigningPubkeyReturnsPublicationProof(t *testing.T) {
+	setTestConfig(t, "v2-request-signing-pubkey-proof.db")
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	_, aliceUser := seedV2SessionCookie(t, srv, "user-request-signing-pubkey-proof", "Alice")
+
+	keyLabel := "ssh-main"
+	km := newSigningKeyMaterial(t)
+	_, err := srv.db.SigningKeyStore().Create(t.Context(), db.InsertSigningKeyInput{
+		ID:                          km.ID,
+		UserID:                      aliceUser.ID,
+		Algorithm:                   protocolv2.SigningAlgES256,
+		KeyLabel:                    keyLabel,
+		JWK:                         string(km.JWKJSON),
+		PEM:                         km.PEM,
+		Published:                   true,
+		PublicationPayload:          "canonical-payload",
+		PublicationSignatureEs384:   "sig-es384",
+		PublicationSignatureMldsa87: "sig-mldsa87",
+	})
+	require.NoError(t, err)
+
+	//nolint:bodyclose
+	res, out := doRequestKeyJSON(t, client, http.MethodGet, "signing-pubkey?label=ssh-main&algorithm=ES256", aliceUser.RequestKey, nil)
+	require.Equal(t, http.StatusOK, res.StatusCode, "unexpected body: %v", out)
+	require.Equal(t, km.ID, out["id"])
+	require.Equal(t, "canonical-payload", out["publicationPayload"])
+	require.Equal(t, "sig-es384", out["publicationSignatureEs384"])
+	require.Equal(t, "sig-mldsa87", out["publicationSignatureMldsa87"])
 }
 
 func TestServerV2RequestSigningPubkeyRejectsInvalidRequests(t *testing.T) {

@@ -49,6 +49,18 @@ func (j *ECP256SigningJWK) ValidateSigningKey() error {
 		return fmt.Errorf("invalid JWK 'use': %q", j.Use)
 	}
 
+	// Decode and length-check the coordinates here rather than relying on the caller having invoked ToECDHPublicKey first
+	// Thumbprint() builds its canonical JSON by string concatenation, so it must never see a value containing JSON-significant characters
+	_, err := decodeB64URL256(j.X)
+	if err != nil {
+		return fmt.Errorf("invalid JWK 'x': %w", err)
+	}
+
+	_, err = decodeB64URL256(j.Y)
+	if err != nil {
+		return fmt.Errorf("invalid JWK 'y': %w", err)
+	}
+
 	return nil
 }
 
