@@ -462,15 +462,15 @@ jobs:
         with:
           subject-path: '.out/*'
 
-      # Attached to the release so the provenance can also be verified offline, with `gh attestation verify <archive> --bundle attestations.jsonl`
+      # Attached to the release so the provenance can also be verified offline, with `gh attestation verify <archive> --bundle attestations.json`
       - name: Stage attestation bundle
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           BUNDLE_PATH: ${{ steps.attest-archives.outputs.bundle-path }}
         run: |
-          cp "${BUNDLE_PATH}" .out/attestations.jsonl
+          cp "${BUNDLE_PATH}" .out/attestations.json
 
-          echo "Attestations: $(wc -l < .out/attestations.jsonl)"
+          echo "Attestations: $(wc -l < .out/attestations.json)"
 
       - name: Publish binaries as Actions Artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
