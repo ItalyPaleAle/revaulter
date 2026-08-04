@@ -417,13 +417,20 @@ jobs:
           echo ".out:"
           ls -al .out
 
-      - name: Publish binaries as Actions Artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: artifacts
-          path: .out
-          include-hidden-files: true
-          compression-level: 0
+      - name: Generate checksums
+        working-directory: .out
+        run: |
+          shopt -s nullglob
+          files=(revaulter-*.tar.gz revaulter-*.zip)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::error::No release archives found in .out"
+            exit 1
+          fi
+
+          sha256sum "${files[@]}" | sort -k 2 > checksums.txt
+
+          echo "checksums.txt:"
+          cat checksums.txt
 
       - name: Build and push Container images
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -447,95 +454,31 @@ jobs:
           file: Dockerfile-cli
           push: true
 
-      - name: Binary attestation linux-amd64
+      # A single attestation covering every file attached to the release: the archives plus checksums.txt
+      - name: Attestation for release archives
+        id: attest-archives
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         if: startsWith(github.ref, 'refs/tags/v')
         with:
-          subject-name: linux-amd64/revaulter
-          subject-path: |
-            .bin/revaulter-*-linux-amd64/revaulter
-            .bin/revaulter-*-linux-amd64/revaulter-cli
+          subject-path: '.out/*'
 
-      - name: Binary attestation linux-386
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+      # Attached to the release so the provenance can also be verified offline, with `gh attestation verify <archive> --bundle attestations.jsonl`
+      - name: Stage attestation bundle
         if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          subject-name: linux-386/revaulter
-          subject-path: |
-            .bin/revaulter-*-linux-386/revaulter
-            .bin/revaulter-*-linux-386/revaulter-cli
+        env:
+          BUNDLE_PATH: ${{ steps.attest-archives.outputs.bundle-path }}
+        run: |
+          cp "${BUNDLE_PATH}" .out/attestations.jsonl
 
-      - name: Binary attestation linux-arm64
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          subject-name: linux-arm64/revaulter
-          subject-path: |
-            .bin/revaulter-*-linux-arm64/revaulter
-            .bin/revaulter-*-linux-arm64/revaulter-cli
+          echo "Attestations: $(wc -l < .out/attestations.jsonl)"
 
-      - name: Binary attestation linux-armv7
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish binaries as Actions Artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          subject-name: linux-armv7/revaulter
-          subject-path: |
-            .bin/revaulter-*-linux-armv7/revaulter
-            .bin/revaulter-*-linux-armv7/revaulter-cli
-
-      - name: Binary attestation macos-x64
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          subject-name: macos-x64/revaulter
-          subject-path: |
-            .bin/revaulter-*-macos-x64/revaulter
-            .bin/revaulter-*-macos-x64/revaulter-cli
-
-      - name: Binary attestation macos-arm64
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          subject-name: macos-arm64/revaulter
-          subject-path: |
-            .bin/revaulter-*-macos-arm64/revaulter
-            .bin/revaulter-*-macos-arm64/revaulter-cli
-
-      - name: Binary attestation windows-x64
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          subject-name: windows-x64/revaulter
-          subject-path: |
-            .bin/revaulter-*-windows-x64/revaulter.exe
-            .bin/revaulter-*-windows-x64/revaulter-cli.exe
-
-      - name: Binary attestation windows-arm64
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          subject-name: windows-arm64/revaulter
-          subject-path: |
-            .bin/revaulter-*-windows-arm64/revaulter.exe
-            .bin/revaulter-*-windows-arm64/revaulter-cli.exe
-
-      - name: Binary attestation freebsd-amd64
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          subject-name: freebsd-amd64/revaulter
-          subject-path: |
-            .bin/revaulter-*-freebsd-amd64/revaulter
-            .bin/revaulter-*-freebsd-amd64/revaulter-cli
-
-      - name: Binary attestation freebsd-arm64
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        if: startsWith(github.ref, 'refs/tags/v')
-        with:
-          subject-name: freebsd-arm64/revaulter
-          subject-path: |
-            .bin/revaulter-*-freebsd-arm64/revaulter
-            .bin/revaulter-*-freebsd-arm64/revaulter-cli
+          name: artifacts
+          path: .out
+          include-hidden-files: true
+          compression-level: 0
 
       - name: Container image attestation
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
@@ -552,3 +495,104 @@ jobs:
           subject-name: 'ghcr.io/${{ env.REPO_OWNER }}/revaulter-cli'
           subject-digest: ${{ steps.docker-build-push-cli.outputs.digest }}
           push-to-registry: true
+
+  release:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+
+    steps:
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: artifacts
+          path: .out
+
+      - name: Create draft release
+        run: |
+          # Re-running the workflow is only safe while the release is still a draft
+          # Once published it is immutable and must not be touched
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            if [[ "$(gh release view "${TAG}" --json isDraft --jq '.isDraft')" != 'true' ]]; then
+              echo "::error::Release ${TAG} is already published, and published releases are immutable"
+              exit 1
+            fi
+
+            # Never pass --cleanup-tag here: the tag must survive
+            echo "Deleting existing draft release ${TAG}"
+            gh release delete "${TAG}" --yes
+          fi
+
+          # Tags carrying a pre-release identifier (such as v1.2.0-rc.1) are marked as pre-releases
+          prerelease=()
+          if [[ "${TAG}" == *-* ]]; then
+            echo "Marking ${TAG} as a pre-release"
+            prerelease=(--prerelease)
+          fi
+
+          shopt -s nullglob
+          assets=(.out/*)
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "::error::No assets found in .out"
+            exit 1
+          fi
+
+          echo "Attaching ${#assets[@]} assets:"
+          printf '  %s\n' "${assets[@]}"
+
+          # Release notes are written by hand
+          gh release create "${TAG}" \
+            --draft \
+            --verify-tag \
+            --title "${TAG}" \
+            --notes "" \
+            "${prerelease[@]}" \
+            "${assets[@]}"
+
+      - name: Job summary
+        run: |
+          url=$(gh release view "${TAG}" --json url --jq '.url')
+          {
+            echo "## Draft release ${TAG}"
+            echo
+            echo "Review the draft and write the release notes, then approve the \`publish\` job."
+            echo
+            echo "<${url}>"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    environment: release
+
+    permissions:
+      contents: write
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+
+    steps:
+
+      # Publishing the release makes it immutable
+      - name: Publish release
+        run: |
+          gh release edit "${TAG}" --draft=false
+
+          gh release view "${TAG}" \
+            --json url,isDraft,isPrerelease \
+            --jq '"\(.url)\ndraft=\(.isDraft) prerelease=\(.isPrerelease)"'

@@ -11,6 +11,15 @@ The Revaulter CLI (`revaulter-cli`) is the primary way to submit encrypt, decryp
 
 Download the latest release from [GitHub Releases](https://github.com/ItalyPaleAle/revaulter/releases). Binaries are available for Linux (`amd64`, `arm64`), macOS (`amd64`, `arm64`), and Windows.
 
+Each release also includes a `checksums.txt` with the SHA-256 of every archive and an `attestations.jsonl` holding the [build provenance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations) for each asset. To check an archive before extracting it:
+
+```bash
+gh attestation verify revaulter-<version>-<arch>.tar.gz \
+  --repo ItalyPaleAle/revaulter
+```
+
+Pass `--bundle attestations.jsonl` to verify against the downloaded bundle rather than querying GitHub's attestations API.
+
 ### Docker
 
 ```bash

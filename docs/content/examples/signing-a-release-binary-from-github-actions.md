@@ -34,10 +34,20 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -o dist/myapp-linux-amd64 ./cmd/myapp
 
       - name: Install revaulter-cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVAULTER_VERSION: '2.2.0'
         run: |
-          curl -fsSL https://github.com/ItalyPaleAle/revaulter/releases/latest/download/revaulter-cli-linux-amd64 \
-            -o /usr/local/bin/revaulter-cli
-          chmod 0755 /usr/local/bin/revaulter-cli
+          archive="revaulter-${REVAULTER_VERSION}-linux-amd64.tar.gz"
+          curl -fsSLO "https://github.com/ItalyPaleAle/revaulter/releases/download/v${REVAULTER_VERSION}/${archive}"
+
+          # Check the build provenance before trusting the binary
+          gh attestation verify "${archive}" --repo ItalyPaleAle/revaulter
+
+          tar -xzf "${archive}"
+          sudo install -m 0755 \
+            "revaulter-${REVAULTER_VERSION}-linux-amd64/revaulter-cli" \
+            /usr/local/bin/revaulter-cli
 
       - name: Sign the binary (waits for passkey approval)
         env:
