@@ -79,9 +79,9 @@ export default defineConfig(({ mode }) => {
         ],
         resolve: {
             alias: {
-                '$lib': path.resolve(__dirname, './src/lib'),
-                '$components': path.resolve(__dirname, './src/components'),
-                '$assets': path.resolve(__dirname, './src/assets'),
+                '$lib': path.resolve(import.meta.dirname, './src/lib'),
+                '$components': path.resolve(import.meta.dirname, './src/components'),
+                '$assets': path.resolve(import.meta.dirname, './src/assets'),
             },
         },
         define: {

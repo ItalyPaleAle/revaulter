@@ -36,7 +36,8 @@ jobs:
       - name: Install revaulter-cli
         env:
           GH_TOKEN: ${{ github.token }}
-          REVAULTER_VERSION: '2.2.0'
+          # Set this, e.g. "2.2.0"
+          REVAULTER_VERSION: ''
         run: |
           archive="revaulter-${REVAULTER_VERSION}-linux-amd64.tar.gz"
           curl -fsSLO "https://github.com/ItalyPaleAle/revaulter/releases/download/v${REVAULTER_VERSION}/${archive}"
