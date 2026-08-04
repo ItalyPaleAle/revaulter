@@ -9,7 +9,7 @@ import (
 	env "github.com/caarlos0/env/v11"
 	"github.com/italypaleale/revaulter/pkg/utils"
 	"github.com/mitchellh/mapstructure"
-	yaml "gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // LoadOptions contains options for the Load method.
