@@ -22,7 +22,7 @@ jobs:
 
     env:
       GOEXPERIMENT: jsonv2
-      TRUST_ROOT_PATH: pkg/integrity/sigstore_trust_root.json
+      TRUST_ROOT_PATH: internal/integrity/sigstore_trust_root.json
       TRUST_ROOT_URL: https://raw.githubusercontent.com/sigstore/sigstore-go/main/examples/trusted-root-public-good.json
       # Canonical Rekor pubkey, published directly by Sigstore (not via the sigstore-go repo)
       # Used as an independent cross-check so a compromise of sigstore-go alone can't poison the refresh
@@ -84,7 +84,7 @@ jobs:
       - name: Verify integrity tests still pass with the new trust root
         if: steps.diff.outputs.changed == 'true'
         run: |
-          go test -tags unit ./pkg/integrity/...
+          go test -tags unit ./internal/integrity/...
 
       - name: Open pull request
         if: steps.diff.outputs.changed == 'true'
@@ -102,7 +102,7 @@ jobs:
             Rotating it changes which Sigstore infrastructure keys the CLI will
             accept when verifying signatures made after this merge.
 
-            `go test -tags unit ./pkg/integrity/...` was run against the
+            `go test -tags unit ./internal/integrity/...` was run against the
             updated file and passed.
           labels: |
             dependencies

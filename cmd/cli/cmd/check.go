@@ -9,9 +9,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/italypaleale/revaulter/pkg/buildinfo"
-	"github.com/italypaleale/revaulter/pkg/integrity/verifier"
-	"github.com/italypaleale/revaulter/pkg/utils/logging"
+	"github.com/italypaleale/revaulter/internal/buildinfo"
+	"github.com/italypaleale/revaulter/internal/integrity/verifier"
+	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
 type checkFlags struct {

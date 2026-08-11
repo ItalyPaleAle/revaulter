@@ -74,7 +74,8 @@ test('two passkeys without a password can each sign in and share the primary key
         const firstId = await registerWithManager(page, manager, 'Multi Passkey User')
         await skipPasswordSetup(page)
 
-        // Add a second passkey while signed in; the helper expects the manager to already have the desired authenticator active
+        // Add a second passkey while signed in
+        // The helper expects the manager to already have the desired authenticator active
         const secondId = await manager.addAuthenticator({ active: false })
         await manager.setActive(secondId)
         await addPasskeyThroughSettings(page, manager, 'Second Passkey')
@@ -111,7 +112,8 @@ test('two passkeys with a password set before the second passkey share the prima
         await page.getByRole('button', { name: 'Save password' }).click()
         await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
 
-        // Add the second passkey; doAddPasskey reuses the in-memory session password to wrap the new credential's primary key
+        // Add the second passkey
+        // DoAddPasskey reuses the in-memory session password to wrap the new credential's primary key
         const secondId = await manager.addAuthenticator({ active: false })
         await manager.setActive(secondId)
         await addPasskeyThroughSettings(page, manager, 'Second Passkey')
@@ -125,7 +127,8 @@ test('two passkeys with a password set before the second passkey share the prima
         const firstSession = await readSession(page)
         const encrypted = await runEncryptThroughUI(page, firstSession.requestKey, 'hello world', 'pk1')
 
-        // Sign in with the second passkey using the same password; both credentials must unwrap to the same primary key
+        // Sign in with the second passkey using the same password
+        // Both credentials must unwrap to the same primary key
         await signOutThroughUI(page)
         await signInWithAuthenticator(page, manager, secondId)
         await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()
@@ -159,7 +162,8 @@ test('changing the password on one passkey leaves the other on the old password 
         await manager.setActive(secondId)
         await addPasskeyThroughSettings(page, manager, 'Second Passkey')
 
-        // Change the password while signed in with the first passkey; that should only update this credential immediately
+        // Change the password while signed in with the first passkey
+        // This should only update this credential immediately
         await signOutThroughUI(page)
         await signInWithAuthenticator(page, manager, firstId)
         await expect(page.getByRole('heading', { name: 'Unlock with your password' })).toBeVisible()

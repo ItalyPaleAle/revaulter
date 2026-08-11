@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
-	"github.com/italypaleale/revaulter/pkg/protocolv2"
+	"github.com/italypaleale/revaulter/internal/protocolv2"
 )
 
 // newSignFlagsWithRequired builds a v2OperationFlagsSign bound to a cobra command and populated with the required base flags
@@ -290,20 +290,17 @@ func TestSignValidateFormatUnknownRejected(t *testing.T) {
 	require.Contains(t, err.Error(), "invalid --format")
 }
 
-func TestSignInnerPayloadCarriesOnlyDigestAndTransportKeys(t *testing.T) {
+func TestSignInnerPayloadCarriesOnlyDigest(t *testing.T) {
 	f := newSignFlagsWithRequired(t)
 	f.Digest = strings.Repeat("00", 32)
 	require.NoError(t, f.Validate())
 
-	transportJWK := protocolv2.ECP256PublicJWK{Kty: "EC", Crv: "P-256", X: "x", Y: "y"}
-	inner := f.InnerPayload(transportJWK, "mlkem-ct")
+	inner := f.InnerPayload()
 
 	require.Equal(t, f.resolvedValueB64, inner.Value)
 	require.Empty(t, inner.Nonce, "sign payloads must leave nonce empty")
 	require.Empty(t, inner.Tag, "sign payloads must leave tag empty")
 	require.Empty(t, inner.AdditionalData, "sign payloads must leave additionalData empty")
-	require.Equal(t, transportJWK, inner.ClientTransportEcdhKey)
-	require.Equal(t, "mlkem-ct", inner.ClientTransportMlkemKey)
 }
 
 // --- FormatResult ---

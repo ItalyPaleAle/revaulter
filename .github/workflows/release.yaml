@@ -91,6 +91,17 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
 
+      - name: Generate Container tags and labels for revaulter-edit
+        id: meta-edit
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ env.REPO_OWNER }}/revaulter-edit
+          tags: |
+            type=edge,branch=main
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
       - name: Set variables
         run: |
           BUILD_ID=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
@@ -108,7 +119,7 @@ jobs:
           echo "BUILD_DATE: '$BUILD_DATE'"
           echo "COMMIT_HASH: '$COMMIT_HASH'"
 
-          BUILDINFO_PKG="github.com/italypaleale/revaulter/pkg/buildinfo"
+          BUILDINFO_PKG="github.com/italypaleale/revaulter/internal/buildinfo"
           REPO_URL="https://github.com/${{ github.repository }}"
           # This is injected into the CLI as a regex fragment, so keep it regex-safe
           SIGNING_BRANCH_REF_PATTERN='heads/main'
@@ -187,16 +198,16 @@ jobs:
       - name: Build integrity manifest
         if: steps.sign_gate.outputs.should_sign == 'true'
         run: |
-          mkdir -p pkg/server/integrity
+          mkdir -p internal/server/integrity
           go run ./tools/build-manifest \
             --dist client/web/dist \
             --version "${BUILD_VERSION}" \
             --commit "${COMMIT_HASH}" \
             --build-date "${BUILD_DATE}" \
-            --out pkg/server/integrity/manifest.txt
+            --out internal/server/integrity/manifest.txt
 
             echo "Manifest:"
-            cat pkg/server/integrity/manifest.txt
+            cat internal/server/integrity/manifest.txt
 
       - name: Sign integrity manifest (cosign keyless)
         if: steps.sign_gate.outputs.should_sign == 'true'
@@ -204,195 +215,20 @@ jobs:
           COSIGN_YES: "true"
         run: |
           cosign sign-blob \
-            --bundle pkg/server/integrity/manifest.sigstore.json \
-            pkg/server/integrity/manifest.txt
+            --bundle internal/server/integrity/manifest.sigstore.json \
+            internal/server/integrity/manifest.txt
 
       - name: Build binaries
         env:
           CGO_ENABLED: "0"
         run: |
-          mkdir -p .bin .out
-
-          echo -e "\n###\nBuilding linux/amd64\n"
-          mkdir .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64
-          GOOS=linux GOARCH=amd64 \
-            go build \
-              -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64/revaulter \
-              -trimpath \
-              ./cmd/revaulter
-          GOOS=linux GOARCH=amd64 \
-            go build \
-              -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64/revaulter-cli \
-              -trimpath \
-              ./cmd/cli
-          cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64
-          cp -r README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-amd64
-          (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-linux-amd64.tar.gz revaulter-${{ env.BUILD_ID }}-linux-amd64)
-
-          echo -e "\n###\nBuilding linux/arm64\n"
-          mkdir .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64
-          GOOS=linux GOARCH=arm64 \
-            go build \
-              -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64/revaulter \
-              -trimpath \
-              ./cmd/revaulter
-          GOOS=linux GOARCH=arm64 \
-            go build \
-              -ldflags "${BUILD_LDFLAGS}" \
-              -o .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64/revaulter-cli \
-              -trimpath \
-              ./cmd/cli
-          cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64
-          cp -r README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-arm64
-          (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-linux-arm64.tar.gz revaulter-${{ env.BUILD_ID }}-linux-arm64)
+          ./scripts/build-binaries.sh linux-amd64
+          ./scripts/build-binaries.sh linux-arm64
 
           if [[ "${BUILD_ALL_PLATFORMS}" == 'true' ]]; then
-            echo -e "\n###\nBuilding linux/386\n"
-            mkdir .bin/revaulter-${{ env.BUILD_ID }}-linux-386
-            GOOS=linux GOARCH=386 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-linux-386/revaulter \
-                -trimpath \
-                ./cmd/revaulter
-            GOOS=linux GOARCH=386 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-linux-386/revaulter-cli \
-                -trimpath \
-                ./cmd/cli
-            cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-386
-            cp -r README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-386
-            (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-linux-386.tar.gz revaulter-${{ env.BUILD_ID }}-linux-386)
-
-            echo -e "\n###\nBuilding linux/armv7\n"
-            mkdir .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7
-            GOOS=linux GOARCH=arm GOARM=7 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7/revaulter \
-                -trimpath \
-                ./cmd/revaulter
-            GOOS=linux GOARCH=arm GOARM=7 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7/revaulter-cli \
-                -trimpath \
-                ./cmd/cli
-            cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7
-            cp -r README.md .bin/revaulter-${{ env.BUILD_ID }}-linux-armv7
-            (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-linux-armv7.tar.gz revaulter-${{ env.BUILD_ID }}-linux-armv7)
-
-            echo -e "\n###\nBuilding darwin/amd64\n"
-            mkdir .bin/revaulter-${{ env.BUILD_ID }}-macos-x64
-            GOOS=darwin GOARCH=amd64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-macos-x64/revaulter \
-                -trimpath \
-                ./cmd/revaulter
-            GOOS=darwin GOARCH=amd64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-macos-x64/revaulter-cli \
-                -trimpath \
-                ./cmd/cli
-            cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-macos-x64
-            cp -r README.md .bin/revaulter-${{ env.BUILD_ID }}-macos-x64
-            (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-macos-x64.tar.gz revaulter-${{ env.BUILD_ID }}-macos-x64)
-
-            echo -e "\n###\nBuilding darwin/arm64\n"
-            mkdir .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64
-            GOOS=darwin GOARCH=arm64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64/revaulter \
-                -trimpath \
-                ./cmd/revaulter
-            GOOS=darwin GOARCH=arm64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64/revaulter-cli \
-                -trimpath \
-                ./cmd/cli
-            cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64
-            cp -r README.md .bin/revaulter-${{ env.BUILD_ID }}-macos-arm64
-            (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-macos-arm64.tar.gz revaulter-${{ env.BUILD_ID }}-macos-arm64)
-
-            echo -e "\n###\nBuilding windows/amd64\n"
-            mkdir .bin/revaulter-${{ env.BUILD_ID }}-windows-x64
-            GOOS=windows GOARCH=amd64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-windows-x64/revaulter.exe \
-                -trimpath \
-                ./cmd/revaulter
-            GOOS=windows GOARCH=amd64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-windows-x64/revaulter-cli.exe \
-                -trimpath \
-                ./cmd/cli
-            cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-windows-x64
-            cp -r README.md .bin/revaulter-${{ env.BUILD_ID }}-windows-x64
-            (cd .bin/revaulter-${{ env.BUILD_ID }}-windows-x64 && zip -r ../../.out/revaulter-${{ env.BUILD_ID }}-windows-x64.zip .)
-
-            echo -e "\n###\nBuilding windows/arm64\n"
-            mkdir .bin/revaulter-${{ env.BUILD_ID }}-windows-arm64
-            GOOS=windows GOARCH=arm64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-windows-arm64/revaulter.exe \
-                -trimpath \
-                ./cmd/revaulter
-            GOOS=windows GOARCH=arm64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-windows-arm64/revaulter-cli.exe \
-                -trimpath \
-                ./cmd/cli
-            cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-windows-arm64
-            cp -r README.md .bin/revaulter-${{ env.BUILD_ID }}-windows-arm64
-            (cd .bin/revaulter-${{ env.BUILD_ID }}-windows-arm64 && zip -r ../../.out/revaulter-${{ env.BUILD_ID }}-windows-arm64.zip .)
-
-            echo -e "\n###\nBuilding freebsd/amd64\n"
-            mkdir .bin/revaulter-${{ env.BUILD_ID }}-freebsd-amd64
-            GOOS=freebsd GOARCH=amd64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-freebsd-amd64/revaulter \
-                -trimpath \
-                ./cmd/revaulter
-            GOOS=freebsd GOARCH=amd64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-freebsd-amd64/revaulter-cli \
-                -trimpath \
-                ./cmd/cli
-            cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-freebsd-amd64
-            cp -r README.md .bin/revaulter-${{ env.BUILD_ID }}-freebsd-amd64
-            (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-freebsd-amd64.tar.gz revaulter-${{ env.BUILD_ID }}-freebsd-amd64)
-
-            echo -e "\n###\nBuilding freebsd/arm64\n"
-            mkdir .bin/revaulter-${{ env.BUILD_ID }}-freebsd-arm64
-            GOOS=freebsd GOARCH=arm64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-freebsd-arm64/revaulter \
-                -trimpath \
-                ./cmd/revaulter
-            GOOS=freebsd GOARCH=arm64 \
-              go build \
-                -ldflags "${BUILD_LDFLAGS}" \
-                -o .bin/revaulter-${{ env.BUILD_ID }}-freebsd-arm64/revaulter-cli \
-                -trimpath \
-                ./cmd/cli
-            cp LICENSE.md .bin/revaulter-${{ env.BUILD_ID }}-freebsd-arm64
-            cp -r README.md .bin/revaulter-${{ env.BUILD_ID }}-freebsd-arm64
-            (cd .bin && tar -czvf ../.out/revaulter-${{ env.BUILD_ID }}-freebsd-arm64.tar.gz revaulter-${{ env.BUILD_ID }}-freebsd-arm64)
+            for target in linux-386 linux-armv7 macos-x64 macos-arm64 windows-x64 windows-arm64 freebsd-amd64 freebsd-arm64; do
+              ./scripts/build-binaries.sh "${target}"
+            done
           else
             echo -e "\n###\nSkipping non-default platforms for this run\n"
           fi
@@ -454,6 +290,17 @@ jobs:
           file: Dockerfile-cli
           push: true
 
+      - name: Build and push Container images for revaulter-edit
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        id: docker-build-push-edit
+        with:
+          tags: ${{ steps.meta-edit.outputs.tags }}
+          labels: ${{ steps.meta-edit.outputs.labels }}
+          platforms: ${{ env.CONTAINER_PLATFORMS }}
+          context: .
+          file: Dockerfile-edit
+          push: true
+
       # A single attestation covering every file attached to the release: the archives plus checksums.txt
       - name: Attestation for release archives
         id: attest-archives
@@ -494,6 +341,14 @@ jobs:
         with:
           subject-name: 'ghcr.io/${{ env.REPO_OWNER }}/revaulter-cli'
           subject-digest: ${{ steps.docker-build-push-cli.outputs.digest }}
+          push-to-registry: true
+
+      - name: Container image attestation for revaulter-edit
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # 4.2.1
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          subject-name: 'ghcr.io/${{ env.REPO_OWNER }}/revaulter-edit'
+          subject-digest: ${{ steps.docker-build-push-edit.outputs.digest }}
           push-to-registry: true
 
   release:

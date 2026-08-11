@@ -21,8 +21,9 @@ Revaulter is distributed as a container image and runs as a single-container ser
 |-------|-------------|
 | `ghcr.io/italypaleale/revaulter:2` | Revaulter server |
 | `ghcr.io/italypaleale/revaulter-cli:2` | Revaulter CLI |
+| `ghcr.io/italypaleale/revaulter-edit:2` | Revaulter local file encryption utility |
 
-Both images are available for `amd64` and `arm64`.
+All images are available for `amd64` and `arm64`.
 
 ## Configuration
 

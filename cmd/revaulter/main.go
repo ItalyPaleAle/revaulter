@@ -17,12 +17,12 @@ import (
 	"github.com/italypaleale/revaulter/cmd/revaulter/backup"
 	"github.com/italypaleale/revaulter/cmd/revaulter/healthcheck"
 	"github.com/italypaleale/revaulter/cmd/revaulter/migrate"
-	"github.com/italypaleale/revaulter/pkg/buildinfo"
-	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/db"
-	revaultermetrics "github.com/italypaleale/revaulter/pkg/metrics"
-	"github.com/italypaleale/revaulter/pkg/server"
-	"github.com/italypaleale/revaulter/pkg/utils/logging"
+	"github.com/italypaleale/revaulter/internal/buildinfo"
+	"github.com/italypaleale/revaulter/internal/config"
+	"github.com/italypaleale/revaulter/internal/db"
+	revaultermetrics "github.com/italypaleale/revaulter/internal/metrics"
+	"github.com/italypaleale/revaulter/internal/server"
+	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
 func main() {

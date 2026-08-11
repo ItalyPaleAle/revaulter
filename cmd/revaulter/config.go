@@ -19,10 +19,10 @@ import (
 	logGlobal "go.opentelemetry.io/otel/log/global"
 	logSdk "go.opentelemetry.io/otel/sdk/log"
 
-	"github.com/italypaleale/revaulter/pkg/buildinfo"
-	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/utils"
-	"github.com/italypaleale/revaulter/pkg/utils/configloader"
+	"github.com/italypaleale/revaulter/internal/buildinfo"
+	"github.com/italypaleale/revaulter/internal/config"
+	"github.com/italypaleale/revaulter/internal/utils"
+	"github.com/italypaleale/revaulter/internal/utils/configloader"
 )
 
 func loadConfig() error {

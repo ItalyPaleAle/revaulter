@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/italypaleale/revaulter/pkg/config"
+	"github.com/italypaleale/revaulter/internal/config"
 )
 
 func TestRunHTTPServer(t *testing.T) {

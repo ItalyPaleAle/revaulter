@@ -4,14 +4,14 @@ import (
 	"bufio"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 
-	"github.com/italypaleale/revaulter/pkg/utils/logging"
+	"github.com/italypaleale/revaulter/internal/clientcore"
+	"github.com/italypaleale/revaulter/internal/cliutil"
+	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
 type trustCmd struct {
@@ -23,9 +23,26 @@ type trustCmd struct {
 	Yes            bool
 }
 
-// GetServer and GetConnectionOptions implement httpClientFlags so trustCmd can be passed to getV2HTTPClient
-func (c *trustCmd) GetServer() string                  { return c.Server }
-func (c *trustCmd) GetConnectionOptions() (bool, bool) { return c.Insecure, c.NoH2C }
+// These methods implement coreClientFlags so trustCmd can be passed to newCoreClient
+func (c *trustCmd) GetServer() string {
+	return c.Server
+}
+
+func (c *trustCmd) GetRequestKey() string {
+	return c.RequestKey
+}
+
+func (c *trustCmd) GetConnectionOptions() (bool, bool) {
+	return c.Insecure, c.NoH2C
+}
+
+func (c *trustCmd) GetTrustStorePath() string {
+	return c.TrustStorePath
+}
+
+func (c *trustCmd) GetNoTrustStore() bool {
+	return false
+}
 
 func newTrustCmd() *cobra.Command {
 	impl := &trustCmd{}
@@ -41,7 +58,7 @@ If the anchor is already pinned and matches, the command confirms it and exits s
 		RunE: impl.Run,
 	}
 
-	defaultPath, _ := defaultTrustStorePath()
+	defaultPath, _ := clientcore.DefaultTrustStorePath()
 	var trustStoreDefault string
 	if defaultPath != "" {
 		trustStoreDefault = " (defaults to " + defaultPath + ")"
@@ -64,92 +81,37 @@ func (c *trustCmd) Run(cmd *cobra.Command, _ []string) error {
 	log := logging.LogFromContext(cmd.Context())
 	c.Server = strings.TrimSuffix(c.Server, "/")
 
-	// Get a HTTP client
-	httpClient, err := getV2HTTPClient(log, c)
+	// Get a client for the server
+	client, err := newCoreClient(log, c, nil)
 	if err != nil {
 		return err
 	}
 
-	// Resolve trust store path
-	path := c.TrustStorePath
-	if path == "" {
-		path, err = defaultTrustStorePath()
-		if err != nil {
-			return err
-		}
+	// Resolve the trust store path and load the trust store
+	path, err := client.TrustStorePath()
+	if err != nil {
+		return err
 	}
 
-	// Load the trust store
-	ts, err := loadTrustStore(path)
+	ts, err := clientcore.LoadTrustStore(path)
 	if err != nil {
 		return err
 	}
 
 	// Fetch the pubkey bundle
-	req, err := newV2RequestKeyHTTPRequest(cmd.Context(), http.MethodGet, c.Server, c.RequestKey, "pubkey", nil)
-	if err != nil {
-		return err
-	}
-
-	// Parse the response
-	var resp v2PubkeyResponse
-	err = doJSONRequest(httpClient, req, &resp)
+	resp, err := client.FetchPubkeyBundle(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("failed to fetch server pubkey bundle: %w", err)
 	}
 
-	// Build a confirmer for first-contact pinning
-	// --yes accepts without prompting (for scripts/CI); otherwise require a TTY
-	var confirm func(string) (bool, error)
-	switch {
-	case c.Yes:
-		server, userID := c.Server, resp.UserID
-		confirm = func(fp string) (bool, error) {
-			fmt.Fprintf(os.Stderr, "Pinning anchor for %s (user %s) without confirmation (--yes).\n", server, userID)
-			fmt.Fprintf(os.Stderr, "Anchor fingerprint:\n%s\n", formatFingerprint(fp, 2))
-			return true, nil
-		}
-	default:
-		stdinFd := int(os.Stdin.Fd())   // #nosec G115
-		stderrFd := int(os.Stderr.Fd()) // #nosec G115
-		if term.IsTerminal(stdinFd) && term.IsTerminal(stderrFd) {
-			reader := bufio.NewReader(os.Stdin)
-			server, userID := c.Server, resp.UserID
-
-			// Prompt the user for confirmation
-			confirm = func(fp string) (bool, error) {
-				fmt.Fprintf(os.Stderr, "First contact with %s (user %s).\n", server, userID)
-				fmt.Fprintf(os.Stderr, "Anchor fingerprint:\n%s\n", formatFingerprint(fp, 2))
-				fmt.Fprint(os.Stderr, "Pin this anchor? [y/N]: ")
-
-				// Read the response
-				line, err := reader.ReadString('\n')
-				if err != nil {
-					return false, fmt.Errorf("read answer: %w", err)
-				}
-
-				line = strings.ToLower(strings.TrimSpace(line))
-				return line == "y" || line == "yes", nil
-			}
-		} else {
-			server, userID := c.Server, resp.UserID
-			confirm = func(fp string) (bool, error) {
-				return false, fmt.Errorf(
-					"anchor for %s (user %s) is not pinned yet (fingerprint %s); rerun with a TTY or use --yes for non-interactive pinning",
-					server, userID, fp,
-				)
-			}
-		}
-	}
-
-	pinned, err := verifyAndPinAnchor(c.Server, &resp, ts, confirm)
+	pinned, err := clientcore.VerifyAndPinAnchor(c.Server, resp, ts, c.anchorConfirmer())
 	if err != nil {
 		return err
 	}
 
 	// Pin if the user confirmed
 	if pinned {
-		err = saveTrustStore(path, ts)
+		err = clientcore.SaveTrustStore(path, ts)
 		if err != nil {
 			return fmt.Errorf("save trust store: %w", err)
 		}
@@ -164,4 +126,42 @@ func (c *trustCmd) Run(cmd *cobra.Command, _ []string) error {
 	}
 
 	return nil
+}
+
+// anchorConfirmer builds the confirmer used for first-contact pinning
+// --yes accepts without prompting (for scripts/CI), otherwise a TTY is required
+func (c *trustCmd) anchorConfirmer() clientcore.ConfirmAnchorFunc {
+	if c.Yes {
+		return func(server, userID, fingerprint string) (bool, error) {
+			fmt.Fprintf(os.Stderr, "Pinning anchor for %s (user %s) without confirmation (--yes).\n", server, userID)
+			fmt.Fprintf(os.Stderr, "Anchor fingerprint:\n%s\n", clientcore.FormatFingerprint(fingerprint, 2))
+			return true, nil
+		}
+	}
+
+	if !cliutil.IsInteractiveTerminal() {
+		return func(server, userID, fingerprint string) (bool, error) {
+			return false, fmt.Errorf(
+				"anchor for %s (user %s) is not pinned yet (fingerprint %s); rerun with a TTY or use --yes for non-interactive pinning",
+				server, userID, fingerprint,
+			)
+		}
+	}
+
+	// Prompt the user for confirmation
+	reader := bufio.NewReader(os.Stdin)
+	return func(server, userID, fingerprint string) (bool, error) {
+		fmt.Fprintf(os.Stderr, "First contact with %s (user %s).\n", server, userID)
+		fmt.Fprintf(os.Stderr, "Anchor fingerprint:\n%s\n", clientcore.FormatFingerprint(fingerprint, 2))
+		fmt.Fprint(os.Stderr, "Pin this anchor? [y/N]: ")
+
+		// Read the response
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return false, fmt.Errorf("read answer: %w", err)
+		}
+
+		line = strings.ToLower(strings.TrimSpace(line))
+		return line == "y" || line == "yes", nil
+	}
 }

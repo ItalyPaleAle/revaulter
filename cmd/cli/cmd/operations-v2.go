@@ -1,49 +1,24 @@
 package cmd
 
 import (
-	"bufio"
 	"bytes"
-	"context"
-	"crypto/ecdh"
-	"crypto/ecdsa"
-	"crypto/mlkem"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
-	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/net/http2"
-	"golang.org/x/term"
 
-	"github.com/italypaleale/revaulter/pkg/buildinfo"
-	"github.com/italypaleale/revaulter/pkg/protocolv2"
-	"github.com/italypaleale/revaulter/pkg/utils/logging"
+	"github.com/italypaleale/revaulter/internal/buildinfo"
+	"github.com/italypaleale/revaulter/internal/clientcore"
+	"github.com/italypaleale/revaulter/internal/cliutil"
+	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
 // userAgent is the User-Agent header value sent on all CLI HTTP requests
 var userAgent = "RevaulterCLI/" + buildinfo.AppVersion
-
-// userAgentTransport sets the User-Agent header on every outgoing request
-type userAgentTransport struct {
-	base http.RoundTripper
-}
-
-func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	// Clone the request because RoundTripper must not modify the input
-	r := req.Clone(req.Context())
-	r.Header.Set("User-Agent", userAgent)
-	return t.base.RoundTrip(r)
-}
 
 type v2OperationCmd struct {
 	Operation string
@@ -79,12 +54,7 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	httpClient, err := getV2HTTPClient(log, o.flags)
-	if err != nil {
-		return err
-	}
-
-	kp, err := newV2TransportKeyPair()
+	client, err := newCoreClient(log, o.flags, terminalAnchorConfirmer())
 	if err != nil {
 		return err
 	}
@@ -96,22 +66,67 @@ func (o *v2OperationCmd) Run(cmd *cobra.Command, args []string) error {
 		slog.String("algorithm", o.flags.GetAlgorithm()),
 	)
 
-	state, err := o.createRequest(cmd.Context(), httpClient, kp)
+	payload := o.flags.InnerPayload()
+	res, err := client.Execute(cmd.Context(), clientcore.Request{
+		Operation:      o.Operation,
+		KeyLabel:       o.flags.GetKeyLabel(),
+		Algorithm:      o.flags.GetAlgorithm(),
+		Timeout:        o.flags.GetTimeoutDuration(),
+		Note:           o.flags.GetNote(),
+		Value:          payload.Value,
+		Nonce:          payload.Nonce,
+		Tag:            payload.Tag,
+		AdditionalData: payload.AdditionalData,
+		OnSubmitted: func(state string) {
+			log.Info("Waiting for browser confirmation", slog.String("state", state))
+		},
+	})
 	if err != nil {
-		return fmt.Errorf("failed to start operation: %w", err)
+		return err
 	}
 
-	log.Info("Waiting for browser confirmation", slog.String("state", state))
+	log.Info("Received response from server", slog.String("state", res.State))
 
-	aad := buildTransportAAD(state, o.Operation, o.flags.GetAlgorithm())
-	plain, err := o.getResult(cmd.Context(), httpClient, state, kp, aad)
-	if err != nil {
-		return fmt.Errorf("failed to get response: %w", err)
+	return o.writeResult(res.State, res.Payload)
+}
+
+// terminalAnchorConfirmer returns a prompt function that asks the user to accept a TOFU pin
+func terminalAnchorConfirmer() clientcore.ConfirmAnchorFunc {
+	if !cliutil.IsInteractiveTerminal() {
+		// If the terminal is not interactive, return nil which means no confirmation
+		return nil
 	}
 
-	log.Info("Received response from server", slog.String("state", state))
+	return func(server, _, fingerprint string) (bool, error) {
+		return cliutil.AnchorPrompt(server, fingerprint)
+	}
+}
 
-	return o.writeResult(state, plain)
+// coreClientFlags is the minimal interface required to build a client for a Revaulter server
+// It is satisfied by v2OperationFlags, *v2OperationFlagsBase, and the trust command's flags
+type coreClientFlags interface {
+	GetServer() string
+	GetRequestKey() string
+	GetConnectionOptions() (insecure bool, noh2c bool)
+	GetTrustStorePath() string
+	GetNoTrustStore() bool
+}
+
+// newCoreClient returns a client for the Revaulter server, configured from the command's flags
+func newCoreClient(log *slog.Logger, flags coreClientFlags, confirm clientcore.ConfirmAnchorFunc) (*clientcore.Client, error) {
+	insecure, noH2C := flags.GetConnectionOptions()
+
+	return clientcore.NewClient(clientcore.Config{
+		Server:         flags.GetServer(),
+		RequestKey:     flags.GetRequestKey(),
+		Insecure:       insecure,
+		NoH2C:          noH2C,
+		UserAgent:      userAgent,
+		Logger:         log,
+		TrustStorePath: flags.GetTrustStorePath(),
+		NoTrustStore:   flags.GetNoTrustStore(),
+		ConfirmAnchor:  confirm,
+	})
 }
 
 type noMitmProtectionFlags interface {
@@ -120,44 +135,11 @@ type noMitmProtectionFlags interface {
 	GetYesIKnowWhatImDoing() bool
 }
 
+// confirmNoMitmProtection asks the user to confirm before running an operation with every MITM protection disabled
 func confirmNoMitmProtection(flags noMitmProtectionFlags) error {
-	// We need to show the warning only if both --insecure and --no-trust-store are set
 	insecure, _ := flags.GetConnectionOptions()
-	if !insecure || !flags.GetNoTrustStore() {
-		return nil
-	}
 
-	// Show the warning
-	fmt.Fprintln(os.Stderr, "WARNING: --insecure and --no-trust-store disable all transport and anchor MITM protection")
-	fmt.Fprintln(os.Stderr, "A network attacker can intercept TLS and substitute public keys for this operation")
-
-	// The --yes-i-know-what-im-doing can be added for non-interactive use
-	if flags.GetYesIKnowWhatImDoing() {
-		fmt.Fprintln(os.Stderr, "Continuing because --yes-i-know-what-im-doing was provided")
-		return nil
-	}
-
-	// If there's no interactive shell, return an error
-	stdinFd := int(os.Stdin.Fd())   // #nosec G115
-	stderrFd := int(os.Stderr.Fd()) // #nosec G115
-	if !term.IsTerminal(stdinFd) || !term.IsTerminal(stderrFd) {
-		return errors.New("refusing to combine --insecure with --no-trust-store without --yes-i-know-what-im-doing")
-	}
-
-	// Ask for confirmation
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Fprint(os.Stderr, "Type 'yes' to continue without MITM protection: ")
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("read answer: %w", err)
-	}
-
-	line = strings.ToLower(strings.TrimSpace(line))
-	if line != "yes" {
-		return errors.New("refusing to continue without MITM protection")
-	}
-
-	return nil
+	return cliutil.ConfirmNoMitmProtection(insecure, flags.GetNoTrustStore(), flags.GetYesIKnowWhatImDoing())
 }
 
 // v2OperationResultFormatter lets an operation override how the decrypted plaintext is shaped before being written
@@ -215,6 +197,25 @@ func (o *v2OperationCmd) writeResult(state string, plain []byte) error {
 	return nil
 }
 
+// formatV2DecryptedPayload returns the decrypted payload as-is when it's valid JSON, or wrapped in a JSON object with a base64-encoded "data" property otherwise
+func formatV2DecryptedPayload(_ string, plain []byte) (json.RawMessage, error) {
+	var v any
+	err := json.Unmarshal(plain, &v)
+	if err == nil && json.Valid(plain) {
+		return json.RawMessage(plain), nil
+	}
+
+	// Fallback: bytes -> JSON object with base64 payload
+	b, err := json.Marshal(map[string]any{
+		"data": base64.RawStdEncoding.EncodeToString(plain),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return json.RawMessage(b), nil
+}
+
 // writeOutputFile writes payload to path with mode 0600 and refuses to follow symlinks
 // On platforms that lack O_NOFOLLOW the call falls back to a Lstat pre-check (small TOCTOU window)
 func writeOutputFile(path string, payload []byte) error {
@@ -239,354 +240,4 @@ func writeOutputFile(path string, payload []byte) error {
 	}
 
 	return cerr
-}
-
-func (o *v2OperationCmd) createRequest(ctx context.Context, httpClient *http.Client, kp *v2TransportKeyPair) (string, error) {
-	// Fetch the user's static public keys (ECDH + ML-KEM) alongside the hybrid anchor bundle so the CLI can pin the anchor on first contact and refuse any subsequent pubkey substitution
-	ecdhPub, mlkemPub, err := o.fetchAndVerifyUserPubkeys(ctx, httpClient)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch user public keys: %w", err)
-	}
-
-	// Build the inner payload (sensitive fields)
-	innerPayload := o.flags.InnerPayload(kp.EcdhPublic, kp.MlkemPublic)
-
-	// Build AAD from plaintext metadata
-	aad := buildRequestEncAAD(o.flags.GetAlgorithm(), o.flags.GetKeyLabel(), o.Operation)
-
-	// Encrypt the inner payload with hybrid ECDH + ML-KEM
-	cliEphPub, mlkemCiphertext, nonce, ciphertext, err := encryptV2RequestPayload(ecdhPub, mlkemPub, innerPayload, aad)
-	if err != nil {
-		return "", fmt.Errorf("failed to encrypt request payload: %w", err)
-	}
-
-	// Build the outer request body
-	outerBody := v2OperationRequest{
-		KeyLabel:              o.flags.GetKeyLabel(),
-		Algorithm:             o.flags.GetAlgorithm(),
-		Timeout:               o.flags.GetTimeout(),
-		Note:                  o.flags.GetNote(),
-		RequestEncAlg:         protocolv2.TransportAlg,
-		CliEphemeralPublicKey: cliEphPub,
-		MlkemCiphertext:       mlkemCiphertext,
-		EncryptedPayloadNonce: nonce,
-		EncryptedPayload:      ciphertext,
-	}
-
-	body, err := json.Marshal(outerBody)
-	if err != nil {
-		return "", err
-	}
-
-	req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodPost, o.flags.GetServer(), o.flags.GetRequestKey(), o.Operation, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	var res protocolv2.RequestResultResponse
-	err = doJSONRequest(httpClient, req, &res)
-	if err != nil {
-		return "", err
-	}
-	if !res.Pending || res.State == "" {
-		return "", errors.New("invalid create response")
-	}
-	return res.State, nil
-}
-
-// v2PubkeyResponse mirrors the server's /v2/request/pubkey shape
-type v2PubkeyResponse struct {
-	UserID   string          `json:"userId"`
-	EcdhP256 json.RawMessage `json:"ecdhP256"`
-	Mlkem768 string          `json:"mlkem768"`
-
-	AnchorEs384PublicKey         string `json:"anchorEs384PublicKey"`
-	AnchorMldsa87PublicKey       string `json:"anchorMldsa87PublicKey"`
-	PubkeyBundleSignatureEs384   string `json:"pubkeyBundleSignatureEs384"`
-	PubkeyBundleSignatureMldsa87 string `json:"pubkeyBundleSignatureMldsa87"`
-
-	// pubkeyBundleVersion selects the canonical payload the signatures cover
-	// Servers that predate versioning omit it, which means v1
-	PubkeyBundleVersion int64 `json:"pubkeyBundleVersion"`
-}
-
-func (o *v2OperationCmd) fetchAndVerifyUserPubkeys(ctx context.Context, httpClient *http.Client) (*ecdh.PublicKey, *mlkem.EncapsulationKey768, error) {
-	log := logging.LogFromContext(ctx)
-
-	req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodGet, o.flags.GetServer(), o.flags.GetRequestKey(), "pubkey", nil)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var resp v2PubkeyResponse
-	err = doJSONRequest(httpClient, req, &resp)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var ecdhJWK protocolv2.ECP256PublicJWK
-	err = json.Unmarshal(resp.EcdhP256, &ecdhJWK)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid ECDH public key: %w", err)
-	}
-	ecdhPub, err := ecdhJWK.ToECDHPublicKey()
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid ECDH public key: %w", err)
-	}
-
-	mlkemBytes, err := base64.RawURLEncoding.DecodeString(resp.Mlkem768)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid ML-KEM public key encoding: %w", err)
-	}
-	mlkemPub, err := mlkem.NewEncapsulationKey768(mlkemBytes)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid ML-KEM public key: %w", err)
-	}
-
-	if o.flags.GetNoTrustStore() {
-		log.Warn("Skipping anchor pinning and hybrid bundle verification because --no-trust-store is set")
-		return ecdhPub, mlkemPub, nil
-	}
-
-	ts, path, err := o.loadOrInitTrustStore()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	confirm := o.terminalConfirmer()
-	pinned, err := verifyAndPinAnchor(o.flags.GetServer(), &resp, ts, confirm)
-	if err != nil {
-		return nil, nil, fmt.Errorf("anchor trust check failed: %w", err)
-	}
-
-	if pinned {
-		err = saveTrustStore(path, ts)
-		if err != nil {
-			return nil, nil, fmt.Errorf("save trust store: %w", err)
-		}
-		log.Info("Pinned anchor on first contact", slog.String("trust_store", path))
-	}
-
-	return ecdhPub, mlkemPub, nil
-}
-
-// loadOrInitTrustStore resolves the trust store path and loads its contents
-func (o *v2OperationCmd) loadOrInitTrustStore() (*trustStore, string, error) {
-	return loadTrustStoreForFlags(o.flags)
-}
-
-// terminalConfirmer returns a prompt function that asks the user on stderr to accept a TOFU pin
-// If stdin or stderr is not a TTY, it returns nil so the caller fails closed
-func (o *v2OperationCmd) terminalConfirmer() func(fingerprint string) (bool, error) {
-	// File descriptors on supported platforms always fit in int; the uintptr from Fd is just an OS handle representation
-	stdinFd := int(os.Stdin.Fd())   // #nosec G115
-	stderrFd := int(os.Stderr.Fd()) // #nosec G115
-	if !term.IsTerminal(stdinFd) || !term.IsTerminal(stderrFd) {
-		return nil
-	}
-
-	reader := bufio.NewReader(os.Stdin)
-	return func(fingerprint string) (bool, error) {
-		fmt.Fprintf(os.Stderr, "First contact with %s.\n", o.flags.GetServer())
-		fmt.Fprintf(os.Stderr, "Anchor fingerprint:\n%s\n", formatFingerprint(fingerprint, 2))
-		fmt.Fprint(os.Stderr, "Pin this anchor? [y/N]: ")
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return false, fmt.Errorf("read answer: %w", err)
-		}
-		line = strings.ToLower(strings.TrimSpace(line))
-		return line == "y" || line == "yes", nil
-	}
-}
-
-// parseAnchorPubkeysFromWire decodes the CLI-facing wire form of the hybrid anchor
-func parseAnchorPubkeysFromWire(es384JWK string, mldsa87PubB64 string) (*ecdsa.PublicKey, []byte, error) {
-	jwk, err := protocolv2.ParseECP384PublicJWKCanonicalBody(es384JWK)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ES384 JWK: %w", err)
-	}
-
-	ecdsaPub, err := jwk.ToECDSAPublicKey()
-	if err != nil {
-		return nil, nil, fmt.Errorf("ES384 pubkey: %w", err)
-	}
-
-	mldsa87PubBytes, err := base64.RawURLEncoding.DecodeString(mldsa87PubB64)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ML-DSA-87 pubkey base64: %w", err)
-	}
-
-	if len(mldsa87PubBytes) != protocolv2.MLDSA87PublicKeySize {
-		return nil, nil, fmt.Errorf("ML-DSA-87 pubkey: expected %d bytes, got %d", protocolv2.MLDSA87PublicKeySize, len(mldsa87PubBytes))
-	}
-
-	return ecdsaPub, mldsa87PubBytes, nil
-}
-
-// decodeHybridSignatures decodes base64url-encoded ES384 + ML-DSA-87 signatures and validates their sizes
-func decodeHybridSignatures(es384B64, mldsa87B64 string) (sigEs, sigMl []byte, err error) {
-	sigEs, err = protocolv2.DecodeBase64Signature(es384B64, protocolv2.ES384SignatureSize)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ES384 sig: %w", err)
-	}
-	sigMl, err = protocolv2.DecodeBase64Signature(mldsa87B64, protocolv2.MLDSA87SignatureSize)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ML-DSA-87 sig: %w", err)
-	}
-	return sigEs, sigMl, nil
-}
-
-// getResult polls the server until the operation completes and returns the decrypted plaintext bytes
-// Callers decide whether to wrap the bytes in the default JSON envelope (formatV2DecryptedPayload) or write them raw
-func (o *v2OperationCmd) getResult(ctx context.Context, httpClient *http.Client, state string, kp *v2TransportKeyPair, aad []byte) ([]byte, error) {
-	log := logging.LogFromContext(ctx)
-	if kp == nil {
-		return nil, errors.New("missing transport key pair")
-	}
-
-	// Apply a local deadline so the CLI can't poll indefinitely if the server hangs, drops the state, or keeps returning pending beyond the negotiated timeout
-	// Use the user-supplied --timeout plus a small grace window so the server's expiry fires first and produces a clean "failed" response; fall back to a sensible default when unset
-	const defaultResultTimeout = 15 * time.Minute
-	const resultTimeoutGrace = 30 * time.Second
-	localTimeout := o.flags.GetTimeoutDuration()
-	if localTimeout > 0 {
-		localTimeout += resultTimeoutGrace
-	} else {
-		localTimeout = defaultResultTimeout
-	}
-	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, localTimeout)
-	defer cancel()
-
-	// The server long-polls and may return {pending:true} when its own subscription window elapses, when the broker is saturated, or when the subscriber slot is temporarily unavailable
-	// Treat those as "keep waiting" and re-issue the request until the context is canceled (or its deadline is reached)
-	// A short backoff avoids tight-spinning if the server ever returns pending immediately
-	const minBackoff = 250 * time.Millisecond
-	const maxBackoff = 2 * time.Second
-	backoff := minBackoff
-
-	for {
-		err := ctx.Err()
-		if err != nil {
-			return nil, err
-		}
-
-		req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodGet, o.flags.GetServer(), o.flags.GetRequestKey(), "result/"+state, nil)
-		if err != nil {
-			return nil, err
-		}
-		var res protocolv2.RequestResultResponse
-		err = doJSONRequest(httpClient, req, &res)
-		if err != nil {
-			return nil, err
-		}
-		if res.State != state {
-			return nil, errors.New("response state mismatch")
-		}
-		if res.Pending {
-			log.Debug("Server long-poll returned pending, reconnecting",
-				slog.String("state", state),
-				slog.Duration("backoff", backoff),
-			)
-			// Wait briefly before reconnecting
-			// The typical server long-poll already covered the bulk of the wait time; this backoff only kicks in if the server is returning pending quickly
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(backoff):
-			}
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-			continue
-		}
-		if res.Failed {
-			return nil, errors.New("operation is canceled, denied, or failed")
-		}
-		if !res.Done || res.ResponseEnvelope == nil {
-			return nil, errors.New("missing encrypted response envelope")
-		}
-		return decryptV2ResponseEnvelope(state, kp, res.ResponseEnvelope, aad)
-	}
-}
-
-// newV2RequestKeyHTTPRequest builds an HTTP request for the v2 request endpoints
-// The key is sent in the Authorization header
-func newV2RequestKeyHTTPRequest(ctx context.Context, method, server, requestKey, pathSuffix string, body io.Reader) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, method, server+"/v2/request/"+pathSuffix, body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+requestKey)
-	return req, nil
-}
-
-func doJSONRequest(client *http.Client, req *http.Request, out any) error {
-	// #nosec G704 -- redirects are disabled on the client and req targets are built from the validated server URL selected by the CLI flags
-	res, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode >= 400 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		_ = json.NewDecoder(res.Body).Decode(&e)
-		if e.Error != "" {
-			return fmt.Errorf("%s (status %d)", e.Error, res.StatusCode)
-		}
-		return fmt.Errorf("response status code: %d", res.StatusCode)
-	}
-	return json.NewDecoder(res.Body).Decode(out)
-}
-
-func getV2HTTPClient(log *slog.Logger, flags httpClientFlags) (*http.Client, error) {
-	server := flags.GetServer()
-	insecure, noH2c := flags.GetConnectionOptions()
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, fmt.Errorf("invalid server URL: %w", err)
-	}
-	transport := &http2.Transport{
-		IdleConnTimeout:  90 * time.Second,
-		WriteByteTimeout: 30 * time.Second,
-	}
-	if serverURL.Scheme == "http" && !noH2c {
-		if log != nil {
-			log.Warn("Server URL uses the 'http://' scheme: traffic is unencrypted and integrity checks can be bypassed by a network attacker")
-		}
-		transport.AllowHTTP = true
-		transport.DialTLSContext = func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-			return net.Dial(network, addr)
-		}
-	}
-	if insecure {
-		if log != nil {
-			log.Warn("The '--insecure' flag is enabled: skipping TLS certificate validation")
-		}
-		transport.TLSClientConfig = &tls.Config{
-			// #nosec G402
-			InsecureSkipVerify: true,
-		}
-	}
-	return &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-		Transport: &userAgentTransport{
-			base: transport,
-		},
-	}, nil
-}
-
-// httpClientFlags is the minimal interface required to build an HTTP client
-// It is satisfied by both v2OperationFlags and *v2OperationFlagsBase
-type httpClientFlags interface {
-	GetServer() string
-	GetConnectionOptions() (insecure bool, noh2c bool)
 }

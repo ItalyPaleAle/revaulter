@@ -1,6 +1,6 @@
 ---
 title: "Cryptography Architecture"
-weight: 29
+weight: 30
 ---
 
 This document describes the cryptography used by Revaulter v2 as it exists today in the browser client, CLI protocol, and server-side storage model.

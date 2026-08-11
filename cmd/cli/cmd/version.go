@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/italypaleale/revaulter/pkg/buildinfo"
+	"github.com/italypaleale/revaulter/internal/buildinfo"
+
 	"github.com/spf13/cobra"
 )
 

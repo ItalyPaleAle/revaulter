@@ -12,8 +12,8 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/internal/config"
+	"github.com/italypaleale/revaulter/internal/utils"
 )
 
 const defaultHealthcheckTimeout = 2500 * time.Millisecond

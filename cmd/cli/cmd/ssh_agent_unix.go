@@ -7,18 +7,14 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -30,8 +26,9 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
-	"github.com/italypaleale/revaulter/pkg/protocolv2"
-	"github.com/italypaleale/revaulter/pkg/utils/logging"
+	"github.com/italypaleale/revaulter/internal/clientcore"
+	"github.com/italypaleale/revaulter/internal/protocolv2"
+	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
 type sshAgentFlags struct {
@@ -130,8 +127,9 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Get the HTTP client
-	httpClient, err := getV2HTTPClient(log, &f.v2OperationFlagsBase)
+	// Get the client for the Revaulter server
+	// The agent runs unattended, so it can never prompt to pin an anchor
+	client, err := newCoreClient(log, &f.v2OperationFlagsBase, nil)
 	if err != nil {
 		return err
 	}
@@ -153,10 +151,10 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 	defer stop()
 
 	a := &revaulterSSHAgent{
-		shutdown:   ctx.Done(),
-		httpClient: httpClient,
-		flags:      f,
-		log:        log,
+		shutdown: ctx.Done(),
+		client:   client,
+		flags:    f,
+		log:      log,
 	}
 
 	log.Info("SSH agent listening",
@@ -206,7 +204,6 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 // listenAgentSocket creates the agent's Unix socket listener with owner-only permissions
 func listenAgentSocket(socketPath string) (net.Listener, error) {
 	// net.Listen creates the socket with 0666&^umask, so narrowing the umask first is what keeps the socket from being briefly world-accessible between Listen and the Chmod below
-	// That window is reachable when --socket points into a world-traversable directory; the default path is under a 0700 directory, so it is not affected
 	// Nothing else in the process creates files concurrently at this point, so temporarily changing the process-wide umask is safe
 	oldUmask := syscall.Umask(0o077)
 	l, err := net.Listen("unix", socketPath)
@@ -216,7 +213,7 @@ func listenAgentSocket(socketPath string) (net.Listener, error) {
 	}
 
 	// Restrict socket to owner-only access
-	// The umask above already covers this on platforms that apply it to sockets; this makes the result explicit regardless
+	// The umask above already covers this on platforms that apply it to sockets, this makes the result explicit regardless
 	err = os.Chmod(socketPath, 0o600)
 	if err != nil {
 		l.Close()
@@ -275,10 +272,10 @@ func defaultSSHAgentSocketDir() string {
 
 // revaulterSSHAgent implements agent.Agent, routing all sign requests through Revaulter
 type revaulterSSHAgent struct {
-	shutdown   <-chan struct{}
-	httpClient *http.Client
-	flags      *sshAgentFlags
-	log        *slog.Logger
+	shutdown <-chan struct{}
+	client   *clientcore.Client
+	flags    *sshAgentFlags
+	log      *slog.Logger
 }
 
 // List returns the signing public key registered for the configured label
@@ -312,17 +309,12 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 		return nil, err
 	}
 
-	// Build a sign operation reusing existing request/result helpers
-	signFlags := &v2OperationFlagsSign{
-		v2OperationFlagsBase: a.flags.v2OperationFlagsBase,
-	}
-	signFlags.Algorithm = a.flags.Algorithm
-	signFlags.Note = sshAgentSignNote(a.flags.Note)
-
+	// Compute the value to sign
+	var value string
 	if a.flags.Algorithm == protocolv2.SigningAlgES256 {
 		// For ES256, compute the SHA-256 digest
 		digest := sha256.Sum256(data)
-		signFlags.resolvedValueB64 = base64.RawURLEncoding.EncodeToString(digest[:])
+		value = base64.RawURLEncoding.EncodeToString(digest[:])
 	} else {
 		// For Ed25519, hashing is done during the signing process
 		err = ensureWithinInputLimit("ssh-agent signing input", len(data))
@@ -330,35 +322,27 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 			return nil, err
 		}
 
-		signFlags.resolvedValueB64 = base64.RawURLEncoding.EncodeToString(data)
+		value = base64.RawURLEncoding.EncodeToString(data)
 	}
 
-	op := &v2OperationCmd{
+	// Submit the sign request and wait for the user to approve it in the browser
+	res, err := a.client.Execute(ctx, clientcore.Request{
 		Operation: protocolv2.OperationSign,
-		flags:     signFlags,
-	}
-
-	kp, err := newV2TransportKeyPair()
-	if err != nil {
-		return nil, fmt.Errorf("transport key pair: %w", err)
-	}
-
-	// Create the request
-	state, err := op.createRequest(ctx, a.httpClient, kp)
-	if err != nil {
-		return nil, fmt.Errorf("submit sign request: %w", err)
-	}
-
-	// Wait for the confirmation
-	a.log.Info("Waiting for browser confirmation", slog.String("state", state))
-	aad := buildTransportAAD(state, protocolv2.OperationSign, a.flags.Algorithm)
-	plain, err := op.getResult(ctx, a.httpClient, state, kp, aad)
+		KeyLabel:  a.flags.KeyLabel,
+		Algorithm: a.flags.Algorithm,
+		Timeout:   a.flags.GetTimeoutDuration(),
+		Note:      sshAgentSignNote(a.flags.Note),
+		Value:     value,
+		OnSubmitted: func(state string) {
+			a.log.Info("Waiting for browser confirmation", slog.String("state", state))
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("sign request failed: %w", err)
 	}
 
 	// Parse and validate the response
-	signResp, sigBytes, err := parseAndValidateV2SignResponse(state, a.flags.KeyLabel, a.flags.Algorithm, plain)
+	signResp, sigBytes, err := parseAndValidateV2SignResponse(res.State, a.flags.KeyLabel, a.flags.Algorithm, res.Payload)
 	if err != nil {
 		return nil, err
 	}
@@ -468,196 +452,26 @@ type advertisedSigningKey struct {
 // fetchSigningPubkey retrieves the stored signing public key for the configured label and algorithm
 // The key is only returned after its anchor-signed publication proof has been verified against the anchor pinned in the trust store, so a compromised server cannot substitute a key of its choosing
 func (a *revaulterSSHAgent) fetchSigningPubkey(parentCtx context.Context) (advertisedSigningKey, error) {
-	anchor, err := a.verifyAnchorTrust(parentCtx)
+	key, err := a.client.SigningPublicKey(parentCtx, a.flags.KeyLabel, a.flags.Algorithm)
 	if err != nil {
 		return advertisedSigningKey{}, err
 	}
 
-	// Create the request
-	query := url.Values{}
-	query.Set("label", a.flags.KeyLabel)
-	query.Set("algorithm", a.flags.Algorithm)
-	pathSuffix := "signing-pubkey?" + query.Encode()
-	req, err := newV2RequestKeyHTTPRequest(parentCtx, http.MethodGet, a.flags.GetServer(), a.flags.GetRequestKey(), pathSuffix, nil)
-	if err != nil {
-		return advertisedSigningKey{}, err
-	}
-
-	// Parse the response
-	var resp v2RequestSigningPubkeyClientResponse
-	err = doJSONRequest(a.httpClient, req, &resp)
-	if err != nil {
-		return advertisedSigningKey{}, fmt.Errorf("fetch signing pubkey: %w", err)
-	}
-
-	// Convert the JWK into an SSH public key and derive its thumbprint
-	// The thumbprint is what the publication proof binds, so it must be computed locally from the returned key material rather than read from the response
-	var (
-		sshPub ssh.PublicKey
-		keyID  string
-	)
-	switch resp.Algorithm {
-	case protocolv2.SigningAlgES256:
-		jwk, parseErr := protocolv2.ParseECP256SigningJWK(resp.JWK)
-		if parseErr != nil {
-			return advertisedSigningKey{}, fmt.Errorf("parse signing key JWK: %w", parseErr)
-		}
-
-		ecdhPub, parseErr := jwk.ToECDHPublicKey()
-		if parseErr != nil {
-			return advertisedSigningKey{}, fmt.Errorf("invalid signing public key: %w", parseErr)
-		}
-
-		keyID, parseErr = jwk.Thumbprint()
-		if parseErr != nil {
-			return advertisedSigningKey{}, fmt.Errorf("compute signing key thumbprint: %w", parseErr)
-		}
-
-		// Convert raw uncompressed point (04 || x || y) to *ecdsa.PublicKey
-		raw := ecdhPub.Bytes()
-		ecdsaPub := &ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     new(big.Int).SetBytes(raw[1:33]),
-			Y:     new(big.Int).SetBytes(raw[33:65]),
-		}
-
-		// Convert into the SSH public key format
-		sshPub, parseErr = ssh.NewPublicKey(ecdsaPub)
-		if parseErr != nil {
-			return advertisedSigningKey{}, fmt.Errorf("build SSH public key: %w", parseErr)
-		}
-
-	case protocolv2.SigningAlgEd25519:
-		jwk, parseErr := protocolv2.ParseEd25519SigningJWK(resp.JWK)
-		if parseErr != nil {
-			return advertisedSigningKey{}, fmt.Errorf("parse signing key JWK: %w", parseErr)
-		}
-
-		edPub, parseErr := jwk.ToPublicKey()
-		if parseErr != nil {
-			return advertisedSigningKey{}, fmt.Errorf("invalid signing public key: %w", parseErr)
-		}
-
-		keyID, parseErr = jwk.Thumbprint()
-		if parseErr != nil {
-			return advertisedSigningKey{}, fmt.Errorf("compute signing key thumbprint: %w", parseErr)
-		}
-
-		// Convert into the SSH public key format
-		sshPub, parseErr = ssh.NewPublicKey(ed25519.PublicKey(edPub))
-		if parseErr != nil {
-			return advertisedSigningKey{}, fmt.Errorf("build SSH public key: %w", parseErr)
-		}
-
+	// Convert the public key into the SSH public key format
+	var sshPub ssh.PublicKey
+	switch pub := key.PublicKey.(type) {
+	case *ecdsa.PublicKey:
+		sshPub, err = ssh.NewPublicKey(pub)
+	case ed25519.PublicKey:
+		sshPub, err = ssh.NewPublicKey(pub)
 	default:
-		return advertisedSigningKey{}, fmt.Errorf("unsupported SSH signing algorithm %q", resp.Algorithm)
+		return advertisedSigningKey{}, fmt.Errorf("unsupported SSH signing key type %T", key.PublicKey)
 	}
-
-	// Bind the key to the pinned anchor
-	// Without this the server is free to advertise any key it likes, and a substituted key copied into an authorized_keys file would authorize the attacker
-	err = a.verifySigningKeyPublication(anchor, &resp, keyID)
 	if err != nil {
-		return advertisedSigningKey{}, err
+		return advertisedSigningKey{}, fmt.Errorf("build SSH public key: %w", err)
 	}
 
-	return advertisedSigningKey{SSHPub: sshPub, KeyID: keyID}, nil
-}
-
-// verifySigningKeyPublication checks the anchor-signed publication proof that binds the fetched signing key to the user's pinned anchor
-// Verification is skipped only when --no-trust-store disabled pinning altogether, in which case there is no trusted anchor to verify against
-func (a *revaulterSSHAgent) verifySigningKeyPublication(anchor *pinnedAnchor, resp *v2RequestSigningPubkeyClientResponse, keyID string) error {
-	if anchor == nil {
-		return nil
-	}
-
-	// Auto-stored keys carry no proof: the server registers them as a side effect of the first sign, which is not an explicit user decision and is therefore not something the anchor has vouched for
-	if resp.PublicationPayload == "" || resp.PublicationSignatureEs384 == "" || resp.PublicationSignatureMldsa87 == "" {
-		return fmt.Errorf(
-			"the signing key for label %q (algorithm %s) has no publication proof, so it cannot be verified against the anchor pinned for %s; publish the key from the Revaulter web interface, then start the agent again",
-			a.flags.KeyLabel, a.flags.Algorithm, a.flags.GetServer(),
-		)
-	}
-
-	_, err := protocolv2.VerifySigningKeyPublicResponse(
-		resp.PublicationPayload,
-		resp.PublicationSignatureEs384,
-		resp.PublicationSignatureMldsa87,
-		protocolv2.SigningKeyPublicResponseVerifyOptions{
-			Es384Pub:        anchor.Es384Pub,
-			Mldsa87PubBytes: anchor.Mldsa87PubBytes,
-			// Every field the agent has an expectation for is pinned, so a proof captured for a different user, key, or label cannot be replayed here
-			ExpectedUserID:    anchor.UserID,
-			ExpectedAlgorithm: a.flags.Algorithm,
-			ExpectedKeyLabel:  a.flags.KeyLabel,
-			ExpectedKeyID:     keyID,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("publication proof for the advertised signing key is not valid: %w", err)
-	}
-
-	return nil
-}
-
-// pinnedAnchor carries the anchor identity that verifyAnchorTrust confirmed against the trust store
-// Callers use it to verify anchor-signed material, so the keys here must always be the ones that survived the pin check
-type pinnedAnchor struct {
-	UserID          string
-	Es384Pub        *ecdsa.PublicKey
-	Mldsa87PubBytes []byte
-}
-
-// verifyAnchorTrust checks the pinned server anchor before trusting signing-key lookup responses
-// Returns the verified anchor, or nil when --no-trust-store disabled pinning
-func (a *revaulterSSHAgent) verifyAnchorTrust(ctx context.Context) (*pinnedAnchor, error) {
-	if a.flags.GetNoTrustStore() {
-		a.log.Warn("Skipping anchor pinning, hybrid bundle verification, and signing key publication proof checks because --no-trust-store is set")
-		return nil, nil
-	}
-
-	// Load the trust store
-	ts, path, err := loadTrustStoreForFlags(a.flags)
-	if err != nil {
-		return nil, err
-	}
-
-	// Request the public key
-	req, err := newV2RequestKeyHTTPRequest(ctx, http.MethodGet, a.flags.GetServer(), a.flags.GetRequestKey(), "pubkey", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse and validate the response
-	var resp v2PubkeyResponse
-	err = doJSONRequest(a.httpClient, req, &resp)
-	if err != nil {
-		return nil, fmt.Errorf("fetch server pubkey bundle: %w", err)
-	}
-
-	pinned, err := verifyAndPinAnchor(a.flags.GetServer(), &resp, ts, nil)
-	if err != nil {
-		return nil, fmt.Errorf("anchor trust check failed: %w", err)
-	}
-
-	// Save the updated trust store if needed
-	if pinned {
-		err = saveTrustStore(path, ts)
-		if err != nil {
-			return nil, fmt.Errorf("save trust store: %w", err)
-		}
-	}
-
-	// Re-parse from the wire values, which verifyAndPinAnchor has just confirmed byte-for-byte against the pinned entry
-	es384Pub, mldsa87PubBytes, err := parseAnchorPubkeysFromWire(resp.AnchorEs384PublicKey, resp.AnchorMldsa87PublicKey)
-	if err != nil {
-		return nil, fmt.Errorf("invalid anchor public key: %w", err)
-	}
-
-	return &pinnedAnchor{
-		UserID:          resp.UserID,
-		Es384Pub:        es384Pub,
-		Mldsa87PubBytes: mldsa87PubBytes,
-	}, nil
+	return advertisedSigningKey{SSHPub: sshPub, KeyID: key.KeyID}, nil
 }
 
 // shellQuote returns a POSIX single-quoted shell literal
@@ -676,17 +490,4 @@ func (a *revaulterSSHAgent) signTimeout() time.Duration {
 	}
 
 	return defaultTimeout
-}
-
-// v2RequestSigningPubkeyClientResponse mirrors the server's v2RequestSigningPubkeyResponse
-type v2RequestSigningPubkeyClientResponse struct {
-	ID        string          `json:"id"`
-	Algorithm string          `json:"algorithm"`
-	KeyLabel  string          `json:"keyLabel"`
-	JWK       json.RawMessage `json:"jwk"`
-
-	// Anchor-signed publication proof, empty for keys the user has not published
-	PublicationPayload          string `json:"publicationPayload"`
-	PublicationSignatureEs384   string `json:"publicationSignatureEs384"`
-	PublicationSignatureMldsa87 string `json:"publicationSignatureMldsa87"`
 }

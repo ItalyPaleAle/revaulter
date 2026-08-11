@@ -87,7 +87,8 @@ export async function performChaCha20Poly1305Operation(params: {
     aad?: Uint8Array
     tag?: Uint8Array
 }): Promise<Uint8Array> {
-    // ChaCha20-Poly1305 requires a 12-byte nonce; generate one for encryption callers that don't supply one
+    // ChaCha20-Poly1305 requires a 12-byte nonce
+    // Generate one for encryption callers that don't supply one
     const nonce = params.nonce ?? crypto.getRandomValues(new Uint8Array(12))
     const aad = params.aad && params.aad.length > 0 ? params.aad : undefined
     const cipher = chacha20poly1305(params.keyBytes, nonce, aad)

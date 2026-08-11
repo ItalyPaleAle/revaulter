@@ -12,10 +12,10 @@ import (
 	slogkit "github.com/italypaleale/go-kit/slog"
 	"github.com/spf13/pflag"
 
-	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/db"
-	dbbackup "github.com/italypaleale/revaulter/pkg/db/backup"
-	"github.com/italypaleale/revaulter/pkg/utils/logging"
+	"github.com/italypaleale/revaulter/internal/config"
+	"github.com/italypaleale/revaulter/internal/db"
+	dbbackup "github.com/italypaleale/revaulter/internal/db/backup"
+	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
 // dbOpenTimeout caps how long we wait for the initial database connection

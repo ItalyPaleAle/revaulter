@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/italypaleale/revaulter/pkg/protocolv2"
+	"github.com/italypaleale/revaulter/internal/protocolv2"
 )
 
 //go:embed protocol-canonical-vectors.json

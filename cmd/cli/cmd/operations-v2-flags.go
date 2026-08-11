@@ -17,7 +17,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/italypaleale/revaulter/pkg/protocolv2"
+	"github.com/italypaleale/revaulter/internal/clientcore"
+	"github.com/italypaleale/revaulter/internal/protocolv2"
 )
 
 // maxInputBytes caps the plaintext bytes the CLI is willing to send through encrypt/decrypt/sign to 100KB
@@ -72,7 +73,7 @@ type v2OperationFlagsBase struct {
 }
 
 func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
-	defaultPath, _ := defaultTrustStorePath()
+	defaultPath, _ := clientcore.DefaultTrustStorePath()
 	var trustStoreDefault string
 	if defaultPath != "" {
 		trustStoreDefault = " (defaults to " + defaultPath + ")"
@@ -139,10 +140,19 @@ func (f *v2OperationFlagsBase) GetTrustStorePath() string          { return f.Tr
 func (f *v2OperationFlagsBase) GetNoTrustStore() bool              { return f.NoTrustStore }
 func (f *v2OperationFlagsBase) GetYesIKnowWhatImDoing() bool       { return f.YesIKnowWhatImDoing }
 
+// v2OperationPayload carries the operation-specific fields that travel inside the end-to-end encrypted request payload
+// All values are base64url-encoded
+type v2OperationPayload struct {
+	Value          string
+	Nonce          string
+	Tag            string
+	AdditionalData string
+}
+
 type v2OperationFlags interface {
 	BindToCommand(cmd *cobra.Command)
 	Validate() error
-	InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner
+	InnerPayload() v2OperationPayload
 	GetServer() string
 	GetRequestKey() string
 	GetKeyLabel() string
@@ -297,12 +307,10 @@ func (f *v2OperationFlagsEncrypt) checkAADSize() error {
 	)
 }
 
-func (f *v2OperationFlagsEncrypt) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
-	return protocolv2.RequestPayloadInner{
-		Value:                   f.resolvedValueB64,
-		AdditionalData:          f.resolvedAADB64,
-		ClientTransportEcdhKey:  clientTransportEcdhKey,
-		ClientTransportMlkemKey: clientTransportMlkemKey,
+func (f *v2OperationFlagsEncrypt) InnerPayload() v2OperationPayload {
+	return v2OperationPayload{
+		Value:          f.resolvedValueB64,
+		AdditionalData: f.resolvedAADB64,
 	}
 }
 
@@ -508,14 +516,12 @@ func checkDecryptInputSizes(valueB64, aadB64, prefix string) error {
 	return ensureWithinInputLimit(aadLabel, decodedSizeFromBase64(aadB64))
 }
 
-func (f *v2OperationFlagsDecrypt) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
-	return protocolv2.RequestPayloadInner{
-		Value:                   f.resolvedValueB64,
-		Tag:                     f.resolvedTagB64,
-		Nonce:                   f.resolvedNonceB64,
-		AdditionalData:          f.resolvedAADB64,
-		ClientTransportEcdhKey:  clientTransportEcdhKey,
-		ClientTransportMlkemKey: clientTransportMlkemKey,
+func (f *v2OperationFlagsDecrypt) InnerPayload() v2OperationPayload {
+	return v2OperationPayload{
+		Value:          f.resolvedValueB64,
+		Tag:            f.resolvedTagB64,
+		Nonce:          f.resolvedNonceB64,
+		AdditionalData: f.resolvedAADB64,
 	}
 }
 
@@ -794,11 +800,9 @@ func (f *v2OperationFlagsSign) resolveFromDigest() error {
 	return nil
 }
 
-func (f *v2OperationFlagsSign) InnerPayload(clientTransportEcdhKey protocolv2.ECP256PublicJWK, clientTransportMlkemKey string) protocolv2.RequestPayloadInner {
-	return protocolv2.RequestPayloadInner{
-		Value:                   f.resolvedValueB64,
-		ClientTransportEcdhKey:  clientTransportEcdhKey,
-		ClientTransportMlkemKey: clientTransportMlkemKey,
+func (f *v2OperationFlagsSign) InnerPayload() v2OperationPayload {
+	return v2OperationPayload{
+		Value: f.resolvedValueB64,
 	}
 }
 

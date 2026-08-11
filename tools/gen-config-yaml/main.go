@@ -113,7 +113,7 @@ func generateYAMLFromStruct(filePath string) error {
 }
 
 func main() {
-	err := generateYAMLFromStruct("pkg/config/config.go")
+	err := generateYAMLFromStruct("internal/config/config.go")
 	if err != nil {
 		panic(err)
 	}

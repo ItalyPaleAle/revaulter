@@ -16,6 +16,7 @@ Encryption keys and signing keys don't belong in environment variables or on dis
 - [Sign release binaries from CI](/examples/signing-a-release-binary-from-github-actions)
 - [Issue long-lived JWTs](/examples/issuing-a-long-lived-jwt)
 - [Encrypt/decrypt very large files with age and Revaulter](/examples/encrypting-large-files-with-age-and-revaulter)
+- [Use `revaulter-edit` to work with local, encrypted files](/cli/revaulter-edit)
 
 {{< figure light="docs/img/readme-screenshot-light.png" dark="docs/img/readme-screenshot-dark.png" alt="Screenshot of Revaulter, showing 3 requests pending approval: one for encrypting, one for signing, one for decrypting" resize="1200x webp q80" >}}
 

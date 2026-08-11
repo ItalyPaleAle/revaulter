@@ -1,6 +1,6 @@
 # gen-config-yaml
 
-This utility updates the [`config.sample.yaml`](../../config.sample.yaml) file based on the `Config` struct defined in [`pkg/config/config.go`](../../pkg/config/config.go).
+This utility updates the [`config.sample.yaml`](../../config.sample.yaml) file based on the `Config` struct defined in [`internal/config/config.go`](../../internal/config/config.go).
 
 To run:
 

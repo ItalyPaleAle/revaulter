@@ -8,8 +8,8 @@ import (
 
 	slogkit "github.com/italypaleale/go-kit/slog"
 
-	"github.com/italypaleale/revaulter/pkg/config"
-	"github.com/italypaleale/revaulter/pkg/db"
+	"github.com/italypaleale/revaulter/internal/config"
+	"github.com/italypaleale/revaulter/internal/db"
 )
 
 // Run opens the database and runs migrations

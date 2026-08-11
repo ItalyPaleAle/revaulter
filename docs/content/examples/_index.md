@@ -1,5 +1,5 @@
 ---
 title: "Examples"
-weight: 30
+weight: 50
 description: "Revaulter workflows and integrations"
 ---

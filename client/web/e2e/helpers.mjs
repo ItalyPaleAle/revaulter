@@ -394,7 +394,8 @@ export function startCLIRequest(args) {
     ]
 
     if (args.operation === 'encrypt') {
-        // --message takes a raw UTF-8 string; the CLI handles base64url-encoding before submitting
+        // --message takes a raw UTF-8 string
+        // The CLI handles base64url-encoding before submitting
         cliArgs.push('--message', args.value)
         if (args.aad) {
             cliArgs.push('--aad', Buffer.from(args.aad, 'utf8').toString('base64url'))

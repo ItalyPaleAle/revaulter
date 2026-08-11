@@ -17,6 +17,7 @@ Encryption keys and signing keys don't belong in environment variables or on dis
 - [Sign release binaries from CI](https://revaulter.italypaleale.me/examples/signing-a-release-binary-from-github-actions)
 - [Issue long-lived JWTs](https://revaulter.italypaleale.me/examples/issuing-a-long-lived-jwt)
 - [Encrypt/decrypt very large files with age and Revaulter](https://revaulter.italypaleale.me/examples/encrypting-large-files-with-age-and-revaulter)
+- [Use `revaulter-edit` to work with local, encrypted files](https://revaulter.italypaleale.me/cli/revaulter-edit)
 
 ![Screenshot of Revaulter, showing 3 requests pending approval: one for encrypting, one for signing, one for decrypting](./screenshot.webp)
 
@@ -66,6 +67,8 @@ Quick links:
 - [What is Revaulter](https://revaulter.italypaleale.me/docs/what-is-revaulter/) — how it works, security model, webhooks
 - [Installing Revaulter](https://revaulter.italypaleale.me/docs/installing-revaulter/) — Docker setup, configuration reference, Docker Compose and Podman examples
 - [Using the CLI](https://revaulter.italypaleale.me/docs/revaulter-cli/) — commands, flags, and examples
+- [Editing encrypted files](https://revaulter.italypaleale.me/cli/revaulter-edit/) — `revaulter-edit`, for reading and editing local encrypted files
+- [Using Revaulter as a Go library](https://revaulter.italypaleale.me/advanced/go-library/) — submit requests from your own applications
 - [Cryptography architecture](https://revaulter.italypaleale.me/docs/crypto-architecture/) — key layers, wrapping, derivation, transport encryption
 
 ## License

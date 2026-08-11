@@ -19,7 +19,7 @@ import type { V2Operation, V2SigningJwk } from '$lib/v2-types'
 /**
  * Shared Go/TypeScript test vectors for every byte string both implementations must construct identically.
  *
- * The Go suites in pkg/protocolv2/canonical_vectors_test.go and cmd/cli/cmd/canonical_vectors_test.go read the same
+ * The Go suites in internal/protocolv2/canonical_vectors_test.go and internal/clientcore/canonical_vectors_test.go read the same
  * file, so a change to either implementation that is not mirrored in the other fails both test suites instead of
  * silently producing signatures or AEAD tags the other side cannot verify.
  *

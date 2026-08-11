@@ -1,0 +1,85 @@
+package clientcore
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
+	"crypto/mlkem"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/italypaleale/revaulter/internal/protocolv2"
+)
+
+func TestDecryptV2ResponseEnvelope(t *testing.T) {
+	// Generate CLI transport key pair (ECDH + ML-KEM)
+	kp, err := NewTransportKeyPair()
+	require.NoError(t, err)
+
+	// Simulate browser: ECDH key agreement
+	browserEcdhPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	ecdhShared, err := browserEcdhPriv.ECDH(kp.EcdhPrivate.PublicKey())
+	require.NoError(t, err)
+
+	// Simulate browser: ML-KEM encapsulation
+	mlkemPubBytes, err := base64.RawURLEncoding.DecodeString(kp.MlkemPublic)
+	require.NoError(t, err)
+	mlkemPub, err := mlkem.NewEncapsulationKey768(mlkemPubBytes)
+	require.NoError(t, err)
+	mlkemShared, mlkemCT := mlkemPub.Encapsulate()
+
+	// Combine shared secrets
+	combined := make([]byte, 0, len(ecdhShared)+len(mlkemShared))
+	combined = append(combined, ecdhShared...)
+	combined = append(combined, mlkemShared...)
+	key, err := DeriveTransportKey(combined, "state-1")
+	require.NoError(t, err)
+
+	block, err := aes.NewCipher(key)
+	require.NoError(t, err)
+	aead, err := cipher.NewGCM(block)
+	require.NoError(t, err)
+
+	nonce := make([]byte, aead.NonceSize())
+	_, err = rand.Read(nonce)
+	require.NoError(t, err)
+	aad := BuildTransportAAD("state-1", "encrypt", "A256GCM")
+	plain := []byte(`{"ok":true}`)
+	ct := aead.Seal(nil, nonce, plain, aad)
+
+	browserEcdhPubJWK, err := protocolv2.ECP256PublicJWKFromECDH(browserEcdhPriv.PublicKey())
+	require.NoError(t, err)
+
+	out, err := DecryptResponseEnvelope("state-1", kp, &protocolv2.ResponseEnvelope{
+		TransportAlg:              protocolv2.TransportAlg,
+		BrowserEphemeralPublicKey: browserEcdhPubJWK,
+		MlkemCiphertext:           base64.RawURLEncoding.EncodeToString(mlkemCT),
+		Nonce:                     base64.RawURLEncoding.EncodeToString(nonce),
+		Ciphertext:                base64.RawURLEncoding.EncodeToString(ct),
+	}, aad)
+	require.NoError(t, err)
+	require.Equal(t, string(plain), string(out))
+}
+
+func TestDeriveV2TransportKeyDeterministic(t *testing.T) {
+	sum := sha256.Sum256([]byte("shared"))
+	k1, err := DeriveTransportKey(sum[:], "x")
+	require.NoError(t, err)
+	k2, err := DeriveTransportKey(sum[:], "x")
+	require.NoError(t, err)
+	require.Equal(t, k1, k2)
+	require.Len(t, k1, 32)
+}
+
+func TestBuildTransportAADMatchesBrowserOrdering(t *testing.T) {
+	require.Equal(
+		t,
+		[]byte("algorithm=A256GCM\noperation=encrypt\nstate=state-1\nv=1"),
+		BuildTransportAAD("state-1", "encrypt", "A256GCM"),
+	)
+}

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/italypaleale/revaulter/pkg/utils"
+	"github.com/italypaleale/revaulter/internal/utils"
 )
 
 // Type for a flag that accepts a base64-encoded string

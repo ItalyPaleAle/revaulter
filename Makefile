@@ -23,12 +23,12 @@ check-config-diff: gen-config
 
 .PHONY: gen-db
 gen-db:
-	go generate ./pkg/db/...
+	go generate ./internal/db/...
 
 # Ensure gen-db ran
 .PHONY: check-db-diff
 check-db-diff: gen-db
-	git diff --exit-code pkg/db/backup/tables_gen.go
+	git diff --exit-code internal/db/backup/tables_gen.go
 
 .PHONY: client-format
 client-format:

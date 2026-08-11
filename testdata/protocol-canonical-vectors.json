@@ -3,7 +3,7 @@
         "Shared test vectors for every byte string that the Go and TypeScript implementations must construct identically.",
         "These cover the canonical bodies and domain-separated messages that anchor signatures are computed over, the AEAD additional authenticated data, and RFC 7638 JWK thumbprints.",
         "A mismatch between the two implementations means signatures produced by the browser will not verify in Go (or vice versa), so both test suites read this file and assert against it:",
-        "  - Go:         pkg/protocolv2/canonical_vectors_test.go and cmd/cli/cmd/canonical_vectors_test.go",
+        "  - Go:         internal/protocolv2/canonical_vectors_test.go and internal/clientcore/canonical_vectors_test.go",
         "  - TypeScript: client/web/src/lib/canonical-vectors.test.ts",
         "If a value here changes, the wire format changed, and every already-issued signature over the old bytes stops verifying."
     ],

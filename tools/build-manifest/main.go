@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/italypaleale/revaulter/pkg/integrity"
+	"github.com/italypaleale/revaulter/internal/integrity"
 )
 
 func main() {

@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
-	"github.com/italypaleale/revaulter/pkg/protocolv2"
+	"github.com/italypaleale/revaulter/internal/protocolv2"
 )
 
 // newEncryptFlagsWithRequired binds an encrypt flag set to a fresh cobra command and pre-fills the required base flags so Validate can focus on encrypt-specific behavior
