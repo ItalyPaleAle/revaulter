@@ -185,8 +185,9 @@ func (f *sshAgentFlags) Run(cmd *cobra.Command, _ []string) error {
 
 			go func() {
 				defer conn.Close()
+				// ServeAgent always returns a non-nil error, including io.EOF when the client disconnects normally
 				rErr := agent.ServeAgent(a, conn)
-				if rErr != nil && !errors.Is(rErr, net.ErrClosed) {
+				if !errors.Is(rErr, net.ErrClosed) {
 					log.Debug("SSH agent connection closed", slog.Any("err", rErr))
 				}
 			}()

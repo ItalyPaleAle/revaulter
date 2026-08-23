@@ -12,7 +12,6 @@ const repoRoot = resolve(currentDir, '..', '..', '..')
 function goEnv() {
     return {
         ...process.env,
-        GOEXPERIMENT: process.env.GOEXPERIMENT || 'jsonv2',
     }
 }
 

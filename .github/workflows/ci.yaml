@@ -33,8 +33,7 @@ jobs:
 
     env:
       CGO_ENABLED: "0"
-      GOLANGCI_LINT_VERSION: "v2.12.2"
-      GOEXPERIMENT: jsonv2
+      GOLANGCI_LINT_VERSION: "v2.13.1"
       TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/revaulter_test?sslmode=disable
 
     steps:

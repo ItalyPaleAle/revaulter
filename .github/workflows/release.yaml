@@ -32,9 +32,6 @@ jobs:
       attestations: write
       id-token: write
 
-    env:
-      GOEXPERIMENT: jsonv2
-
     steps:
 
       - name: Check out code
