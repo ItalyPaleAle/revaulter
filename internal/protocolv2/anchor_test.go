@@ -3,6 +3,7 @@ package protocolv2
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
@@ -10,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,10 +67,9 @@ func signES384Raw(t *testing.T, priv *ecdsa.PrivateKey, msg []byte) []byte {
 	return sig
 }
 
-func signMLDSA87(t *testing.T, sk *mldsa87.PrivateKey, msg []byte) []byte {
+func signMLDSA87(t *testing.T, sk *mldsa.PrivateKey, msg []byte) []byte {
 	t.Helper()
-	sig := make([]byte, MLDSA87SignatureSize)
-	err := mldsa87.SignTo(sk, msg, nil, false, sig)
+	sig, err := sk.Sign(rand.Reader, msg, nil)
 	require.NoError(t, err)
 	return sig
 }
@@ -271,10 +270,9 @@ func TestParsePubkeyBundlePayloadV2RejectsV1Body(t *testing.T) {
 func TestHybridAttestationRoundTrip(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 
 	payload := testAttestationPayload()
 	msg := CanonicalAttestationMessage(payload)
@@ -288,10 +286,9 @@ func TestHybridAttestationRoundTrip(t *testing.T) {
 func TestHybridAttestationPartialRejected(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 
 	payload := testAttestationPayload()
 	msg := CanonicalAttestationMessage(payload)
@@ -322,10 +319,9 @@ func TestHybridAttestationPartialRejected(t *testing.T) {
 func TestHybridBundleRoundTripAndTamper(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 
 	payload := testBundlePayload()
 	msg := CanonicalPubkeyBundleMessage(payload)
@@ -344,10 +340,9 @@ func TestHybridBundleRoundTripAndTamper(t *testing.T) {
 func TestHybridBundleV2RoundTripAndTamper(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 
 	payload := testBundlePayloadV2()
 	msg := CanonicalPubkeyBundleMessageV2(payload)
@@ -372,10 +367,9 @@ func TestHybridBundleV2RoundTripAndTamper(t *testing.T) {
 func TestAnchorFingerprintStable(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, _, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 
 	fp1, err := AnchorFingerprint(&esPriv.PublicKey, mlPubBytes)
 	require.NoError(t, err)
@@ -388,19 +382,17 @@ func TestAnchorFingerprintStable(t *testing.T) {
 func TestAnchorFingerprintChangesOnTamper(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, _, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 
 	fp1, err := AnchorFingerprint(&esPriv.PublicKey, mlPubBytes)
 	require.NoError(t, err)
 
 	// Swap the ML-DSA leg for a different key.
-	mlPub2, _, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv2, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes2, err := mlPub2.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes2 := mlPriv2.PublicKey().Bytes()
 	fp2, err := AnchorFingerprint(&esPriv.PublicKey, mlPubBytes2)
 	require.NoError(t, err)
 	require.NotEqual(t, fp1, fp2)

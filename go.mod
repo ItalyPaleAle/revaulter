@@ -6,7 +6,6 @@ tool github.com/fchimpan/gomod-age
 
 require (
 	github.com/caarlos0/env/v11 v11.4.1
-	github.com/cloudflare/circl v1.6.5
 	github.com/fxamacker/cbor/v2 v2.9.3
 	github.com/gin-contrib/location/v2 v2.0.1
 	github.com/gin-gonic/gin v1.12.0

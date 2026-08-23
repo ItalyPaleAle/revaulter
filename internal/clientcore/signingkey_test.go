@@ -3,13 +3,13 @@ package clientcore
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
 	"testing"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/stretchr/testify/require"
 
 	"github.com/italypaleale/revaulter/internal/protocolv2"
@@ -28,10 +28,9 @@ func newSigningKeyProofFixture(t *testing.T, userID, algorithm, keyLabel, keyID 
 
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 
 	payload := protocolv2.SigningKeyPublicationPayload{
 		UserID:          userID,
@@ -75,10 +74,9 @@ func testSignES384Raw(t *testing.T, priv *ecdsa.PrivateKey, msg []byte) []byte {
 	return sig
 }
 
-func testSignMLDSA87(t *testing.T, sk *mldsa87.PrivateKey, msg []byte) []byte {
+func testSignMLDSA87(t *testing.T, sk *mldsa.PrivateKey, msg []byte) []byte {
 	t.Helper()
-	sig := make([]byte, protocolv2.MLDSA87SignatureSize)
-	err := mldsa87.SignTo(sk, msg, nil, false, sig)
+	sig, err := sk.Sign(rand.Reader, msg, nil)
 	require.NoError(t, err)
 	return sig
 }

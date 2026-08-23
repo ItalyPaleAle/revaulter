@@ -3,6 +3,7 @@ package clientcore
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
@@ -11,7 +12,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/stretchr/testify/require"
 
 	"github.com/italypaleale/revaulter/internal/protocolv2"
@@ -26,10 +26,9 @@ func newTestAnchorPubkeys(t *testing.T) (*ecdsa.PublicKey, string, []byte, strin
 	require.NoError(t, err)
 	jwkBody := jwk.CanonicalBody()
 
-	mlPub, _, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPubBytes)
 
 	return &priv.PublicKey, jwkBody, mlPubBytes, mlPubB64
@@ -178,20 +177,20 @@ func TestTrustStoreFailsClosedOnNoConfirm(t *testing.T) {
 }
 
 // signTestBundle signs a legacy (v1) pubkey-bundle payload with both anchor legs and returns base64url-encoded signatures, mirroring what the browser produces at signup
-func signTestBundle(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa87.PrivateKey, payload *protocolv2.PubkeyBundlePayload) (sigEsB64, sigMlB64 string) {
+func signTestBundle(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa.PrivateKey, payload *protocolv2.PubkeyBundlePayload) (sigEsB64, sigMlB64 string) {
 	t.Helper()
 
 	return signTestBundleMessage(t, esPriv, mlPriv, protocolv2.CanonicalPubkeyBundleMessage(payload))
 }
 
 // signTestBundleV2 signs a v2 pubkey-bundle payload with both anchor legs and returns base64url-encoded signatures
-func signTestBundleV2(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa87.PrivateKey, payload *protocolv2.PubkeyBundlePayloadV2) (sigEsB64, sigMlB64 string) {
+func signTestBundleV2(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa.PrivateKey, payload *protocolv2.PubkeyBundlePayloadV2) (sigEsB64, sigMlB64 string) {
 	t.Helper()
 
 	return signTestBundleMessage(t, esPriv, mlPriv, protocolv2.CanonicalPubkeyBundleMessageV2(payload))
 }
 
-func signTestBundleMessage(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa87.PrivateKey, msg []byte) (sigEsB64, sigMlB64 string) {
+func signTestBundleMessage(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa.PrivateKey, msg []byte) (sigEsB64, sigMlB64 string) {
 	t.Helper()
 
 	digest := sha512.Sum384(msg)
@@ -204,8 +203,7 @@ func signTestBundleMessage(t *testing.T, esPriv *ecdsa.PrivateKey, mlPriv *mldsa
 	copy(sig[half-len(rBytes):half], rBytes)
 	copy(sig[protocolv2.ES384SignatureSize-len(sBytes):], sBytes)
 
-	mlSig := make([]byte, protocolv2.MLDSA87SignatureSize)
-	err = mldsa87.SignTo(mlPriv, msg, nil, false, mlSig)
+	mlSig, err := mlPriv.Sign(rand.Reader, msg, nil)
 	require.NoError(t, err)
 
 	return base64.RawURLEncoding.EncodeToString(sig), base64.RawURLEncoding.EncodeToString(mlSig)
@@ -228,11 +226,9 @@ func TestVerifyAndPinAnchorIgnoresAdvertisedEpoch(t *testing.T) {
 	require.NoError(t, err)
 	es384Body := jwk.CanonicalBody()
 
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
-	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPubBytes)
+	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPriv.PublicKey().Bytes())
 
 	ecdhJSON := `{"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}`
 	mlkemB64 := base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes"))
@@ -275,11 +271,9 @@ func TestVerifyAndPinAnchorBundleV2(t *testing.T) {
 	require.NoError(t, err)
 	es384Body := jwk.CanonicalBody()
 
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
-	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPubBytes)
+	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPriv.PublicKey().Bytes())
 
 	ecdhJSON := `{"kty":"EC","crv":"P-256","x":"xxx","y":"yyy"}`
 	mlkemB64 := base64.RawURLEncoding.EncodeToString([]byte("mlkem-pub-bytes"))

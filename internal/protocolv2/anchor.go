@@ -2,6 +2,7 @@ package protocolv2
 
 import (
 	"crypto/ecdsa"
+	"crypto/mldsa"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -13,8 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
 
 // CredAttestPrefix and PubkeyBundlePrefix are domain-separation prefixes for anchor-signed messages
@@ -42,8 +41,8 @@ const (
 
 // Fixed sizes for the PQ and classical legs of the hybrid anchor
 const (
-	MLDSA87PublicKeySize = mldsa87.PublicKeySize // 2592
-	MLDSA87SignatureSize = mldsa87.SignatureSize // 4627
+	MLDSA87PublicKeySize = mldsa.MLDSA87PublicKeySize // 2592
+	MLDSA87SignatureSize = mldsa.MLDSA87SignatureSize // 4627
 
 	// ES384SignatureSize is the fixed length of a raw r||s P-384 signature
 	// WebCrypto's ECDSA produces this format (IEEE P1363), so we accept only this on the wire and reject ASN.1-DER encoded signatures
@@ -355,7 +354,8 @@ func verifyMLDSA87(pubBytes, msg, sig []byte) error {
 		return fmt.Errorf("signature has wrong length %d, expected %d", len(sig), MLDSA87SignatureSize)
 	}
 
-	if !mldsa87.Verify(pub, msg, nil, sig) {
+	err = mldsa.Verify(pub, msg, sig, nil)
+	if err != nil {
 		return errors.New("signature verification failed")
 	}
 
@@ -363,13 +363,12 @@ func verifyMLDSA87(pubBytes, msg, sig []byte) error {
 }
 
 // UnmarshalMLDSA87PublicKey decodes a raw ML-DSA-87 public key
-func UnmarshalMLDSA87PublicKey(b []byte) (*mldsa87.PublicKey, error) {
+func UnmarshalMLDSA87PublicKey(b []byte) (*mldsa.PublicKey, error) {
 	if len(b) != MLDSA87PublicKeySize {
 		return nil, fmt.Errorf("expected %d bytes, got %d", MLDSA87PublicKeySize, len(b))
 	}
 
-	pk := new(mldsa87.PublicKey)
-	err := pk.UnmarshalBinary(b)
+	pk, err := mldsa.NewPublicKey(mldsa.MLDSA87(), b)
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}

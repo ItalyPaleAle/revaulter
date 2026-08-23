@@ -3,13 +3,13 @@ package protocolv2
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,10 +115,9 @@ func TestSigningKeyPublicationValidateCreatedAt(t *testing.T) {
 func TestHybridSigningKeyPublicationRoundTrip(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 
 	payload := testSigningKeyPublicationPayload()
 	msg := CanonicalSigningKeyPublicationMessage(payload)
@@ -131,10 +130,9 @@ func TestHybridSigningKeyPublicationRoundTrip(t *testing.T) {
 func TestHybridSigningKeyPublicationRejectsTamper(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 
 	payload := testSigningKeyPublicationPayload()
 	msg := CanonicalSigningKeyPublicationMessage(payload)
@@ -182,10 +180,9 @@ func TestHybridSigningKeyPublicationRejectsTamper(t *testing.T) {
 func TestVerifySigningKeyPublicResponse(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 
 	payload := testSigningKeyPublicationPayload()
 	body := payload.CanonicalBody()

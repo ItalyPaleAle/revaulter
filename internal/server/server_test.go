@@ -7,6 +7,7 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha512"
 	"crypto/tls"
@@ -28,7 +29,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/gin-gonic/gin"
 	"github.com/italypaleale/go-kit/webhook"
 	"github.com/stretchr/testify/assert"
@@ -1182,8 +1182,8 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 // Used by tests that need to forge anchor-signed proofs (publication, attestation, ...) for an existing user
 type testAnchorKeyPair struct {
 	Es384Priv        *ecdsa.PrivateKey
-	Mldsa87Priv      *mldsa87.PrivateKey
-	Mldsa87Pub       *mldsa87.PublicKey
+	Mldsa87Priv      *mldsa.PrivateKey
+	Mldsa87Pub       *mldsa.PublicKey
 	Mldsa87PubBytes  []byte
 	Es384JWKBody     string
 	Mldsa87PubBase64 string
@@ -1196,10 +1196,10 @@ func seedV2AnchorForUser(t *testing.T, srv *Server, userID string) *testAnchorKe
 
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPub := mlPriv.PublicKey()
+	mlPubBytes := mlPub.Bytes()
 
 	es384JWK, err := protocolv2.ECP384PublicJWKFromECDSA(&esPriv.PublicKey)
 	require.NoError(t, err)
@@ -1258,8 +1258,7 @@ func signSigningKeyPublication(t *testing.T, anchor *testAnchorKeyPair, payload 
 	copy(sig[protocolv2.ES384SignatureSize-len(sBytes):], sBytes)
 	sigEsB64 = base64.RawURLEncoding.EncodeToString(sig)
 
-	mlSig := make([]byte, protocolv2.MLDSA87SignatureSize)
-	err = mldsa87.SignTo(anchor.Mldsa87Priv, msg, nil, false, mlSig)
+	mlSig, err := anchor.Mldsa87Priv.Sign(rand.Reader, msg, nil)
 	require.NoError(t, err)
 	sigMlB64 = base64.RawURLEncoding.EncodeToString(mlSig)
 
@@ -1295,8 +1294,7 @@ func signHybridMessage(t *testing.T, anchor *testAnchorKeyPair, msg []byte) (sig
 	copy(sig[protocolv2.ES384SignatureSize-len(sBytes):], sBytes)
 	sigEsB64 = base64.RawURLEncoding.EncodeToString(sig)
 
-	mlSig := make([]byte, protocolv2.MLDSA87SignatureSize)
-	err = mldsa87.SignTo(anchor.Mldsa87Priv, msg, nil, false, mlSig)
+	mlSig, err := anchor.Mldsa87Priv.Sign(rand.Reader, msg, nil)
 	require.NoError(t, err)
 	sigMlB64 = base64.RawURLEncoding.EncodeToString(mlSig)
 
@@ -1892,10 +1890,9 @@ func TestServerV2RequestPubkeyBundleV2VerifiesAfterEpochAdvance(t *testing.T) {
 func TestVerifySignupPubkeyBundle(t *testing.T) {
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
-	mlPub, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	require.NoError(t, err)
-	mlPubBytes, err := mlPub.MarshalBinary()
-	require.NoError(t, err)
+	mlPubBytes := mlPriv.PublicKey().Bytes()
 	anchor := &testAnchorKeyPair{Es384Priv: esPriv, Mldsa87Priv: mlPriv}
 
 	es384JWK, err := protocolv2.ECP384PublicJWKFromECDSA(&esPriv.PublicKey)
