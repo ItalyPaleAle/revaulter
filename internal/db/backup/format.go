@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"uuid"
 
 	"github.com/fxamacker/cbor/v2"
-	"github.com/google/uuid"
 	"github.com/italypaleale/go-sql-utils/adapter"
 )
 

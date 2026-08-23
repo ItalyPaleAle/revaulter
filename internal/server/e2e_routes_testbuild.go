@@ -15,9 +15,9 @@ import (
 	"os"
 	"strings"
 	"time"
+	"uuid"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 
 	"github.com/italypaleale/revaulter/internal/config"
 	"github.com/italypaleale/revaulter/internal/db"
@@ -355,7 +355,7 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 		req.TimeoutSec = 300
 	}
 	if req.State == "" {
-		req.State = uuid.NewString()
+		req.State = uuid.NewV4().String()
 	}
 	if req.Status == "" {
 		req.Status = string(db.V2RequestStatusPending)
@@ -518,7 +518,7 @@ func (s *Server) RouteE2ESeedCredential(c *gin.Context) {
 	}
 
 	// Store the credential in the database
-	credID := "e2e-cred-extra-" + uuid.NewString()[:8]
+	credID := "e2e-cred-extra-" + uuid.NewV4().String()[:8]
 	err = s.db.AuthStore().AddCredential(c.Request.Context(), db.AddCredentialInput{
 		UserID:       req.UserID,
 		CredentialID: credID,

@@ -1,12 +1,11 @@
 package server
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
+	"uuid"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -52,13 +51,7 @@ func (s *Server) getRequestID(c *gin.Context) (string, error) {
 	}
 
 	// If we get here, we have no request ID found in headers, so let's generate a new UUID
-	reqUuid, err := uuid.NewRandom()
-	if err != nil {
-		return "", fmt.Errorf("failed to generate request ID UUID: %w", err)
-	}
-
-	v := reqUuid.String()
-	return v, nil
+	return uuid.NewV4().String(), nil
 }
 
 // validateTrustedRequestID validates that the request ID header matches `[A-Za-z0-9._:-]{1,128}`

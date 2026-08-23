@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+	"uuid"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/italypaleale/revaulter/internal/config"
@@ -92,12 +92,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 
 		// Save the request in the database
 		now := time.Now()
-		id, err := uuid.NewRandom()
-		if err != nil {
-			AbortWithErrorJSON(c, err)
-			return
-		}
-		state := id.String()
+		state := uuid.NewV4().String()
 
 		encEnvelope := protocolv2.RequestEncEnvelope{
 			CliEphemeralPublicKey: body.CliEphemeralPublicKey,

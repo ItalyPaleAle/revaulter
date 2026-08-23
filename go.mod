@@ -11,7 +11,6 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-chi/httprate v0.16.0
 	github.com/go-webauthn/webauthn v0.17.4
-	github.com/google/uuid v1.6.0
 	github.com/italypaleale/go-kit v1.1.0
 	github.com/italypaleale/go-sql-utils v0.3.7
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
@@ -99,6 +98,7 @@ require (
 	github.com/google/certificate-transparency-go v1.3.3 // indirect
 	github.com/google/go-containerregistry v0.21.7 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/in-toto/attestation v1.2.0 // indirect
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect

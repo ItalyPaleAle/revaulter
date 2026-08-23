@@ -15,12 +15,12 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"uuid"
 
 	location "github.com/gin-contrib/location/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
-	"github.com/google/uuid"
 	"github.com/italypaleale/go-kit/eventqueue"
 
 	"github.com/italypaleale/revaulter/internal/config"
@@ -244,7 +244,7 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 	}
 
 	// Create the user object for registration
-	userID := uuid.NewString()
+	userID := uuid.NewV4().String()
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
 	user, err := newV2WebAuthnUserForRegistration(userID, req.DisplayName)
 	if err != nil {

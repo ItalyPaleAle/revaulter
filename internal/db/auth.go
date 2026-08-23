@@ -9,8 +9,8 @@ import (
 	"net"
 	"strings"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/italypaleale/go-sql-utils/adapter"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -249,7 +249,7 @@ func (s *AuthStore) BeginChallenge(ctx context.Context, kind string, userID stri
 	}
 
 	rec := &AuthChallenge{
-		ID:        uuid.NewString(),
+		ID:        uuid.NewV4().String(),
 		Kind:      kind,
 		UserID:    userID,
 		Challenge: challenge,
@@ -355,7 +355,7 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Us
 	_, err = s.db.Exec(ctx,
 		`INSERT INTO v2_user_credentials (id, user_id, credential_id, display_name, public_key, sign_count, created_at, last_used_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-		uuid.NewString(), in.UserID, in.CredentialID, strings.TrimSpace(in.CredentialDisplayName), in.PublicKey, in.SignCount, now,
+		uuid.NewV4().String(), in.UserID, in.CredentialID, strings.TrimSpace(in.CredentialDisplayName), in.PublicKey, in.SignCount, now,
 	)
 	if isIntegrityViolationError(err) {
 		return nil, ErrUserAlreadyExists
@@ -678,7 +678,7 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 				SELECT wrapped_key_epoch FROM v2_users WHERE id = $2 AND status = 'active'
 			), $12, $12
 			WHERE EXISTS (SELECT 1 FROM v2_users WHERE id = $2 AND status = 'active')`,
-		uuid.NewString(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount,
+		uuid.NewV4().String(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount,
 		in.WrappedPrimaryKey, in.WrappedAnchorKey,
 		in.AttestationPayload, in.AttestationSignatureEs384, in.AttestationSignatureMldsa87,
 		now,

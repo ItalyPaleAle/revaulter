@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/italypaleale/go-sql-utils/adapter"
 )
 
@@ -229,10 +229,7 @@ func (s *AuditStore) Insert(ctx context.Context, data AuditEventInput) (AuditEve
 	}
 
 	// Use UUIDv7 so rows are time-sortable
-	id, err := uuid.NewV7()
-	if err != nil {
-		return AuditEvent{}, fmt.Errorf("failed to generate audit id: %w", err)
-	}
+	id := uuid.NewV7()
 
 	metadata := data.Metadata
 	if len(metadata) == 0 {
@@ -474,7 +471,8 @@ func validateAuditCursor(cursor string) (string, error) {
 	if err != nil {
 		return "", ErrAuditInvalidCursor
 	}
-	if u.Version() != 7 {
+	// The version is stored in the high nibble of byte 6, per RFC 9562 § 4.2
+	if u[6]>>4 != 7 {
 		return "", ErrAuditInvalidCursor
 	}
 
