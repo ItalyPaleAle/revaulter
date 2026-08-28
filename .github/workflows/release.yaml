@@ -85,6 +85,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
+            type=ref,event=branch
 
       - name: Generate Container tags and labels for revaulter-edit
         id: meta-edit
@@ -96,6 +97,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
+            type=ref,event=branch
 
       - name: Set variables
         run: |
