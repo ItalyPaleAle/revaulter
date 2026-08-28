@@ -43,12 +43,39 @@ function cloneAndDecodeWebAuthnOptions<T>(input: T, skipBinaryDecoding = false):
     return input
 }
 
+export function serializeWebAuthnExtensionResults(input: unknown): unknown {
+    if (input instanceof ArrayBuffer) {
+        return bytesToBase64Url(input)
+    }
+
+    if (ArrayBuffer.isView(input)) {
+        const bytes = new Uint8Array(input.byteLength)
+        bytes.set(new Uint8Array(input.buffer, input.byteOffset, input.byteLength))
+        return bytesToBase64Url(bytes)
+    }
+
+    if (Array.isArray(input)) {
+        return input.map((value) => serializeWebAuthnExtensionResults(value))
+    }
+
+    if (input !== null && typeof input === 'object') {
+        return Object.fromEntries(
+            Object.entries(input).map(([key, value]) => [key, serializeWebAuthnExtensionResults(value)])
+        )
+    }
+
+    return input
+}
+
 function serializePublicKeyCredential(cred: PublicKeyCredential) {
+    const clientExtensionResults = cred.getClientExtensionResults?.()
     const base = {
         id: cred.id,
         rawId: bytesToBase64Url(new Uint8Array(cred.rawId)),
         type: cred.type,
-        clientExtensionResults: cred.getClientExtensionResults?.() || undefined,
+        clientExtensionResults: clientExtensionResults
+            ? serializeWebAuthnExtensionResults(clientExtensionResults)
+            : undefined,
     }
 
     if (cred.response instanceof AuthenticatorAttestationResponse) {

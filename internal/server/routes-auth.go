@@ -303,9 +303,7 @@ func (s *Server) beginWebAuthnSession(user *v2WebAuthnUser) (creation *protocol.
 		// We require discoverable credentials aka Passkeys
 		webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
 		// Add PRF extension
-		webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
-			"prf": map[string]any{},
-		}),
+		webauthnlib.WithExtensions(webauthnlib.WithExtensionPRFSupport()),
 	)
 }
 
@@ -386,7 +384,9 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 // RouteV2AuthLoginBegin is the handler for POST /v2/auth/login/begin
 func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 	// Get an assertion and store it in the database
-	assertion, session, err := s.webAuthn.BeginDiscoverableLogin()
+	assertion, session, err := s.webAuthn.BeginDiscoverableLogin(
+		webauthnlib.WithAssertionExtensions(webauthnlib.WithExtensionPRFSupport()),
+	)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
