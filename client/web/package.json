@@ -20,7 +20,14 @@
     "test": "vitest run",
     "analyze": "cross-replace vite build --mode analyze"
   },
-  "packageManager": "pnpm@10.30.1",
+  "packageManager": "pnpm@12.0.0+sha512.9e2e3dc3911995868dc94b8175c217c27e95408fa03b4a22749778f2b34f773b77cdd3b39ede8171b22fcd53be6a35342e9fac9948a68ef58df6488ce89a7e67",
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^24.13.0",
+      "onFail": "download"
+    }
+  },
   "dependencies": {
     "@awasm/noble": "0.1.4",
     "@fontsource-variable/geist": "5.3.0",
