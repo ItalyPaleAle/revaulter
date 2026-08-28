@@ -100,6 +100,11 @@ export async function resetState(request) {
 export async function resetBrowserState(page) {
     await page.goto('/')
     await page.context().clearCookies()
+    await clearSiteStorage(page)
+}
+
+// Clears origin storage while preserving virtual-authenticator credentials so tests can simulate a returning browser profile
+export async function clearSiteStorage(page) {
     await page.evaluate(async () => {
         localStorage.clear()
         sessionStorage.clear()
@@ -110,7 +115,13 @@ export async function resetBrowserState(page) {
         const cacheNames = await caches.keys()
         await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)))
 
-        indexedDB.deleteDatabase('revaulter')
+        const deletion = new Promise((resolveDeletion) => {
+            const request = indexedDB.deleteDatabase('revaulter')
+            request.onsuccess = () => resolveDeletion(undefined)
+            request.onerror = () => resolveDeletion(undefined)
+            request.onblocked = () => resolveDeletion(undefined)
+        })
+        await deletion
     })
 }
 

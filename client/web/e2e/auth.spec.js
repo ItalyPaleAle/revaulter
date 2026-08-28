@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import {
+    clearSiteStorage,
     completePasswordSetup,
     installSessionCookie,
     loginToPasswordPrompt,
@@ -11,6 +12,7 @@ import {
     skipPasswordSetup,
     unlockWithPassword,
 } from './helpers.mjs'
+import { createVirtualPasskey } from './passkeys.mjs'
 
 test.beforeEach(async ({ page, request }) => {
     await resetState(request)
@@ -45,7 +47,7 @@ test('user can register and save a password', async ({ page }) => {
     }
 })
 
-test('passwordless ready user logs in directly to ready view', async ({ page }) => {
+test('passwordless ready user logs in directly to ready view with base64url PRF output', async ({ page }) => {
     const passkey = await registerThroughUI(page, 'Passwordless User')
 
     try {
@@ -55,8 +57,52 @@ test('passwordless ready user logs in directly to ready view', async ({ page }) 
             page.getByText('Session exists but local key material is missing. Sign in again to continue.')
         ).toBeVisible()
 
+        const loginRequest = page.waitForRequest((request) => {
+            return request.url().includes('/v2/auth/login/finish') && request.method() === 'POST'
+        })
+        await page.getByRole('button', { name: 'Continue with passkey' }).click()
+        const requestBody = (await loginRequest).postDataJSON()
+        const first = requestBody.credential.clientExtensionResults.prf.results.first
+        expect(typeof first).toBe('string')
+        expect(first).toMatch(/^[A-Za-z0-9_-]+$/)
+        await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
+    } finally {
+        await passkey.dispose()
+    }
+})
+
+// Clearing browser storage reproduces a returning user whose server credential and authenticator passkey predate the current client session
+// This guards against accidentally depending on local registration state during assertion serialization
+test('registered passkey still signs in after site storage is cleared', async ({ page }) => {
+    const passkey = await registerThroughUI(page, 'Returning Passkey User')
+
+    try {
+        await skipPasswordSetup(page)
+        await page.context().clearCookies()
+        await clearSiteStorage(page)
+        await page.reload()
+        await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
+
         await page.getByRole('button', { name: 'Continue with passkey' }).click()
         await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
+    } finally {
+        await passkey.dispose()
+    }
+})
+
+test('registration explains when the authenticator does not support PRF', async ({ page }) => {
+    const passkey = await createVirtualPasskey(page, { hasPrf: false })
+
+    try {
+        await page.goto('/')
+        await page.getByRole('button', { name: 'Create a new account' }).click()
+        await page.getByLabel('Display name (optional)').fill('No PRF User')
+        await page.getByRole('button', { name: 'Create account with passkey' }).click()
+        await expect(
+            page.getByText(
+                'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Sign up with a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
+            )
+        ).toBeVisible()
     } finally {
         await passkey.dispose()
     }

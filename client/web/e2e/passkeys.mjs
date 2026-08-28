@@ -1,8 +1,8 @@
 // Manages virtual WebAuthn authenticators in Chrome for tests that need a single passkey
 // The returned object owns a CDP session that lives for the lifetime of the test
-export async function createVirtualPasskey(page) {
+export async function createVirtualPasskey(page, options = {}) {
     const manager = await createVirtualPasskeyManager(page)
-    await manager.addAuthenticator({ active: true })
+    await manager.addAuthenticator({ ...options, active: true })
     return {
         async dispose() {
             await manager.dispose()
@@ -29,7 +29,7 @@ export async function createVirtualPasskeyManager(page) {
                 transport,
                 hasResidentKey: true,
                 hasUserVerification: true,
-                hasPrf: true,
+                hasPrf: options.hasPrf ?? true,
                 isUserVerified: true,
                 automaticPresenceSimulation: !!options.active,
             },
