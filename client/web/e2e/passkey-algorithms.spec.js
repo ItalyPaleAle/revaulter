@@ -92,7 +92,7 @@ for (const algorithmName of ALGORITHMS) {
             }
         })
 
-        test('approves an encrypt request end to end', async ({ page }) => {
+        test('approves an encrypt request end to end', { tag: '@requeststream' }, async ({ page }) => {
             const passkey = await installSoftwareAuthenticator(page, { algorithm: algorithmName })
 
             try {

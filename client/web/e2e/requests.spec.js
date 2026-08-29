@@ -33,7 +33,7 @@ test('empty ready state is shown when there are no requests', async ({ page }) =
     }
 })
 
-test('seeded encrypt request appears in the list', async ({ page, request }) => {
+test('seeded encrypt request appears in the list', { tag: '@requeststream' }, async ({ page, request }) => {
     const auth = await registerAndReachReady(page, 'Request User')
     await seedPendingRequest(request, {
         userId: auth.session.userId,
@@ -54,7 +54,7 @@ test('seeded encrypt request appears in the list', async ({ page, request }) => 
     }
 })
 
-test('seeded decrypt request appears in the list', async ({ page, request }) => {
+test('seeded decrypt request appears in the list', { tag: '@requeststream' }, async ({ page, request }) => {
     const auth = await registerAndReachReady(page, 'Request User')
     await seedPendingRequest(request, {
         userId: auth.session.userId,
@@ -72,7 +72,10 @@ test('seeded decrypt request appears in the list', async ({ page, request }) => 
     }
 })
 
-test('canceling a pending request removes it from the UI and updates state', async ({ page, request }) => {
+test('canceling a pending request removes it from the UI and updates state', { tag: '@requeststream' }, async ({
+    page,
+    request,
+}) => {
     const auth = await registerAndReachReady(page, 'Request User')
     const seeded = await seedPendingRequest(request, {
         userId: auth.session.userId,
@@ -93,10 +96,9 @@ test('canceling a pending request removes it from the UI and updates state', asy
     }
 })
 
-test('second long-poll subscriber evicts the first and the response is unavailable to the evicted caller', async ({
-    page,
-    request,
-}) => {
+test('second long-poll subscriber evicts the first and the response is unavailable to the evicted caller', {
+    tag: '@requeststream',
+}, async ({ page, request }) => {
     const auth = await registerAndReachReady(page, 'Subscriber Evict User')
 
     try {
@@ -151,7 +153,7 @@ test('second long-poll subscriber evicts the first and the response is unavailab
     }
 })
 
-test('requests for another user are not shown', async ({ page, request }) => {
+test('requests for another user are not shown', { tag: '@requeststream' }, async ({ page, request }) => {
     const auth = await registerAndReachReady(page, 'Request User')
     await seedUser(request, {
         userId: 'other-user',
@@ -175,7 +177,10 @@ test('requests for another user are not shown', async ({ page, request }) => {
     }
 })
 
-test('new seeded request appears without reload after stream is connected', async ({ page, request }) => {
+test('new seeded request appears without reload after stream is connected', { tag: '@requeststream' }, async ({
+    page,
+    request,
+}) => {
     const auth = await registerAndReachReady(page, 'Request User')
 
     try {
@@ -225,7 +230,9 @@ test('regenerating the request key invalidates the old public key endpoint', asy
     }
 })
 
-test('cli sign round-trips and the signature verifies against the browser-derived public key', async ({ page }) => {
+test('cli sign round-trips and the signature verifies against the browser-derived public key', {
+    tag: '@requeststream',
+}, async ({ page }) => {
     const auth = await registerAndReachReady(page, 'CLI Sign User')
 
     // Create a temp file with known content; CLI will SHA-256 it internally and request the browser to sign the digest
@@ -291,7 +298,9 @@ test('cli sign round-trips and the signature verifies against the browser-derive
 // Cover all four accepted name forms — both the JOSE-style and long-form name pair for AES-GCM and ChaCha20-Poly1305
 // Encrypt and decrypt must use the SAME spelling because the algorithm string is bound into HKDF info and AAD verbatim
 for (const algorithm of ['A256GCM', 'aes-256-gcm', 'C20P', 'chacha20-poly1305']) {
-    test(`cli encrypt then decrypt round-trips hello world (algorithm=${algorithm})`, async ({ page }) => {
+    test(`cli encrypt then decrypt round-trips hello world (algorithm=${algorithm})`, {
+        tag: '@requeststream',
+    }, async ({ page }) => {
         const auth = await registerAndReachReady(page, `CLI Crypto User ${algorithm}`)
 
         try {

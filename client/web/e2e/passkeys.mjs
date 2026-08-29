@@ -1,9 +1,16 @@
-// Manages virtual WebAuthn authenticators in Chrome for tests that need a single passkey
-// The returned object owns a CDP session that lives for the lifetime of the test
+import { installSoftwareAuthenticators } from './software-authenticator.mjs'
+
+// Manages virtual authenticators for tests that need a passkey
+// These are backed by the software authenticator in ./software-authenticator.mjs rather than Chrome's built-in virtual authenticator (which is only reachable over CDP and so only works on Chromium, plus it doesn't support any algorithm except ECDSA)
+// Every engine Playwright drives runs the same passkey ceremonies this way
+
+// Creates a page's authenticator holding a single passkey
 export async function createVirtualPasskey(page, options = {}) {
     const manager = await createVirtualPasskeyManager(page)
-    await manager.addAuthenticator({ ...options, active: true })
+    const authenticatorId = await manager.addAuthenticator({ ...options, active: true })
+    await manager.setActive(authenticatorId)
     return {
+        authenticatorId,
         async dispose() {
             await manager.dispose()
         },
@@ -13,61 +20,31 @@ export async function createVirtualPasskey(page, options = {}) {
 // Returns a manager that can host multiple virtual authenticators on the same page
 // The caller can add more authenticators on demand and toggle which one is active for ceremonies that need a specific credential
 export async function createVirtualPasskeyManager(page) {
-    const cdpSession = await page.context().newCDPSession(page)
-    await cdpSession.send('WebAuthn.enable')
+    const set = await installSoftwareAuthenticators(page)
 
-    const authenticatorIds = []
-
+    // hasPrf mirrors the option Chrome's virtual authenticator took, and algorithm picks the credential algorithm the passkey is minted with
     async function addAuthenticator(options = {}) {
-        // Chrome limits the environment to a single "internal" virtual authenticator, so only the first authenticator uses it
-        // Subsequent authenticators default to "usb" which still supports resident keys, PRF, and user verification in the virtual authenticator
-        const transport = options.transport ?? (authenticatorIds.length === 0 ? 'internal' : 'usb')
-        const result = await cdpSession.send('WebAuthn.addVirtualAuthenticator', {
-            options: {
-                protocol: 'ctap2',
-                ctap2Version: 'ctap2_1',
-                transport,
-                hasResidentKey: true,
-                hasUserVerification: true,
-                hasPrf: options.hasPrf ?? true,
-                isUserVerified: true,
-                automaticPresenceSimulation: !!options.active,
-            },
+        const authenticator = set.add({
+            algorithm: options.algorithm,
+            supportsPrf: options.hasPrf ?? true,
+            transports: options.transport ? [options.transport] : undefined,
+            active: !!options.active,
         })
-        authenticatorIds.push(result.authenticatorId)
-        return result.authenticatorId
+        return authenticator.id
     }
 
-    // Toggles the automatic presence simulation so only the specified authenticator responds to WebAuthn ceremonies
-    // All other authenticators are silenced, which in practice forces Chrome to use the active one
+    // Makes the specified authenticator the only one that responds to WebAuthn ceremonies
     async function setActive(activeId) {
-        for (const id of authenticatorIds) {
-            await cdpSession.send('WebAuthn.setAutomaticPresenceSimulation', {
-                authenticatorId: id,
-                enabled: id === activeId,
-            })
-        }
+        set.setActive(activeId)
     }
 
     // Silences every authenticator so no WebAuthn call succeeds until one is explicitly reactivated
     async function silenceAll() {
-        for (const id of authenticatorIds) {
-            await cdpSession.send('WebAuthn.setAutomaticPresenceSimulation', {
-                authenticatorId: id,
-                enabled: false,
-            })
-        }
+        set.silenceAll()
     }
 
     async function dispose() {
-        try {
-            for (const id of authenticatorIds) {
-                // Ignore errors
-                await cdpSession.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId: id }).catch(() => null)
-            }
-        } finally {
-            await cdpSession.send('WebAuthn.disable').catch(() => null)
-        }
+        set.enabled = false
     }
 
     return {
@@ -76,7 +53,7 @@ export async function createVirtualPasskeyManager(page) {
         silenceAll,
         dispose,
         get authenticatorIds() {
-            return [...authenticatorIds]
+            return set.authenticators.map((authenticator) => authenticator.id)
         },
     }
 }
