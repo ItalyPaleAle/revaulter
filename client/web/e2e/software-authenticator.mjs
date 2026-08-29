@@ -33,6 +33,20 @@ function toBase64Url(value) {
     return Buffer.from(value).toString('base64url')
 }
 
+// Resolves the relying-party ID a ceremony runs against
+// The Credentials API defaults it to the effective domain of the caller's origin, which is what the app relies on when it omits the field
+function effectiveRpID(request, explicit) {
+    if (explicit) {
+        return explicit
+    }
+
+    try {
+        return new URL(request.origin).hostname
+    } catch {
+        throw new AuthenticatorError('NotSupportedError', `Cannot derive an rpId from origin ${request.origin}`)
+    }
+}
+
 // Errors carrying a DOMException name so the page shim can rethrow them the way the Credentials API would
 class AuthenticatorError extends Error {
     constructor(name, message) {
@@ -41,51 +55,32 @@ class AuthenticatorError extends Error {
     }
 }
 
+// One virtual authenticator holding its own credentials
+// A page can host several of them, which is how tests cover accounts with more than one passkey
 export class SoftwareAuthenticator {
-    constructor(options = {}) {
+    constructor(id, options = {}) {
+        this.id = id
         this.algorithm = getPasskeyAlgorithm(options.algorithm ?? 'es256')
         // A "PRF-less" authenticator is useful for asserting the client's error path, matching the virtual authenticator's hasPrf option
         this.supportsPrf = options.supportsPrf ?? true
+        this.transports = options.transports ?? ['internal', 'hybrid']
+        // Only an active authenticator answers a ceremony, standing in for the presence the user would supply on a real one
+        this.active = options.active ?? false
         this.credentials = new Map()
-        this.enabled = true
     }
 
     get credentialCount() {
         return this.credentials.size
     }
 
-    // Handles one request forwarded from the page shim
-    // Errors are returned rather than thrown so Playwright's binding does not turn them into an opaque rejection
-    async handle(request) {
-        if (!this.enabled) {
-            return { error: { name: 'NotAllowedError', message: 'The software authenticator was disposed' } }
-        }
-
-        try {
-            switch (request?.kind) {
-                case 'create':
-                    return { result: this.create(request) }
-                case 'get':
-                    return { result: this.get(request) }
-                default:
-                    throw new AuthenticatorError('NotSupportedError', `Unsupported request: ${request?.kind}`)
-            }
-        } catch (err) {
-            return {
-                error: {
-                    name: err instanceof AuthenticatorError ? err.domName : 'NotAllowedError',
-                    message: err instanceof Error ? err.message : String(err),
-                },
-            }
-        }
+    // Reports whether this authenticator holds a credential that could answer a request
+    canAnswer(rpID, allowCredentials) {
+        return this.selectCredential(rpID, allowCredentials) !== null
     }
 
     create(request) {
         const publicKey = request.publicKey ?? {}
-        const rpID = publicKey.rp?.id
-        if (!rpID) {
-            throw new AuthenticatorError('NotSupportedError', 'Creation options are missing rp.id')
-        }
+        const rpID = effectiveRpID(request, publicKey.rp?.id)
 
         // Honor the relying party's algorithm preferences: a real authenticator only mints a credential the RP asked for
         const params = Array.isArray(publicKey.pubKeyCredParams) ? publicKey.pubKeyCredParams : []
@@ -142,7 +137,7 @@ export class SoftwareAuthenticator {
                 clientDataJSON: toBase64Url(clientDataJSON),
                 attestationObject: toBase64Url(attestationObject),
                 authenticatorData: toBase64Url(authData),
-                transports: ['internal', 'hybrid'],
+                transports: [...this.transports],
                 publicKeyAlgorithm: this.algorithm.coseAlgorithm,
             },
             clientExtensionResults: this.supportsPrf ? { prf: { enabled: true } } : {},
@@ -151,12 +146,9 @@ export class SoftwareAuthenticator {
 
     get(request) {
         const publicKey = request.publicKey ?? {}
-        const rpID = publicKey.rpId
-        if (!rpID) {
-            throw new AuthenticatorError('NotSupportedError', 'Request options are missing rpId')
-        }
+        const rpID = effectiveRpID(request, publicKey.rpId)
 
-        const credential = this.#selectCredential(rpID, publicKey.allowCredentials)
+        const credential = this.selectCredential(rpID, publicKey.allowCredentials)
         if (!credential) {
             throw new AuthenticatorError('NotAllowedError', 'No credential is available for this relying party')
         }
@@ -184,7 +176,7 @@ export class SoftwareAuthenticator {
     }
 
     // Picks the credential that answers a request, honoring allowCredentials when the relying party restricts the set
-    #selectCredential(rpID, allowCredentials) {
+    selectCredential(rpID, allowCredentials) {
         const allowed = Array.isArray(allowCredentials) ? allowCredentials : []
         if (allowed.length > 0) {
             for (const descriptor of allowed) {
@@ -382,7 +374,7 @@ function installShim({ bindingName }) {
         }
     }
 
-    navigator.credentials.create = async (options) => {
+    const create = async (options) => {
         return buildCredential(
             await callAuthenticator({
                 kind: 'create',
@@ -392,7 +384,7 @@ function installShim({ bindingName }) {
         )
     }
 
-    navigator.credentials.get = async (options) => {
+    const get = async (options) => {
         return buildCredential(
             await callAuthenticator({
                 kind: 'get',
@@ -401,25 +393,138 @@ function installShim({ bindingName }) {
             })
         )
     }
+
+    // WebKit's Linux build defines PublicKeyCredential but no navigator.credentials at all, so the container has to be created before its methods can be replaced
+    if (navigator.credentials) {
+        navigator.credentials.create = create
+        navigator.credentials.get = get
+    } else {
+        Object.defineProperty(navigator, 'credentials', {
+            configurable: true,
+            value: { create, get },
+        })
+    }
 }
 
-let bindingCounter = 0
+// The set of virtual authenticators attached to one page, which is what the page shim talks to
+// Routing a ceremony to the active authenticator is what lets a test choose which passkey answers
+export class SoftwareAuthenticatorSet {
+    constructor() {
+        this.authenticators = []
+        this.enabled = true
+        this.#nextID = 1
+    }
 
-// Installs a software authenticator on a page for the lifetime of a test
-// The authenticator must be installed before the page navigates to the app, because the shim is applied to new documents
-export async function installSoftwareAuthenticator(page, options = {}) {
-    const authenticator = new SoftwareAuthenticator(options)
-    bindingCounter++
-    const bindingName = `__revaulterSoftwareAuthenticator${bindingCounter}`
+    #nextID
 
-    await page.exposeFunction(bindingName, (request) => authenticator.handle(request))
+    add(options = {}) {
+        const authenticator = new SoftwareAuthenticator(`software-authenticator-${this.#nextID++}`, options)
+        this.authenticators.push(authenticator)
+        return authenticator
+    }
+
+    get(id) {
+        return this.authenticators.find((authenticator) => authenticator.id === id) ?? null
+    }
+
+    // Makes one authenticator the only active one, which is how a test picks the passkey a ceremony uses
+    setActive(id) {
+        for (const authenticator of this.authenticators) {
+            authenticator.active = authenticator.id === id
+        }
+    }
+
+    // Silences every authenticator so no ceremony succeeds until one is reactivated
+    silenceAll() {
+        for (const authenticator of this.authenticators) {
+            authenticator.active = false
+        }
+    }
+
+    // Handles one request forwarded from the page shim
+    // Errors are returned rather than thrown so Playwright's binding does not turn them into an opaque rejection
+    async handle(request) {
+        try {
+            if (!this.enabled) {
+                throw new AuthenticatorError('NotAllowedError', 'The software authenticators were disposed')
+            }
+
+            switch (request?.kind) {
+                case 'create':
+                    return { result: this.#responder(request).create(request) }
+                case 'get':
+                    return { result: this.#responder(request).get(request) }
+                default:
+                    throw new AuthenticatorError('NotSupportedError', `Unsupported request: ${request?.kind}`)
+            }
+        } catch (err) {
+            return {
+                error: {
+                    name: err instanceof AuthenticatorError ? err.domName : 'NotAllowedError',
+                    message: err instanceof Error ? err.message : String(err),
+                },
+            }
+        }
+    }
+
+    // Chooses the authenticator that answers a ceremony among the active ones
+    #responder(request) {
+        const active = this.authenticators.filter((authenticator) => authenticator.active)
+        if (active.length === 0) {
+            throw new AuthenticatorError('NotAllowedError', 'No active authenticator is available')
+        }
+
+        // An assertion has to come from an authenticator that actually holds a matching credential, the way a real one only responds when it can
+        if (request.kind === 'get') {
+            const publicKey = request.publicKey ?? {}
+            const rpID = effectiveRpID(request, publicKey.rpId)
+            const holder = active.find((authenticator) => authenticator.canAnswer(rpID, publicKey.allowCredentials))
+            if (!holder) {
+                throw new AuthenticatorError('NotAllowedError', 'No active authenticator holds a matching credential')
+            }
+            return holder
+        }
+
+        // A registration goes to the most recently activated authenticator
+        return active[active.length - 1]
+    }
+}
+
+const installed = new WeakMap()
+
+// Attaches the page shim and its binding once per page, so several authenticators can share one page the way a browser profile would
+async function attachToPage(page) {
+    const existing = installed.get(page)
+    if (existing) {
+        return existing
+    }
+
+    const set = new SoftwareAuthenticatorSet()
+    const bindingName = '__revaulterSoftwareAuthenticator'
+    await page.exposeFunction(bindingName, (request) => set.handle(request))
     await page.addInitScript(installShim, { bindingName })
+    installed.set(page, set)
+    return set
+}
+
+// Returns the set of software authenticators for a page, creating it on first use
+// It must be installed before the page navigates to the app, because the shim is applied to new documents
+export async function installSoftwareAuthenticators(page) {
+    return attachToPage(page)
+}
+
+// Installs a single software authenticator and makes it the active one
+export async function installSoftwareAuthenticator(page, options = {}) {
+    const set = await attachToPage(page)
+    const authenticator = set.add({ ...options, active: true })
+    set.setActive(authenticator.id)
 
     return {
+        set,
         authenticator,
         algorithm: authenticator.algorithm,
         async dispose() {
-            authenticator.enabled = false
+            set.enabled = false
         },
     }
 }

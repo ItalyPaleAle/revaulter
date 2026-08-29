@@ -98,6 +98,8 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: client/web
+        env:
+          E2E_BROWSERS: all
         run: |
           pnpm run e2e:install
 
@@ -111,14 +113,19 @@ jobs:
         run: |
           pnpm run e2e:build-server
 
+      # Every browser engine runs against SQLite
       - name: Run E2E tests (SQLite)
         working-directory: client/web
+        env:
+          E2E_BROWSERS: all
         run: |
           pnpm exec playwright test
 
+      # The Postgres run covers chromium only
       - name: Run E2E tests (Postgres)
         working-directory: client/web
         env:
           E2E_DATABASE_DSN: ${{ env.TEST_POSTGRES_DSN }}
+          E2E_BROWSERS: chromium
         run: |
           pnpm exec playwright test

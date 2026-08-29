@@ -10,7 +10,7 @@
     "e2e": "pnpm run e2e:build-server && playwright test",
     "e2e:build-server": "vite build --mode e2e && mkdir -p ../../.bin && go build -tags e2e -o ../../.bin/revaulter-e2e ../../cmd/revaulter",
     "e2e:headed": "pnpm run e2e:build-server && playwright test --headed",
-    "e2e:install": "playwright install --with-deps chromium",
+    "e2e:install": "node ./e2e/install-browsers.mjs",
     "format": "biome format --write .",
     "lint": "biome lint . && svelte-check",
     "lint:biome": "biome lint .",
