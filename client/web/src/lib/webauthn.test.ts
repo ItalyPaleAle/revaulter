@@ -52,6 +52,70 @@ function buildAttestationObject(): ArrayBuffer {
     return Uint8Array.from(decoded).buffer
 }
 
+// Cross-language fixtures for credential public keys that are not ECDSA
+// Each is a fixed CBOR header, a body of repeated fill bytes standing in for the key material, and a fixed trailer
+// These must stay identical to the fixtures in internal/protocolv2/credential_pubkey_test.go and cose-extract.test.ts
+const COSE_FIXTURES = [
+    {
+        name: 'EdDSA',
+        headerHex: 'a4010103272006215820',
+        fill: 0xcc,
+        bodyLen: 32,
+        trailerHex: '',
+        hash: 'cofjKg9veiFnYvNi8MMJxabBwzBlQPpJg1vXJH6fyt4',
+    },
+    {
+        name: 'RS256',
+        headerHex: 'a401030339010020590100',
+        fill: 0xab,
+        bodyLen: 256,
+        trailerHex: '2143010001',
+        hash: 'jaLEoC-xsM5H9AgJeo8GTDcJxd5nBh5R4qw8gUkBEdg',
+    },
+    {
+        name: 'ML-DSA-44',
+        headerHex: 'a3010703382f20590520',
+        fill: 0xdd,
+        bodyLen: 1312,
+        trailerHex: '',
+        hash: 'ag4GSXJUaUsb2zAkWkDsB_Uc9wNpi-zR90RqJnSJFDg',
+    },
+]
+
+function buildFixtureCose(fixture: (typeof COSE_FIXTURES)[number]): Uint8Array {
+    const header = Buffer.from(fixture.headerHex, 'hex')
+    const trailer = Buffer.from(fixture.trailerHex, 'hex')
+    const out = new Uint8Array(header.length + fixture.bodyLen + trailer.length)
+    out.set(header, 0)
+    out.fill(fixture.fill, header.length, header.length + fixture.bodyLen)
+    out.set(trailer, header.length + fixture.bodyLen)
+    return out
+}
+
+// Wraps a credential public key in the attestation object a PRF-capable authenticator produces
+// The flags set AT and ED, so the key is followed by the authenticator extension outputs the extractor has to stop before
+function buildFixtureAttestationObject(fixture: (typeof COSE_FIXTURES)[number]): ArrayBuffer {
+    const credId = new TextEncoder().encode('cross-language-fixture-id')
+    // {"hmac-secret": true}
+    const extensions = Buffer.from('a16b686d61632d736563726574f5', 'hex')
+    const authData = Buffer.concat([
+        Buffer.alloc(32, 0x11),
+        Buffer.from([0xc5, 0x00, 0x00, 0x00, 0x01]),
+        Buffer.alloc(16),
+        Buffer.from([(credId.length >> 8) & 0xff, credId.length & 0xff]),
+        credId,
+        buildFixtureCose(fixture),
+        extensions,
+    ])
+    const attestationObject = Buffer.concat([
+        // a3 | "fmt" -> "none" | "attStmt" -> {} | "authData" -> bstr(authData)
+        Buffer.from('a363666d74646e6f6e656761747453746d74a068617574684461746159', 'hex'),
+        Buffer.from([(authData.length >> 8) & 0xff, authData.length & 0xff]),
+        authData,
+    ])
+    return Uint8Array.from(attestationObject).buffer
+}
+
 function assertionCredential(
     extensionResults: unknown = { prf: { enabled: true, results: { first: bytes(9, 8, 7) } } }
 ) {
@@ -99,6 +163,18 @@ describe('credentialPublicKeyHash', () => {
             'YLaAiaKKf8P_gxCZdaWAwIiQLkrJAoCjl0QLZZb7sYk'
         )
     })
+
+    // The hash is taken over the raw COSE bytes, so no key type needs its own handling here or on the server
+    it.each(COSE_FIXTURES)(
+        'hashes a $name credential public key to the digest the server computes',
+        async (fixture) => {
+            const response = new FakeAuthenticatorAttestationResponse(buildFixtureAttestationObject(fixture), bytes())
+
+            await expect(
+                credentialPublicKeyHash(response as unknown as AuthenticatorAttestationResponse)
+            ).resolves.toBe(fixture.hash)
+        }
+    )
 })
 
 describe('serializePublicKeyCredential', () => {
@@ -295,6 +371,22 @@ describe('webauthnRegister', () => {
             credential: { id: 'registration-id', rawId: 'AQID' },
             clientDataJSON: 'Bgc',
         })
+    })
+
+    it.each(COSE_FIXTURES)('returns the public-key hash for a $name credential', async (fixture) => {
+        const response = new FakeAuthenticatorAttestationResponse(buildFixtureAttestationObject(fixture), bytes(6, 7))
+        const credential = {
+            id: 'registration-id',
+            rawId: bytes(1, 2, 3),
+            type: 'public-key',
+            response,
+            getClientExtensionResults: () => ({ prf: { enabled: true } }),
+        } as unknown as PublicKeyCredential
+        vi.stubGlobal('navigator', { credentials: { create: vi.fn().mockResolvedValue(credential) } })
+
+        const result = await webauthnRegister({ options: { publicKey: { challenge: 'AQID' } } })
+
+        expect(result.publicKeyHash).toBe(fixture.hash)
     })
 })
 

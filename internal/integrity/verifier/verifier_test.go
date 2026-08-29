@@ -1,7 +1,6 @@
 package verifier
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -180,7 +179,7 @@ func TestNewHTTPClient_DoesNotFollowRedirects(t *testing.T) {
 	client, err := NewHTTPClient(srv.URL, true, true)
 	require.NoError(t, err)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
 	require.NoError(t, err)
 
 	res, err := client.Do(req)
@@ -200,7 +199,7 @@ func TestDoJSONRequest_PropagatesServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
 	require.NoError(t, err)
 	var out map[string]any
 	err = doJSONRequest(http.DefaultClient, req, &out)

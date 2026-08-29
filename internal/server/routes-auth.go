@@ -20,6 +20,7 @@ import (
 	location "github.com/gin-contrib/location/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/italypaleale/go-kit/eventqueue"
 
@@ -304,7 +305,35 @@ func (s *Server) beginWebAuthnSession(user *v2WebAuthnUser) (creation *protocol.
 		webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
 		// Add PRF extension
 		webauthnlib.WithExtensions(webauthnlib.WithExtensionPRFSupport()),
+		// Offer post-quantum credential algorithms alongside the classical ones
+		webauthnlib.WithCredentialParameters(credentialParameters()),
 	)
+}
+
+// credentialParameters returns the credential algorithms offered during registration, in order of preference
+// It is the library's default list with the ML-DSA parameter sets in front, so an authenticator that implements a post-quantum algorithm produces a post-quantum credential while every classical algorithm stays available for the ones that don't
+func credentialParameters() []protocol.CredentialParameter {
+	defaults := webauthnlib.CredentialParametersDefault()
+	params := make([]protocol.CredentialParameter, 0, len(defaults)+3)
+
+	// FIPS 204 parameter sets registered for WebAuthn credentials
+	params = append(params,
+		protocol.CredentialParameter{
+			Type:      protocol.PublicKeyCredentialType,
+			Algorithm: webauthncose.AlgMLDSA44,
+		},
+		protocol.CredentialParameter{
+			Type:      protocol.PublicKeyCredentialType,
+			Algorithm: webauthncose.AlgMLDSA65,
+		},
+		protocol.CredentialParameter{
+			Type:      protocol.PublicKeyCredentialType,
+			Algorithm: webauthncose.AlgMLDSA87,
+		},
+	)
+
+	// Add the defaults at the end
+	return append(params, defaults...)
 }
 
 // RouteV2AuthRegisterFinish is the handler for POST /v2/auth/register/finish
@@ -331,13 +360,15 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 
 	// Complete the registration
 	// This must be executed in a transaction
-	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (registerFinishRes, error) {
+	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(_ context.Context, tx *db.DbTx) (registerFinishRes, error) {
 		return s.registerFinish(c, tx, req)
 	})
 	if err != nil {
-		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "User registration failed",
-			slog.String("client_ip", c.ClientIP()),
-		)
+		logging.
+			LogFromContext(c.Request.Context()).
+			WarnContext(c.Request.Context(), "User registration failed",
+				slog.String("client_ip", c.ClientIP()),
+			)
 
 		// The transaction rolled back, so the in-tx success row never landed; record the failure outside the tx
 		s.auditEvent(c, auditFields{
@@ -369,10 +400,12 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User registered",
-		slog.String("user_id", res.user.ID),
-		slog.String("client_ip", c.ClientIP()),
-	)
+	logging.
+		LogFromContext(c.Request.Context()).
+		InfoContext(c.Request.Context(), "User registered",
+			slog.String("user_id", res.user.ID),
+			slog.String("client_ip", c.ClientIP()),
+		)
 
 	// Respond
 	c.JSON(http.StatusOK, v2AuthRegisterFinishResponse{

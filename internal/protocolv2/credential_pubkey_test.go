@@ -16,6 +16,62 @@ const (
 	fixtureExpectedHash = "YLaAiaKKf8P_gxCZdaWAwIiQLkrJAoCjl0QLZZb7sYk"
 )
 
+// Cross-language fixtures for the key types whose material is too long to spell out as one hex constant
+// Each is built as a fixed CBOR header, a body of repeated fill bytes standing in for the key material, and a fixed trailer
+// These must stay identical to the fixtures in client/web/src/lib/cose-extract.test.ts
+type coseFixture struct {
+	name       string
+	headerHex  string
+	fill       byte
+	bodyLen    int
+	trailerHex string
+	hash       string
+}
+
+// EdDSA is kty=OKP(1) alg=-8 crv=Ed25519(6) with a 32-byte x
+// RS256 is kty=RSA(3) alg=-257 with a 256-byte modulus and the 65537 exponent
+// ML-DSA-44 is kty=AKP(7) alg=-48 with the 1312-byte FIPS 204 public key, which is long enough that its CBOR length header takes two bytes
+var coseFixtures = []coseFixture{
+	{
+		name:      "EdDSA",
+		headerHex: "a4010103272006215820",
+		fill:      0xcc,
+		bodyLen:   32,
+		hash:      "cofjKg9veiFnYvNi8MMJxabBwzBlQPpJg1vXJH6fyt4",
+	},
+	{
+		name:       "RS256",
+		headerHex:  "a401030339010020590100",
+		fill:       0xab,
+		bodyLen:    256,
+		trailerHex: "2143010001",
+		hash:       "jaLEoC-xsM5H9AgJeo8GTDcJxd5nBh5R4qw8gUkBEdg",
+	},
+	{
+		name:      "ML-DSA-44",
+		headerHex: "a3010703382f20590520",
+		fill:      0xdd,
+		bodyLen:   1312,
+		hash:      "ag4GSXJUaUsb2zAkWkDsB_Uc9wNpi-zR90RqJnSJFDg",
+	},
+}
+
+func (f coseFixture) bytes(t *testing.T) []byte {
+	t.Helper()
+
+	header, err := hex.DecodeString(f.headerHex)
+	require.NoError(t, err)
+	trailer, err := hex.DecodeString(f.trailerHex)
+	require.NoError(t, err)
+
+	out := make([]byte, 0, len(header)+f.bodyLen+len(trailer))
+	out = append(out, header...)
+	for range f.bodyLen {
+		out = append(out, f.fill)
+	}
+	return append(out, trailer...)
+}
+
 func TestCredentialPublicKeyHash_ES256FixtureMatchesBrowser(t *testing.T) {
 	cose, err := hex.DecodeString(fixtureCoseES256Hex)
 	require.NoError(t, err)
@@ -50,6 +106,28 @@ func TestCredentialPublicKeyHash_EdDSAAndRS256WorkWithoutAlgorithmSwitch(t *test
 		_, dup := seen[h]
 		require.False(t, dup, "case %d: hash collision across distinct COSE inputs", i)
 		seen[h] = struct{}{}
+	}
+}
+
+func TestCredentialPublicKeyHash_NonECDSAFixturesMatchBrowser(t *testing.T) {
+	for _, fixture := range coseFixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			got, err := CredentialPublicKeyHash(fixture.bytes(t))
+			require.NoError(t, err)
+			require.Equal(t, fixture.hash, got, "hash of raw COSE bytes must match the browser-computed hash for the same fixture")
+		})
+	}
+}
+
+func TestCredentialPublicKeyHashFromStoredCredJSON_NonECDSAFixtures(t *testing.T) {
+	for _, fixture := range coseFixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			// encoding/json base64-encodes []byte with the standard encoding, which is the shape go-webauthn stores
+			credJSON := `{"publicKey":"` + base64.StdEncoding.EncodeToString(fixture.bytes(t)) + `"}`
+			got, err := CredentialPublicKeyHashFromStoredCredJSON(credJSON)
+			require.NoError(t, err)
+			require.Equal(t, fixture.hash, got)
+		})
 	}
 }
 

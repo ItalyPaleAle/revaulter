@@ -10,6 +10,49 @@ const COSE_ES256_HEX =
     'a5010203262001215820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa225820bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 const EXPECTED_HASH_BASE64URL = 'YLaAiaKKf8P_gxCZdaWAwIiQLkrJAoCjl0QLZZb7sYk'
 
+// Cross-language fixtures for the key types whose material is too long to spell out as one hex constant
+// Each is built as a fixed CBOR header, a body of repeated fill bytes standing in for the key material, and a fixed trailer
+// These must stay identical to the fixtures in internal/protocolv2/credential_pubkey_test.go
+// EdDSA is kty=OKP(1) alg=-8 crv=Ed25519(6) with a 32-byte x
+// RS256 is kty=RSA(3) alg=-257 with a 256-byte modulus and the 65537 exponent
+// ML-DSA-44 is kty=AKP(7) alg=-48 with the 1312-byte FIPS 204 public key, which is long enough that its CBOR length header takes two bytes
+const COSE_FIXTURES = [
+    {
+        name: 'EdDSA',
+        headerHex: 'a4010103272006215820',
+        fill: 0xcc,
+        bodyLen: 32,
+        trailerHex: '',
+        hash: 'cofjKg9veiFnYvNi8MMJxabBwzBlQPpJg1vXJH6fyt4',
+    },
+    {
+        name: 'RS256',
+        headerHex: 'a401030339010020590100',
+        fill: 0xab,
+        bodyLen: 256,
+        trailerHex: '2143010001',
+        hash: 'jaLEoC-xsM5H9AgJeo8GTDcJxd5nBh5R4qw8gUkBEdg',
+    },
+    {
+        name: 'ML-DSA-44',
+        headerHex: 'a3010703382f20590520',
+        fill: 0xdd,
+        bodyLen: 1312,
+        trailerHex: '',
+        hash: 'ag4GSXJUaUsb2zAkWkDsB_Uc9wNpi-zR90RqJnSJFDg',
+    },
+]
+
+function buildFixtureCose(fixture: (typeof COSE_FIXTURES)[number]): Uint8Array {
+    const header = hexToBytes(fixture.headerHex)
+    const trailer = hexToBytes(fixture.trailerHex)
+    const out = new Uint8Array(header.length + fixture.bodyLen + trailer.length)
+    out.set(header, 0)
+    out.fill(fixture.fill, header.length, header.length + fixture.bodyLen)
+    out.set(trailer, header.length + fixture.bodyLen)
+    return out
+}
+
 function hexToBytes(hex: string): Uint8Array {
     const out = new Uint8Array(hex.length / 2)
     for (let i = 0; i < out.length; i++) {
@@ -20,13 +63,13 @@ function hexToBytes(hex: string): Uint8Array {
 
 // Builds the attestationObject CBOR around a provided raw COSE key
 // Layout: a3 (map 3) | "fmt"->"none" | "attStmt"->{} | "authData"->bstr(authData)
-// authData = rpIdHash(32*0x11) | flags(0x45 = UP|UV|AT) | signCount(0x00000001) | aaguid(16*0x00) | credIdLen(big-endian u16) | credId | cose
-function buildAttestationObject(cose: Uint8Array, credId: Uint8Array): Uint8Array {
+// authData = rpIdHash(32*0x11) | flags(0x45 = UP|UV|AT, plus 0x80 = ED when extensions are present) | signCount(0x00000001) | aaguid(16*0x00) | credIdLen(big-endian u16) | credId | cose | extensions
+function buildAttestationObject(cose: Uint8Array, credId: Uint8Array, extensions?: Uint8Array): Uint8Array {
     const authData: number[] = []
     for (let i = 0; i < 32; i++) {
         authData.push(0x11)
     }
-    authData.push(0x45)
+    authData.push(extensions ? 0xc5 : 0x45)
     authData.push(0x00, 0x00, 0x00, 0x01)
     for (let i = 0; i < 16; i++) {
         authData.push(0x00)
@@ -36,6 +79,9 @@ function buildAttestationObject(cose: Uint8Array, credId: Uint8Array): Uint8Arra
         authData.push(b)
     }
     for (const b of cose) {
+        authData.push(b)
+    }
+    for (const b of extensions ?? []) {
         authData.push(b)
     }
 
@@ -110,6 +156,41 @@ describe('extractCredentialPublicKeyCose', () => {
             ao.buffer.slice(ao.byteOffset, ao.byteOffset + ao.byteLength) as ArrayBuffer
         )
         expect(extracted).toEqual(cose)
+    })
+
+    // A PRF-capable authenticator writes its extension outputs after the credential public key, so the extractor has to find where the COSE map ends rather than taking the rest of authData
+    // The credential public key of an RSA or ML-DSA credential is also long enough that its CBOR length headers take more than one byte
+    describe.each(COSE_FIXTURES)('$name credential public key', (fixture) => {
+        const credId = new TextEncoder().encode('cross-language-fixture-id')
+        // {"hmac-secret": true}, which is what an authenticator supporting the PRF extension reports at registration
+        const extensions = hexToBytes('a16b686d61632d736563726574f5')
+
+        it('returns the exact COSE bytes that were embedded in authData', () => {
+            const cose = buildFixtureCose(fixture)
+            const ao = buildAttestationObject(cose, credId)
+            const extracted = extractCredentialPublicKeyCose(
+                ao.buffer.slice(ao.byteOffset, ao.byteOffset + ao.byteLength) as ArrayBuffer
+            )
+            expect(extracted).toEqual(cose)
+        })
+
+        it('stops at the end of the COSE map when authenticator extensions follow it', () => {
+            const cose = buildFixtureCose(fixture)
+            const ao = buildAttestationObject(cose, credId, extensions)
+            const extracted = extractCredentialPublicKeyCose(
+                ao.buffer.slice(ao.byteOffset, ao.byteOffset + ao.byteLength) as ArrayBuffer
+            )
+            expect(extracted).toEqual(cose)
+        })
+
+        it('hashes the extracted COSE to the same digest the server computes', async () => {
+            const cose = buildFixtureCose(fixture)
+            const ao = buildAttestationObject(cose, credId, extensions)
+            const extracted = extractCredentialPublicKeyCose(
+                ao.buffer.slice(ao.byteOffset, ao.byteOffset + ao.byteLength) as ArrayBuffer
+            )
+            await expect(sha256Base64Url(extracted)).resolves.toBe(fixture.hash)
+        })
     })
 
     it('throws when the AT flag is missing', () => {

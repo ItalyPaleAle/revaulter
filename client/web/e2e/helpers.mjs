@@ -170,8 +170,15 @@ export async function registerAndReachReady(page, displayName = 'Playwright Read
 }
 
 export async function registerThroughUI(page, displayName = 'Playwright User') {
-    const authDebug = attachAuthDebugLogging(page)
     const passkey = await createVirtualPasskey(page)
+    await completeSignupForm(page, displayName)
+    return passkey
+}
+
+// Fills in and submits the signup form with whichever authenticator the caller already installed on the page
+// Leaves the UI on the post-signup password-setup screen so the caller can decide whether to skip or set a password
+export async function completeSignupForm(page, displayName = 'Playwright User') {
+    const authDebug = attachAuthDebugLogging(page)
 
     try {
         await page.goto('/')
@@ -180,7 +187,6 @@ export async function registerThroughUI(page, displayName = 'Playwright User') {
         await page.getByRole('button', { name: 'Create account with passkey' }).click()
         await expect(page.getByRole('heading', { name: 'Add a password' })).toBeVisible()
         authDebug.assertNoFailures()
-        return passkey
     } catch (err) {
         authDebug.assertNoFailures()
         throw err
@@ -296,26 +302,11 @@ function decodeCliJSON(stdout) {
 }
 
 // Completes signup using a passkey manager's authenticator as the active one
-// Leaves the UI on the post-signup password-setup screen so the caller can decide whether to skip or set a password
 export async function registerWithManager(page, manager, displayName = 'Playwright User') {
-    const authDebug = attachAuthDebugLogging(page)
     const authenticatorId = await manager.addAuthenticator({ active: true })
     await manager.setActive(authenticatorId)
-
-    try {
-        await page.goto('/')
-        await page.getByRole('button', { name: 'Create a new account' }).click()
-        await page.getByLabel('Display name (optional)').fill(displayName)
-        await page.getByRole('button', { name: 'Create account with passkey' }).click()
-        await expect(page.getByRole('heading', { name: 'Add a password' })).toBeVisible()
-        authDebug.assertNoFailures()
-        return authenticatorId
-    } catch (err) {
-        authDebug.assertNoFailures()
-        throw err
-    } finally {
-        authDebug.detach()
-    }
+    await completeSignupForm(page, displayName)
+    return authenticatorId
 }
 
 // Forces the manager's specified authenticator to be the only active one and completes a passkey sign-in up to the ready or password-prompt screen

@@ -1,7 +1,6 @@
 package integrity
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -134,7 +133,7 @@ func TestRekorEntryAsBundle_RejectsWrongKind(t *testing.T) {
 	defer rekor.Close()
 
 	digest := make([]byte, 32)
-	_, err = rekorEntryAsBundle(context.Background(), rekor.URL, "abc123", digest)
+	_, err = rekorEntryAsBundle(t.Context(), rekor.URL, "abc123", digest)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported rekor entry kind")
 }
