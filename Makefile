@@ -40,6 +40,8 @@ client-lint:
 test-client:
 	(cd client/web && pnpm run test)
 
+# Runs against chromium only
+# Set E2E_BROWSERS to "all", or to a comma-separated list of chromium, firefox and webkit, to run against other engines
 .PHONY: test-e2e
 test-e2e:
 	(cd client/web && pnpm run e2e)

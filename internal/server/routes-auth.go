@@ -20,6 +20,7 @@ import (
 	location "github.com/gin-contrib/location/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/italypaleale/go-kit/eventqueue"
 
@@ -303,10 +304,36 @@ func (s *Server) beginWebAuthnSession(user *v2WebAuthnUser) (creation *protocol.
 		// We require discoverable credentials aka Passkeys
 		webauthnlib.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
 		// Add PRF extension
-		webauthnlib.WithExtensions(protocol.AuthenticationExtensions{
-			"prf": map[string]any{},
-		}),
+		webauthnlib.WithExtensions(webauthnlib.WithExtensionPRFSupport()),
+		// Offer post-quantum credential algorithms alongside the classical ones
+		webauthnlib.WithCredentialParameters(credentialParameters()),
 	)
+}
+
+// credentialParameters returns the credential algorithms offered during registration, in order of preference
+// It is the library's default list with the ML-DSA parameter sets in front, so an authenticator that implements a post-quantum algorithm produces a post-quantum credential while every classical algorithm stays available for the ones that don't
+func credentialParameters() []protocol.CredentialParameter {
+	defaults := webauthnlib.CredentialParametersDefault()
+	params := make([]protocol.CredentialParameter, 0, len(defaults)+3)
+
+	// FIPS 204 parameter sets registered for WebAuthn credentials
+	params = append(params,
+		protocol.CredentialParameter{
+			Type:      protocol.PublicKeyCredentialType,
+			Algorithm: webauthncose.AlgMLDSA44,
+		},
+		protocol.CredentialParameter{
+			Type:      protocol.PublicKeyCredentialType,
+			Algorithm: webauthncose.AlgMLDSA65,
+		},
+		protocol.CredentialParameter{
+			Type:      protocol.PublicKeyCredentialType,
+			Algorithm: webauthncose.AlgMLDSA87,
+		},
+	)
+
+	// Add the defaults at the end
+	return append(params, defaults...)
 }
 
 // RouteV2AuthRegisterFinish is the handler for POST /v2/auth/register/finish
@@ -333,13 +360,15 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 
 	// Complete the registration
 	// This must be executed in a transaction
-	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (registerFinishRes, error) {
+	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(_ context.Context, tx *db.DbTx) (registerFinishRes, error) {
 		return s.registerFinish(c, tx, req)
 	})
 	if err != nil {
-		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "User registration failed",
-			slog.String("client_ip", c.ClientIP()),
-		)
+		logging.
+			LogFromContext(c.Request.Context()).
+			WarnContext(c.Request.Context(), "User registration failed",
+				slog.String("client_ip", c.ClientIP()),
+			)
 
 		// The transaction rolled back, so the in-tx success row never landed; record the failure outside the tx
 		s.auditEvent(c, auditFields{
@@ -371,10 +400,12 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), "User registered",
-		slog.String("user_id", res.user.ID),
-		slog.String("client_ip", c.ClientIP()),
-	)
+	logging.
+		LogFromContext(c.Request.Context()).
+		InfoContext(c.Request.Context(), "User registered",
+			slog.String("user_id", res.user.ID),
+			slog.String("client_ip", c.ClientIP()),
+		)
 
 	// Respond
 	c.JSON(http.StatusOK, v2AuthRegisterFinishResponse{
@@ -386,7 +417,9 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 // RouteV2AuthLoginBegin is the handler for POST /v2/auth/login/begin
 func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 	// Get an assertion and store it in the database
-	assertion, session, err := s.webAuthn.BeginDiscoverableLogin()
+	assertion, session, err := s.webAuthn.BeginDiscoverableLogin(
+		webauthnlib.WithAssertionExtensions(webauthnlib.WithExtensionPRFSupport()),
+	)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -1633,8 +1666,14 @@ func (s *Server) loginFinish(c *gin.Context, tx *db.DbTx, req v2AuthLoginFinishR
 		return userRecord, nil
 	}
 
+	// Normalize the PRF results to support passkeys created with an older version of webauthn
+	credential, err := normalizeWebAuthnPRFResults(req.Credential)
+	if err != nil {
+		return loginFinishRes{}, NewResponseError(http.StatusBadRequest, "Invalid WebAuthn PRF result")
+	}
+
 	// The WebAuthn requires a *http.Request object formatted with a very specific body
-	waReq, err := newJSONHTTPRequest(c, req.Credential)
+	waReq, err := newJSONHTTPRequest(c, credential)
 	if err != nil {
 		return loginFinishRes{}, err
 	}
@@ -1642,6 +1681,7 @@ func (s *Server) loginFinish(c *gin.Context, tx *db.DbTx, req v2AuthLoginFinishR
 	// Complete the WebAuthn login
 	cred, err := s.webAuthn.FinishDiscoverableLogin(handler, *payload.WebAuthnSession, waReq)
 	if err != nil {
+		logWebAuthnError(ctx, "login", err)
 		return loginFinishRes{}, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
 	}
 	if discoveredUser == nil || discoveredDBUser == nil {
@@ -1932,6 +1972,99 @@ func (s *Server) validateAuthenticatorSignCount(c *gin.Context, userRecord *v2We
 		slog.String("client_ip", c.ClientIP()),
 	)
 	return NewResponseError(http.StatusForbidden, "Authenticator credential not recognized")
+}
+
+// logWebAuthnError logs concise structured details for a failed WebAuthn ceremony
+func logWebAuthnError(ctx context.Context, ceremony string, err error) {
+	attrs := []any{
+		slog.String("ceremony", ceremony),
+		slog.String("error", err.Error()),
+	}
+
+	pErr, ok := errors.AsType[*protocol.Error](err)
+	if ok {
+		attrs = append(attrs,
+			slog.String("webauthn_error_type", pErr.Type),
+			slog.String("webauthn_error_details", pErr.Details),
+		)
+	}
+
+	logging.LogFromContext(ctx).WarnContext(ctx, "WebAuthn ceremony failed", attrs...)
+}
+
+// normalizeWebAuthnPRFResults converts browser-produced PRF byte arrays to base64url strings
+func normalizeWebAuthnPRFResults(credential json.RawMessage) (json.RawMessage, error) {
+	var value map[string]any
+	err := json.Unmarshal(credential, &value)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, path := range []string{
+		"clientExtensionResults.prf.results.first",
+		"clientExtensionResults.prf.results.second",
+	} {
+		err = normalizeWebAuthnByteArrayAtPath(value, path)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return json.Marshal(value)
+}
+
+// normalizeWebAuthnByteArrayAtPath encodes a byte array at a nested JSON path while preserving base64url strings
+func normalizeWebAuthnByteArrayAtPath(value map[string]any, path string) error {
+	parts := strings.Split(path, ".")
+	current := value
+
+	// PRF extension output is optional so a missing object means there is nothing to normalize
+	for _, part := range parts[:len(parts)-1] {
+		next, ok := current[part]
+		if !ok {
+			return nil
+		}
+
+		// Reject malformed intermediate values because silently ignoring them would defer an unclear parse error to the WebAuthn library
+		current, ok = next.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s must be an object", strings.Join(parts[:len(parts)-1], "."))
+		}
+	}
+
+	last := parts[len(parts)-1]
+	field, ok := current[last]
+	if !ok {
+		// Authenticators may omit either PRF result when no value was produced
+		return nil
+	}
+
+	// Standards-compliant clients already send base64url strings so preserve them without encoding them again
+	_, ok = field.(string)
+	if ok {
+		return nil
+	}
+
+	// Older client code can serialize browser byte buffers as JSON number arrays instead of base64url strings
+	values, ok := field.([]any)
+	if !ok {
+		return fmt.Errorf("%s must be a base64url string or byte array", path)
+	}
+
+	bytesValue := make([]byte, len(values))
+	for i, value := range values {
+		// JSON numbers decode as float64 so require an integer in the byte range before narrowing to byte
+		number, numberOK := value.(float64)
+		if !numberOK || number < 0 || number > 255 || number != math.Trunc(number) {
+			return fmt.Errorf("%s contains an invalid byte at index %d", path, i)
+		}
+		bytesValue[i] = byte(number)
+	}
+
+	// Convert the legacy array to the representation expected by the upgraded WebAuthn parser
+	current[last] = base64.RawURLEncoding.EncodeToString(bytesValue)
+
+	return nil
 }
 
 // newJSONHTTPRequest returns a new http.Request with a JSON body

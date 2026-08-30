@@ -6,13 +6,8 @@
   ],
   "allow": [
     {
-      "module": "github.com/fxamacker/cbor/v2",
-      "version": "v2.9.3",
-      "reason": ""
-    },
-    {
-      "module": "github.com/lestrrat-go/jwx/v4",
-      "version": "v4.4.0",
+      "module": "github.com/go-webauthn/webauthn",
+      "version": "v0.18.0",
       "reason": ""
     }
   ]

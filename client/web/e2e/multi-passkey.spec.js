@@ -66,7 +66,9 @@ async function runDecryptThroughUI(page, requestKey, encryptOutput, noteSuffix) 
     return result.json
 }
 
-test('two passkeys without a password can each sign in and share the primary key', async ({ page }) => {
+test('two passkeys without a password can each sign in and share the primary key', { tag: '@requeststream' }, async ({
+    page,
+}) => {
     const manager = await createPasskeyManager(page)
 
     try {
@@ -100,7 +102,9 @@ test('two passkeys without a password can each sign in and share the primary key
     }
 })
 
-test('two passkeys with a password set before the second passkey share the primary key', async ({ page }) => {
+test('two passkeys with a password set before the second passkey share the primary key', {
+    tag: '@requeststream',
+}, async ({ page }) => {
     const manager = await createPasskeyManager(page)
 
     try {
@@ -143,9 +147,9 @@ test('two passkeys with a password set before the second passkey share the prima
     }
 })
 
-test('changing the password on one passkey leaves the other on the old password until it is refreshed', async ({
-    page,
-}) => {
+test('changing the password on one passkey leaves the other on the old password until it is refreshed', {
+    tag: '@requeststream',
+}, async ({ page }) => {
     const manager = await createPasskeyManager(page)
 
     try {

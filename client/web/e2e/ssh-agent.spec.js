@@ -19,7 +19,9 @@ test.beforeEach(async ({ page, request }) => {
     await resetBrowserState(page)
 })
 
-test('ssh-agent serves the public key and approves SSH auth through Revaulter', async ({ page }) => {
+test('ssh-agent serves the public key and approves SSH auth through Revaulter', { tag: '@requeststream' }, async ({
+    page,
+}) => {
     const auth = await registerAndReachReady(page, 'SSH Agent User')
     const tmpRoot = mkdtempSync(join(tmpdir(), 'revaulter-e2e-ssh-agent-'))
     const trustStorePath = join(tmpRoot, 'trust.json')
