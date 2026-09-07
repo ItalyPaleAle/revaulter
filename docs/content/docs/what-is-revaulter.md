@@ -44,7 +44,7 @@ Encryption keys are derived from the passkey in the browser and never leave the 
 - Request payloads are encrypted end-to-end between the CLI and the browser.
 - Response envelopes use hybrid ECDH P-256 + ML-KEM-768 key agreement for post-quantum transport security.
 
-For a full description of the cryptographic architecture, see [Cryptography architecture](./docs/crypto-architecture).
+For a full description of the cryptographic architecture, see [Cryptography architecture](/docs/crypto-architecture).
 
 ## Self-hosted
 
@@ -78,7 +78,7 @@ Revaulter supports three operations:
 - **Decrypt** — decrypt a ciphertext value (`A256GCM` / AES-256-GCM)
 - **Sign** — produce a digital signature over a SHA-256 digest (`ES256` / ECDSA P-256 + SHA-256)
 
-Encryption/decryption keys and signing keys are derived deterministically from the passkey holder's primary key, the key label, and the algorithm. Published signing public keys can optionally be fetched by a stable key ID in JWK or PEM form. See the [cryptography architecture](./docs/crypto-architecture) for details.
+Encryption/decryption keys and signing keys are derived deterministically from the passkey holder's primary key, the key label, and the algorithm. Published signing public keys can optionally be fetched by a stable key ID in JWK or PEM form. See the [cryptography architecture](/docs/crypto-architecture) for details.
 
 ## Webhook notifications
 
