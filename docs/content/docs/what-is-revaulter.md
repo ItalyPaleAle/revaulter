@@ -44,7 +44,7 @@ Encryption keys are derived from the passkey in the browser and never leave the 
 - Request payloads are encrypted end-to-end between the CLI and the browser.
 - Response envelopes use hybrid ECDH P-256 + ML-KEM-768 key agreement for post-quantum transport security.
 
-For a full description of the cryptographic architecture, see [Cryptography architecture](/docs/crypto-architecture).
+For a full description of the cryptographic architecture, see [Cryptography architecture](./crypto-architecture).
 
 ## Self-hosted
 
