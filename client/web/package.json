@@ -20,7 +20,7 @@
     "test": "vitest run",
     "analyze": "cross-replace vite build --mode analyze"
   },
-  "packageManager": "pnpm@12.0.0+sha512.9e2e3dc3911995868dc94b8175c217c27e95408fa03b4a22749778f2b34f773b77cdd3b39ede8171b22fcd53be6a35342e9fac9948a68ef58df6488ce89a7e67",
+  "packageManager": "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
   "devEngines": {
     "runtime": {
       "name": "node",
@@ -32,15 +32,15 @@
     "@awasm/noble": "0.1.4",
     "@fontsource-variable/geist": "5.3.0",
     "@fontsource-variable/geist-mono": "5.3.0",
-    "@noble/curves": "2.3.0",
-    "@noble/post-quantum": "0.7.0",
+    "@noble/curves": "2.4.0",
+    "@noble/post-quantum": "0.7.1",
     "arraybuffer-encoding": "1.1.0",
     "date-fns": "4.4.0",
     "js-cookie": "3.0.8",
     "tailwindcss": "4.3.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.7",
+    "@biomejs/biome": "2.5.11",
     "@playwright/test": "1.62.1",
     "@sveltejs/vite-plugin-svelte": "7.3.0",
     "@tailwindcss/vite": "4.3.3",
@@ -49,11 +49,11 @@
     "@types/node": "26.2.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "cross-replace": "0.2.0",
-    "cssnano": "8.0.5",
+    "cssnano": "9.0.2",
     "postcss": "8.5.26",
     "postcss-import": "17.0.0",
     "postcss-url": "10.1.4",
-    "svelte": "5.56.10",
+    "svelte": "5.57.0",
     "svelte-check": "4.7.6",
     "typescript": "6.0.3",
     "vite": "8.2.2",
