@@ -17,6 +17,7 @@ export default defineConfig(({ mode }) => {
 
     const isProduction = mode === 'production'
     const isE2E = mode === 'e2e'
+    const appVersion = process.env.BUILD_VERSION || 'canary'
 
     // In "analyze" mode, add the analyzer plugin
     if (mode == 'analyze') {
@@ -86,6 +87,7 @@ export default defineConfig(({ mode }) => {
         },
         define: {
             __ARGON2ID_COST__: JSON.stringify(argon2idCost),
+            __APP_VERSION__: JSON.stringify(appVersion),
         },
         test: {
             exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
@@ -118,6 +120,10 @@ export default defineConfig(({ mode }) => {
             port: 3000,
             proxy: {
                 // Proxy API routes for development
+                '/info': {
+                    target: 'http://localhost:8080',
+                    changeOrigin: true,
+                },
                 '/v2': {
                     target: 'http://localhost:8080',
                     changeOrigin: true,

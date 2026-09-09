@@ -5,3 +5,5 @@ declare const __ARGON2ID_COST__: {
     t: number
     p: number
 }
+
+declare const __APP_VERSION__: string

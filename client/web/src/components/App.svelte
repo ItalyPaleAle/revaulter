@@ -4,7 +4,8 @@ import { onMount } from 'svelte'
 import AuthAccessView from '$components/AuthAccessView.svelte'
 import AuthSetupView from '$components/AuthSetupView.svelte'
 import ReadyView from '$components/ReadyView.svelte'
-
+import UpdateAvailable from '$components/UpdateAvailable.svelte'
+import { appVersion, getServerVersion, reloadWithLatestClient, versionsMatch } from '$lib/app-version'
 import { argon2idCost } from '$lib/argon2id-cost'
 import {
     computeSigningKeyThumbprint,
@@ -76,6 +77,7 @@ const signupMissingPrfError =
     'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Sign up with a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
 
 let uiState = $state<UIState>('boot')
+let serverVersion = $state<string | null>(null)
 let authBusy = $state(false)
 let authError = $state<string | null>(null)
 let pageError = $state<string | null>(null)
@@ -126,6 +128,12 @@ async function initialize() {
     pageError = null
 
     try {
+        const currentServerVersion = await getServerVersion()
+        if (!versionsMatch(appVersion, currentServerVersion)) {
+            serverVersion = currentServerVersion
+            return
+        }
+
         await v2Session()
 
         // While sessions could survive page reloads, but the PRF secret is intentionally kept in memory only
@@ -144,6 +152,14 @@ async function initialize() {
         pageError = err instanceof Error ? err.message : String(err)
         uiState = 'signin'
     }
+}
+
+async function reloadForUpdate(): Promise<void> {
+    if (!serverVersion) {
+        return
+    }
+
+    await reloadWithLatestClient()
 }
 
 function toSessionResponse(authSession: V2AuthSessionInfo): V2SessionResponse {
@@ -1054,7 +1070,9 @@ function sortedItems() {
 </script>
 
 <div class="min-h-screen">
-    {#if uiState === 'ready'}
+    {#if serverVersion}
+        <UpdateAvailable clientVersion={appVersion} onReload={reloadForUpdate} {serverVersion} />
+    {:else if uiState === 'ready'}
         <ReadyView
             allowedIpsText={allowedIpsText}
             {credentials}
