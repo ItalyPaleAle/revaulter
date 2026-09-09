@@ -1,17 +1,13 @@
 package verifier
 
 import (
-	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"time"
-
-	"golang.org/x/net/http2"
 )
 
 // Sentinel errors that callers can detect with errors.Is
@@ -27,16 +23,20 @@ func NewHTTPClient(serverURL string, insecure, noH2C bool) (*http.Client, error)
 	if err != nil {
 		return nil, fmt.Errorf("invalid server URL: %w", err)
 	}
-	transport := &http2.Transport{
-		IdleConnTimeout:  90 * time.Second,
-		WriteByteTimeout: 30 * time.Second,
+
+	protocols := &http.Protocols{}
+	if parsed.Scheme == "http" && !noH2C {
+		protocols.SetUnencryptedHTTP2(true)
+	} else {
+		protocols.SetHTTP2(true)
 	}
 
-	if parsed.Scheme == "http" && !noH2C {
-		transport.AllowHTTP = true
-		transport.DialTLSContext = func(_ context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-			return net.Dial(network, addr)
-		}
+	transport := &http.Transport{
+		IdleConnTimeout: 90 * time.Second,
+		HTTP2: &http.HTTP2Config{
+			WriteByteTimeout: 30 * time.Second,
+		},
+		Protocols: protocols,
 	}
 
 	if insecure {

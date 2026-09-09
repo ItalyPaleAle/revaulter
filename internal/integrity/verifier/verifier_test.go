@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
 )
 
 // newStubServer returns an httptest.Server whose handlers are looked up by path
@@ -25,9 +24,10 @@ func newStubServer(t *testing.T, handlers map[string]http.HandlerFunc) *httptest
 func newStubTLSServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(handler)
+	protocols := &http.Protocols{}
+	protocols.SetHTTP2(true)
+	srv.Config.Protocols = protocols
 	srv.EnableHTTP2 = true
-	err := http2.ConfigureServer(srv.Config, &http2.Server{})
-	require.NoError(t, err)
 	srv.StartTLS()
 	return srv
 }
@@ -154,13 +154,22 @@ func TestNewHTTPClient_InvalidURL(t *testing.T) {
 func TestNewHTTPClient_HTTPAllowsH2C(t *testing.T) {
 	c, err := NewHTTPClient("http://localhost:8080", false, false)
 	require.NoError(t, err)
-	require.NotNil(t, c)
+	transport, ok := c.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotNil(t, transport.Protocols)
+	assert.True(t, transport.Protocols.UnencryptedHTTP2())
+	assert.False(t, transport.Protocols.HTTP1())
 }
 
 func TestNewHTTPClient_InsecureSkipsTLSVerify(t *testing.T) {
 	c, err := NewHTTPClient("https://localhost", true, false)
 	require.NoError(t, err)
-	require.NotNil(t, c)
+	transport, ok := c.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotNil(t, transport.TLSClientConfig)
+	assert.True(t, transport.TLSClientConfig.InsecureSkipVerify)
+	require.NotNil(t, transport.Protocols)
+	assert.True(t, transport.Protocols.HTTP2())
 }
 
 func TestNewHTTPClient_DoesNotFollowRedirects(t *testing.T) {
