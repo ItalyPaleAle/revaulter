@@ -269,6 +269,8 @@ func (pk *testPasskey) assertionResponse(t *testing.T, challenge string, userHan
 			"userHandle":        base64.RawURLEncoding.EncodeToString(userHandle),
 		},
 		"clientExtensionResults": map[string]any{
+			// Safari returns appid false without being asked when authenticating with some cross-platform security keys
+			"appid": false,
 			"prf": map[string]any{
 				"enabled": true,
 				"results": map[string]any{"first": base64.RawURLEncoding.EncodeToString(make([]byte, 32))},

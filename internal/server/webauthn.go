@@ -58,9 +58,10 @@ func (s *Server) initWebAuthn() (*webauthnlib.WebAuthn, error) {
 
 	// RPOrigins controls the normal origin checks for WebAuthn ceremonies
 	waCfg := &webauthnlib.Config{
-		RPID:          rpID,
-		RPDisplayName: cfg.WebAuthnRPName,
-		RPOrigins:     filtered,
+		RPID:                              rpID,
+		RPDisplayName:                     cfg.WebAuthnRPName,
+		RPOrigins:                         filtered,
+		ExtensionsUnsolicitedOutputPolicy: protocol.UnsolicitedOutputPolicyIgnore,
 	}
 
 	// Enable explicit top-origin verification for Related Origin Requests when extra WebAuthn origins are configured
