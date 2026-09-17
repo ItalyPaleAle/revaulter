@@ -8,6 +8,7 @@ import {
     resetBrowserState,
     resetState,
 } from './helpers.mjs'
+import { createVirtualPasskey } from './passkeys.mjs'
 
 test.beforeEach(async ({ page, request }) => {
     await resetState(request)
@@ -126,6 +127,35 @@ test('passkeys tab shows credentials', async ({ page }) => {
         // Should show at least one passkey with creation timestamp
         await expect(page.getByText('Created')).toBeVisible()
     } finally {
+        await auth.passkey.dispose()
+    }
+})
+
+test('adding a passkey without PRF stops before server persistence', async ({ page }) => {
+    const auth = await registerAndReachReady(page, 'Settings User')
+    const incompatiblePasskey = await createVirtualPasskey(page, { hasPrf: false })
+
+    try {
+        let addCredentialFinishes = 0
+        page.on('request', (request) => {
+            if (new URL(request.url()).pathname === '/v2/auth/credentials/add/finish') {
+                addCredentialFinishes += 1
+            }
+        })
+
+        await openSettingsTab(page, 'Passkeys')
+        await page.getByRole('button', { name: 'Add passkey' }).click()
+        await page.getByLabel('Passkey name (optional)').fill('No PRF')
+        await page.getByRole('button', { name: 'Register passkey' }).click()
+
+        await expect(
+            page.getByText(
+                'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Add a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
+            )
+        ).toBeVisible()
+        expect(addCredentialFinishes).toBe(0)
+    } finally {
+        await incompatiblePasskey.dispose()
         await auth.passkey.dispose()
     }
 })

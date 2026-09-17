@@ -68,13 +68,15 @@ import type {
     V2PublishedSigningKey,
     V2SessionResponse,
 } from '$lib/v2-types'
-import { webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
+import { PrfUnavailableError, webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
 
 type UIState = 'boot' | 'signin' | 'signup' | 'password-login' | 'password-setup' | 'ready'
 
 const missingPrfError = 'Authenticator did not return PRF output'
 const signupMissingPrfError =
     'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Sign up with a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
+const addPasskeyMissingPrfError =
+    'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Add a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
 
 let uiState = $state<UIState>('boot')
 let serverVersion = $state<string | null>(null)
@@ -442,7 +444,7 @@ async function doRegister() {
             uiState = 'signin'
         } else {
             authError =
-                err instanceof Error && err.message === missingPrfError
+                err instanceof PrfUnavailableError
                     ? signupMissingPrfError
                     : err instanceof Error
                       ? err.message
@@ -896,7 +898,12 @@ async function doAddPasskey(name: string) {
         await doLoadCredentials()
         settingsSuccess = 'Passkey added.'
     } catch (err) {
-        settingsError = err instanceof Error ? err.message : String(err)
+        settingsError =
+            err instanceof PrfUnavailableError
+                ? addPasskeyMissingPrfError
+                : err instanceof Error
+                  ? err.message
+                  : String(err)
     } finally {
         settingsBusy = false
     }
