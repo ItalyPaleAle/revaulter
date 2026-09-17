@@ -13,7 +13,8 @@ func TestRequirePRFSupport(t *testing.T) {
 		cred := &webauthnlib.Credential{
 			Extensions: webauthnlib.CredentialExtensions{PRFEnabled: &enabled},
 		}
-		require.NoError(t, requirePRFSupport(cred))
+		err := requirePRFSupport(cred)
+		require.NoError(t, err)
 	})
 
 	for _, tc := range []struct {
@@ -25,7 +26,8 @@ func TestRequirePRFSupport(t *testing.T) {
 		{name: "PRF unavailable", cred: credentialWithPRFSupport(false)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Error(t, requirePRFSupport(tc.cred))
+			err := requirePRFSupport(tc.cred)
+			require.Error(t, err)
 		})
 	}
 }

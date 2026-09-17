@@ -1318,7 +1318,8 @@ func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCreden
 	if err != nil {
 		return addCredentialFinishRes{}, err
 	}
-	if err = requirePRFSupport(cred); err != nil {
+	err = requirePRFSupport(cred)
+	if err != nil {
 		return addCredentialFinishRes{}, err
 	}
 	credID := base64.RawURLEncoding.EncodeToString(cred.ID)
@@ -1574,7 +1575,8 @@ func (s *Server) registerFinish(c *gin.Context, tx *db.DbTx, req v2AuthRegisterF
 	if err != nil {
 		return registerFinishRes{}, err
 	}
-	if err = requirePRFSupport(cred); err != nil {
+	err = requirePRFSupport(cred)
+	if err != nil {
 		return registerFinishRes{}, err
 	}
 

@@ -77,6 +77,7 @@ const signupMissingPrfError =
     'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Sign up with a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
 const addPasskeyMissingPrfError =
     'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Add a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
+const prfHelpHref = 'https://revaulter.italypaleale.me/docs/what-is-revaulter/#supported-passkeys'
 
 let uiState = $state<UIState>('boot')
 let serverVersion = $state<string | null>(null)
@@ -98,6 +99,8 @@ let allowedIpsText = $state('')
 let settingsBusy = $state(false)
 let settingsError = $state<string | null>(null)
 let settingsSuccess = $state<string | null>(null)
+const authErrorHelpHref = $derived(authError === signupMissingPrfError ? prfHelpHref : null)
+const settingsErrorHelpHref = $derived(settingsError === addPasskeyMissingPrfError ? prfHelpHref : null)
 let credentials = $state<V2CredentialItem[]>([])
 let signingKeys = $state<V2PublishedSigningKey[]>([])
 let hasPassword = $state(false)
@@ -1111,6 +1114,7 @@ function sortedItems() {
             sessionLabel={sessionLabel()}
             settingsBusy={settingsBusy}
             settingsError={settingsError}
+            settingsErrorHelpHref={settingsErrorHelpHref}
             settingsSuccess={settingsSuccess}
             {signingKeys}
             userId={session?.userId ?? ''}
@@ -1119,6 +1123,7 @@ function sortedItems() {
         <AuthSetupView
             authBusy={authBusy}
             authError={authError}
+            authErrorHelpHref={authErrorHelpHref}
             displayName={displayName}
             onDisplayNameInput={(value) => {
                 displayName = value

@@ -23,6 +23,7 @@ interface Props {
     signingKeys: V2PublishedSigningKey[]
     busy: boolean
     error: string | null
+    errorHelpHref: string | null
     success: string | null
     onClose: () => void
     onUpdateDisplayName: (name: string) => Promise<void>
@@ -51,6 +52,7 @@ let {
     signingKeys,
     busy,
     error,
+    errorHelpHref,
     success,
     onClose,
     onUpdateDisplayName,
@@ -674,6 +676,9 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
             {#if error}
                 <div class="mt-6 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
                     {error}
+                    {#if errorHelpHref}
+                        <a class="ml-1 underline" href={errorHelpHref} target="_blank" rel="noreferrer">Learn about compatible passkeys.</a>
+                    {/if}
                 </div>
             {:else if success}
                 <div class="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-800 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-200">
