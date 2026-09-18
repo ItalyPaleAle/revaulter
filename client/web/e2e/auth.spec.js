@@ -94,6 +94,18 @@ test('registration explains when the authenticator does not support PRF', async 
     const passkey = await createVirtualPasskey(page, { hasPrf: false })
 
     try {
+        let registerFinishes = 0
+        let loginBegins = 0
+        page.on('request', (request) => {
+            const path = new URL(request.url()).pathname
+            if (path === '/v2/auth/register/finish') {
+                registerFinishes += 1
+            }
+            if (path === '/v2/auth/login/begin') {
+                loginBegins += 1
+            }
+        })
+
         await page.goto('/')
         await page.getByRole('button', { name: 'Create a new account' }).click()
         await page.getByLabel('Display name (optional)').fill('No PRF User')
@@ -103,6 +115,12 @@ test('registration explains when the authenticator does not support PRF', async 
                 'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Sign up with a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
             )
         ).toBeVisible()
+        await expect(page.getByRole('link', { name: 'Learn about compatible passkeys.' })).toHaveAttribute(
+            'href',
+            'https://revaulter.italypaleale.me/docs/what-is-revaulter/#supported-passkeys'
+        )
+        expect(registerFinishes).toBe(0)
+        expect(loginBegins).toBe(0)
     } finally {
         await passkey.dispose()
     }

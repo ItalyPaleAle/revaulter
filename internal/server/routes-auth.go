@@ -1318,6 +1318,10 @@ func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCreden
 	if err != nil {
 		return addCredentialFinishRes{}, err
 	}
+	err = requirePRFSupport(cred)
+	if err != nil {
+		return addCredentialFinishRes{}, err
+	}
 	credID := base64.RawURLEncoding.EncodeToString(cred.ID)
 
 	// Retrieve the list of existing credentials to make sure that the same one isn't already registered
@@ -1571,6 +1575,10 @@ func (s *Server) registerFinish(c *gin.Context, tx *db.DbTx, req v2AuthRegisterF
 	if err != nil {
 		return registerFinishRes{}, err
 	}
+	err = requirePRFSupport(cred)
+	if err != nil {
+		return registerFinishRes{}, err
+	}
 
 	// Register the user in the database
 	user, err := as.RegisterUser(c.Request.Context(), db.RegisterUserInput{
@@ -1760,6 +1768,13 @@ func (s *Server) finishWebAuthnRegistration(c *gin.Context, user *v2WebAuthnUser
 	}
 
 	return cred, credJSON, nil
+}
+
+func requirePRFSupport(cred *webauthnlib.Credential) error {
+	if cred == nil || cred.Extensions.PRFEnabled == nil || !*cred.Extensions.PRFEnabled {
+		return NewResponseError(http.StatusBadRequest, "Passkey does not support the required PRF extension")
+	}
+	return nil
 }
 
 type finalizeSetupVals struct {

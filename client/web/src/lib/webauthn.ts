@@ -148,6 +148,13 @@ export function serializePublicKeyCredential(cred: PublicKeyCredential) {
     return base
 }
 
+export class PrfUnavailableError extends Error {
+    constructor() {
+        super('PRF is unavailable for this credential')
+        this.name = 'PrfUnavailableError'
+    }
+}
+
 // webauthnRegister creates a passkey and returns its serialized registration data
 export async function webauthnRegister(args: {
     options: unknown
@@ -175,6 +182,13 @@ export async function webauthnRegister(args: {
 
     if (!cred) {
         throw new Error('WebAuthn registration was canceled')
+    }
+
+    const extensionResults = cred.getClientExtensionResults() as {
+        prf?: { enabled?: boolean }
+    }
+    if (extensionResults?.prf?.enabled !== true) {
+        throw new PrfUnavailableError()
     }
 
     const resp = cred.response as AuthenticatorAttestationResponse
