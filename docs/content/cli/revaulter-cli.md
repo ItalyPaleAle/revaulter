@@ -413,7 +413,7 @@ revaulter-cli version
 
 ## Reading the request key from a file
 
-Every command that connects to a server accepts the request key either inline with `--request-key, or from a file with `--request-key-file`. The two flags are mutually exclusive, and exactly one of them is required.
+Every command that connects to a server accepts the request key either inline with `--request-key`, or from a file with `--request-key-file`. The two flags are mutually exclusive, and exactly one of them is required.
 
 ```bash
 install -m 600 /dev/null /etc/revaulter/request-key

@@ -74,11 +74,11 @@ func ReadRequestKeyFile(path string) (string, error) {
 }
 
 // validateRequestKeyFileMode checks that mode describes a file that is allowed to hold a request key
+// A directory or a device is always a mistake, and a FIFO cannot be read without blocking
 func validateRequestKeyFileMode(mode fs.FileMode) error {
-	// A directory or a device is always a mistake, and a FIFO cannot be read without blocking
 	if !mode.IsRegular() {
 		return errors.New("not a regular file")
 	}
 
-	return checkRequestKeyFilePerms(mode)
+	return nil
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// writeRequestKeyFile writes content to a file in a temporary directory, with owner-only permissions, and returns its path
+// writeRequestKeyFile writes content to a file in a temporary directory and returns its path
 func writeRequestKeyFile(t *testing.T, content string) string {
 	t.Helper()
 

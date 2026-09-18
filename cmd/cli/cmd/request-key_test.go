@@ -9,15 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// writeRequestKeyFile writes a request key to a file with owner-only permissions and returns its path
+// writeRequestKeyFile writes a request key to a file in a temporary directory and returns its path
 func writeRequestKeyFile(t *testing.T, content string) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "request-key")
 	err := os.WriteFile(path, []byte(content), 0o600)
-	require.NoError(t, err)
-
-	err = os.Chmod(path, 0o600)
 	require.NoError(t, err)
 
 	return path
