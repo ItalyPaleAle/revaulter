@@ -11,9 +11,11 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/italypaleale/go-kit/auditlogs/siem"
 	"github.com/lestrrat-go/jwx/v4/jwk"
 )
 
@@ -37,6 +39,42 @@ type Config struct {
 	// For example, set this to `Bearer abc123` for bearer-token auth, or `Basic dXNlcjpwYXNz` for HTTP Basic
 	// Leave unset to omit the header entirely
 	WebhookKey string `env:"WEBHOOKKEY" yaml:"webhookKey"`
+
+	// If set, streams the audit log to this endpoint, for ingestion by a SIEM or another log collector (Splunk HEC, Elastic, Vector, Fluent Bit, Cribl, a plain webhook receiver, …)
+	// Delivery is at-least-once, so the collector must deduplicate on the event `id`
+	AuditStreamUrl string `env:"AUDITSTREAMURL" yaml:"auditStreamUrl"`
+
+	// The wire format for the audit log stream:
+	// - `ndjson`: one compact JSON object per line, sent with content type `application/x-ndjson`
+	// - `json`: a single JSON envelope per request, sent with content type `application/json`
+	// +default "ndjson"
+	AuditStreamFormat string `env:"AUDITSTREAMFORMAT" yaml:"auditStreamFormat"`
+
+	// Value sent as-is as the authorization header on audit log stream requests
+	// Revaulter does NOT add an authentication scheme prefix, so include one yourself if your collector expects it
+	// For example, set this to `Splunk 00000000-0000-0000-0000-000000000000` for a Splunk HEC token, or `Bearer abc123` for bearer-token auth
+	// Leave unset to omit the header entirely
+	AuditStreamKey string `env:"AUDITSTREAMKEY" yaml:"auditStreamKey"`
+
+	// Name of the header the `auditStreamKey` value is sent in
+	// This is overridable because several collectors do not use `Authorization`
+	// +default "Authorization"
+	AuditStreamAuthHeader string `env:"AUDITSTREAMAUTHHEADER" yaml:"auditStreamAuthHeader"`
+
+	// Maximum number of audit events sent in a single request, between 1 and 1000
+	// If the collector rejects a body as too large, Revaulter automatically halves this value for subsequent requests, down to a floor of 1
+	// +default 100
+	AuditStreamBatchSize int `env:"AUDITSTREAMBATCHSIZE" yaml:"auditStreamBatchSize"`
+
+	// How long Revaulter waits before checking for new audit events when there is nothing to send, as a Go duration between 1s and 5m
+	// A newly-written event wakes the shipper early, so this is primarily meant as fallback
+	// +default 10s
+	AuditStreamFlushInterval time.Duration `env:"AUDITSTREAMFLUSHINTERVAL" yaml:"auditStreamFlushInterval"`
+
+	// Restricts the audit log stream to the listed event types
+	// Each entry is either an exact event type, such as `request.confirm`, or an area wildcard, such as `request.*`
+	// An empty list streams every event type
+	AuditStreamEventTypes []string `env:"AUDITSTREAMEVENTTYPES" yaml:"auditStreamEventTypes"`
 
 	// The URL your application can be reached at. This is used in the links that are sent in webhook notifications.
 	// This is optional, but recommended.
@@ -70,7 +108,7 @@ type Config struct {
 	// Instance-wide secret to derive encryption keys.
 	// It's recommended to generate with `openssl rand -base64 32`.
 	//
-	// IMPORTANT: rotating `secretKey` changes the PRF salt for every user effectively bricks every existing account. Treat this value as immutable for the lifetime of the instance; if you must rotate it, plan on every user re-registering from scratch.
+	// IMPORTANT: rotating `secretKey` changes the PRF salt for every user effectively bricks every existing account. Treat this value as immutable for the lifetime of the instance - if you must rotate it, plan on every user re-registering from scratch.
 	//
 	// Note: this value is NOT used to encrypt anything server-side: all request payloads and responses are end-to-end encrypted in the browser, and the server only stores opaque envelopes.
 	// +required
@@ -135,10 +173,11 @@ type Config struct {
 	LogLevel string `env:"LOGLEVEL" yaml:"logLevel"`
 
 	// If true, emits logs formatted as JSON, otherwise uses a text-based structured log format.
-	// +default false if a TTY is attached (e.g. in development); true otherwise.
+	// +default false if a TTY is attached (e.g. in development), true otherwise.
 	LogAsJSON bool `env:"LOGASJSON" yaml:"logAsJson"`
 
-	// Dev is meant for development only; it's undocumented
+	// Dev is meant for development only
+	// It's undocumented
 	Dev Dev `yaml:"-"`
 
 	// internal keys
@@ -240,6 +279,12 @@ func (c *Config) Validate(logger *slog.Logger) error {
 		return errors.New("config entry key 'webhookFormat' is invalid")
 	}
 
+	// Validate the audit log stream options
+	err := c.validateAuditStream()
+	if err != nil {
+		return err
+	}
+
 	// Ensure that the secret key is at least 20-character long (although ideally it's 32 or more, but enforcing some minimum standard)
 	if len(c.SecretKey) < 20 {
 		return errors.New("secret key is too short: must be at least 20 characters")
@@ -259,8 +304,59 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	return nil
 }
 
+// validateAuditStream validates and normalizes the audit log stream options
+func (c *Config) validateAuditStream() error {
+	// Every option is inert while the feature is disabled
+	if c.AuditStreamUrl == "" {
+		return nil
+	}
+
+	parsed, err := url.Parse(c.AuditStreamUrl)
+	if err != nil {
+		return fmt.Errorf("config entry key 'auditStreamUrl' is invalid: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("config entry key 'auditStreamUrl' has disallowed scheme %q: only http and https are permitted", parsed.Scheme)
+	}
+
+	c.AuditStreamFormat = strings.ToLower(c.AuditStreamFormat)
+	switch c.AuditStreamFormat {
+	case "ndjson", "json", "":
+		// All good
+	default:
+		return errors.New("config entry key 'auditStreamFormat' is invalid: supported values are 'ndjson' and 'json'")
+	}
+
+	if c.AuditStreamBatchSize == 0 {
+		c.AuditStreamBatchSize = siem.DefaultBatchSize
+	}
+	if c.AuditStreamBatchSize < siem.MinBatchSize || c.AuditStreamBatchSize > siem.MaxBatchSize {
+		return fmt.Errorf("config entry key 'auditStreamBatchSize' is invalid: must be between %d and %d", siem.MinBatchSize, siem.MaxBatchSize)
+	}
+
+	if c.AuditStreamFlushInterval == 0 {
+		c.AuditStreamFlushInterval = siem.DefaultFlushInterval
+	}
+	if c.AuditStreamFlushInterval < siem.MinFlushInterval || c.AuditStreamFlushInterval > siem.MaxFlushInterval {
+		return fmt.Errorf("config entry key 'auditStreamFlushInterval' is invalid: must be between %v and %v", siem.MinFlushInterval, siem.MaxFlushInterval)
+	}
+
+	auditStreamEventTypeRegexp := regexp.MustCompile(`^[a-z_]+\.([a-z_]+|\*)$`)
+	for i, entry := range c.AuditStreamEventTypes {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if !auditStreamEventTypeRegexp.MatchString(entry) {
+			return fmt.Errorf(`config entry key 'auditStreamEventTypes' contains an invalid entry %q: expected the form "area.verb" or "area.*"`, c.AuditStreamEventTypes[i])
+		}
+
+		c.AuditStreamEventTypes[i] = entry
+	}
+
+	return nil
+}
+
 // SetSecretKey derives the instance-wide deterministic WebAuthn PRF salt from `secretKey` and the token signing key.
-// The resulting salt is NOT used to encrypt any server-side data; it is purely the input-material anchor that every user's in-browser key derivation (static ECDH/ML-KEM decryption keys and per-operation AES-GCM keys) is bound to.
+// The resulting salt is NOT used to encrypt any server-side data
+// It is purely the input-material anchor that every user's in-browser key derivation (static ECDH/ML-KEM decryption keys and per-operation AES-GCM keys) is bound to.
 func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
 	if c.SecretKey == "" {
 		return errors.New("secret key value is empty")

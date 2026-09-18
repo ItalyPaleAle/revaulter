@@ -29,11 +29,11 @@ Wf86aX6PepsntZv2GYlA5UpabfT2EZICICpJ5h/iI+i341gBmLiAFQOyTDT+/wQc
 func TestVerifyBundle_RejectsEmptyInputs(t *testing.T) {
 	_, err := VerifyBundle(nil, []byte("{}"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "manifest is empty")
+	require.ErrorContains(t, err, "manifest is empty")
 
 	_, err = VerifyBundle([]byte("manifest"), nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bundle is empty")
+	require.ErrorContains(t, err, "bundle is empty")
 }
 
 func TestVerifyBundle_RejectsMalformedBundle(t *testing.T) {
@@ -41,7 +41,7 @@ func TestVerifyBundle_RejectsMalformedBundle(t *testing.T) {
 	_, err := VerifyBundle([]byte("some manifest"), []byte(`{"foo":"bar"}`))
 	require.Error(t, err)
 	// sigstore-go's UnmarshalJSON rejects anything that's not a Sigstore bundle
-	assert.Contains(t, err.Error(), "parse signing bundle")
+	require.ErrorContains(t, err, "parse signing bundle")
 
 	// Not valid JSON at all
 	_, err = VerifyBundle([]byte("some manifest"), []byte(`not json`))
@@ -49,8 +49,8 @@ func TestVerifyBundle_RejectsMalformedBundle(t *testing.T) {
 }
 
 func TestLoadTrustedRoot_EmbeddedJSONParses(t *testing.T) {
-	// The embedded sigstore trust root JSON must parse; this is a regression guard for
-	// file-refresh workflows that might accidentally ship a truncated or broken copy
+	// The embedded sigstore trust root JSON must parse
+	// This is a regression guard for file-refresh workflows that might accidentally ship a truncated or broken copy
 	tr, err := loadTrustedRoot()
 	require.NoError(t, err)
 	require.NotNil(t, tr)
@@ -59,7 +59,7 @@ func TestLoadTrustedRoot_EmbeddedJSONParses(t *testing.T) {
 func TestVerifyViaRekor_RejectsEmptyManifest(t *testing.T) {
 	_, err := VerifyViaRekor(t.Context(), nil, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "manifest is empty")
+	require.ErrorContains(t, err, "manifest is empty")
 }
 
 func TestVerifyViaRekor_ReturnsErrorOnEmptyRekorResponse(t *testing.T) {
@@ -78,7 +78,7 @@ func TestVerifyViaRekor_ReturnsErrorOnEmptyRekorResponse(t *testing.T) {
 
 	_, err := VerifyViaRekor(t.Context(), []byte("some manifest"), rekor.URL)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no rekor entries found")
+	require.ErrorContains(t, err, "no rekor entries found")
 }
 
 func TestVerifyViaRekor_PropagatesHTTPError(t *testing.T) {
@@ -90,7 +90,7 @@ func TestVerifyViaRekor_PropagatesHTTPError(t *testing.T) {
 
 	_, err := VerifyViaRekor(t.Context(), []byte("x"), rekor.URL)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "rekor search by hash")
+	require.ErrorContains(t, err, "rekor search by hash")
 }
 
 func TestRekorEntryAsBundle_RejectsWrongKind(t *testing.T) {
@@ -135,7 +135,7 @@ func TestRekorEntryAsBundle_RejectsWrongKind(t *testing.T) {
 	digest := make([]byte, 32)
 	_, err = rekorEntryAsBundle(t.Context(), rekor.URL, "abc123", digest)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported rekor entry kind")
+	require.ErrorContains(t, err, "unsupported rekor entry kind")
 }
 
 func TestRekorInclusionProof_ToProto(t *testing.T) {
@@ -206,7 +206,7 @@ func TestParseHashedRekord_RejectsNonPEMContent(t *testing.T) {
 
 	_, _, err = parseHashedRekord(bodyJSON)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "PEM CERTIFICATE")
+	require.ErrorContains(t, err, "PEM CERTIFICATE")
 }
 
 func TestPolicySanRegex_UsesConfiguredSigningRefPattern(t *testing.T) {

@@ -27,7 +27,8 @@ func TestServeStaticFilesSetsSecurityHeadersForRootIndex(t *testing.T) {
 }
 
 func TestSafeRedirectLocation_DropsQueryString(t *testing.T) {
-	// Forwarding RawQuery verbatim into the Location header would let a `next=http://evil.example` parameter ride along on the redirect; the redirect itself stays same-origin, but downstream JS that consumes `next` could be tricked into navigating off-origin
+	// Forwarding RawQuery verbatim into the Location header would let a `next=http://evil.example` parameter ride along on the redirect
+	// The redirect itself stays same-origin, but downstream JS that consumes `next` could be tricked into navigating off-origin
 	// safeRedirectLocation must therefore drop the query entirely
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -35,7 +36,8 @@ func TestSafeRedirectLocation_DropsQueryString(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodGet, "/foo?next=http://evil.example&x=1", nil)
 
 	safeRedirectLocation(c, "foo")
-	// Gin buffers the status until something is written; flush so the recorder reports the real code
+	// Gin buffers the status until something is written
+	// Flush so the recorder reports the real code
 	c.Writer.WriteHeaderNow()
 
 	require.Equal(t, http.StatusMovedPermanently, w.Code)

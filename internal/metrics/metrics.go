@@ -23,6 +23,11 @@ type RevaulterMetrics struct {
 	requests       api.Int64Counter
 	results        api.Int64Counter
 	latency        api.Float64Histogram
+
+	auditStreamEvents  api.Int64Counter
+	auditStreamBatches api.Int64Counter
+	auditStreamLag     api.Float64Gauge
+	auditStreamBacklog api.Int64Gauge
 }
 
 func NewRevaulterMetrics(ctx context.Context, log *slog.Logger) (m *RevaulterMetrics, shutdownFn func(ctx context.Context) error, err error) {
@@ -84,6 +89,39 @@ func NewRevaulterMetrics(ctx context.Context, log *slog.Logger) (m *RevaulterMet
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create %s_keyvault_latency meter: %w", prefix, err)
+	}
+
+	m.auditStreamEvents, err = meter.Int64Counter(
+		prefix+"_audit_stream_events_total",
+		api.WithDescription("The total number of audit events considered by the audit log stream, per outcome"),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create %s_audit_stream_events_total meter: %w", prefix, err)
+	}
+
+	m.auditStreamBatches, err = meter.Int64Counter(
+		prefix+"_audit_stream_batches_total",
+		api.WithDescription("The total number of audit event batches sent to the collector, per outcome"),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create %s_audit_stream_batches_total meter: %w", prefix, err)
+	}
+
+	m.auditStreamLag, err = meter.Float64Gauge(
+		prefix+"_audit_stream_lag_seconds",
+		api.WithUnit("s"),
+		api.WithDescription("Seconds between the creation of the last audit event the stream considered and now"),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create %s_audit_stream_lag_seconds meter: %w", prefix, err)
+	}
+
+	m.auditStreamBacklog, err = meter.Int64Gauge(
+		prefix+"_audit_stream_backlog",
+		api.WithDescription("The number of audit events waiting past the audit log stream cursor"),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create %s_audit_stream_backlog meter: %w", prefix, err)
 	}
 
 	return m, mp.Shutdown, nil

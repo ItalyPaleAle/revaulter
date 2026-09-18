@@ -107,7 +107,8 @@ func (s *Server) executeDeleteEvent(ev deleteEvent) {
 			log.WarnContext(ctx, "non-ready user cleanup failed", slog.Any("error", err), slog.String("user_id", ev.ID))
 		}
 	case "audit-prune":
-		threshold := time.Now().Add(-auditRetention).Unix()
+		// The cutoff is the retention horizon, clamped so the prune never deletes events the audit log stream has not shipped yet
+		threshold := s.auditPruneCutoff(ctx, time.Now())
 		removed, err := s.db.AuditStore().PruneBefore(ctx, threshold)
 		if err != nil {
 			log.WarnContext(ctx, "audit prune failed", slog.Any("error", err))

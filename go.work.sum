@@ -18,6 +18,7 @@ cloud.google.com/go/storage v1.62.2/go.mod h1:cpYz/kRVZ+UQAF1uHeea10/9ewcRbxGoGN
 cloud.google.com/go/trace v1.11.3/go.mod h1:pt7zCYiDSQjC9Y2oqCsh9jF4GStB/hmjrYLsxRR27q8=
 contrib.go.opencensus.io/exporter/stackdriver v0.13.14/go.mod h1:5pSSGY0Bhuk7waTHuDf4aQ8D2DrhgETRo9fy6k3Xlzc=
 github.com/DATA-DOG/go-sqlmock v1.5.2/go.mod h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=
+github.com/GoogleCloudPlatform/confidential-space/server v0.0.0-20260307011055-895ec9019dd7/go.mod h1:sNFt/HcARjGxR3/2s7hwlqvHlUzXdaCiS62u7A4rnHg=
 github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.5.3/go.mod h1:dppbR7CwXD4pgtV9t3wD1812RaLDcBjtblcDF5f1vI0=
 github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.6.0/go.mod h1:I7kE2kM3qCr9QPT4cU4cCFYkEpVyVr16YOGUHzy+nR0=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.31.0/go.mod h1:P4WPRUkOhJC13W//jWpyfJNDAIpvRbAUIYLX/4jtlE0=
@@ -74,6 +75,7 @@ github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2/go.mod h1:qwXFYgsP6T7X
 github.com/coder/websocket v1.8.12/go.mod h1:LNVeNrXQZfe5qhS9ALED3uA+l5pPqvwXg3CKoDBB2gs=
 github.com/coder/websocket v1.8.14/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/common-nighthawk/go-figure v0.0.0-20210622060536-734e95fb86be/go.mod h1:mk5IQ+Y0ZeO87b858TlA645sVcEcbiX6YqP98kt+7+w=
+github.com/containerd/containerd v1.7.30/go.mod h1:fek494vwJClULlTpExsmOyKCMUAbuVjlFsJQc4/j44M=
 github.com/containerd/errdefs v1.0.0/go.mod h1:+YBYIdtsnF4Iw6nWZhJcqGSg/dwvV7tyJ/kCkyJ2k+M=
 github.com/containerd/errdefs/pkg v0.3.0/go.mod h1:NJw6s9HwNuRhnjJhM7pylWwMyAkmCQvQ4GpJHEqRLVk=
 github.com/containerd/log v0.1.0/go.mod h1:VRRf09a7mHDIRezVKTRCrOq78v577GXq3bSa3EhrzVo=
@@ -113,6 +115,7 @@ github.com/gaissmai/bart v0.26.1/go.mod h1:GREWQfTLRWz/c5FTOsIw+KkscuFkIV5t8Rp7N
 github.com/getkin/kin-openapi v0.139.0/go.mod h1:NGxPfE4PwS/TRXEbyx2RrxDFPZvxcWw31Tw8XXjPZLs=
 github.com/getkin/kin-openapi v0.140.0/go.mod h1:lISrB64F0CPcuDJ3LdtPTMJBY8VENjR9wJBdrcT6J3g=
 github.com/getkin/kin-openapi v0.146.0/go.mod h1:3BH9M9XDe/y9M5DSvEocVYAYq1w0qrhJHjC/vZi0AaY=
+github.com/getkin/kin-openapi v0.149.0/go.mod h1:1+BHDzstro+P5CKtPy1X4PfofnFgmRe6uvMy9+r9fKY=
 github.com/go-chi/chi v4.1.2+incompatible/go.mod h1:eB3wogJHnLi3x/kFX2A+IbTBlXxmMeXJVKy9tTv1XzQ=
 github.com/go-jose/go-jose/v3 v3.0.0/go.mod h1:RNkWWRld676jZEYoV3+XK8L2ZnNSvIsxFMht0mSX+u8=
 github.com/go-json-experiment/json v0.0.0-20250813024750-ebf49471dced/go.mod h1:TiCD2a1pcmjd7YnhGH0f/zKNcCD06B029pHhzV23c2M=
@@ -136,7 +139,14 @@ github.com/golang/snappy v0.0.4/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEW
 github.com/google/addlicense v1.1.1/go.mod h1:Sm/DHu7Jk+T5miFHHehdIjbi4M5+dJDRS3Cq0rncIxA=
 github.com/google/btree v1.1.3/go.mod h1:qOPhT0dTNdNzV6Z/lhRX0YXUafgPLFUh+gZMl761Gm4=
 github.com/google/flatbuffers v25.2.10+incompatible/go.mod h1:1AeVuKshWv4vARoZatz6mlQ0JxURH0Kv5+zNeJKJCa8=
+github.com/google/go-attestation v0.5.1/go.mod h1:KqGatdUhg5kPFkokyzSBDxwSCFyRgIgtRkMp6c3lOBQ=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+github.com/google/go-configfs-tsm v0.3.3-0.20240919001351-b4b5b84fdcbc/go.mod h1:EL1GTDFMb5PZQWDviGfZV9n87WeGTR/JUg13RfwkgRo=
+github.com/google/go-eventlog v0.0.3-0.20260305053119-5cd85087f9f9/go.mod h1:7huE5P8w2NTObSwSJjboHmB7ioBNblkijdzoVa2skfQ=
+github.com/google/go-sev-guest v0.14.0/go.mod h1:SK9vW+uyfuzYdVN0m8BShL3OQCtXZe/JPF7ZkpD3760=
+github.com/google/go-tdx-guest v0.3.2-0.20250814004405-ffb0869e6f4d/go.mod h1:uHy3VaNXNXhl0fiPxKqTxieeouqQmW6A0EfLcaeCYBk=
+github.com/google/go-tspi v0.3.0/go.mod h1:xfMGI3G0PhxCdNVcYr1C4C+EizojDg/TXuX5by8CiHI=
+github.com/google/logger v1.1.1/go.mod h1:BkeJZ+1FhQ+/d087r4dzojEg1u2ZX+ZqG1jTUrLM+zQ=
 github.com/google/rpmpack v0.7.1/go.mod h1:h1JL16sUTWCLI/c39ox1rDaTBo3BXUQGjczVJyK4toU=
 github.com/google/wire v0.6.0/go.mod h1:F4QhpQ9EDIdJ1Mbop/NZBRB+5yrR6qg3BnctaoUk6NA=
 github.com/google/wire v0.7.0/go.mod h1:n6YbUQD9cPKTnHXEBN2DXlOp/mVADhVErcMFb0v3J18=
@@ -149,6 +159,8 @@ github.com/hdevalence/ed25519consensus v0.2.0/go.mod h1:w3BHWjwJbFU29IRHL1Iqkw3s
 github.com/huandu/xstrings v1.2.0/go.mod h1:DvyZB1rfVYsBIigL8HwpZgxHwXozlTgGqn63UyNX5k4=
 github.com/huin/goupnp v1.3.0/go.mod h1:gnGPsThkYa7bFi/KWmEysQRf48l2dvR5bxr2OFckNX8=
 github.com/imdario/mergo v0.3.16/go.mod h1:WBLT9ZmE3lPoWsEzCh9LPo3TiwVN+ZKEjmz+hD27ysY=
+github.com/italypaleale/go-kit v1.2.1 h1:aUoBjDqKwbxoT2E+KBvVjfVSGVgppFePeD/qb2AV3vQ=
+github.com/italypaleale/go-kit v1.2.1/go.mod h1:+Jwwwm1BwqLnerW3SnAGxfj8aN1Kgrok5uUllabDE6E=
 github.com/italypaleale/hugo-assets v0.2.0/go.mod h1:LPOrOBqvZgjTDNwInR/6mrKgbDndARoTo69TXvtAgu0=
 github.com/jhump/protoreflect v1.17.0/go.mod h1:h9+vUUL38jiBzck8ck+6G/aeMX8Z4QUY/NiJPwPNi+8=
 github.com/jmespath/go-jmespath v0.4.1-0.20220621161143-b0104c826a24/go.mod h1:T8mJZnbsbmF+m6zOOFylbeCJqk5+pHWvzYPziyZiYoo=
@@ -216,6 +228,7 @@ github.com/rs/cors v1.11.1/go.mod h1:XyqrcTp5zjWr1wsJ8PIRZssZ8b/WMcMf71DJnit4EMU
 github.com/safchain/ethtool v0.3.0/go.mod h1:SA9BwrgyAqNo7M+uaL6IYbxpm5wk3L7Mm6ocLW+CJUs=
 github.com/sagikazarmark/locafero v0.11.0/go.mod h1:nVIGvgyzw595SUSUE6tvCp3YYTeHs15MvlmU87WwIik=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.2/go.mod h1:JXeL+ps8p7/KNMjDQk3TCwPpBy0wYklyWTfbkIzdIFU=
+github.com/santhosh-tekuri/jsonschema/v6 v6.0.3/go.mod h1:JXeL+ps8p7/KNMjDQk3TCwPpBy0wYklyWTfbkIzdIFU=
 github.com/segmentio/ksuid v1.0.4/go.mod h1:/XUiZBD3kVx5SmUOl55voK5yeAbBNNIed+2O73XgrPE=
 github.com/sigstore/protobuf-specs v0.5.1 h1:/5OPaNuolRJmQfeZLayJGFXMpsRJEdgC6ah1/+7Px7U=
 github.com/sigstore/protobuf-specs v0.5.1/go.mod h1:DRBzpFuE+LnvQMN10/dU6nBeKwVLGEQ6o2FovN2Rats=
@@ -305,6 +318,7 @@ golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a/go.mod h1:d2fgXJLVs4dYDHUk5l
 golang.org/x/exp v0.0.0-20260611194520-c48552f49976/go.mod h1:vnf4pv9iKZXY58sQE1L86zmNWJ4159e1RkcWiLCkeEY=
 golang.org/x/exp v0.0.0-20260718201538-764159d718ef/go.mod h1:EdfpwwqSu+0Li0mzskwHU6FWDV3t9Q+RZDo3QMUtL3Q=
 golang.org/x/exp v0.0.0-20260820142414-ca536658362e/go.mod h1:zeBbvyFKDaLwa7CH/zI8KXt7gTl14SF7sO08Pl5jBCM=
+golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba/go.mod h1:50RgIsmK7OwqzTTeqcSXQW8SswW0o8fRcDxmqGluJ8E=
 golang.org/x/mod v0.33.0/go.mod h1:swjeQEj+6r7fODbD2cqrnje9PnziFuw4bmLbBZFrQ5w=
 golang.org/x/net v0.53.0/go.mod h1:JvMuJH7rrdiCfbeHoo3fCQU24Lf5JJwT9W3sJFulfgs=
 golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
@@ -340,3 +354,4 @@ tailscale.com v1.98.4/go.mod h1:U23ZwbZlKJMNU7CScy+lCVVlece/S5n09q0nyudncBI=
 tailscale.com v1.98.8/go.mod h1:zH5+644fVCOozdtB256cRLPMcwv15h/lcyN+/MX1nBc=
 tailscale.com v1.98.10/go.mod h1:NeACE/ATZA6GjyVTERnoyTcHps2BpRfs2mXDcPstD9A=
 tailscale.com v1.102.3/go.mod h1:47bv91Xbg4K1p5wti7F1dmKvUVWV5BXF78d9EWJ+d6c=
+tailscale.com v1.102.4/go.mod h1:47bv91Xbg4K1p5wti7F1dmKvUVWV5BXF78d9EWJ+d6c=

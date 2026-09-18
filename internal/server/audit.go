@@ -35,7 +35,8 @@ type auditFields struct {
 	// HTTP helpers default to session auth
 	AuthMethod db.AuditAuthMethod
 
-	// ActorUserID overrides the default actor lookup; useful when the handler runs before the session middleware has populated UserID (e.g. login_finish, register_finish), or to record a failure for an unauthenticated attempt
+	// ActorUserID overrides the default actor lookup
+	// Useful when the handler runs before the session middleware has populated UserID (e.g. login_finish, register_finish), or to record a failure for an unauthenticated attempt
 	ActorUserID string
 }
 
@@ -50,7 +51,11 @@ func (s *Server) auditEvent(c *gin.Context, f auditFields) {
 			slog.Any("error", err),
 			slog.String("event_type", string(f.EventType)),
 		)
+
+		return
 	}
+
+	s.nudgeAuditStream()
 }
 
 // auditEventTx writes an audit row inside an existing transaction
@@ -58,7 +63,13 @@ func (s *Server) auditEvent(c *gin.Context, f auditFields) {
 func (s *Server) auditEventTx(c *gin.Context, tx *db.DbTx, f auditFields) error {
 	in := s.auditInputFromContext(c, f)
 	_, err := tx.AuditStore().Insert(c.Request.Context(), in)
-	return err
+	if err != nil {
+		return err
+	}
+
+	s.nudgeAuditStream()
+
+	return nil
 }
 
 // auditEventCtx writes an audit row from a non-HTTP path (background goroutines, eventqueue handlers)
@@ -84,12 +95,17 @@ func (s *Server) auditEventCtx(ctx context.Context, f auditFields) {
 			slog.Any("error", err),
 			slog.String("event_type", string(f.EventType)),
 		)
+
+		return
 	}
+
+	s.nudgeAuditStream()
 }
 
 // auditInputFromContext extracts the actor, auth method, request id, IP, and UA from a gin context and merges them with the caller-provided audit fields
 func (s *Server) auditInputFromContext(c *gin.Context, f auditFields) db.AuditEventInput {
-	// Default actor: the session-bound user; if absent, fall back to the request-key user
+	// Default actor: the session-bound user
+	// If absent, fall back to the request-key user
 	actor := f.ActorUserID
 	authMethod := f.AuthMethod
 
@@ -144,7 +160,7 @@ func optionalString(s string) *string {
 }
 
 // jsonMetadata marshals the given map as a json.RawMessage suitable for AuditEventInput.Metadata
-// Returns nil when marshalling fails; the caller never has to check, and the audit row is still written with an empty "{}" metadata
+// Returns nil when marshalling fails
 func jsonMetadata(payload map[string]any) json.RawMessage {
 	b, err := json.Marshal(payload)
 	if err != nil {

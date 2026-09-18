@@ -106,9 +106,10 @@ let primaryKey = $state<Uint8Array | null>(null)
 // Unwrapped hybrid anchor keypair for the current session
 // Used to sign attestations when adding new credentials
 let sessionAnchor = $state<AnchorKeyPair | null>(null)
-// Wrapped anchor blob returned by the login finish response; unwrapped once we have the wrapping key
+// Wrapped anchor blob returned by the login finish response, unwrapped once we have the wrapping key
 let loginWrappedAnchorKey = $state<string | null>(null)
-// Public key (SPKI, base64url) of a freshly-registered credential. Held briefly until the matching finalize step consumes it
+// Public key (SPKI, base64url) of a freshly-registered credential
+// Held briefly until the matching finalize step consumes it
 let pendingCredentialPublicKeyHash = $state<string | null>(null)
 
 let items = $state<Record<string, V2PendingRequestItem>>({})
@@ -686,7 +687,8 @@ async function doDeriveSigningKey(keyLabel: string, algorithm: string): Promise<
     const sshPublicKey =
         algorithm === 'Ed25519ph' ? '' : signingJwkToSshPublicKey(publicJwk, `${keyLabel}-${algorithm}`)
 
-    // Attempt to register the derived key as unpublished; if a row already exists for this (algorithm, keyLabel) the server returns 409 and we treat that as a no-op since the caller just needs the derived material returned
+    // Attempt to register the derived key as unpublished
+    // If a row already exists for this (algorithm, keyLabel) the server returns 409 and we treat that as a no-op since the caller just needs the derived material returned
     try {
         await v2CreateSigningKey({
             algorithm,

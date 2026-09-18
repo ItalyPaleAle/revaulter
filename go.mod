@@ -7,12 +7,12 @@ tool github.com/fchimpan/gomod-age
 require (
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/fxamacker/cbor/v2 v2.9.3
-	github.com/gin-contrib/location/v2 v2.0.1
+	github.com/gin-contrib/location/v2 v2.0.2
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-chi/httprate v0.16.0
-	github.com/go-webauthn/webauthn v0.18.0
-	github.com/italypaleale/go-kit v1.1.0
-	github.com/italypaleale/go-sql-utils v0.3.7
+	github.com/go-webauthn/webauthn v0.18.1
+	github.com/italypaleale/go-kit v1.2.1
+	github.com/italypaleale/go-sql-utils v0.3.8
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/jinzhu/copier v0.4.0
@@ -49,7 +49,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
-	github.com/bytedance/sonic v1.15.3 // indirect
+	github.com/bytedance/sonic v1.15.4 // indirect
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -91,7 +91,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/go-webauthn/x v0.3.0 // indirect
+	github.com/go-webauthn/x v0.3.1 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
@@ -145,7 +145,7 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
-	go.mongodb.org/mongo-driver/v2 v2.9.0 // indirect
+	go.mongodb.org/mongo-driver/v2 v2.9.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/bridges/prometheus v0.71.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.22.0 // indirect
