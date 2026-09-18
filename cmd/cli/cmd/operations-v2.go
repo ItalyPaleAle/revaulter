@@ -103,7 +103,7 @@ func terminalAnchorConfirmer() clientcore.ConfirmAnchorFunc {
 }
 
 // resolveRequestKey returns the request key to authenticate with, given the values of --request-key and --request-key-file
-// Exactly one of the two must be set; cobra enforces that when the flags are parsed, and this repeats the check so callers that populate the flags directly cannot skip it
+// Exactly one of the two must be set
 func resolveRequestKey(requestKey string, requestKeyFile string) (string, error) {
 	switch {
 	case requestKey != "" && requestKeyFile != "":

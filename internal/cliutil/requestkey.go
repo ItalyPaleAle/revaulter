@@ -10,15 +10,9 @@ import (
 	"unicode"
 )
 
-// MaxRequestKeyFileSize is the largest request key file the CLI is willing to read
-// Request keys are a few dozen bytes, so anything larger is a sign that the wrong file was passed
-const MaxRequestKeyFileSize = 4 << 10
+const MaxRequestKeyFileSize = 4 << 10 // 4KB
 
 // ReadRequestKeyFile loads a request key from the file at path
-// It is the file-based alternative to passing the key in argv, where it would be visible to every other process on the host
-//
-// The file must be a regular file, no larger than MaxRequestKeyFileSize, and (on Unix) not accessible by group or others
-// Surrounding whitespace is trimmed, so a trailing newline left by an editor or by `echo` does not become part of the key
 func ReadRequestKeyFile(path string) (string, error) {
 	if path == "" {
 		return "", errors.New("path is empty")

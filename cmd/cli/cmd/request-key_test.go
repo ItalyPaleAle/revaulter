@@ -59,7 +59,8 @@ func TestEncryptValidateResolvesRequestKeyFile(t *testing.T) {
 	f.RequestKey = ""
 	f.RequestKeyFile = writeRequestKeyFile(t, "rvk_from_file\n")
 
-	require.NoError(t, f.Validate())
+	err := f.Validate()
+	require.NoError(t, err)
 	require.Equal(t, "rvk_from_file", f.GetRequestKey(), "the key read from the file must replace the empty --request-key")
 }
 

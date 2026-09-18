@@ -89,7 +89,7 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 
 	cmd.Flags().StringVarP(&f.RequestKey, "request-key", "k", "", "Per-user request key used to route the request. Mutually exclusive with --request-key-file")
-	cmd.Flags().StringVar(&f.RequestKeyFile, "request-key-file", "", "Path to a file containing the per-user request key, so it is not exposed in the process list. Mutually exclusive with --request-key")
+	cmd.Flags().StringVar(&f.RequestKeyFile, "request-key-file", "", "Path to a file containing the per-user request key, mutually exclusive with --request-key")
 	cmd.MarkFlagsMutuallyExclusive("request-key", "request-key-file")
 	cmd.MarkFlagsOneRequired("request-key", "request-key-file")
 

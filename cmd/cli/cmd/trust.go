@@ -73,7 +73,7 @@ If the anchor is already pinned and matches, the command confirms it and exits s
 	cmd.Flags().StringVarP(&impl.Server, "server", "s", "", "Address of the Revaulter server")
 	_ = cmd.MarkFlagRequired("server")
 	cmd.Flags().StringVarP(&impl.RequestKey, "request-key", "k", "", "Per-user request key used to authenticate with the server. Mutually exclusive with --request-key-file")
-	cmd.Flags().StringVar(&impl.RequestKeyFile, "request-key-file", "", "Path to a file containing the per-user request key, so it is not exposed in the process list. Mutually exclusive with --request-key")
+	cmd.Flags().StringVar(&impl.RequestKeyFile, "request-key-file", "", "Path to a file containing the per-user request key, mutually exclusive with --request-key")
 	cmd.MarkFlagsMutuallyExclusive("request-key", "request-key-file")
 	cmd.MarkFlagsOneRequired("request-key", "request-key-file")
 	cmd.Flags().BoolVar(&impl.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
