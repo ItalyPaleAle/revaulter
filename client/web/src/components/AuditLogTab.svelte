@@ -29,7 +29,8 @@ async function copyToClipboard(value: string) {
             copyResetTimer = null
         }, 2000)
     } catch {
-        // Clipboard write can fail in insecure contexts; silently ignore
+        // Clipboard write can fail in insecure contexts
+        // Ignore the error
     }
 }
 

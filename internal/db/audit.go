@@ -20,7 +20,7 @@ import (
 type EventType string
 
 // Audit event types
-// Adding a new constant requires updating docs/07-audit-events.md
+// Adding a new constant requires updating EventType.Valid, AllEventTypes, and docs/07-audit-events.md
 const (
 	AuditAuthRegisterFinish    EventType = "auth.register_finish"
 	AuditAuthFinalizeSignup    EventType = "auth.finalize_signup"
@@ -99,6 +99,33 @@ func (e EventType) Valid() bool {
 	}
 }
 
+// AllEventTypes returns every declared event type, as strings
+// The audit log stream validates its event-type filter against this, so a typo in the configuration fails at boot rather than silently emptying the feed
+func AllEventTypes() []string {
+	return []string{
+		string(AuditAuthRegisterFinish),
+		string(AuditAuthFinalizeSignup),
+		string(AuditAuthLoginFinish),
+		string(AuditAuthLogout),
+		string(AuditAuthRequestKeyRegen),
+		string(AuditAuthAllowedIPsChange),
+		string(AuditAuthDisplayNameChange),
+		string(AuditAuthWrappedKeyUpdate),
+		string(AuditAuthCredentialAdd),
+		string(AuditAuthCredentialRename),
+		string(AuditAuthCredentialDelete),
+		string(AuditRequestCreate),
+		string(AuditRequestConfirm),
+		string(AuditRequestCancel),
+		string(AuditRequestExpire),
+		string(AuditSigningKeyCreate),
+		string(AuditSigningKeyPublish),
+		string(AuditSigningKeyUnpublish),
+		string(AuditSigningKeyDelete),
+		string(AuditSigningKeyAutoStore),
+	}
+}
+
 // Valid reports whether the receiver matches one of the declared outcome constants
 func (o AuditOutcome) Valid() bool {
 	switch o {
@@ -159,13 +186,16 @@ type AuditEventInput struct {
 // Empty fields are treated as "no filter"
 // UserID and System are mutually exclusive: a system event has no actor user, so combining them is rejected with ErrAuditFilterConflict
 type AuditFilter struct {
-	// UserID filters to events where actor_user_id matches; empty means no actor filter
+	// UserID filters to events where actor_user_id matches
+	// Empty means no actor filter
 	UserID string
 	// System filters to events written by a background/system path (auth_method = "system")
 	System bool
-	// EventType filters to a single event type; empty means no event-type filter
+	// EventType filters to a single event type
+	// Empty means no event-type filter
 	EventType EventType
-	// SinceUnix and UntilUnix bound the created_at range; zero means no bound on that side
+	// SinceUnix and UntilUnix bound the created_at range
+	// Zero means no bound on that side
 	SinceUnix int64
 	UntilUnix int64
 }
@@ -338,10 +368,11 @@ func (s *AuditStore) List(ctx context.Context, filter AuditFilter, limit int, cu
 		clauses = append(clauses, fmt.Sprintf("id < $%d%s", len(args), idCast))
 	}
 
-	// Fetch 1 extra row to see if there are more records; the extra one will be discarded
+	// Fetch 1 extra row to see if there are more records
+	// The extra one will be discarded
 	args = append(args, limit+1)
 
-	// With an empty filter (no clauses) we want a bare SELECT; otherwise stitch the AND-joined WHERE clause in
+	// With an empty filter (no clauses) we want a bare SELECT, otherwise stitch the AND-joined WHERE clause in
 	whereClause := ""
 	if len(clauses) > 0 {
 		whereClause = "\n\t\tWHERE " + strings.Join(clauses, " AND ")

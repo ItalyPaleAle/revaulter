@@ -51,11 +51,14 @@ func canonicalFixture() fixtureBackup {
 	const ts = int64(1700000000)
 
 	return fixtureBackup{
-		SchemaLevel: 2,
+		SchemaLevel: 3,
 		Tables: []fixtureTable{
 			tableFixture("v2_audit_events", [][]any{
 				{fxAuditID1, ts, "auth.login.finish", "success", "session", fxUserAID, fxUserAID, nil, nil, fxRequestID, "http-1", "127.0.0.1", "ua/1.0", `{"flow":"webauthn"}`},
 				{fxAuditID2, ts + 1, "auth.logout", "success", "session", fxUserBID, nil, nil, nil, nil, nil, nil, nil, `{}`},
+			}),
+			tableFixture("v2_kv", [][]any{
+				{"some_setting", "some-value", "etag-1"},
 			}),
 			tableFixture("v2_users", [][]any{
 				{fxUserAID, "Alice", "active", "wa-A", "rk-A", "ecdh-A", "mlkem-A", "es384-A", "mldsa-A", "sig-es-A", "sig-mldsa-A", int64(1), "10.0.0.0/8", true, ts, ts, int64(1)},
@@ -243,7 +246,8 @@ func runRoundTrip(t *testing.T, conn *db.DB) {
 	require.NoError(t, writeFixture(&fixtureBytes, fixture))
 
 	// Restore into the fresh DB
-	// Restore applies migrations itself; we deliberately do not call db.RunMigrations beforehand
+	// Restore applies migrations itself
+	// We deliberately do not call db.RunMigrations beforehand
 	require.NoError(t, Restore(t.Context(), conn, &fixtureBytes))
 
 	// Sanity check: each table has the expected row count
@@ -292,6 +296,113 @@ func sortRows(rows [][]any) [][]any {
 		return fmt.Sprintf("%v", out[i][0]) < fmt.Sprintf("%v", out[j][0])
 	})
 	return out
+}
+
+// TestBackupSkipsTheAuditShippingKey verifies the backup format carries neither backend's audit stream shipping key
+func TestBackupSkipsTheAuditShippingKey(t *testing.T) {
+	for _, spec := range backupTables {
+		if spec.name != "v2_audit_events" {
+			continue
+		}
+
+		// seq is meaningful only on SQLite and xact_id only on Postgres, while backups restore in either direction
+		require.NotContains(t, spec.columnNames(), "seq")
+		require.NotContains(t, spec.columnNames(), "xact_id")
+	}
+}
+
+// TestBackupIncludesTheKVTable verifies v2_kv is backed up, with only the audit stream cursor row left out
+func TestBackupIncludesTheKVTable(t *testing.T) {
+	names := make([]string, 0, len(backupTables))
+	for _, spec := range backupTables {
+		names = append(names, spec.name)
+	}
+	require.Contains(t, names, "v2_kv")
+
+	filter, ok := rowFilters["v2_kv"]
+	require.True(t, ok, "v2_kv must be filtered, or a stale audit stream cursor would be restored into a fresh instance")
+	require.Equal(t, []any{db.AuditStreamCursorKey}, filter.args)
+}
+
+func TestBackupExcludesTheAuditStreamCursor_SQLite(t *testing.T) {
+	runExcludesAuditStreamCursor(t, newSQLiteTestDB(t))
+}
+
+func TestBackupExcludesTheAuditStreamCursor_Postgres(t *testing.T) {
+	runExcludesAuditStreamCursor(t, newPostgresTestDB(t))
+}
+
+// runExcludesAuditStreamCursor checks that the cursor row is left out of a backup while the rest of v2_kv survives
+func runExcludesAuditStreamCursor(t *testing.T, conn *db.DB) {
+	t.Helper()
+
+	require.NoError(t, db.RunMigrations(t.Context(), conn, nil))
+
+	kv := conn.KVStore()
+	_, _, err := kv.SetIfAbsent(t.Context(), db.AuditStreamCursorKey, "v=1;seq=42;xactId=;eventId=;eventCreatedAt=0")
+	require.NoError(t, err)
+	_, _, err = kv.SetIfAbsent(t.Context(), "unrelated_key", "keep-me")
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	require.NoError(t, Backup(t.Context(), conn.DatabaseConn, &buf))
+
+	fb := readFixture(t, &buf)
+
+	var kvTable fixtureTable
+	for _, table := range fb.Tables {
+		if table.Name == "v2_kv" {
+			kvTable = table
+			break
+		}
+	}
+	require.Equal(t, "v2_kv", kvTable.Name, "v2_kv missing from the backup")
+
+	// The cursor is instance-local, so it does not travel
+	// Everything else in the table does
+	require.Len(t, kvTable.Rows, 1)
+	require.Equal(t, "unrelated_key", kvTable.Rows[0][0])
+}
+
+func TestRestoreRegeneratesTheAuditShippingKey_SQLite(t *testing.T) {
+	runRegeneratesShippingKey(t, newSQLiteTestDB(t))
+}
+
+func TestRestoreRegeneratesTheAuditShippingKey_Postgres(t *testing.T) {
+	runRegeneratesShippingKey(t, newPostgresTestDB(t))
+}
+
+// runRegeneratesShippingKey checks that the shipping key is assigned by the restoring database rather than carried over from the backup
+func runRegeneratesShippingKey(t *testing.T, conn *db.DB) {
+	t.Helper()
+
+	var fixtureBytes bytes.Buffer
+	require.NoError(t, writeFixture(&fixtureBytes, canonicalFixture()))
+	require.NoError(t, Restore(t.Context(), conn, &fixtureBytes))
+
+	query := "SELECT CAST(seq AS TEXT) FROM v2_audit_events ORDER BY id"
+	if conn.Kind() == db.BackendPostgres {
+		query = "SELECT xact_id::text FROM v2_audit_events ORDER BY id"
+	}
+
+	rows, err := conn.Query(t.Context(), query)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var values []string
+	for rows.Next() {
+		var v string
+		require.NoError(t, rows.Scan(&v))
+		values = append(values, v)
+	}
+	require.NoError(t, rows.Err())
+
+	// Both rows get a freshly-assigned, non-empty key: AUTOINCREMENT assigns seq in insertion order, and the Postgres column default assigns the restoring transaction's xid
+	require.Len(t, values, 2)
+	for _, v := range values {
+		require.NotEmpty(t, v)
+		require.NotEqual(t, "0", v)
+	}
 }
 
 // --- error-path tests ---

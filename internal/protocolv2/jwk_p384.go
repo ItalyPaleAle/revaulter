@@ -17,7 +17,8 @@ type ECP384PublicJWK struct {
 	X   string `json:"x"`
 	Y   string `json:"y"`
 
-	// Rejected if present; the anchor JWK must be a bare public key.
+	// Rejected if present
+	// The anchor JWK must be a bare public key
 	D   string `json:"d,omitempty"`
 	Kid string `json:"kid,omitempty"`
 	Alg string `json:"alg,omitempty"`

@@ -100,7 +100,15 @@ func dumpTable(ctx context.Context, tx adapter.Querier, spec tableSpec, enc *cbo
 	}
 
 	query := "SELECT " + strings.Join(colNames, ", ") + " FROM " + spec.name
-	rows, err := tx.Query(ctx, query)
+
+	filter, filtered := rowFilters[spec.name]
+	var args []any
+	if filtered {
+		query += " WHERE " + filter.where
+		args = filter.args
+	}
+
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying rows: %w", err)
 	}

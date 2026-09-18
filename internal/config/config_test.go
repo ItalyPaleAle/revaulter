@@ -130,6 +130,119 @@ func TestValidateConfig(t *testing.T) {
 	})
 }
 
+func TestValidateAuditStream(t *testing.T) {
+	// Set initial variables in the global object
+	oldConfig := config
+	config = GetDefaultConfig()
+	t.Cleanup(func() {
+		config = oldConfig
+	})
+
+	t.Cleanup(SetTestConfig(map[string]any{
+		"databaseDSN": "sqlite://./test.db",
+		"secretKey":   testSecretKey,
+	}))
+
+	t.Run("every option is inert while the stream is disabled", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"auditStreamUrl":        "",
+			"auditStreamFormat":     "nonsense",
+			"auditStreamBatchSize":  99999,
+			"auditStreamEventTypes": []string{"not a valid entry"},
+		}))
+
+		err := config.Validate(nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("fails when auditStreamUrl has a disallowed scheme", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"auditStreamUrl": "ftp://collector.local",
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'auditStreamUrl' has disallowed scheme")
+	})
+
+	t.Run("applies the defaults", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"auditStreamUrl": "https://collector.local/ingest",
+		}))
+
+		err := config.Validate(nil)
+		require.NoError(t, err)
+		assert.Equal(t, 100, config.AuditStreamBatchSize)
+		assert.Equal(t, 10*time.Second, config.AuditStreamFlushInterval)
+	})
+
+	t.Run("normalizes the format", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"auditStreamUrl":    "https://collector.local/ingest",
+			"auditStreamFormat": "NDJSON",
+		}))
+
+		err := config.Validate(nil)
+		require.NoError(t, err)
+		assert.Equal(t, "ndjson", config.AuditStreamFormat)
+	})
+
+	t.Run("fails on an unsupported format", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"auditStreamUrl":    "https://collector.local/ingest",
+			"auditStreamFormat": "msgpack",
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'auditStreamFormat' is invalid")
+	})
+
+	t.Run("fails on an out-of-range batch size", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"auditStreamUrl":       "https://collector.local/ingest",
+			"auditStreamBatchSize": 1001,
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'auditStreamBatchSize' is invalid")
+	})
+
+	t.Run("fails on an out-of-range flush interval", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"auditStreamUrl":           "https://collector.local/ingest",
+			"auditStreamFlushInterval": "10m",
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'auditStreamFlushInterval' is invalid")
+	})
+
+	t.Run("normalizes the event type filter", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"auditStreamUrl":        "https://collector.local/ingest",
+			"auditStreamEventTypes": []string{" Request.* ", "auth.login_finish"},
+		}))
+
+		err := config.Validate(nil)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"request.*", "auth.login_finish"}, config.AuditStreamEventTypes)
+	})
+
+	t.Run("fails on a malformed event type filter", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"auditStreamUrl":        "https://collector.local/ingest",
+			"auditStreamEventTypes": []string{"request"},
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'auditStreamEventTypes' contains an invalid entry")
+	})
+}
+
 func TestSetSecretKey(t *testing.T) {
 	t.Run("fails with an empty secret", func(t *testing.T) {
 		cfg := &Config{}

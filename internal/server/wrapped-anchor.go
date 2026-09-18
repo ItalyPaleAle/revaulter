@@ -17,7 +17,7 @@ const (
 var wrappedAnchorFields = [...]string{"ciphertext", "nonce", "v"}
 
 // validateWrappedAnchorEnvelope performs structural validation on a wrapped-anchor blob
-// It never decrypts the ciphertext; it only enforces that the envelope parses, has exactly the expected field set in the expected order, and that each field has the expected shape
+// It never decrypts the ciphertext: it only enforces that the envelope parses, has exactly the expected field set in the expected order, and that each field has the expected shape
 func validateWrappedAnchorEnvelope(wrapped string) error {
 	if wrapped == "" {
 		return errors.New("wrappedAnchorKey is empty")

@@ -55,7 +55,8 @@ func normalizeSigningAlgorithm(algorithm string) (string, error) {
 }
 
 // resolveSigningInput returns the bytes a signature covers for the given algorithm
-// ES256 and Ed25519ph sign a digest of the message, which the caller can also supply pre-computed; Ed25519 signs the message itself
+// ES256 and Ed25519ph sign a digest of the message, which the caller can also supply pre-computed
+// Ed25519 signs the message itself
 func resolveSigningInput(algorithm string, message []byte, digest []byte) ([]byte, error) {
 	switch {
 	case len(message) > 0 && len(digest) > 0:

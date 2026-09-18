@@ -25,6 +25,14 @@ var backupTables = []tableSpec{
 		},
 	},
 	{
+		name: "v2_kv",
+		columns: []columnSpec{
+			{name: "key", kind: colKindText},
+			{name: "value", kind: colKindText},
+			{name: "etag", kind: colKindText},
+		},
+	},
+	{
 		name: "v2_users",
 		columns: []columnSpec{
 			{name: "id", kind: colKindText},

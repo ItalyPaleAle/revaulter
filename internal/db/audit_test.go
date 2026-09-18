@@ -341,3 +341,18 @@ func TestAuditStoreInvalidCursor(t *testing.T) {
 		})
 	})
 }
+
+func TestAllEventTypes(t *testing.T) {
+	all := AllEventTypes()
+	require.NotEmpty(t, all)
+
+	seen := make(map[string]struct{}, len(all))
+	for _, e := range all {
+		// A name here that Insert would reject would make the audit stream filter accept a type that can never match
+		require.True(t, EventType(e).Valid(), "%q is not a valid event type", e)
+
+		_, dup := seen[e]
+		require.False(t, dup, "%q appears twice", e)
+		seen[e] = struct{}{}
+	}
+}

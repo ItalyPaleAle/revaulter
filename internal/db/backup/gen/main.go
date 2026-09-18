@@ -31,6 +31,12 @@ var skipTables = map[string]bool{
 	"v2_auth_challenge_payloads": true,
 }
 
+// skipColumns lists individual columns excluded from backups, keyed by "table.column"
+var skipColumns = map[string]bool{
+	"v2_audit_events.seq":     true,
+	"v2_audit_events.xact_id": true,
+}
+
 // postgresUDTToKind maps Postgres udt_name values (from information_schema) to the columnKind constant used by the backup library
 var postgresUDTToKind = map[string]string{
 	"bool":    "colKindBool",
@@ -180,6 +186,10 @@ func sqliteColumns(ctx context.Context, db *sql.DB, tableName string) ([]column,
 		err = rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk)
 		if err != nil {
 			return nil, err
+		}
+
+		if skipColumns[tableName+"."+name] {
+			continue
 		}
 
 		// Map SQLite type affinity to a preliminary columnKind

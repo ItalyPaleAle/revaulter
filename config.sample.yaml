@@ -23,6 +23,56 @@
 ##   Leave unset to omit the header entirely
 #webhookKey:
 
+## auditStreamUrl (string)
+## Description:
+##   If set, streams the audit log to this endpoint, for ingestion by a SIEM or another log collector (Splunk HEC, Elastic, Vector, Fluent Bit, Cribl, a plain webhook receiver, …)
+##   Delivery is at-least-once, so the collector must deduplicate on the event `id`
+#auditStreamUrl:
+
+## auditStreamFormat (string)
+## Description:
+##   The wire format for the audit log stream:
+##   - `ndjson`: one compact JSON object per line, sent with content type `application/x-ndjson`
+##   - `json`: a single JSON envelope per request, sent with content type `application/json`
+## Default: "ndjson"
+#auditStreamFormat:
+
+## auditStreamKey (string)
+## Description:
+##   Value sent as-is as the authorization header on audit log stream requests
+##   Revaulter does NOT add an authentication scheme prefix, so include one yourself if your collector expects it
+##   For example, set this to `Splunk 00000000-0000-0000-0000-000000000000` for a Splunk HEC token, or `Bearer abc123` for bearer-token auth
+##   Leave unset to omit the header entirely
+#auditStreamKey:
+
+## auditStreamAuthHeader (string)
+## Description:
+##   Name of the header the `auditStreamKey` value is sent in
+##   This is overridable because several collectors do not use `Authorization`
+## Default: "Authorization"
+#auditStreamAuthHeader:
+
+## auditStreamBatchSize (number)
+## Description:
+##   Maximum number of audit events sent in a single request, between 1 and 1000
+##   If the collector rejects a body as too large, Revaulter automatically halves this value for subsequent requests, down to a floor of 1
+## Default: 100
+#auditStreamBatchSize:
+
+## auditStreamFlushInterval (duration)
+## Description:
+##   How long Revaulter waits before checking for new audit events when there is nothing to send, as a Go duration between 1s and 5m
+##   A newly-written event wakes the shipper early, so this is primarily meant as fallback
+## Default: 10s
+#auditStreamFlushInterval:
+
+## auditStreamEventTypes (list of strings)
+## Description:
+##   Restricts the audit log stream to the listed event types
+##   Each entry is either an exact event type, such as `request.confirm`, or an area wildcard, such as `request.*`
+##   An empty list streams every event type
+#auditStreamEventTypes:
+
 ## baseUrl (string)
 ## Description:
 ##   The URL your application can be reached at. This is used in the links that are sent in webhook notifications.

@@ -235,7 +235,8 @@ test('cli sign round-trips and the signature verifies against the browser-derive
 }, async ({ page }) => {
     const auth = await registerAndReachReady(page, 'CLI Sign User')
 
-    // Create a temp file with known content; CLI will SHA-256 it internally and request the browser to sign the digest
+    // Create a temp file with known content
+    // CLI will SHA-256 it internally and request the browser to sign the digest
     const tmpRoot = mkdtempSync(join(tmpdir(), 'revaulter-e2e-sign-'))
     const inputPath = join(tmpRoot, 'sign-input.bin')
     const message = Buffer.from('revaulter sign e2e — the quick brown fox jumps over the lazy dog', 'utf8')

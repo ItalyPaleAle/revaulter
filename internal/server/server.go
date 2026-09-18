@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-chi/httprate"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
+	"github.com/italypaleale/go-kit/auditlogs/siem"
 	"github.com/italypaleale/go-kit/eventqueue"
 	slogkit "github.com/italypaleale/go-kit/slog"
 	"github.com/italypaleale/go-kit/webhook"
@@ -72,6 +73,10 @@ type Server struct {
 	// Delayed work for request expiry and record deletion
 	requestExpiryQueue *eventqueue.Processor[string, requestExpiryEvent]
 	deleteQueue        *eventqueue.Processor[string, deleteEvent]
+
+	// Ships audit events to an external collector
+	// Nil when `auditStreamUrl` is not configured
+	auditStream *siem.Shipper
 
 	// Database and request store
 	db       *db.DB
@@ -161,6 +166,12 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 	s.webAuthn, err = s.initWebAuthn()
 	if err != nil {
 		return fmt.Errorf("failed to initialize WebAuthn config: %w", err)
+	}
+
+	// Init the audit log stream, if enabled
+	s.auditStream, err = s.initAuditStream(log)
+	if err != nil {
+		return fmt.Errorf("failed to initialize the audit log stream: %w", err)
 	}
 
 	// Init the app server
@@ -397,6 +408,14 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}()
 	defer s.pubsub.Shutdown()
+
+	// Start shipping audit events to the external collector, if enabled
+	if s.auditStream != nil {
+		err = s.startAuditStream(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to start the audit log stream: %w", err)
+		}
+	}
 
 	// If we have a tlsCertWatchFn, invoke that
 	if s.tlsCertWatchFn != nil {
