@@ -358,7 +358,7 @@ describe('webauthnRegister', () => {
             rawId: bytes(1, 2, 3),
             type: 'public-key',
             response,
-            getClientExtensionResults: () => ({}),
+            getClientExtensionResults: () => ({ prf: { enabled: true } }),
         } as unknown as PublicKeyCredential
         vi.stubGlobal('navigator', { credentials: { create: vi.fn().mockResolvedValue(credential) } })
 
@@ -372,6 +372,24 @@ describe('webauthnRegister', () => {
             clientDataJSON: 'Bgc',
         })
     })
+
+    it.each([{}, { prf: {} }, { prf: { enabled: false } }])(
+        'rejects a newly-created credential without confirmed PRF support before serialization',
+        async (extensionResults) => {
+            const credential = {
+                id: 'registration-id',
+                rawId: bytes(1, 2, 3),
+                type: 'public-key',
+                response: new FakeAuthenticatorAttestationResponse(buildAttestationObject(), bytes(6, 7)),
+                getClientExtensionResults: () => extensionResults,
+            } as unknown as PublicKeyCredential
+            vi.stubGlobal('navigator', { credentials: { create: vi.fn().mockResolvedValue(credential) } })
+
+            await expect(webauthnRegister({ options: { publicKey: { challenge: 'AQID' } } })).rejects.toThrow(
+                'PRF is unavailable for this credential'
+            )
+        }
+    )
 
     it.each(COSE_FIXTURES)('returns the public-key hash for a $name credential', async (fixture) => {
         const response = new FakeAuthenticatorAttestationResponse(buildFixtureAttestationObject(fixture), bytes(6, 7))

@@ -68,13 +68,16 @@ import type {
     V2PublishedSigningKey,
     V2SessionResponse,
 } from '$lib/v2-types'
-import { webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
+import { PrfUnavailableError, webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
 
 type UIState = 'boot' | 'signin' | 'signup' | 'password-login' | 'password-setup' | 'ready'
 
 const missingPrfError = 'Authenticator did not return PRF output'
 const signupMissingPrfError =
     'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Sign up with a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
+const addPasskeyMissingPrfError =
+    'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Add a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
+const prfHelpHref = 'https://revaulter.italypaleale.me/docs/what-is-revaulter/#supported-passkeys'
 
 let uiState = $state<UIState>('boot')
 let serverVersion = $state<string | null>(null)
@@ -96,6 +99,8 @@ let allowedIpsText = $state('')
 let settingsBusy = $state(false)
 let settingsError = $state<string | null>(null)
 let settingsSuccess = $state<string | null>(null)
+const authErrorHelpHref = $derived(authError === signupMissingPrfError ? prfHelpHref : null)
+const settingsErrorHelpHref = $derived(settingsError === addPasskeyMissingPrfError ? prfHelpHref : null)
 let credentials = $state<V2CredentialItem[]>([])
 let signingKeys = $state<V2PublishedSigningKey[]>([])
 let hasPassword = $state(false)
@@ -443,7 +448,7 @@ async function doRegister() {
             uiState = 'signin'
         } else {
             authError =
-                err instanceof Error && err.message === missingPrfError
+                err instanceof PrfUnavailableError
                     ? signupMissingPrfError
                     : err instanceof Error
                       ? err.message
@@ -898,7 +903,12 @@ async function doAddPasskey(name: string) {
         await doLoadCredentials()
         settingsSuccess = 'Passkey added.'
     } catch (err) {
-        settingsError = err instanceof Error ? err.message : String(err)
+        settingsError =
+            err instanceof PrfUnavailableError
+                ? addPasskeyMissingPrfError
+                : err instanceof Error
+                  ? err.message
+                  : String(err)
     } finally {
         settingsBusy = false
     }
@@ -1106,6 +1116,7 @@ function sortedItems() {
             sessionLabel={sessionLabel()}
             settingsBusy={settingsBusy}
             settingsError={settingsError}
+            settingsErrorHelpHref={settingsErrorHelpHref}
             settingsSuccess={settingsSuccess}
             {signingKeys}
             userId={session?.userId ?? ''}
@@ -1114,6 +1125,7 @@ function sortedItems() {
         <AuthSetupView
             authBusy={authBusy}
             authError={authError}
+            authErrorHelpHref={authErrorHelpHref}
             displayName={displayName}
             onDisplayNameInput={(value) => {
                 displayName = value
