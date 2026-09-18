@@ -677,7 +677,7 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                 <div class="mt-6 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
                     {error}
                     {#if errorHelpHref}
-                        <a class="ml-1 underline" href={errorHelpHref} target="_blank" rel="noreferrer">Learn about compatible passkeys.</a>
+                        <a class="ml-1 underline" href={errorHelpHref} target="_blank" rel="noreferrer">Learn about compatible passkeys</a>
                     {/if}
                 </div>
             {:else if success}

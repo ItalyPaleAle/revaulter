@@ -62,7 +62,7 @@ See [Installing Revaulter](/docs/installing-revaulter) for setup instructions.
 
 Using Revaulter requires passkeys with support for the PRF extension, which must be supported by both the authenticator and the platform.
 
-PRF (Pseudo-Random Function) lets Revaulter ask a passkey for deterministic, credential-bound secret material after a successful WebAuthn ceremony. Revaulter uses that output to derive local wrapping keys in the browser; PRF does not expose the passkey's private key, and the Revaulter server never receives the PRF output. A provider can support ordinary passkey authentication without supporting PRF, so Revaulter checks each new credential at registration time.
+PRF (Pseudo-Random Function) lets Revaulter ask a passkey for deterministic, credential-bound secret material after a successful WebAuthn ceremony. Revaulter uses that output to derive local wrapping keys in the browser.
 
 Some supported configurations include:
 
@@ -72,7 +72,7 @@ Some supported configurations include:
 - Chrome/Edge or Samsung Internet on Android, with Google Password Manager or Security Keys
 - 1Password on macOS 15+, Android, and iOS 18.4+
 
-Support depends on the complete browser, operating-system, passkey-provider, and authenticator combination and can change with software updates. If Revaulter reports that PRF is unavailable, try another configuration from the list above; the registration check is authoritative for the credential being created.
+Support depends on the complete browser, operating system, passkey provider, and authenticator combination. If Revaulter reports that PRF is unavailable, try another configuration from the list above.
 
 ## Supported operations
 
