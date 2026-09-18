@@ -49,9 +49,13 @@ type v2OperationFlagsBase struct {
 	Insecure bool
 	NoH2C    bool
 
-	RequestKey string
-	KeyLabel   string
-	Algorithm  string
+	// Exactly one of RequestKey or RequestKeyFile must be set
+	// Validate() resolves the file into RequestKey, so everything downstream reads the key from a single place
+	RequestKey     string
+	RequestKeyFile string
+
+	KeyLabel  string
+	Algorithm string
 
 	Timeout durationValue
 	Note    string
@@ -84,8 +88,11 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
 	cmd.Flags().BoolVar(&f.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 
-	cmd.Flags().StringVarP(&f.RequestKey, "request-key", "k", "", "Per-user request key used to route the request")
-	_ = cmd.MarkFlagRequired("request-key")
+	cmd.Flags().StringVarP(&f.RequestKey, "request-key", "k", "", "Per-user request key used to route the request. Mutually exclusive with --request-key-file")
+	cmd.Flags().StringVar(&f.RequestKeyFile, "request-key-file", "", "Path to a file containing the per-user request key, so it is not exposed in the process list. Mutually exclusive with --request-key")
+	cmd.MarkFlagsMutuallyExclusive("request-key", "request-key-file")
+	cmd.MarkFlagsOneRequired("request-key", "request-key-file")
+
 	// Each operation marks --key-label required (or accepts it from --json) in its own BindToCommand
 	cmd.Flags().StringVarP(&f.KeyLabel, "key-label", "l", "", "Logical key label used for v2 key derivation")
 
@@ -109,6 +116,12 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 
 func (f *v2OperationFlagsBase) Validate() error {
 	f.Server = strings.TrimSuffix(f.Server, "/")
+
+	requestKey, err := resolveRequestKey(f.RequestKey, f.RequestKeyFile)
+	if err != nil {
+		return err
+	}
+	f.RequestKey = requestKey
 
 	// Normalize the key label up-front so subsequent reads (and the request body) use the canonical form
 	// The server applies the same rule and would reject anything else with a BadRequest
