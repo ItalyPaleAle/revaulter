@@ -60,7 +60,8 @@ revaulter-cli encrypt [flags]
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
-| `--request-key` | `-k` | Yes | Per-user request key (shown in the web UI after registration) |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration). Mutually exclusive with `--request-key-file` |
+| `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
 | `--key-label` | `-l` | Yes | Logical key label used for key derivation |
 | `--algorithm` | `-a` | Yes | AEAD algorithm identifier: `A256GCM` (alias `aes-256-gcm`) or `C20P` (alias `chacha20-poly1305`) |
 | `--message` | `-m` | One of `--message`, `--input`, or `--json` is required | The message to encrypt as a raw UTF-8 string. |
@@ -122,7 +123,8 @@ revaulter-cli decrypt [flags]
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
-| `--request-key` | `-k` | Yes | Per-user request key (shown in the web UI after registration) |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration). Mutually exclusive with `--request-key-file` |
+| `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
 | `--key-label` | `-l` | Yes | Logical key label used for key derivation |
 | `--algorithm` | `-a` | Yes | AEAD algorithm identifier: `A256GCM` (alias `aes-256-gcm`) or `C20P` (alias `chacha20-poly1305`). Must match what was used at encryption time |
 | `--value` | `-m` | One of `--value` or `--json` is required | The ciphertext to decrypt, base64-encoded |
@@ -197,7 +199,8 @@ revaulter-cli sign [flags]
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
-| `--request-key` | `-k` | Yes | Per-user request key |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key. Mutually exclusive with `--request-key-file` |
+| `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
 | `--key-label` | `-l` | Yes | Logical key label used for signing-key derivation |
 | `--algorithm` | `-a` | Yes | Signing algorithm identifier: `ES256`, `Ed25519`, or `Ed25519ph` |
 | `--input` | `-i` | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. With ES256 and Ed25519ph, the CLI hashes the file's contents locally. |
@@ -295,7 +298,8 @@ The default trust store path is `<user-config-dir>/revaulter-cli/trust.json` (e.
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
-| `--request-key` | `-k` | Yes | Per-user request key used to authenticate with the server |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key used to authenticate with the server. Mutually exclusive with `--request-key-file` |
+| `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
 | `--trust-store` | | No | Path to the anchor trust store file (defaults to `<user-config-dir>/revaulter-cli/trust.json`) |
 | `--yes` | `-y` | No | Accept the anchor fingerprint without prompting (for non-interactive use) |
 | `--insecure` | | No | Skip TLS certificate validation |
@@ -340,7 +344,8 @@ For a full setup walkthrough (including installing the public key in `authorized
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
-| `--request-key` | `-k` | Yes | Per-user request key |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key. Mutually exclusive with `--request-key-file` |
+| `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
 | `--key-label` | `-l` | Yes | Logical key label for the signing key |
 | `--algorithm` | `-a` | No | Signing algorithm: `ES256` (default) or `Ed25519`. `Ed25519ph` is not supported by the SSH agent |
 | `--socket` | | No | Path to the Unix socket (defaults to `$XDG_RUNTIME_DIR/revaulter/ssh-agent-<key-label>.sock`, or a private per-user directory under `$TMPDIR` if `XDG_RUNTIME_DIR` is unset). The socket is created with `0600` permissions |
@@ -404,6 +409,22 @@ Print the CLI version.
 
 ```bash
 revaulter-cli version
+```
+
+## Reading the request key from a file
+
+Every command that connects to a server accepts the request key either inline with `--request-key`, or from a file with `--request-key-file`. The two flags are mutually exclusive, and exactly one of them is required.
+
+```bash
+install -m 600 /dev/null /etc/revaulter/request-key
+printf '%s' 'AbCdEf0123456789GhIj' > /etc/revaulter/request-key
+
+revaulter-cli decrypt \
+  --server https://revaulter.example.com \
+  --request-key-file /etc/revaulter/request-key \
+  --key-label wrappingkey1 \
+  --algorithm A256GCM \
+  --input encrypted-key.json
 ```
 
 ## How it works

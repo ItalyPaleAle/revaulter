@@ -15,8 +15,13 @@ import (
 )
 
 type trustCmd struct {
-	Server         string
+	Server string
+
+	// Exactly one of RequestKey or RequestKeyFile must be set
+	// Run() resolves the file into RequestKey, so GetRequestKey reads the key from a single place
 	RequestKey     string
+	RequestKeyFile string
+
 	Insecure       bool
 	NoH2C          bool
 	TrustStorePath string
@@ -67,8 +72,10 @@ If the anchor is already pinned and matches, the command confirms it and exits s
 	// Set flags
 	cmd.Flags().StringVarP(&impl.Server, "server", "s", "", "Address of the Revaulter server")
 	_ = cmd.MarkFlagRequired("server")
-	cmd.Flags().StringVarP(&impl.RequestKey, "request-key", "k", "", "Per-user request key used to authenticate with the server")
-	_ = cmd.MarkFlagRequired("request-key")
+	cmd.Flags().StringVarP(&impl.RequestKey, "request-key", "k", "", "Per-user request key used to authenticate with the server. Mutually exclusive with --request-key-file")
+	cmd.Flags().StringVar(&impl.RequestKeyFile, "request-key-file", "", "Path to a file containing the per-user request key, mutually exclusive with --request-key")
+	cmd.MarkFlagsMutuallyExclusive("request-key", "request-key-file")
+	cmd.MarkFlagsOneRequired("request-key", "request-key-file")
 	cmd.Flags().BoolVar(&impl.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
 	cmd.Flags().BoolVar(&impl.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 	cmd.Flags().StringVar(&impl.TrustStorePath, "trust-store", "", "Path to the anchor trust store"+trustStoreDefault)
@@ -80,6 +87,12 @@ If the anchor is already pinned and matches, the command confirms it and exits s
 func (c *trustCmd) Run(cmd *cobra.Command, _ []string) error {
 	log := logging.LogFromContext(cmd.Context())
 	c.Server = strings.TrimSuffix(c.Server, "/")
+
+	requestKey, err := resolveRequestKey(c.RequestKey, c.RequestKeyFile)
+	if err != nil {
+		return err
+	}
+	c.RequestKey = requestKey
 
 	// Get a client for the server
 	client, err := newCoreClient(log, c, nil)

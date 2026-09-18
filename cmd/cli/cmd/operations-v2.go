@@ -102,6 +102,26 @@ func terminalAnchorConfirmer() clientcore.ConfirmAnchorFunc {
 	}
 }
 
+// resolveRequestKey returns the request key to authenticate with, given the values of --request-key and --request-key-file
+// Exactly one of the two must be set
+func resolveRequestKey(requestKey string, requestKeyFile string) (string, error) {
+	switch {
+	case requestKey != "" && requestKeyFile != "":
+		return "", errors.New("--request-key and --request-key-file are mutually exclusive")
+	case requestKey == "" && requestKeyFile == "":
+		return "", errors.New("one of --request-key or --request-key-file is required")
+	case requestKeyFile == "":
+		return requestKey, nil
+	}
+
+	key, err := cliutil.ReadRequestKeyFile(requestKeyFile)
+	if err != nil {
+		return "", fmt.Errorf("invalid --request-key-file %q: %w", requestKeyFile, err)
+	}
+
+	return key, nil
+}
+
 // coreClientFlags is the minimal interface required to build a client for a Revaulter server
 // It is satisfied by v2OperationFlags, *v2OperationFlagsBase, and the trust command's flags
 type coreClientFlags interface {
