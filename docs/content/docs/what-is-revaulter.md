@@ -62,6 +62,8 @@ See [Installing Revaulter](/docs/installing-revaulter) for setup instructions.
 
 Using Revaulter requires passkeys with support for the PRF extension, which must be supported by both the authenticator and the platform.
 
+PRF (Pseudo-Random Function) lets Revaulter ask a passkey for deterministic, credential-bound secret material after a successful WebAuthn ceremony. Revaulter uses that output to derive local wrapping keys in the browser.
+
 Some supported configurations include:
 
 - macOS/iOS: Safari with Apple/iCloud Passkeys, on iOS 18.4+ and macOS 15+ (with Safari 18+)
@@ -69,6 +71,8 @@ Some supported configurations include:
 - Chrome/Edge on Windows 11 with Security Keys
 - Chrome/Edge or Samsung Internet on Android, with Google Password Manager or Security Keys
 - 1Password on macOS 15+, Android, and iOS 18.4+
+
+Support depends on the complete browser, operating system, passkey provider, and authenticator combination. If Revaulter reports that PRF is unavailable, try another configuration from the list above.
 
 ## Supported operations
 

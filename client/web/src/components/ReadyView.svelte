@@ -36,6 +36,7 @@ interface Props {
     sessionLabel: string
     settingsBusy: boolean
     settingsError: string | null
+    settingsErrorHelpHref: string | null
     settingsSuccess: string | null
     signingKeys: V2PublishedSigningKey[]
     userId: string
@@ -70,6 +71,7 @@ let {
     sessionLabel,
     settingsBusy,
     settingsError,
+    settingsErrorHelpHref,
     settingsSuccess,
     signingKeys,
     userId,
@@ -242,6 +244,7 @@ function rejectAll() {
             {signingKeys}
             busy={settingsBusy}
             error={settingsError}
+            errorHelpHref={settingsErrorHelpHref}
             success={settingsSuccess}
             onClose={closeSettingsModal}
             {onUpdateDisplayName}

@@ -9,6 +9,7 @@ import TextField from '$components/TextField.svelte'
 interface Props {
     authBusy: boolean
     authError: string | null
+    authErrorHelpHref: string | null
     displayName: string
     onDisplayNameInput: (value: string) => void
     onPasswordInput: (value: string) => void
@@ -24,6 +25,7 @@ interface Props {
 let {
     authBusy,
     authError,
+    authErrorHelpHref,
     displayName,
     onDisplayNameInput,
     onPasswordInput,
@@ -87,6 +89,9 @@ function authBodyCopy() {
             {#if authError}
                 <div class="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/40 dark:text-rose-200">
                     {authError}
+                    {#if authErrorHelpHref}
+                        <a class="ml-1 underline" href={authErrorHelpHref} target="_blank" rel="noreferrer">Learn about compatible passkeys.</a>
+                    {/if}
                 </div>
             {/if}
 
