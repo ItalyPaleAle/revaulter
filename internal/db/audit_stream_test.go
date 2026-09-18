@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/italypaleale/go-kit/auditlogs/siem"
 	"github.com/stretchr/testify/require"
@@ -146,11 +147,18 @@ func TestAuditStreamBootstrapOnAnEmptyTable(t *testing.T) {
 		ctx := t.Context()
 		store := conn.AuditStreamStore()
 
-		// An empty audit table seeds a legitimately all-zero cursor
+		// SQLite has no assigned rows yet, so its sequence cursor is all-zero
+		// Postgres records the transaction activation boundary even when the table is empty
 		head, seeded, err := store.BootstrapToHead(ctx)
 		require.NoError(t, err)
 		require.True(t, seeded)
-		require.Equal(t, siem.Position{V: siem.PositionVersion}, head)
+		if conn.Kind() == BackendPostgres {
+			require.NotEmpty(t, head.XactID)
+			require.Empty(t, head.EventID)
+			require.NotZero(t, head.EventCreatedAt)
+		} else {
+			require.Equal(t, siem.Position{V: siem.PositionVersion}, head)
+		}
 
 		// Events written afterwards must still be delivered, which is what would break if bootstrap were inferred from a zero cursor instead of from key presence
 		first := insertAuditEvent(t, conn, AuditRequestCreate)
@@ -166,6 +174,64 @@ func TestAuditStreamBootstrapOnAnEmptyTable(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, events, 1)
 		require.Equal(t, first, events[0].ID)
+	})
+}
+
+func TestAuditStreamPostgresBootstrapUsesActivationBoundary(t *testing.T) {
+	runDBTest(t, func(t *testing.T, conn *DB) {
+		if conn.Kind() != BackendPostgres {
+			t.Skip("transaction activation boundaries are a Postgres concern")
+		}
+
+		require.NoError(t, RunMigrations(t.Context(), conn, nil))
+
+		ctx := t.Context()
+		actor := "user-bootstrap"
+		tx, err := conn.DatabaseConn.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			_ = tx.Rollback(ctx)
+		}()
+
+		txStore, err := NewAuditStore(tx, conn.Kind())
+		require.NoError(t, err)
+		inFlight, err := txStore.Insert(ctx, AuditEventInput{
+			EventType:   AuditRequestCreate,
+			Outcome:     AuditOutcomeSuccess,
+			AuthMethod:  AuditAuthMethodSession,
+			ActorUserID: &actor,
+		})
+		require.NoError(t, err)
+
+		// This row commits above the open transaction and would be hidden by a head query based on snapshot xmin
+		committed := insertAuditEvent(t, conn, AuditRequestConfirm)
+
+		store := conn.AuditStreamStore()
+		head, seeded, err := store.BootstrapToHead(ctx)
+		require.NoError(t, err)
+		require.True(t, seeded)
+		require.NotEmpty(t, head.XactID)
+		require.Empty(t, head.EventID)
+
+		err = tx.Commit(ctx)
+		require.NoError(t, err)
+
+		fresh := insertAuditEvent(t, conn, AuditSigningKeyCreate)
+		nilUUID := uuid.Nil().String()
+		sortsAfterBoundary := func(id string) bool {
+			var after bool
+			err = conn.QueryRow(ctx,
+				`SELECT (xact_id, id) > ($1::xid8, $2::uuid) FROM v2_audit_events WHERE id = $3::uuid`,
+				head.XactID, nilUUID, id,
+			).Scan(&after)
+			require.NoError(t, err)
+
+			return after
+		}
+
+		require.False(t, sortsAfterBoundary(inFlight.ID))
+		require.False(t, sortsAfterBoundary(committed))
+		require.True(t, sortsAfterBoundary(fresh))
 	})
 }
 

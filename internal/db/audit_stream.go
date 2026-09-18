@@ -114,23 +114,28 @@ func (s *AuditStreamStore) BootstrapToHead(ctx context.Context) (siem.Position, 
 	return existing, false, nil
 }
 
-// head returns the position of the last settled event, or a zero position when the table holds none
+// head returns the position that separates transactions assigned before activation from transactions assigned afterwards
 func (s *AuditStreamStore) head(ctx context.Context) (pos siem.Position, err error) {
 	pos = siem.Position{V: siem.PositionVersion}
 
-	var createdAt int64
 	if s.kind == BackendPostgres {
+		// Snapshot xmax is the first transaction ID not yet assigned when the snapshot is taken
+		// Using it avoids replaying committed history when an unrelated transaction keeps the database-wide xmin pinned
+		// The empty event ID sorts before every UUID, so the transaction that receives xmax is included in the stream
 		err = s.db.
-			QueryRow(ctx, `SELECT xact_id::text, id::text, created_at FROM v2_audit_events
-				WHERE xact_id < pg_snapshot_xmin(pg_current_snapshot())
-				ORDER BY xact_id DESC, id DESC
-				LIMIT 1`).
-			Scan(&pos.XactID, &pos.EventID, &createdAt)
-	} else {
-		err = s.db.
-			QueryRow(ctx, `SELECT seq, created_at FROM v2_audit_events ORDER BY seq DESC LIMIT 1`).
-			Scan(&pos.Seq, &createdAt)
+			QueryRow(ctx, `SELECT pg_snapshot_xmax(pg_current_snapshot())::text, FLOOR(EXTRACT(EPOCH FROM statement_timestamp()))::bigint`).
+			Scan(&pos.XactID, &pos.EventCreatedAt)
+		if err != nil {
+			return siem.Position{}, err
+		}
+
+		return pos, nil
 	}
+
+	var createdAt int64
+	err = s.db.
+		QueryRow(ctx, `SELECT seq, created_at FROM v2_audit_events ORDER BY seq DESC LIMIT 1`).
+		Scan(&pos.Seq, &createdAt)
 	if s.db.IsNoRowsError(err) {
 		// An empty audit table seeds a legitimately all-zero cursor
 		// That is unambiguous here only because bootstrap is keyed on key presence, not on the cursor's value

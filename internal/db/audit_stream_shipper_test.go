@@ -107,6 +107,7 @@ func TestAuditStreamEndToEnd(t *testing.T) {
 
 		ctx := t.Context()
 		store := conn.AuditStreamStore()
+		cursorObserver := conn.AuditStreamStore()
 		collector := newShipperTestCollector(t)
 
 		// Two events already in the table when the feature is turned on
@@ -127,8 +128,13 @@ func TestAuditStreamEndToEnd(t *testing.T) {
 		}
 
 		require.Eventually(t, func() bool {
-			return len(collector.delivered()) >= len(fresh)
-		}, 20*time.Second, 20*time.Millisecond, "timed out waiting for the events to be delivered")
+			if len(collector.delivered()) < len(fresh) {
+				return false
+			}
+
+			pos, err := cursorObserver.GetPosition(ctx)
+			return err == nil && pos.EventID == fresh[len(fresh)-1]
+		}, 20*time.Second, 20*time.Millisecond, "timed out waiting for the events to be delivered and the cursor to advance")
 
 		stop()
 
