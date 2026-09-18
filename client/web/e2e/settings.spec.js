@@ -153,7 +153,7 @@ test('adding a passkey without PRF stops before server persistence', async ({ pa
                 'This passkey does not support the PRF extension Revaulter needs to protect your local keys. Add a PRF-capable passkey or use a browser and authenticator that support WebAuthn PRF.'
             )
         ).toBeVisible()
-        await expect(page.getByRole('link', { name: 'Learn about compatible passkeys.' })).toHaveAttribute(
+        await expect(page.getByRole('link', { name: 'Learn about compatible passkeys' })).toHaveAttribute(
             'href',
             'https://revaulter.italypaleale.me/docs/what-is-revaulter/#supported-passkeys'
         )
