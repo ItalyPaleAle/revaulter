@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -23,8 +22,6 @@ const staticBaseDir = "dist"
 
 func (s *Server) serveClient() []gin.HandlerFunc {
 	return []gin.HandlerFunc{
-		// Add cache-control header for static assets to cache for 30 days
-		addClientCacheHeaders(30 * 86400),
 		func(c *gin.Context) {
 			if !prepareStaticResponse(c) {
 				return
@@ -52,8 +49,13 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 	// Normalize the request path before use
 	// Backslashes are converted to forward slashes because some browsers parse "\" as "/" in Location headers, which would let "\evil.com" be interpreted as the protocol-relative URL "//evil.com"
 	// path.Clean collapses "..", duplicate slashes, and trailing slashes, then prefixes with "/" and ensures the cleaned result is a host-relative absolute path
-	reqPath = path.Clean("/" + strings.ReplaceAll(reqPath, `\`, "/"))
+	normalizedPath := strings.ReplaceAll(reqPath, `\`, "/")
+	hadTrailingSlash := strings.HasSuffix(normalizedPath, "/")
+	reqPath = path.Clean("/" + normalizedPath)
 	reqPath = strings.TrimPrefix(reqPath, "/")
+	if hadTrailingSlash && reqPath != "" {
+		reqPath += "/"
+	}
 
 	// Check if the static file exists
 	f, err := filesystem.Open(staticBaseDir + "/" + reqPath)
@@ -114,7 +116,9 @@ func serveStaticFiles(c *gin.Context, reqPath string, filesystem fs.FS) {
 		return
 	}
 
-	http.ServeContent(c.Writer, c.Request, stat.Name(), stat.ModTime(), fseek)
+	buildTime := buildinfo.GetBuildDate()
+	setClientCacheHeaders(c, reqPath, 30*86400)
+	http.ServeContent(c.Writer, c.Request, stat.Name(), buildTime, fseek)
 }
 
 // safeRedirectLocation emits a 301 redirect whose Location is guaranteed to be a host-relative URL starting with a single "/"
@@ -127,52 +131,52 @@ func safeRedirectLocation(c *gin.Context, reqPath string) {
 	c.Status(http.StatusMovedPermanently)
 }
 
-func addClientCacheHeaders(cacheMaxAge int64) func(c *gin.Context) {
+func setClientCacheHeaders(c *gin.Context, reqPath string, cacheMaxAge int64) {
 	cfg := config.Get()
 
-	cacheControlHeader := fmt.Sprintf("public, max-age=%d", cacheMaxAge)
-
-	// Go does not save the last modification time for embedded files
-	// As a workaround, we use the time the app build time
-	buildTime := buildinfo.GetBuildDate()
-	lastModifiedHeader := buildTime.Format(time.RFC1123)
-
 	if cfg.Dev.DisableClientCache {
-		return func(c *gin.Context) {
-			c.Header("Cache-Control", "no-cache")
-		}
+		c.Header("Cache-Control", "no-cache")
+		return
 	}
 
-	return func(c *gin.Context) {
-		if isNotModified(c) {
-			// Request has already been aborted
-			return
-		}
-
-		// Add cache-control and last-modified header
-		c.Header("Cache-Control", cacheControlHeader)
-		if lastModifiedHeader != "" {
-			c.Header("Last-Modified", lastModifiedHeader)
-		}
+	if isFingerprintAsset(reqPath) {
+		c.Header("Cache-Control", fmt.Sprintf("public, max-age=%d", cacheMaxAge))
+		return
 	}
+
+	c.Header("Cache-Control", "no-cache, max-age=0, must-revalidate")
 }
 
-func isNotModified(c *gin.Context) bool {
-	// Check if there's an If-Modified-Since header
-	ims := c.Request.Header.Get("If-Modified-Since")
-	if ims == "" {
+func isFingerprintAsset(reqPath string) bool {
+	name := path.Base(reqPath)
+	ext := strings.ToLower(path.Ext(name))
+	if ext == "" {
+		return false
+	}
+	switch ext {
+	case ".avif", ".css", ".eot", ".gif", ".ico", ".jpeg", ".jpg", ".js", ".mjs", ".otf", ".png", ".svg", ".ttf", ".webp", ".woff", ".woff2":
+	default:
 		return false
 	}
 
-	// If there's no build time, it's always modified
-	buildTime := buildinfo.GetBuildDate()
-	imsDate, err := time.Parse(time.RFC1123, ims)
-	// Ignore headers with invalid dates
-	if err != nil || !imsDate.After(buildTime) {
+	stem := strings.TrimSuffix(name, ext)
+	dot := strings.LastIndexByte(stem, '.')
+	if dot < 0 {
 		return false
 	}
 
-	c.AbortWithStatus(http.StatusNotModified)
+	hash := stem[dot+1:]
+	// Vite emits an eight-character base64url content hash before the extension
+	if len(hash) != 8 {
+		return false
+	}
+	for _, char := range hash {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') && char != '-' && char != '_' {
+			return false
+		}
+	}
+
 	return true
 }
 
