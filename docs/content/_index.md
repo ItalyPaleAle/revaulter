@@ -42,3 +42,29 @@ Encryption keys are derived from the passkey in the browser (leveraging the PRF 
 - **Webhook notifications** — get notified on Discord, Slack, or any webhook endpoint when a request is waiting
 - **Lightweight** — single binary, requires only a database (SQLite or PostgreSQL)
 - **Strong cryptography** — includes support for hybrid, quantum-resistant asymmetric cryptography
+
+## Revaulter vs Vault and other KMS
+
+[HashiCorp Vault](https://www.vaultproject.io/) and cloud KMS services solve a related but different problem than Revaulter:
+
+| | Vault / typical KMS | Revaulter |
+| --- | --- | --- |
+| Operation mode | Unattended: serves keys to any authorized caller automatically | Attended: a human must approve each request |
+| Key location | Held server-side, encrypted at rest (can be available in-memory during use) | Server never sees private keys (not even in transit) |
+| Key material | A stored secret (password, token, unseal key) | Derived from a passkey at the moment of approval, via PRF extension |
+| Server compromise | Can expose keys and secrets directly | Exposes only opaque, encrypted envelopes |
+| Best suited for | Automated services that need secrets around the clock | Sensitive operations a person should consciously approve |
+
+**Unattended vs. attended access:** Once unsealed, Vault serves keys and secrets to any authorized caller automatically, with no human involved in each request.  
+Revaulter requires a person to open the web app, authenticate with a passkey, and approve that specific request. There's no way to grant standing, always-on access to a key.
+
+**Where the key lives:** Vault and most KMS keep the usable key on the server, because the server performs the cryptographic operation itself. Even when keys are stored inside dedicated security hardware (like a HSM or TPM) and un-exportable, the application maintains standing access to perform operations using those keys.  
+Revaulter's server never holds the key in any form and can never perform operations unattended. The key is derived from your passkey inside the browser, using the WebAuthn PRF extension, used locally to perform the operation, then discarded. Requests and results travel end-to-end encrypted, so the server never sees the key or the plaintext, even in transit.
+
+**Compromises:** An attacker who compromises a Vault server, or an operator with broad enough policies, can access keys and secrets without further user interaction.  
+An attacker who compromises the Revaulter server gets only encrypted envelopes: without the passkey holder approving each request, there's no key to take.
+
+The two serve substantially different use cases and can be complementary.
+
+- Use Vault or a KMS for automated, unattended access to secrets at scale, like a fleet of services fetching database credentials or an authentication server signing user session JWTs.
+- Use Revaulter when an operation should require a human to explicitly approve it each time, such as unlocking a disk at boot, signing a release, or decrypting a sensitive value, using a passkey instead of a long-lived credential that could be stolen and used without you knowing.
