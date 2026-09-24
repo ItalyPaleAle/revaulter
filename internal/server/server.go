@@ -499,9 +499,12 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		now := time.Now()
 
 		// Cleanup expired requests
-		err := rs.ExpirePending(ctx, now)
+		expired, err := rs.ExpirePending(ctx, now)
 		if err != nil {
 			return fmt.Errorf("failed to cleanup expired requests at startup: %w", err)
+		}
+		if len(expired) > 0 {
+			s.nudgeAuditStream()
 		}
 
 		// Cleanup expired records
@@ -519,7 +522,7 @@ func (s *Server) startAppServer(ctx context.Context) error {
 			err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
 				State:  item.State,
 				UserID: item.UserID,
-				TTL:    time.Unix(item.Expiry, 0),
+				TTL:    time.Unix(item.Expiry, 0).Add(requestExpiryGrace),
 			})
 			if err != nil {
 				return fmt.Errorf("failed to enqueue request expiry for %s: %w", item.State, err)

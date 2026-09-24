@@ -10,6 +10,9 @@ import (
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
+// requestExpiryGrace is added to a request's deadline when scheduling its expiry event, so the deadline has passed when the event fires
+const requestExpiryGrace = 5 * time.Second
+
 // requestExpiryEvent implements eventqueue.Queueable
 type requestExpiryEvent struct {
 	State  string
@@ -46,24 +49,52 @@ func (s *Server) executeRequestExpiryEvent(ev requestExpiryEvent) {
 	defer cancel()
 	log := logging.LogFromContext(ctx)
 
+	// MarkExpired also writes the audit event for the expiry
 	rs := s.db.RequestStore()
 	rec, err := rs.MarkExpired(ctx, ev.State)
 	if err != nil {
 		log.WarnContext(ctx, "error expiring request", slog.Any("error", err), slog.String("state", ev.State))
 		return
 	}
-	if rec == nil {
-		return
-	}
 
-	s.auditEventCtx(ctx, auditFields{
-		EventType:    db.AuditRequestExpire,
-		Outcome:      db.AuditOutcomeSuccess,
-		ActorUserID:  rec.UserID,
-		TargetUserID: rec.UserID,
-		RequestState: ev.State,
-		Metadata:     requestAuditMetadata(rec.Operation, rec.Algorithm, rec.KeyLabel, rec.Note),
-	})
+	if rec != nil {
+		s.nudgeAuditStream()
+	} else {
+		// The request was not expired by this call
+		// It may have been expired lazily by a read (which doesn't notify anyone), resolved by the user, deleted, or not be past its deadline yet
+		rec, err = rs.GetRequest(ctx, ev.State)
+		if err != nil {
+			log.WarnContext(ctx, "error reading request to expire", slog.Any("error", err), slog.String("state", ev.State))
+			return
+		}
+
+		switch {
+		case rec == nil:
+			// The request was already deleted, but list streams may still be showing it
+			s.publishListItem(&db.V2RequestListItem{
+				State:  ev.State,
+				Status: "removed",
+				UserID: ev.UserID,
+			})
+			return
+		case rec.Status == db.V2RequestStatusPending:
+			// The deadline hasn't passed yet, for example because the event fired within the same second as the deadline: try again later
+			err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
+				State:  ev.State,
+				UserID: rec.UserID,
+				TTL:    rec.ExpiresAt.Add(requestExpiryGrace),
+			})
+			if err != nil {
+				log.WarnContext(ctx, "failed to re-enqueue request expiry", slog.Any("error", err), slog.String("state", ev.State))
+			}
+			return
+		case rec.Status != db.V2RequestStatusExpired:
+			// Completed or canceled requests are handled by the route that resolved them
+			return
+		}
+
+		// The request was expired lazily: notify subscribers and schedule the cleanup below
+	}
 
 	s.lock.Lock()
 	s.notifySubscriber(ev.State)

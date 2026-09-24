@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"time"
@@ -72,36 +71,6 @@ func (s *Server) auditEventTx(c *gin.Context, tx *db.DbTx, f auditFields) error 
 	return nil
 }
 
-// auditEventCtx writes an audit row from a non-HTTP path (background goroutines, eventqueue handlers)
-// The auth_method is forced to "system" and there is no IP / UA / request-id to record
-// Failures are logged and swallowed
-func (s *Server) auditEventCtx(ctx context.Context, f auditFields) {
-	in := db.AuditEventInput{
-		EventType:    f.EventType,
-		Outcome:      f.Outcome,
-		AuthMethod:   db.AuditAuthMethodSystem,
-		ActorUserID:  optionalString(f.ActorUserID),
-		TargetUserID: optionalString(f.TargetUserID),
-		SigningKeyID: optionalString(f.SigningKeyID),
-		CredentialID: optionalString(f.CredentialID),
-		RequestState: optionalString(f.RequestState),
-		Metadata:     f.Metadata,
-	}
-
-	_, err := s.db.AuditStore().Insert(ctx, in)
-	if err != nil {
-		logging.LogFromContext(ctx).WarnContext(ctx,
-			"failed to write audit event",
-			slog.Any("error", err),
-			slog.String("event_type", string(f.EventType)),
-		)
-
-		return
-	}
-
-	s.nudgeAuditStream()
-}
-
 // auditInputFromContext extracts the actor, auth method, request id, IP, and UA from a gin context and merges them with the caller-provided audit fields
 func (s *Server) auditInputFromContext(c *gin.Context, f auditFields) db.AuditEventInput {
 	// Default actor: the session-bound user
@@ -167,18 +136,4 @@ func jsonMetadata(payload map[string]any) json.RawMessage {
 		return nil
 	}
 	return b
-}
-
-// requestAuditMetadata builds the metadata payload shared by all request.* audit events
-// The note is omitted when empty so the metadata payload stays compact
-func requestAuditMetadata(operation, algorithm, keyLabel, note string) json.RawMessage {
-	payload := map[string]any{
-		"operation": operation,
-		"algorithm": algorithm,
-		"keyLabel":  keyLabel,
-	}
-	if note != "" {
-		payload["note"] = note
-	}
-	return jsonMetadata(payload)
 }

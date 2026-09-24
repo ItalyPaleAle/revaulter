@@ -167,7 +167,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 				ActorUserID:  userID,
 				TargetUserID: rRec.UserID,
 				RequestState: req.State,
-				Metadata:     requestAuditMetadata(rRec.Operation, rRec.Algorithm, rRec.KeyLabel, rRec.Note),
+				Metadata:     db.RequestAuditMetadata(rRec.Operation, rRec.Algorithm, rRec.KeyLabel, rRec.Note),
 			})
 			if rErr != nil {
 				return nil, rErr
@@ -242,7 +242,7 @@ func (s *Server) RouteV2APIConfirm(c *gin.Context) {
 			ActorUserID:  userID,
 			TargetUserID: vRec.UserID,
 			RequestState: req.State,
-			Metadata:     requestAuditMetadata(vRec.Operation, vRec.Algorithm, vRec.KeyLabel, vRec.Note),
+			Metadata:     db.RequestAuditMetadata(vRec.Operation, vRec.Algorithm, vRec.KeyLabel, vRec.Note),
 		})
 		if rErr != nil {
 			return nil, rErr

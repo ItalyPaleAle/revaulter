@@ -85,11 +85,12 @@ func (db *DB) AuthStore() *AuthStore {
 
 // RequestStore returns an instance of RequestStore
 func (db *DB) RequestStore() *RequestStore {
-	as, err := NewRequestStore(db)
+	as, err := NewRequestStore(db, db.kind)
 	if err != nil {
 		// Indicates a development-time error
 		panic(err)
 	}
+	as.conn = db
 
 	return as
 }
@@ -137,7 +138,7 @@ func (tx *DbTx) AuthStore() *AuthStore {
 
 // RequestStore returns an instance of RequestStore
 func (tx *DbTx) RequestStore() *RequestStore {
-	as, err := NewRequestStore(tx)
+	as, err := NewRequestStore(tx, tx.kind)
 	if err != nil {
 		// Indicates a development-time error
 		panic(err)

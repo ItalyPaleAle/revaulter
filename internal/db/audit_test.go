@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -355,4 +356,64 @@ func TestAllEventTypes(t *testing.T) {
 		require.False(t, dup, "%q appears twice", e)
 		seen[e] = struct{}{}
 	}
+}
+
+func TestAuditStoreInsertMany(t *testing.T) {
+	runDBTest(t, func(t *testing.T, conn *DB) {
+		require.NoError(t, RunMigrations(t.Context(), conn, nil))
+		store := conn.AuditStore()
+
+		newInput := func(state string) AuditEventInput {
+			actor := "user-insert-many"
+			return AuditEventInput{
+				EventType:    AuditRequestExpire,
+				Outcome:      AuditOutcomeSuccess,
+				AuthMethod:   AuditAuthMethodSystem,
+				ActorUserID:  &actor,
+				RequestState: &state,
+			}
+		}
+
+		// No rows is a no-op
+		require.NoError(t, store.InsertMany(t.Context(), nil))
+
+		// If any event is invalid, nothing is written, including rows in earlier batches
+		inputs := make([]AuditEventInput, auditInsertBatchSize+1)
+		for i := range inputs {
+			inputs[i] = newInput("invalid-batch-" + strconv.Itoa(i))
+		}
+		inputs[len(inputs)-1].EventType = "not.a.real.event"
+		err := store.InsertMany(t.Context(), inputs)
+		require.ErrorIs(t, err, ErrAuditInvalidEventType)
+
+		events, _, err := store.List(t.Context(), AuditFilter{}, 10, "")
+		require.NoError(t, err)
+		require.Empty(t, events)
+
+		// Write more rows than fit in a single statement
+		count := 2*auditInsertBatchSize + 3
+		inputs = make([]AuditEventInput, count)
+		for i := range inputs {
+			inputs[i] = newInput("batch-" + strconv.Itoa(i))
+		}
+		require.NoError(t, store.InsertMany(t.Context(), inputs))
+
+		events, _, err = store.List(t.Context(), AuditFilter{UserID: "user-insert-many"}, 500, "")
+		require.NoError(t, err)
+		require.Len(t, events, count)
+
+		seen := make(map[string]bool, count)
+		for _, ev := range events {
+			require.Equal(t, AuditRequestExpire, ev.EventType)
+			require.Equal(t, AuditAuthMethodSystem, ev.AuthMethod)
+			require.JSONEq(t, `{}`, string(ev.Metadata))
+			require.NotNil(t, ev.RequestState)
+			require.False(t, seen[ev.ID], "duplicate event ID")
+			seen[ev.ID] = true
+			seen[*ev.RequestState] = true
+		}
+		for i := range count {
+			require.True(t, seen["batch-"+strconv.Itoa(i)], "missing event for batch-%d", i)
+		}
+	})
 }

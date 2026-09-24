@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -251,48 +252,73 @@ func (tx *DbTx) AuditStore() *AuditStore {
 	return as
 }
 
+const (
+	// auditInsertColumns is the list of columns written by an INSERT into v2_audit_events
+	auditInsertColumns = `id, created_at, event_type, outcome, auth_method, actor_user_id, target_user_id, signing_key_id, credential_id, request_state, http_request_id, client_ip, user_agent, metadata`
+	// auditInsertColumnCount is the number of columns in auditInsertColumns
+	auditInsertColumnCount = 14
+	// auditInsertBatchSize caps the rows written by a single INSERT statement
+	auditInsertBatchSize = 64
+)
+
 // Insert validates and writes an audit event row
 func (s *AuditStore) Insert(ctx context.Context, data AuditEventInput) (AuditEvent, error) {
-	err := data.Validate()
+	ev, err := prepareAuditEvent(data, time.Now())
 	if err != nil {
 		return AuditEvent{}, err
 	}
 
-	// Use UUIDv7 so rows are time-sortable
-	id := uuid.NewV7()
+	err = s.insertRows(ctx, ev)
+	if err != nil {
+		return AuditEvent{}, err
+	}
+
+	return ev, nil
+}
+
+// InsertMany validates and writes multiple audit event rows, using one INSERT statement for up to auditInsertBatchSize rows
+// If any event fails validation, nothing is written
+// When there are more rows than auditInsertBatchSize, callers must ensure to invoke this in a transaction to write all rows atomically
+func (s *AuditStore) InsertMany(ctx context.Context, data []AuditEventInput) (err error) {
+	if len(data) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	events := make([]AuditEvent, len(data))
+	for i := range data {
+		events[i], err = prepareAuditEvent(data[i], now)
+		if err != nil {
+			return err
+		}
+	}
+
+	for batch := range slices.Chunk(events, auditInsertBatchSize) {
+		err = s.insertRows(ctx, batch...)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// prepareAuditEvent validates the input and returns the audit event to write, with a new ID
+func prepareAuditEvent(data AuditEventInput, now time.Time) (AuditEvent, error) {
+	err := data.Validate()
+	if err != nil {
+		return AuditEvent{}, err
+	}
 
 	metadata := data.Metadata
 	if len(metadata) == 0 {
 		metadata = json.RawMessage("{}")
 	}
 
-	now := time.Now().Unix()
-
-	// Postgres types are stricter than SQLite: id is uuid and metadata is jsonb
-	// We cast both placeholders explicitly so pgx can pass the Go string straight through without driver-side type juggling
-	idPlaceholder := "$1"
-	metadataPlaceholder := "$14"
-	if s.kind == BackendPostgres {
-		idPlaceholder = "$1::uuid"
-		metadataPlaceholder = "$14::jsonb"
-	}
-
-	_, err = s.db.Exec(ctx,
-		`INSERT INTO v2_audit_events
-			(id, created_at, event_type, outcome, auth_method, actor_user_id, target_user_id, signing_key_id, credential_id, request_state, http_request_id, client_ip, user_agent, metadata)
-			VALUES (`+idPlaceholder+`, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, `+metadataPlaceholder+`)`,
-		id.String(), now, string(data.EventType), string(data.Outcome), string(data.AuthMethod),
-		nullableString(data.ActorUserID), nullableString(data.TargetUserID), nullableString(data.SigningKeyID), nullableString(data.CredentialID),
-		nullableString(data.RequestState), nullableString(data.HTTPRequestID), nullableString(data.ClientIP), nullableString(data.UserAgent),
-		string(metadata),
-	)
-	if err != nil {
-		return AuditEvent{}, err
-	}
-
 	return AuditEvent{
-		ID:            id.String(),
-		CreatedAt:     time.Unix(now, 0),
+		// Use UUIDv7 so rows are time-sortable
+		ID:            uuid.NewV7().String(),
+		CreatedAt:     time.Unix(now.Unix(), 0),
 		EventType:     data.EventType,
 		Outcome:       data.Outcome,
 		AuthMethod:    data.AuthMethod,
@@ -306,6 +332,49 @@ func (s *AuditStore) Insert(ctx context.Context, data AuditEventInput) (AuditEve
 		UserAgent:     clonePtr(data.UserAgent),
 		Metadata:      append(json.RawMessage(nil), metadata...),
 	}, nil
+}
+
+// insertRows writes the given audit events with a single INSERT statement
+func (s *AuditStore) insertRows(ctx context.Context, events ...AuditEvent) error {
+	var query strings.Builder
+	query.WriteString(`INSERT INTO v2_audit_events (` + auditInsertColumns + `) VALUES `)
+
+	args := make([]any, 0, len(events)*auditInsertColumnCount)
+	for i, ev := range events {
+		if i > 0 {
+			query.WriteString(", ")
+		}
+
+		query.WriteString("(")
+		for c := 1; c <= auditInsertColumnCount; c++ {
+			if c > 1 {
+				query.WriteString(", ")
+			}
+			query.WriteString("$")
+			query.WriteString(strconv.Itoa(len(args) + c))
+
+			// We cast both placeholders explicitly so pgx can pass the Go string straight through without driver-side type juggling
+			if s.kind == BackendPostgres {
+				switch c {
+				case 1:
+					query.WriteString("::uuid")
+				case auditInsertColumnCount:
+					query.WriteString("::jsonb")
+				}
+			}
+		}
+		query.WriteString(")")
+
+		args = append(args,
+			ev.ID, ev.CreatedAt.Unix(), string(ev.EventType), string(ev.Outcome), string(ev.AuthMethod),
+			nullableString(ev.ActorUserID), nullableString(ev.TargetUserID), nullableString(ev.SigningKeyID), nullableString(ev.CredentialID),
+			nullableString(ev.RequestState), nullableString(ev.HTTPRequestID), nullableString(ev.ClientIP), nullableString(ev.UserAgent),
+			string(ev.Metadata),
+		)
+	}
+
+	_, err := s.db.Exec(ctx, query.String(), args...)
+	return err
 }
 
 // List returns audit events matching the given filter
@@ -508,4 +577,24 @@ func validateAuditCursor(cursor string) (string, error) {
 	}
 
 	return cursor, nil
+}
+
+// RequestAuditMetadata builds the metadata payload shared by all request.* audit events
+// The note is omitted when empty so the metadata payload stays compact
+// Returns nil when marshalling fails
+func RequestAuditMetadata(operation, algorithm, keyLabel, note string) json.RawMessage {
+	payload := map[string]any{
+		"operation": operation,
+		"algorithm": algorithm,
+		"keyLabel":  keyLabel,
+	}
+	if note != "" {
+		payload["note"] = note
+	}
+
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return b
 }

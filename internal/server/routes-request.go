@@ -132,7 +132,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 				AuthMethod:   db.AuditAuthMethodRequestKey,
 				ActorUserID:  user.ID,
 				RequestState: state,
-				Metadata:     requestAuditMetadata(operation, body.Algorithm, body.KeyLabel, body.Note),
+				Metadata:     db.RequestAuditMetadata(operation, body.Algorithm, body.KeyLabel, body.Note),
 			})
 			if rErr != nil {
 				return struct{}{}, rErr
@@ -149,7 +149,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 		err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
 			State:  state,
 			UserID: user.ID,
-			TTL:    now.Add(timeout + 5*time.Second),
+			TTL:    now.Add(timeout + requestExpiryGrace),
 		})
 		if err != nil {
 			AbortWithErrorJSON(c, err)
