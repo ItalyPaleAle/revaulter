@@ -27,6 +27,24 @@ func insertAuditEvent(t *testing.T, conn *DB, eventType EventType) string {
 	return rec.ID
 }
 
+// waitForSettled blocks until every committed audit row sits below the snapshot xmin, which is when Postgres considers it shippable
+// The xmin is cluster-wide, so a write transaction held open by another test package on the same server keeps rows unsettled for a moment
+func waitForSettled(t *testing.T, conn *DB) {
+	t.Helper()
+
+	if conn.Kind() != BackendPostgres {
+		return
+	}
+
+	require.Eventually(t, func() bool {
+		var settled bool
+		err := conn.
+			QueryRow(t.Context(), `SELECT NOT EXISTS (SELECT 1 FROM v2_audit_events WHERE xact_id >= pg_snapshot_xmin(pg_current_snapshot()))`).
+			Scan(&settled)
+		return err == nil && settled
+	}, 10*time.Second, 10*time.Millisecond, "timed out waiting for audit rows to settle")
+}
+
 func TestAuditStreamListForShipping(t *testing.T) {
 	runDBTest(t, func(t *testing.T, conn *DB) {
 		require.NoError(t, RunMigrations(t.Context(), conn, nil))
@@ -37,6 +55,7 @@ func TestAuditStreamListForShipping(t *testing.T) {
 		first := insertAuditEvent(t, conn, AuditAuthLoginFinish)
 		second := insertAuditEvent(t, conn, AuditRequestCreate)
 		third := insertAuditEvent(t, conn, AuditRequestConfirm)
+		waitForSettled(t, conn)
 
 		var zero siem.Position
 
@@ -108,6 +127,7 @@ func TestAuditStreamCursor(t *testing.T) {
 		require.Equal(t, head, again)
 
 		// The event written after the first bootstrap is still pending
+		waitForSettled(t, conn)
 		events, err := store.ListForShipping(ctx, again, 10)
 		require.NoError(t, err)
 		require.Len(t, events, 1)
@@ -170,6 +190,7 @@ func TestAuditStreamBootstrapOnAnEmptyTable(t *testing.T) {
 		pos, err := store.GetPosition(ctx)
 		require.NoError(t, err)
 
+		waitForSettled(t, conn)
 		events, err := store.ListForShipping(ctx, pos, 10)
 		require.NoError(t, err)
 		require.Len(t, events, 1)
@@ -244,6 +265,7 @@ func TestAuditStreamShipsEventsWrittenInATransaction(t *testing.T) {
 
 		// An event committed outside a transaction, which the shipper reads and advances past
 		insertAuditEvent(t, conn, AuditAuthLoginFinish)
+		waitForSettled(t, conn)
 
 		events, err := store.ListForShipping(ctx, siem.Position{}, 10)
 		require.NoError(t, err)
@@ -262,6 +284,7 @@ func TestAuditStreamShipsEventsWrittenInATransaction(t *testing.T) {
 			})
 		})
 		require.NoError(t, err)
+		waitForSettled(t, conn)
 
 		events, err = store.ListForShipping(ctx, pos, 10)
 		require.NoError(t, err)
@@ -309,6 +332,7 @@ func TestAuditStreamPostgresExcludesUnsettledRows(t *testing.T) {
 		require.NoError(t, tx.Commit(ctx))
 
 		// Both rows become shippable once the transaction settles
+		waitForSettled(t, conn)
 		events, err = store.ListForShipping(ctx, siem.Position{}, 10)
 		require.NoError(t, err)
 		require.Len(t, events, 2)
@@ -439,6 +463,7 @@ func TestAuditStreamMapsCorrelationIDsToAttributes(t *testing.T) {
 			Metadata:     json.RawMessage(`{"algorithm":"ES384"}`),
 		})
 		require.NoError(t, err)
+		waitForSettled(t, conn)
 
 		events, err := conn.AuditStreamStore().ListForShipping(ctx, siem.Position{}, 10)
 		require.NoError(t, err)

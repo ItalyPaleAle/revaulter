@@ -44,6 +44,7 @@ const (
 // canonicalFixture builds the canonical fixture used by the round-trip tests
 //
 // The values are chosen to exercise every supported columnKind: text, bool, uuid, json (jsonb on Postgres), int64, and nullable columns
+// JSON objects list their keys in alphabetical order, since a Postgres backup re-encodes jsonb values with sorted keys and the comparison is byte for byte
 //
 // SchemaLevel must match the count of embedded migrations
 // If a new migration is added under internal/db/migrations, bump this value
@@ -61,7 +62,7 @@ func canonicalFixture() fixtureBackup {
 				{"some_setting", "some-value", "etag-1"},
 			}),
 			tableFixture("v2_users", [][]any{
-				{fxUserAID, "Alice", "active", "wa-A", "rk-A", "ecdh-A", "mlkem-A", "es384-A", "mldsa-A", "sig-es-A", "sig-mldsa-A", int64(1), "10.0.0.0/8", true, ts, ts, int64(1), true, true, `[{"id":"oidc-1","issuer":"https://token.actions.githubusercontent.com","audience":"https://revaulter.example.com","subject":"repo:example/app:*","createdAt":1700000000}]`},
+				{fxUserAID, "Alice", "active", "wa-A", "rk-A", "ecdh-A", "mlkem-A", "es384-A", "mldsa-A", "sig-es-A", "sig-mldsa-A", int64(1), "10.0.0.0/8", true, ts, ts, int64(1), true, true, `[{"audience":"https://revaulter.example.com","createdAt":1700000000,"id":"oidc-1","issuer":"https://token.actions.githubusercontent.com","subject":"repo:example/app:*"}]`},
 				{fxUserBID, "Bob", "active", "wa-B", "rk-B", "", "", "", "", "", "", int64(2), "", false, ts - 100, ts - 50, int64(2), true, false, `[]`},
 			}),
 			tableFixture("v2_published_signing_keys", [][]any{
