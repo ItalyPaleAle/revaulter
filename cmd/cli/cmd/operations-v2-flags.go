@@ -19,6 +19,7 @@ import (
 
 	"github.com/italypaleale/revaulter/internal/clientcore"
 	"github.com/italypaleale/revaulter/internal/protocolv2"
+	"github.com/italypaleale/revaulter/internal/utils"
 )
 
 // maxInputBytes caps the plaintext bytes the CLI is willing to send through encrypt/decrypt/sign to 100KB
@@ -53,6 +54,7 @@ type v2OperationFlagsBase struct {
 	// Validate() resolves the file into RequestKey, so everything downstream reads the key from a single place
 	RequestKey     string
 	RequestKeyFile string
+	UserID         string
 
 	KeyLabel  string
 	Algorithm string
@@ -88,10 +90,11 @@ func (f *v2OperationFlagsBase) BindBase(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
 	cmd.Flags().BoolVar(&f.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 
-	cmd.Flags().StringVarP(&f.RequestKey, "request-key", "k", "", "Per-user request key used to route the request. Mutually exclusive with --request-key-file")
+	cmd.Flags().StringVarP(&f.RequestKey, "request-key", "k", "", "Per-user request key used to route the request, or a JWT from a trusted OIDC issuer (which requires --user-id). Mutually exclusive with --request-key-file")
 	cmd.Flags().StringVar(&f.RequestKeyFile, "request-key-file", "", "Path to a file containing the per-user request key, mutually exclusive with --request-key")
 	cmd.MarkFlagsMutuallyExclusive("request-key", "request-key-file")
 	cmd.MarkFlagsOneRequired("request-key", "request-key-file")
+	cmd.Flags().StringVar(&f.UserID, "user-id", "", "ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT")
 
 	// Each operation marks --key-label required (or accepts it from --json) in its own BindToCommand
 	cmd.Flags().StringVarP(&f.KeyLabel, "key-label", "l", "", "Logical key label used for v2 key derivation")
@@ -141,6 +144,8 @@ func (f *v2OperationFlagsBase) Validate() error {
 
 func (f *v2OperationFlagsBase) GetServer() string                  { return f.Server }
 func (f *v2OperationFlagsBase) GetRequestKey() string              { return f.RequestKey }
+func (f *v2OperationFlagsBase) GetRequestKeyFile() string          { return f.RequestKeyFile }
+func (f *v2OperationFlagsBase) GetUserID() string                  { return f.UserID }
 func (f *v2OperationFlagsBase) GetKeyLabel() string                { return f.KeyLabel }
 func (f *v2OperationFlagsBase) GetAlgorithm() string               { return f.Algorithm }
 func (f *v2OperationFlagsBase) GetTimeout() string                 { return f.Timeout.String() }
@@ -168,6 +173,8 @@ type v2OperationFlags interface {
 	InnerPayload() v2OperationPayload
 	GetServer() string
 	GetRequestKey() string
+	GetRequestKeyFile() string
+	GetUserID() string
 	GetKeyLabel() string
 	GetAlgorithm() string
 	GetTimeout() string
@@ -757,8 +764,7 @@ func encodeSignInputValue(algorithm string, data []byte) (string, error) {
 	switch algorithm {
 	case protocolv2.SigningAlgES256:
 		// ECDSA with P-256 uses SHA256
-		sum := sha256.Sum256(data)
-		return base64.RawURLEncoding.EncodeToString(sum[:]), nil
+		return utils.SHA256Base64URL(data), nil
 
 	case protocolv2.SigningAlgEd25519:
 		// With Ed25519, data is hashed during the signing process

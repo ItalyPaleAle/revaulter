@@ -32,6 +32,11 @@ import (
 const (
 	// RequestKey is the request key the server accepts
 	RequestKey = "request-key-abc"
+	// OIDCToken is the OIDC token the server accepts, together with UserID in the X-Revaulter-User header
+	// The server only compares it, so it doesn't need a valid signature
+	OIDCToken = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2lnbmF0dXJl"
+	// RenewedOIDCToken is a second OIDC token, which tests can pass to SetOIDCToken to simulate the renewal of OIDCToken
+	RenewedOIDCToken = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJyZW5ld2VkIn0.c2lnbmF0dXJl"
 	// UserID is the ID of the simulated user
 	UserID = "user-1"
 )
@@ -55,19 +60,22 @@ type Server struct {
 	es256Key   *ecdsa.PrivateKey
 	ed25519Key ed25519.PrivateKey
 
-	mu        sync.Mutex
-	counter   int
-	pending   map[string]*pendingRequest
-	lastNote  string
-	lastAgent string
+	mu             sync.Mutex
+	oidcToken      string
+	counter        int
+	pending        map[string]*pendingRequest
+	lastNote       string
+	lastAgent      string
+	lastResultAuth string
 }
 
 // pendingRequest is a request the simulated browser has received but not yet performed
 type pendingRequest struct {
-	Operation string
-	Algorithm string
-	KeyLabel  string
-	Inner     protocolv2.RequestPayloadInner
+	Operation   string
+	Algorithm   string
+	KeyLabel    string
+	Inner       protocolv2.RequestPayloadInner
+	ResultToken string
 }
 
 // NewServer starts a simulated Revaulter server, which is stopped when the test ends
@@ -95,9 +103,15 @@ func NewServer(t *testing.T) *Server {
 		es256Key:   es256Key,
 		ed25519Key: ed25519Key,
 		pending:    make(map[string]*pendingRequest),
+		oidcToken:  OIDCToken,
 	}
 
-	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
+	// The server also accepts HTTP/2 over cleartext, which is what clients built by clientcore.NewHTTPClient use for http:// addresses
+	f.srv = httptest.NewUnstartedServer(http.HandlerFunc(f.handle))
+	f.srv.Config.Protocols = &http.Protocols{}
+	f.srv.Config.Protocols.SetHTTP1(true)
+	f.srv.Config.Protocols.SetUnencryptedHTTP2(true)
+	f.srv.Start()
 	f.URL = f.srv.URL
 	t.Cleanup(f.srv.Close)
 
@@ -136,17 +150,51 @@ func (f *Server) LastUserAgent() string {
 	return f.lastAgent
 }
 
+// SetOIDCToken replaces the OIDC token the server accepts
+// From then on, the previous token is rejected, as if it had expired
+func (f *Server) SetOIDCToken(token string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.oidcToken = token
+}
+
+// LastResultAuthorization returns the Authorization header sent with the most recent request for a result
+func (f *Server) LastResultAuthorization() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.lastResultAuth
+}
+
 func (f *Server) handle(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer "+RequestKey {
+	path := strings.TrimPrefix(r.URL.Path, "/v2/request/")
+	kind, credential := protocolv2.ParseAuthorization(r.Header.Get("Authorization"))
+
+	f.mu.Lock()
+	f.lastAgent = r.Header.Get("User-Agent")
+	authorized := (kind == protocolv2.CredentialRequestKey && credential == RequestKey) ||
+		(kind == protocolv2.CredentialJWT && credential == f.oidcToken && r.Header.Get(protocolv2.UserIDHeader) == UserID)
+	if strings.HasPrefix(path, "result/") {
+		// Results can also be retrieved with the request's result token
+		f.lastResultAuth = r.Header.Get("Authorization")
+		req, ok := f.pending[strings.TrimPrefix(path, "result/")]
+		authorized = authorized || (ok && kind == protocolv2.CredentialResultToken && credential == req.ResultToken)
+	}
+	f.mu.Unlock()
+
+	if !authorized {
 		http.Error(w, "invalid request key", http.StatusUnauthorized)
 		return
 	}
 
-	f.mu.Lock()
-	f.lastAgent = r.Header.Get("User-Agent")
-	f.mu.Unlock()
+	// Like the real server, the user ID header is optional with a request key, but must match when set
+	userID := r.Header.Get(protocolv2.UserIDHeader)
+	if userID != "" && userID != UserID {
+		http.Error(w, "user ID does not match", http.StatusForbidden)
+		return
+	}
 
-	path := strings.TrimPrefix(r.URL.Path, "/v2/request/")
 	switch {
 	case r.Method == http.MethodGet && path == "pubkey":
 		f.handlePubkey(w)
@@ -263,16 +311,18 @@ func (f *Server) handleCreate(w http.ResponseWriter, r *http.Request, operation 
 	f.mu.Lock()
 	f.counter++
 	state := "state-" + strconv.Itoa(f.counter)
+	resultToken := "rvr_result-" + strconv.Itoa(f.counter)
 	f.pending[state] = &pendingRequest{
-		Operation: operation,
-		Algorithm: body.Algorithm,
-		KeyLabel:  body.KeyLabel,
-		Inner:     inner,
+		Operation:   operation,
+		Algorithm:   body.Algorithm,
+		KeyLabel:    body.KeyLabel,
+		Inner:       inner,
+		ResultToken: resultToken,
 	}
 	f.lastNote = body.Note
 	f.mu.Unlock()
 
-	writeJSON(w, protocolv2.RequestResultResponse{State: state, Pending: true})
+	writeJSON(w, protocolv2.RequestCreateResponse{State: state, Pending: true, ResultToken: resultToken})
 }
 
 // handleResult performs the requested operation and returns the E2EE response envelope

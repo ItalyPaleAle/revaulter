@@ -14,6 +14,7 @@ import (
 	"github.com/italypaleale/revaulter/internal/buildinfo"
 	"github.com/italypaleale/revaulter/internal/clientcore"
 	"github.com/italypaleale/revaulter/internal/cliutil"
+	"github.com/italypaleale/revaulter/internal/protocolv2"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
@@ -127,6 +128,8 @@ func resolveRequestKey(requestKey string, requestKeyFile string) (string, error)
 type coreClientFlags interface {
 	GetServer() string
 	GetRequestKey() string
+	GetRequestKeyFile() string
+	GetUserID() string
 	GetConnectionOptions() (insecure bool, noh2c bool)
 	GetTrustStorePath() string
 	GetNoTrustStore() bool
@@ -135,10 +138,9 @@ type coreClientFlags interface {
 // newCoreClient returns a client for the Revaulter server, configured from the command's flags
 func newCoreClient(log *slog.Logger, flags coreClientFlags, confirm clientcore.ConfirmAnchorFunc) (*clientcore.Client, error) {
 	insecure, noH2C := flags.GetConnectionOptions()
-
-	return clientcore.NewClient(clientcore.Config{
+	cfg := clientcore.Config{
 		Server:         flags.GetServer(),
-		RequestKey:     flags.GetRequestKey(),
+		UserID:         flags.GetUserID(),
 		Insecure:       insecure,
 		NoH2C:          noH2C,
 		UserAgent:      userAgent,
@@ -146,7 +148,22 @@ func newCoreClient(log *slog.Logger, flags coreClientFlags, confirm clientcore.C
 		TrustStorePath: flags.GetTrustStorePath(),
 		NoTrustStore:   flags.GetNoTrustStore(),
 		ConfirmAnchor:  confirm,
-	})
+	}
+
+	// The --request-key flag accepts both kinds of credentials: request keys never contain dots, so the two can be told apart
+	switch {
+	case !protocolv2.LooksLikeJWT(flags.GetRequestKey()):
+		cfg.RequestKey = flags.GetRequestKey()
+	case flags.GetUserID() == "":
+		return nil, errors.New("--user-id is required when the request key is an OIDC token")
+	case flags.GetRequestKeyFile() != "":
+		// A token from a file is read again for every request, so a long-running command such as ssh-agent picks up a renewed token
+		cfg.OIDCTokenProvider = cliutil.OIDCTokenFileProvider(log, flags.GetRequestKeyFile(), flags.GetRequestKey())
+	default:
+		cfg.OIDCToken = flags.GetRequestKey()
+	}
+
+	return clientcore.NewClient(cfg)
 }
 
 type noMitmProtectionFlags interface {

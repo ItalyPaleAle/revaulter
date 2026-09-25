@@ -51,9 +51,22 @@ func AcceptAnchorOnFirstUse(_ AnchorInfo) (bool, error) {
 type Options struct {
 	// Address of the Revaulter server, including the scheme (required)
 	Server string
-	// Per-user request key used to authenticate with the server (required)
+	// Per-user request key used to authenticate with the server
 	// Request keys are created in the Revaulter web interface
+	// Exactly one of RequestKey, OIDCToken, and OIDCTokenProvider must be set
 	RequestKey string
+	// Short-lived JWT signed by one of the user's trusted OIDC issuers, used to authenticate with the server instead of a request key
+	// Exactly one of RequestKey, OIDCToken, and OIDCTokenProvider must be set, and OIDCToken requires UserID
+	OIDCToken string
+	// Function that returns a short-lived JWT signed by one of the user's trusted OIDC issuers, used to authenticate with the server instead of a request key
+	// It's invoked every time a request needs the credential, so a long-lived Client keeps working after a token expires
+	// Implementations should cache tokens until they're about to expire
+	// Exactly one of RequestKey, OIDCToken, and OIDCTokenProvider must be set, and OIDCTokenProvider requires UserID
+	OIDCTokenProvider func(ctx context.Context) string
+	// ID of the user the requests are for, as shown in the Revaulter web interface
+	// It's required with OIDC tokens (optional with RequestKey)
+	// When set, the server checks that it matches the user the credential belongs to
+	UserID string
 
 	// Optional pre-configured HTTP client
 	// When nil, a HTTP/2-enabled client is created using the Insecure and NoH2C options
@@ -127,16 +140,19 @@ func New(opts Options) (*Client, error) {
 	}
 
 	core, err := clientcore.NewClient(clientcore.Config{
-		Server:         opts.Server,
-		RequestKey:     opts.RequestKey,
-		HTTPClient:     opts.HTTPClient,
-		Insecure:       opts.Insecure,
-		NoH2C:          opts.NoH2C,
-		UserAgent:      userAgent,
-		Logger:         opts.Logger,
-		TrustStorePath: opts.TrustStorePath,
-		NoTrustStore:   opts.NoTrustStore,
-		ConfirmAnchor:  confirmAnchor,
+		Server:            opts.Server,
+		RequestKey:        opts.RequestKey,
+		OIDCToken:         opts.OIDCToken,
+		OIDCTokenProvider: opts.OIDCTokenProvider,
+		UserID:            opts.UserID,
+		HTTPClient:        opts.HTTPClient,
+		Insecure:          opts.Insecure,
+		NoH2C:             opts.NoH2C,
+		UserAgent:         userAgent,
+		Logger:            opts.Logger,
+		TrustStorePath:    opts.TrustStorePath,
+		NoTrustStore:      opts.NoTrustStore,
+		ConfirmAnchor:     confirmAnchor,
 	})
 	if err != nil {
 		return nil, err

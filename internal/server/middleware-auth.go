@@ -9,6 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/italypaleale/revaulter/internal/db"
+	"github.com/italypaleale/revaulter/internal/protocolv2"
+	"github.com/italypaleale/revaulter/internal/requestjwt"
 )
 
 const (
@@ -17,6 +19,11 @@ const (
 	sessionCookieNameInsecure = "_s"
 	contextKeyUserID          = "UserID"
 	contextKeyRequestUser     = "RequestUser"
+
+	// Set by the request middlewares to the method the credential was authenticated with, as a db.AuditAuthMethod
+	contextKeyRequestAuthMethod = "RequestAuthMethod"
+	// Set by the request middlewares to the verified claims, when the credential is a JWT
+	contextKeyRequestJWTClaims = "RequestJWTClaims"
 )
 
 // sessionCookieFor returns the appropriate cookie name and path for the connection
@@ -67,24 +74,94 @@ func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 	}
 }
 
-// MiddlewareRequestKey reads the request key from the Authorization header and retrieves the user
+// MiddlewareRequestKey reads the request credential from the Authorization header and retrieves the user
+// The credential is either the user's static request key or a JWT signed by one of the user's trusted OIDC issuers
 func (s *Server) MiddlewareRequestKey(c *gin.Context) {
-	requestKey := getBearerToken(c)
-	if requestKey == "" {
+	kind, credential := protocolv2.ParseAuthorization(c.GetHeader("Authorization"))
+
+	var user *db.User
+	switch kind {
+	case protocolv2.CredentialRequestKey:
+		user = s.authenticateRequestKey(c, credential)
+	case protocolv2.CredentialJWT:
+		user = s.authenticateRequestJWT(c, credential)
+	case protocolv2.CredentialResultToken:
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Result tokens can only be used to retrieve the result of a request"))
+		return
+	case protocolv2.CredentialUnsupported:
+		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Unsupported authorization scheme: use "+protocolv2.AuthSchemeRequestKey+" for request keys, or "+protocolv2.AuthSchemeBearer+" for OIDC tokens"))
+		return
+	default:
 		AbortWithErrorJSON(c, NewResponseError(http.StatusUnauthorized, "Missing request key"))
 		return
 	}
+	if user == nil {
+		// The request was already aborted
+		return
+	}
 
+	s.completeRequestAuth(c, user)
+}
+
+// MiddlewareRequestResult authenticates calls to GET /v2/request/result/:state
+// It accepts the result token returned when the request was created, with the ResultToken scheme, which stays valid for the request's lifetime even after a short-lived JWT expires
+// Any other credential is handled as in MiddlewareRequestKey
+func (s *Server) MiddlewareRequestResult(c *gin.Context) {
+	kind, token := protocolv2.ParseAuthorization(c.GetHeader("Authorization"))
+	if kind != protocolv2.CredentialResultToken {
+		s.MiddlewareRequestKey(c)
+		return
+	}
+
+	// Load the request's result token and its owner in a single query, and check the token against the one issued for the request
+	// Every mismatch returns the same error as an unknown state, so callers can't probe for another user's states
+	resultTokenHash, user, err := s.db.RequestStore().GetResultTokenAndOwner(c.Request.Context(), c.Param("state"))
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if user == nil || user.Status != "active" || !resultTokenMatches(token, resultTokenHash) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
+		return
+	}
+
+	s.completeRequestAuth(c, user)
+}
+
+// authenticateRequestKey returns the user that owns the static request key
+// If the key isn't valid, it aborts the request and returns nil
+func (s *Server) authenticateRequestKey(c *gin.Context, requestKey string) *db.User {
 	// Get the user matching the request key from the database
 	// Note: this is not performed in a transaction because we can't easily make a transaction that spans this middleware and the handlers that use it
 	// However, handlers that use this middleware do not modify the auth store
 	user, err := s.db.AuthStore().GetUserByRequestKey(c.Request.Context(), requestKey)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
-		return
+		return nil
 	}
 	if user == nil || user.Status != "active" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request key not found"))
+		return nil
+	}
+
+	// Users can disable the static request key, for example when they only use OIDC tokens
+	if !user.RequestAuthMethods.RequestKey {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Request key authentication is disabled for this user"))
+		return nil
+	}
+
+	c.Set(contextKeyRequestAuthMethod, db.AuditAuthMethodRequestKey)
+
+	return user
+}
+
+// completeRequestAuth runs the checks shared by every request credential, then stores the user in the context
+func (s *Server) completeRequestAuth(c *gin.Context, user *db.User) {
+	// The X-Revaulter-User header is required with JWTs, and optional otherwise
+	// When it's set, it must name the user the credential belongs to, so a misconfigured client fails instead of reaching another user
+	headerUserID := c.GetHeader(protocolv2.UserIDHeader)
+	if headerUserID != "" && headerUserID != user.ID {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "The "+protocolv2.UserIDHeader+" header does not match the user the credential belongs to"))
 		return
 	}
 
@@ -116,6 +193,36 @@ func getRequestUserFromCtx(c *gin.Context) *db.User {
 	}
 
 	return user
+}
+
+// getRequestAuthMethodFromCtx returns how the request credential was authenticated
+func getRequestAuthMethodFromCtx(c *gin.Context) db.AuditAuthMethod {
+	val, ok := c.Get(contextKeyRequestAuthMethod)
+	if !ok {
+		return ""
+	}
+
+	method, ok := val.(db.AuditAuthMethod)
+	if !ok {
+		return ""
+	}
+
+	return method
+}
+
+// getRequestJWTClaimsFromCtx returns the verified claims of the request credential, when it's a JWT
+func getRequestJWTClaimsFromCtx(c *gin.Context) *requestjwt.Claims {
+	val, ok := c.Get(contextKeyRequestJWTClaims)
+	if !ok {
+		return nil
+	}
+
+	claims, ok := val.(*requestjwt.Claims)
+	if !ok {
+		return nil
+	}
+
+	return claims
 }
 
 // getBearerToken extracts a bearer token from the Authorization header.

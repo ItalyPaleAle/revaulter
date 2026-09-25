@@ -5,7 +5,14 @@ import Logo from '$components/Logo.svelte'
 import PendingItem from '$components/PendingItem.svelte'
 import UserSettingsModal from '$components/UserSettingsModal.svelte'
 
-import type { DerivedSigningKey, V2CredentialItem, V2PendingRequestItem, V2PublishedSigningKey } from '$lib/v2-types'
+import type {
+    DerivedSigningKey,
+    V2CredentialItem,
+    V2PendingRequestItem,
+    V2PublishedSigningKey,
+    V2RequestAuthMethods,
+    V2RequestOIDCIssuer,
+} from '$lib/v2-types'
 
 interface Props {
     allowedIpsText: string
@@ -22,6 +29,15 @@ interface Props {
     onLogout: () => Promise<void>
     onPublishSigningKey: (derived: DerivedSigningKey) => Promise<void>
     onRegenerateRequestKey: () => Promise<void>
+    onSetRequestAuthMethods: (methods: V2RequestAuthMethods) => Promise<void>
+    onAddRequestOIDCIssuer: (issuer: {
+        displayName: string
+        issuer: string
+        audience: string
+        subject: string
+        jwksUrl: string
+    }) => Promise<boolean>
+    onDeleteRequestOIDCIssuer: (id: string) => Promise<void>
     onRemoveItem: (state: string) => void
     onRemovePassword: () => Promise<void>
     onRenamePasskey: (id: string, name: string) => Promise<void>
@@ -32,6 +48,9 @@ interface Props {
     pendingItems: V2PendingRequestItem[]
     primaryKey: Uint8Array | null
     requestKey: string
+    requestKeyEnabled: boolean
+    requestOidcEnabled: boolean
+    requestOidcIssuers: V2RequestOIDCIssuer[]
     anchorFingerprint: string
     sessionLabel: string
     settingsBusy: boolean
@@ -57,6 +76,9 @@ let {
     onLogout,
     onPublishSigningKey,
     onRegenerateRequestKey,
+    onSetRequestAuthMethods,
+    onAddRequestOIDCIssuer,
+    onDeleteRequestOIDCIssuer,
     onRemoveItem,
     onRemovePassword,
     onRenamePasskey,
@@ -67,6 +89,9 @@ let {
     pendingItems,
     primaryKey,
     requestKey,
+    requestKeyEnabled,
+    requestOidcEnabled,
+    requestOidcIssuers,
     anchorFingerprint,
     sessionLabel,
     settingsBusy,
@@ -236,6 +261,9 @@ function rejectAll() {
             {userId}
             {displayName}
             {requestKey}
+            {requestKeyEnabled}
+            {requestOidcEnabled}
+            {requestOidcIssuers}
             {anchorFingerprint}
             {allowedIpsText}
             {hasPassword}
@@ -248,6 +276,9 @@ function rejectAll() {
             onClose={closeSettingsModal}
             {onUpdateDisplayName}
             {onRegenerateRequestKey}
+            {onSetRequestAuthMethods}
+            {onAddRequestOIDCIssuer}
+            {onDeleteRequestOIDCIssuer}
             {onAllowedIpsTextInput}
             {onUpdateAllowedIps}
             {onChangePassword}

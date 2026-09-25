@@ -128,14 +128,22 @@ func sessionInfoFromUser(user *db.User, ttl int) *v2AuthSessionInfo {
 		allowedIPs = []string{}
 	}
 
+	requestOIDC := user.RequestOIDC
+	if requestOIDC == nil {
+		requestOIDC = []db.RequestOIDCIssuer{}
+	}
+
 	return &v2AuthSessionInfo{
-		UserID:            user.ID,
-		DisplayName:       user.DisplayName,
-		RequestKey:        user.RequestKey,
-		AnchorFingerprint: computeAnchorFingerprint(user),
-		WrappedKeyEpoch:   user.WrappedKeyEpoch,
-		AllowedIPs:        allowedIPs,
-		TTL:               max(ttl, 0),
+		UserID:             user.ID,
+		DisplayName:        user.DisplayName,
+		RequestKey:         user.RequestKey,
+		RequestKeyEnabled:  user.RequestAuthMethods.RequestKey,
+		RequestOIDCEnabled: user.RequestAuthMethods.OIDC,
+		RequestOIDCIssuers: requestOIDC,
+		AnchorFingerprint:  computeAnchorFingerprint(user),
+		WrappedKeyEpoch:    user.WrappedKeyEpoch,
+		AllowedIPs:         allowedIPs,
+		TTL:                max(ttl, 0),
 	}
 }
 

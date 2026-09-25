@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -51,7 +52,7 @@ func canonicalFixture() fixtureBackup {
 	const ts = int64(1700000000)
 
 	return fixtureBackup{
-		SchemaLevel: 3,
+		SchemaLevel: 4,
 		Tables: []fixtureTable{
 			tableFixture("v2_audit_events", [][]any{
 				{fxAuditID1, ts, "auth.login.finish", "success", "session", fxUserAID, fxUserAID, nil, nil, fxRequestID, "http-1", "127.0.0.1", "ua/1.0", `{"flow":"webauthn"}`},
@@ -61,14 +62,14 @@ func canonicalFixture() fixtureBackup {
 				{"some_setting", "some-value", "etag-1"},
 			}),
 			tableFixture("v2_users", [][]any{
-				{fxUserAID, "Alice", "active", "wa-A", "rk-A", "ecdh-A", "mlkem-A", "es384-A", "mldsa-A", "sig-es-A", "sig-mldsa-A", int64(1), "10.0.0.0/8", true, ts, ts, int64(1)},
-				{fxUserBID, "Bob", "active", "wa-B", "rk-B", "", "", "", "", "", "", int64(2), "", false, ts - 100, ts - 50, int64(2)},
+				{fxUserAID, "Alice", "active", "wa-A", "rk-A", "ecdh-A", "mlkem-A", "es384-A", "mldsa-A", "sig-es-A", "sig-mldsa-A", int64(1), "10.0.0.0/8", true, ts, ts, int64(1), true, true, `[{"id":"oidc-1","issuer":"https://token.actions.githubusercontent.com","audience":"https://revaulter.example.com","subject":"repo:example/app:*","createdAt":1700000000}]`},
+				{fxUserBID, "Bob", "active", "wa-B", "rk-B", "", "", "", "", "", "", int64(2), "", false, ts - 100, ts - 50, int64(2), true, false, `[]`},
 			}),
 			tableFixture("v2_published_signing_keys", [][]any{
 				{fxSigningID, fxUserAID, "ES384", "label-1", `{"jwk":1}`, "PEMDATA", true, "pub-payload", "pub-sig-es", "pub-sig-mldsa", ts, ts},
 			}),
 			tableFixture("v2_requests", [][]any{
-				{fxRequestID, "pending", "sign", fxUserAID, "label-2", "ES384", "192.168.1.1", "test note", ts, ts + 600, ts, "encReq", "encRes"},
+				{fxRequestID, "pending", "sign", fxUserAID, "label-2", "ES384", "192.168.1.1", "test note", ts, ts + 600, ts, "encReq", "encRes", "result-token-hash"},
 			}),
 			tableFixture("v2_user_credentials", [][]any{
 				{fxCredAID, fxUserAID, "raw-cred-id", "Cred-A", "pubkey-blob", int64(7), "wpk", "wak", "att-payload", "att-sig-es", "att-sig-mldsa", int64(1), ts, ts + 10},
@@ -274,7 +275,7 @@ func runRoundTrip(t *testing.T, conn *db.DB) {
 		act, ok := actByName[name]
 		require.True(t, ok, "table %q missing from re-exported backup", name)
 		require.Equal(t, exp.Columns, act.Columns, "columns differ for %q", name)
-		require.Equal(t, sortRows(exp.Rows), sortRows(act.Rows), "rows differ for %q", name)
+		requireRowsEqual(t, name, exp.Columns, exp.Rows, act.Rows)
 	}
 }
 
@@ -296,6 +297,44 @@ func sortRows(rows [][]any) [][]any {
 		return fmt.Sprintf("%v", out[i][0]) < fmt.Sprintf("%v", out[j][0])
 	})
 	return out
+}
+
+// requireRowsEqual asserts that two sets of rows from the same table hold the same values, regardless of row order
+func requireRowsEqual(t *testing.T, table string, columns []string, exp [][]any, act [][]any) {
+	t.Helper()
+
+	idx := slices.IndexFunc(backupTables, func(spec tableSpec) bool {
+		return spec.name == table
+	})
+	require.GreaterOrEqual(t, idx, 0, "table %q has no backup spec", table)
+
+	isJSON := make(map[string]bool, len(backupTables[idx].columns))
+	for _, c := range backupTables[idx].columns {
+		isJSON[c.name] = c.kind == colKindJSON
+	}
+
+	exp = sortRows(exp)
+	act = sortRows(act)
+	require.Len(t, act, len(exp), "row count for %q", table)
+
+	for i := range exp {
+		expRow := slices.Clone(exp[i])
+		actRow := slices.Clone(act[i])
+
+		for j, name := range columns {
+			// A NULL JSON value is left in place, so the row comparison checks it is still NULL
+			if !isJSON[name] || expRow[j] == nil {
+				continue
+			}
+
+			require.JSONEq(t, fmt.Sprint(expRow[j]), fmt.Sprint(actRow[j]), "%s.%s differs in row %d", table, name, i)
+
+			// Blank out the checked JSON value so the row comparison covers only the other columns
+			expRow[j], actRow[j] = nil, nil
+		}
+
+		require.Equal(t, expRow, actRow, "row %d differs for %q", i, table)
+	}
 }
 
 // TestBackupSkipsTheAuditShippingKey verifies the backup format carries neither backend's audit stream shipping key

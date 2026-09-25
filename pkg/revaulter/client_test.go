@@ -9,6 +9,7 @@ import (
 	"errors"
 	"math/big"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ func newTestClient(t *testing.T) (*clienttest.Server, *Client) {
 	client, err := New(Options{
 		Server:       srv.URL,
 		RequestKey:   clienttest.RequestKey,
+		UserID:       clienttest.UserID,
 		HTTPClient:   srv.HTTPClient(),
 		NoTrustStore: true,
 	})
@@ -89,6 +91,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 
 	require.Equal(t, "test note", srv.LastNote())
 	require.True(t, strings.HasPrefix(srv.LastUserAgent(), "RevaulterGo/"), "unexpected user agent: %s", srv.LastUserAgent())
+	require.True(t, strings.HasPrefix(srv.LastResultAuthorization(), "ResultToken rvr_"), "the result should be retrieved with the result token")
 
 	dec, err := client.Decrypt(ctx, DecryptRequest{
 		KeyLabel:       "my-key",
@@ -101,6 +104,55 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, plaintext, dec.Plaintext)
 	require.Equal(t, "my-key", dec.KeyLabel)
+}
+
+func TestEncryptWithOIDCTokenProvider(t *testing.T) {
+	srv := clienttest.NewServer(t)
+
+	var calls atomic.Int32
+	client, err := New(Options{
+		Server: srv.URL,
+		OIDCTokenProvider: func(ctx context.Context) string {
+			calls.Add(1)
+			return clienttest.OIDCToken
+		},
+		UserID:       clienttest.UserID,
+		HTTPClient:   srv.HTTPClient(),
+		NoTrustStore: true,
+	})
+	require.NoError(t, err)
+
+	enc, err := client.Encrypt(t.Context(), EncryptRequest{
+		KeyLabel:  "my-key",
+		Algorithm: AlgorithmA256GCM,
+		Plaintext: []byte("hello revaulter"),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, enc.Ciphertext)
+
+	// The token is requested to fetch the public keys and to submit the request, while the result is retrieved with the result token
+	require.EqualValues(t, 2, calls.Load())
+	require.True(t, strings.HasPrefix(srv.LastResultAuthorization(), "ResultToken rvr_"))
+
+	t.Run("fails when the provider returns an empty token", func(t *testing.T) {
+		client, err := New(Options{
+			Server: srv.URL,
+			OIDCTokenProvider: func(context.Context) string {
+				return ""
+			},
+			UserID:       clienttest.UserID,
+			HTTPClient:   srv.HTTPClient(),
+			NoTrustStore: true,
+		})
+		require.NoError(t, err)
+
+		_, err = client.Encrypt(t.Context(), EncryptRequest{
+			KeyLabel:  "my-key",
+			Algorithm: AlgorithmA256GCM,
+			Plaintext: []byte("hello revaulter"),
+		})
+		require.ErrorContains(t, err, "empty token")
+	})
 }
 
 func TestDecryptFailsWithWrongAdditionalData(t *testing.T) {

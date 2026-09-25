@@ -53,6 +53,11 @@ func (c *Client) FetchPubkeyBundle(ctx context.Context) (*PubkeyResponse, error)
 		return nil, err
 	}
 
+	// The server should never return the keys of a different user than the one the client asked for, but refuse them if it does
+	if c.userID != "" && resp.UserID != c.userID {
+		return nil, fmt.Errorf("server returned the public keys of user %q, but the client is configured for user %q", resp.UserID, c.userID)
+	}
+
 	return resp, nil
 }
 

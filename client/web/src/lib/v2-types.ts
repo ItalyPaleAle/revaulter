@@ -134,10 +134,30 @@ export type V2RegisterBeginResponse = {
     basePrfSalt: string
 }
 
+/** Which credentials the CLI can use to authenticate requests */
+export type V2RequestAuthMethods = {
+    requestKeyEnabled: boolean
+    requestOidcEnabled: boolean
+}
+
+/** A trusted OIDC issuer, whose JWTs the CLI can use as request credentials */
+export type V2RequestOIDCIssuer = {
+    id: string
+    displayName?: string
+    issuer: string
+    audience: string
+    subject: string
+    jwksUrl?: string
+    createdAt: number
+}
+
 export type V2AuthSessionInfo = {
     userId: string
     displayName: string
     requestKey: string
+    requestKeyEnabled: boolean
+    requestOidcEnabled: boolean
+    requestOidcIssuers: V2RequestOIDCIssuer[]
     anchorFingerprint: string
     wrappedKeyEpoch: number
     allowedIps: string[]
@@ -167,6 +187,9 @@ export type V2SessionResponse = {
     userId: string
     displayName: string
     requestKey: string
+    requestKeyEnabled: boolean
+    requestOidcEnabled: boolean
+    requestOidcIssuers: V2RequestOIDCIssuer[]
     anchorFingerprint: string
     wrappedKeyEpoch: number
     allowedIps: string[]

@@ -87,3 +87,34 @@ func TestReadRequestKeyFile(t *testing.T) {
 		require.Equal(t, "rvk_linked", key)
 	})
 }
+
+func TestOIDCTokenFileProvider(t *testing.T) {
+	const (
+		firstToken   = "header.first.signature"
+		renewedToken = "header.renewed.signature"
+	)
+
+	path := writeRequestKeyFile(t, firstToken+"\n")
+	provider := OIDCTokenFileProvider(nil, path, firstToken)
+	require.Equal(t, firstToken, provider(t.Context()))
+
+	// The file is read again for every call, so a renewed token is picked up
+	err := os.WriteFile(path, []byte(renewedToken+"\n"), 0o600)
+	require.NoError(t, err)
+	require.Equal(t, renewedToken, provider(t.Context()))
+
+	// While the file can't be read or doesn't hold a JWT, the last token that was read is used
+	for _, content := range []string{"", "rvk_notajwt"} {
+		err = os.WriteFile(path, []byte(content), 0o600)
+		require.NoError(t, err)
+		require.Equal(t, renewedToken, provider(t.Context()))
+	}
+
+	err = os.Remove(path)
+	require.NoError(t, err)
+	require.Equal(t, renewedToken, provider(t.Context()))
+
+	// Until the file is read successfully, the initial token is used
+	provider = OIDCTokenFileProvider(nil, filepath.Join(t.TempDir(), "missing"), firstToken)
+	require.Equal(t, firstToken, provider(t.Context()))
+}

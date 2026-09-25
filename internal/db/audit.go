@@ -23,26 +23,29 @@ type EventType string
 // Audit event types
 // Adding a new constant requires updating EventType.Valid, AllEventTypes, and docs/07-audit-events.md
 const (
-	AuditAuthRegisterFinish    EventType = "auth.register_finish"
-	AuditAuthFinalizeSignup    EventType = "auth.finalize_signup"
-	AuditAuthLoginFinish       EventType = "auth.login_finish"
-	AuditAuthLogout            EventType = "auth.logout"
-	AuditAuthRequestKeyRegen   EventType = "auth.request_key_regenerate"
-	AuditAuthAllowedIPsChange  EventType = "auth.allowed_ips_change"
-	AuditAuthDisplayNameChange EventType = "auth.display_name_change"
-	AuditAuthWrappedKeyUpdate  EventType = "auth.wrapped_key_update"
-	AuditAuthCredentialAdd     EventType = "auth.credential_add_finish" //nolint:gosec // event_type constant, not a credential value
-	AuditAuthCredentialRename  EventType = "auth.credential_rename"     //nolint:gosec // event_type constant, not a credential value
-	AuditAuthCredentialDelete  EventType = "auth.credential_delete"     //nolint:gosec // event_type constant, not a credential value
-	AuditRequestCreate         EventType = "request.create"
-	AuditRequestConfirm        EventType = "request.confirm"
-	AuditRequestCancel         EventType = "request.cancel"
-	AuditRequestExpire         EventType = "request.expire"
-	AuditSigningKeyCreate      EventType = "signing_key.create"
-	AuditSigningKeyPublish     EventType = "signing_key.publish"
-	AuditSigningKeyUnpublish   EventType = "signing_key.unpublish"
-	AuditSigningKeyDelete      EventType = "signing_key.delete"
-	AuditSigningKeyAutoStore   EventType = "signing_key.auto_store"
+	AuditAuthRegisterFinish     EventType = "auth.register_finish"
+	AuditAuthFinalizeSignup     EventType = "auth.finalize_signup"
+	AuditAuthLoginFinish        EventType = "auth.login_finish"
+	AuditAuthLogout             EventType = "auth.logout"
+	AuditAuthRequestKeyRegen    EventType = "auth.request_key_regenerate"
+	AuditAuthRequestAuthMethods EventType = "auth.request_auth_methods_change"
+	AuditAuthOIDCIssuerAdd      EventType = "auth.request_oidc_issuer_add"
+	AuditAuthOIDCIssuerDelete   EventType = "auth.request_oidc_issuer_delete"
+	AuditAuthAllowedIPsChange   EventType = "auth.allowed_ips_change"
+	AuditAuthDisplayNameChange  EventType = "auth.display_name_change"
+	AuditAuthWrappedKeyUpdate   EventType = "auth.wrapped_key_update"
+	AuditAuthCredentialAdd      EventType = "auth.credential_add_finish" //nolint:gosec // event_type constant, not a credential value
+	AuditAuthCredentialRename   EventType = "auth.credential_rename"     //nolint:gosec // event_type constant, not a credential value
+	AuditAuthCredentialDelete   EventType = "auth.credential_delete"     //nolint:gosec // event_type constant, not a credential value
+	AuditRequestCreate          EventType = "request.create"
+	AuditRequestConfirm         EventType = "request.confirm"
+	AuditRequestCancel          EventType = "request.cancel"
+	AuditRequestExpire          EventType = "request.expire"
+	AuditSigningKeyCreate       EventType = "signing_key.create"
+	AuditSigningKeyPublish      EventType = "signing_key.publish"
+	AuditSigningKeyUnpublish    EventType = "signing_key.unpublish"
+	AuditSigningKeyDelete       EventType = "signing_key.delete"
+	AuditSigningKeyAutoStore    EventType = "signing_key.auto_store"
 )
 
 // AuditOutcome is the result of an audited action
@@ -58,10 +61,11 @@ const (
 type AuditAuthMethod string
 
 const (
-	AuditAuthMethodSession    AuditAuthMethod = "session"
-	AuditAuthMethodRequestKey AuditAuthMethod = "request_key"
-	AuditAuthMethodSystem     AuditAuthMethod = "system"
-	AuditAuthMethodNone       AuditAuthMethod = "none"
+	AuditAuthMethodSession     AuditAuthMethod = "session"
+	AuditAuthMethodRequestKey  AuditAuthMethod = "request_key"
+	AuditAuthMethodRequestOIDC AuditAuthMethod = "request_oidc"
+	AuditAuthMethodSystem      AuditAuthMethod = "system"
+	AuditAuthMethodNone        AuditAuthMethod = "none"
 )
 
 // Caps applied at insert time
@@ -79,6 +83,9 @@ func (e EventType) Valid() bool {
 		AuditAuthLoginFinish,
 		AuditAuthLogout,
 		AuditAuthRequestKeyRegen,
+		AuditAuthRequestAuthMethods,
+		AuditAuthOIDCIssuerAdd,
+		AuditAuthOIDCIssuerDelete,
 		AuditAuthAllowedIPsChange,
 		AuditAuthDisplayNameChange,
 		AuditAuthWrappedKeyUpdate,
@@ -109,6 +116,9 @@ func AllEventTypes() []string {
 		string(AuditAuthLoginFinish),
 		string(AuditAuthLogout),
 		string(AuditAuthRequestKeyRegen),
+		string(AuditAuthRequestAuthMethods),
+		string(AuditAuthOIDCIssuerAdd),
+		string(AuditAuthOIDCIssuerDelete),
 		string(AuditAuthAllowedIPsChange),
 		string(AuditAuthDisplayNameChange),
 		string(AuditAuthWrappedKeyUpdate),
@@ -140,7 +150,7 @@ func (o AuditOutcome) Valid() bool {
 // Valid reports whether the receiver matches one of the declared auth_method constants
 func (m AuditAuthMethod) Valid() bool {
 	switch m {
-	case AuditAuthMethodSession, AuditAuthMethodRequestKey, AuditAuthMethodSystem, AuditAuthMethodNone:
+	case AuditAuthMethodSession, AuditAuthMethodRequestKey, AuditAuthMethodRequestOIDC, AuditAuthMethodSystem, AuditAuthMethodNone:
 		return true
 	default:
 		return false
@@ -581,7 +591,6 @@ func validateAuditCursor(cursor string) (string, error) {
 
 // RequestAuditMetadata builds the metadata payload shared by all request.* audit events
 // The note is omitted when empty so the metadata payload stays compact
-// Returns nil when marshalling fails
 func RequestAuditMetadata(operation, algorithm, keyLabel, note string) json.RawMessage {
 	payload := map[string]any{
 		"operation": operation,

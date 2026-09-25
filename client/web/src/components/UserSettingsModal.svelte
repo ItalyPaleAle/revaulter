@@ -5,17 +5,27 @@ import { tick } from 'svelte'
 import AuditLogTab from '$components/AuditLogTab.svelte'
 import Button from '$components/Button.svelte'
 import Icon from '$components/Icon.svelte'
+import RequestAuthTab from '$components/RequestAuthTab.svelte'
 import SigningKeysTab from '$components/SigningKeysTab.svelte'
 import TextField from '$components/TextField.svelte'
 
-import type { DerivedSigningKey, V2CredentialItem, V2PublishedSigningKey } from '$lib/v2-types'
+import type {
+    DerivedSigningKey,
+    V2CredentialItem,
+    V2PublishedSigningKey,
+    V2RequestAuthMethods,
+    V2RequestOIDCIssuer,
+} from '$lib/v2-types'
 
-type SettingsTab = 'user' | 'ip-restrictions' | 'password' | 'passkeys' | 'signing-keys' | 'audit-log'
+type SettingsTab = 'user' | 'request-auth' | 'ip-restrictions' | 'password' | 'passkeys' | 'signing-keys' | 'audit-log'
 
 interface Props {
     userId: string
     displayName: string
     requestKey: string
+    requestKeyEnabled: boolean
+    requestOidcEnabled: boolean
+    requestOidcIssuers: V2RequestOIDCIssuer[]
     anchorFingerprint: string
     allowedIpsText: string
     hasPassword: boolean
@@ -28,6 +38,15 @@ interface Props {
     onClose: () => void
     onUpdateDisplayName: (name: string) => Promise<void>
     onRegenerateRequestKey: () => Promise<void>
+    onSetRequestAuthMethods: (methods: V2RequestAuthMethods) => Promise<void>
+    onAddRequestOIDCIssuer: (issuer: {
+        displayName: string
+        issuer: string
+        audience: string
+        subject: string
+        jwksUrl: string
+    }) => Promise<boolean>
+    onDeleteRequestOIDCIssuer: (id: string) => Promise<void>
     onAllowedIpsTextInput: (value: string) => void
     onUpdateAllowedIps: () => Promise<void>
     onChangePassword: (password: string) => Promise<void>
@@ -45,6 +64,9 @@ let {
     userId,
     displayName,
     requestKey,
+    requestKeyEnabled,
+    requestOidcEnabled,
+    requestOidcIssuers,
     anchorFingerprint,
     allowedIpsText,
     hasPassword,
@@ -57,6 +79,9 @@ let {
     onClose,
     onUpdateDisplayName,
     onRegenerateRequestKey,
+    onSetRequestAuthMethods,
+    onAddRequestOIDCIssuer,
+    onDeleteRequestOIDCIssuer,
     onAllowedIpsTextInput,
     onUpdateAllowedIps,
     onChangePassword,
@@ -74,8 +99,6 @@ let activeTab = $state<SettingsTab>('user')
 
 let editingDisplayName = $state(false)
 let editDisplayNameValue = $state('')
-let copied = $state(false)
-let confirmingRegenerate = $state(false)
 
 let passwordInput = $state('')
 let passwordConfirm = $state('')
@@ -155,15 +178,6 @@ function setActiveTab(val: SettingsTab) {
     success = null
 }
 
-function copyRequestKey() {
-    navigator.clipboard.writeText(requestKey).then(() => {
-        copied = true
-        setTimeout(() => {
-            copied = false
-        }, 2000)
-    })
-}
-
 function formatFingerprint(fp: string): string {
     const upper = fp.toUpperCase()
     const groups: string[] = []
@@ -177,19 +191,6 @@ function formatFingerprint(fp: string): string {
     }
 
     return lines.join('\n')
-}
-
-function promptRegenerate() {
-    confirmingRegenerate = true
-}
-
-function cancelRegenerate() {
-    confirmingRegenerate = false
-}
-
-async function handleRegenerate() {
-    confirmingRegenerate = false
-    await onRegenerateRequestKey()
 }
 
 function startEditDisplayName() {
@@ -269,6 +270,7 @@ function formatTimestamp(value: number | string): string {
 
 const tabs: { id: SettingsTab; label: string; icon: string }[] = [
     { id: 'user', label: 'User', icon: 'user' },
+    { id: 'request-auth', label: 'Request auth', icon: 'key-round' },
     { id: 'ip-restrictions', label: 'Firewall', icon: 'brick-wall-shield' },
     { id: 'password', label: 'Password', icon: 'lock-closed' },
     { id: 'passkeys', label: 'Passkeys', icon: 'shield' },
@@ -355,53 +357,6 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                         <div class="mono text-sm text-neutral-600 dark:text-neutral-400">{userId}</div>
                     </div>
 
-                    <!-- Request key -->
-                    <div class="space-y-2">
-                        <div class="flex items-center gap-1.5 text-sm font-medium text-neutral-900 dark:text-neutral-50">
-                            <Icon icon="key-round" title="Request key" size="4" />
-                            Request key
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <div class="flex min-w-0 flex-1 items-center rounded-lg border border-neutral-200 bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950/40 max-w-80">
-                                <div class="mono min-w-0 flex-1 overflow-x-auto whitespace-nowrap px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100">{requestKey}</div>
-                                <button
-                                    type="button"
-                                    class="flex shrink-0 cursor-pointer items-center justify-center rounded-r-lg border-l border-neutral-200 px-2.5 py-2 text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900 dark:border-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-neutral-50"
-                                    aria-label="Copy to clipboard"
-                                    onclick={copyRequestKey}
-                                >
-                                    {#if copied}
-                                        <Icon icon="check" title="Copied" size="4" />
-                                    {:else}
-                                        <Icon icon="copy" title="Copy to clipboard" size="4" />
-                                    {/if}
-                                </button>
-                            </div>
-                            <Button
-                                variant="secondary"
-                                onclick={promptRegenerate}
-                                disabled={busy || confirmingRegenerate}
-                            >
-                                <Icon icon="refresh-cw" title="Regenerate" size="3.5" />
-                                Regenerate
-                            </Button>
-                        </div>
-                        {#if confirmingRegenerate}
-                            <div class="rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 dark:border-amber-900/70 dark:bg-amber-950/40">
-                                <p class="text-sm font-medium text-amber-800 dark:text-amber-200">Are you sure?</p>
-                                <p class="mt-1 text-sm text-amber-700 dark:text-amber-300">This will invalidate the existing Request key.</p>
-                                <div class="mt-3 flex gap-2">
-                                    <Button variant="danger" onclick={handleRegenerate} disabled={busy}>
-                                        Yes, regenerate
-                                    </Button>
-                                    <Button variant="secondary" onclick={cancelRegenerate}>
-                                        Cancel
-                                    </Button>
-                                </div>
-                            </div>
-                        {/if}
-                    </div>
-
                     {#if anchorFingerprint}
                         <!-- Anchor fingerprint -->
                         <div class="space-y-2">
@@ -416,6 +371,19 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                         </div>
                     {/if}
                 </div>
+            {:else if activeTab === 'request-auth'}
+                <RequestAuthTab
+                    {userId}
+                    {requestKey}
+                    {requestKeyEnabled}
+                    {requestOidcEnabled}
+                    {requestOidcIssuers}
+                    {busy}
+                    {onRegenerateRequestKey}
+                    {onSetRequestAuthMethods}
+                    {onAddRequestOIDCIssuer}
+                    {onDeleteRequestOIDCIssuer}
+                />
             {:else if activeTab === 'ip-restrictions'}
                 <!-- IP Restrictions tab -->
                 <div class="space-y-4">

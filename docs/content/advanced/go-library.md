@@ -27,6 +27,31 @@ if err != nil {
 }
 ```
 
+If the user authenticates requests with [OIDC tokens](/docs/oidc-authentication/), pass a JWT from one of their trusted issuers as `OIDCToken` instead of `RequestKey`, and set `UserID` to the user ID shown in the web UI:
+
+```go
+client, err := revaulter.New(revaulter.Options{
+    Server:    "https://revaulter.example.com",
+    OIDCToken: oidcToken,
+    UserID:    os.Getenv("REVAULTER_USER_ID"),
+})
+```
+
+The client only uses the token to submit requests and fetch public keys: it retrieves each result with a per-request result token issued by the server, so an approval can take longer than the token's lifetime.
+
+`OIDCToken` holds a single token. For a long-lived `Client`, set `OIDCTokenProvider` instead, which the client calls it every time it needs the credential. The provided function should cache the token until it's about to expire:
+
+```go
+client, err := revaulter.New(revaulter.Options{
+    Server: "https://revaulter.example.com",
+    OIDCTokenProvider: func(ctx context.Context) string {
+        // Return a cached token, requesting a new one when it's about to expire
+        return tokenSource.Token(ctx)
+    },
+    UserID: os.Getenv("REVAULTER_USER_ID"),
+})
+```
+
 Clients are safe for concurrent use. Every operation blocks until the user approves the request in the browser, the operation times out, or the context is canceled:
 
 ```go

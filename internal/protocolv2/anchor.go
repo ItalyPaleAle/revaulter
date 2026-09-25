@@ -3,10 +3,8 @@ package protocolv2
 import (
 	"crypto/ecdsa"
 	"crypto/mldsa"
-	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -14,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/italypaleale/revaulter/internal/utils"
 )
 
 // CredAttestPrefix and PubkeyBundlePrefix are domain-separation prefixes for anchor-signed messages
@@ -395,11 +395,7 @@ func AnchorFingerprint(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte) (strin
 		return "", fmt.Errorf("unexpected ES384 uncompressed point length %d", len(es384Bytes))
 	}
 
-	h := sha256.New()
-	h.Write(es384Bytes)
-	h.Write(mldsa87PubBytes)
-
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return utils.SHA256Hex(es384Bytes, mldsa87PubBytes), nil
 }
 
 // DecodeBase64Signature decodes a base64url-encoded signature of the given size

@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/italypaleale/revaulter/internal/db"
+	"github.com/italypaleale/revaulter/internal/requestjwt"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
@@ -74,7 +75,7 @@ func (s *Server) auditEventTx(c *gin.Context, tx *db.DbTx, f auditFields) error 
 // auditInputFromContext extracts the actor, auth method, request id, IP, and UA from a gin context and merges them with the caller-provided audit fields
 func (s *Server) auditInputFromContext(c *gin.Context, f auditFields) db.AuditEventInput {
 	// Default actor: the session-bound user
-	// If absent, fall back to the request-key user
+	// If absent, fall back to the user authenticated by the request credential
 	actor := f.ActorUserID
 	authMethod := f.AuthMethod
 
@@ -89,6 +90,9 @@ func (s *Server) auditInputFromContext(c *gin.Context, f auditFields) db.AuditEv
 		user := getRequestUserFromCtx(c)
 		if user != nil {
 			actor = user.ID
+			if authMethod == "" {
+				authMethod = getRequestAuthMethodFromCtx(c)
+			}
 			if authMethod == "" {
 				authMethod = db.AuditAuthMethodRequestKey
 			}
@@ -136,4 +140,37 @@ func jsonMetadata(payload map[string]any) json.RawMessage {
 		return nil
 	}
 	return b
+}
+
+// requestCreateAuditMetadata builds the metadata payload for request.create audit events
+// When the request was authenticated with a JWT, it also records the verified issuer, subject, and token ID, so the audit log shows which workload asked
+func requestCreateAuditMetadata(operation, algorithm, keyLabel, note string, claims *requestjwt.Claims) json.RawMessage {
+	payload := map[string]any{
+		"operation": operation,
+		"algorithm": algorithm,
+		"keyLabel":  keyLabel,
+	}
+	if note != "" {
+		payload["note"] = note
+	}
+	if claims != nil {
+		// The claims come from the token and aren't length-limited, so truncate them to keep the payload under the audit metadata size limit
+		payload["jwtIssuer"] = truncateAuditValue(claims.Issuer)
+		payload["jwtSubject"] = truncateAuditValue(claims.Subject)
+		if claims.JwtID != "" {
+			payload["jwtId"] = truncateAuditValue(claims.JwtID)
+		}
+	}
+	return jsonMetadata(payload)
+}
+
+func truncateAuditValue(s string) string {
+	const auditMetadataMaxValueLength = 200
+
+	r := []rune(s)
+	if len(r) <= auditMetadataMaxValueLength {
+		return s
+	}
+
+	return string(r[:auditMetadataMaxValueLength]) + "…"
 }

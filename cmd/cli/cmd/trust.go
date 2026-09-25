@@ -21,6 +21,7 @@ type trustCmd struct {
 	// Run() resolves the file into RequestKey, so GetRequestKey reads the key from a single place
 	RequestKey     string
 	RequestKeyFile string
+	UserID         string
 
 	Insecure       bool
 	NoH2C          bool
@@ -35,6 +36,14 @@ func (c *trustCmd) GetServer() string {
 
 func (c *trustCmd) GetRequestKey() string {
 	return c.RequestKey
+}
+
+func (c *trustCmd) GetRequestKeyFile() string {
+	return c.RequestKeyFile
+}
+
+func (c *trustCmd) GetUserID() string {
+	return c.UserID
 }
 
 func (c *trustCmd) GetConnectionOptions() (bool, bool) {
@@ -72,10 +81,11 @@ If the anchor is already pinned and matches, the command confirms it and exits s
 	// Set flags
 	cmd.Flags().StringVarP(&impl.Server, "server", "s", "", "Address of the Revaulter server")
 	_ = cmd.MarkFlagRequired("server")
-	cmd.Flags().StringVarP(&impl.RequestKey, "request-key", "k", "", "Per-user request key used to authenticate with the server. Mutually exclusive with --request-key-file")
+	cmd.Flags().StringVarP(&impl.RequestKey, "request-key", "k", "", "Per-user request key used to authenticate with the server, or a JWT from a trusted OIDC issuer (which requires --user-id). Mutually exclusive with --request-key-file")
 	cmd.Flags().StringVar(&impl.RequestKeyFile, "request-key-file", "", "Path to a file containing the per-user request key, mutually exclusive with --request-key")
 	cmd.MarkFlagsMutuallyExclusive("request-key", "request-key-file")
 	cmd.MarkFlagsOneRequired("request-key", "request-key-file")
+	cmd.Flags().StringVar(&impl.UserID, "user-id", "", "ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT")
 	cmd.Flags().BoolVar(&impl.Insecure, "insecure", false, "Skip TLS certificate validation when connecting to the Revaulter server")
 	cmd.Flags().BoolVar(&impl.NoH2C, "no-h2c", false, "Do not attempt connecting with HTTP/2 Cleartext when not using TLS")
 	cmd.Flags().StringVar(&impl.TrustStorePath, "trust-store", "", "Path to the anchor trust store"+trustStoreDefault)

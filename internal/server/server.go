@@ -31,6 +31,7 @@ import (
 	"github.com/italypaleale/revaulter/internal/config"
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/metrics"
+	"github.com/italypaleale/revaulter/internal/requestjwt"
 	"github.com/italypaleale/revaulter/internal/utils/broker"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
@@ -82,6 +83,9 @@ type Server struct {
 	db       *db.DB
 	webAuthn *webauthnlib.WebAuthn
 
+	// Verifies the JWTs that users with OIDC tokens enabled send as request credentials, and caches the issuers' signing keys
+	requestJWT *requestjwt.Verifier
+
 	// Per-user rate limiter for wrapped primary key delivery
 	// Protects delivery of the wrapped root-key blob to a WebAuthn-authenticated client
 	// and reduces abuse of the password-gated unwrap flow
@@ -131,6 +135,13 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 		db:      opts.DB,
 
 		httpClient: httpClient,
+
+		requestJWT: requestjwt.NewVerifier(requestjwt.NewVerifierOptions{
+			HTTPClient: requestjwt.NewHTTPClient(requestjwt.HTTPClientOptions{
+				AllowPrivateAddresses: config.Get().OIDCAllowPrivateAddresses,
+			}),
+			Logger: opts.Log,
+		}),
 
 		// Throttle wrapped primary key delivery to 4 successful logins per 10-minute window, per user
 		wrappedKeyLimiter: httprate.NewRateLimiter(4, 10*time.Minute),
@@ -280,14 +291,15 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	addStandardMiddlewares(v2RouteGroup)
 
 	// Request group is API-to-server (not browser-originated), so no CSRF middleware
+	// The result route also accepts the per-request result token, so it uses a different authentication middleware
 	v2RequestGroup := v2RouteGroup.Group("/request")
-	v2RequestGroup.Use(requestRateLimiter, s.MiddlewareRequestKey)
-	v2RequestGroup.POST("/encrypt", s.RouteV2RequestCreate("encrypt"))
-	v2RequestGroup.POST("/decrypt", s.RouteV2RequestCreate("decrypt"))
-	v2RequestGroup.POST("/sign", s.RouteV2RequestCreate("sign"))
-	v2RequestGroup.GET("/pubkey", s.RouteV2RequestPubkey)
-	v2RequestGroup.GET("/signing-pubkey", s.RouteV2RequestSigningPubkey)
-	v2RequestGroup.GET("/result/:state", s.RouteV2RequestResult)
+	v2RequestGroup.Use(requestRateLimiter)
+	v2RequestGroup.POST("/encrypt", s.MiddlewareRequestKey, s.RouteV2RequestCreate("encrypt"))
+	v2RequestGroup.POST("/decrypt", s.MiddlewareRequestKey, s.RouteV2RequestCreate("decrypt"))
+	v2RequestGroup.POST("/sign", s.MiddlewareRequestKey, s.RouteV2RequestCreate("sign"))
+	v2RequestGroup.GET("/pubkey", s.MiddlewareRequestKey, s.RouteV2RequestPubkey)
+	v2RequestGroup.GET("/signing-pubkey", s.MiddlewareRequestKey, s.RouteV2RequestSigningPubkey)
+	v2RequestGroup.GET("/result/:state", s.MiddlewareRequestResult, s.RouteV2RequestResult)
 
 	// Public (unauthenticated) signing key fetch endpoints, rate-limited
 	// Paths carry the format as a dot-extension
@@ -320,6 +332,9 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/finalize-signup", sessionMw, s.RouteV2AuthFinalizeSignup)
 	v2AuthGroup.POST("/allowed-ips", sessionReadyMw, s.RouteV2AuthAllowedIPs)
 	v2AuthGroup.POST("/regenerate-request-key", sessionReadyMw, s.RouteV2AuthRequestKeyRegenerate)
+	v2AuthGroup.POST("/request-auth-methods", sessionReadyMw, s.RouteV2AuthRequestAuthMethods)
+	v2AuthGroup.POST("/request-oidc-issuers/add", sessionReadyMw, s.RouteV2AuthAddRequestOIDCIssuer)
+	v2AuthGroup.POST("/request-oidc-issuers/delete", sessionReadyMw, s.RouteV2AuthDeleteRequestOIDCIssuer)
 	v2AuthGroup.POST("/update-display-name", sessionReadyMw, s.RouteV2AuthUpdateDisplayName)
 	v2AuthGroup.POST("/update-wrapped-key", sessionReadyMw, s.RouteV2AuthUpdateWrappedKey)
 	v2AuthGroup.GET("/credentials", sessionReadyMw, s.RouteV2AuthListCredentials)
@@ -386,6 +401,13 @@ func (s *Server) Run(ctx context.Context) error {
 	// Stop the background eventqueue processors
 	defer s.requestExpiryQueue.Close()
 	defer s.deleteQueue.Close()
+
+	// Stop refreshing the JWKS of trusted OIDC issuers
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		_ = s.requestJWT.Close(closeCtx)
+	}()
 
 	// App server
 	s.wg.Add(1)

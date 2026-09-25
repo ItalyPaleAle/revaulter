@@ -52,6 +52,9 @@ var backupTables = []tableSpec{
 			{name: "created_at", kind: colKindText},
 			{name: "updated_at", kind: colKindText},
 			{name: "pubkey_bundle_version", kind: colKindText},
+			{name: "request_key_enabled", kind: colKindBool},
+			{name: "request_oidc_enabled", kind: colKindBool},
+			{name: "request_oidc", kind: colKindJSON},
 		},
 	},
 	{
@@ -87,6 +90,7 @@ var backupTables = []tableSpec{
 			{name: "updated_at", kind: colKindText},
 			{name: "encrypted_request", kind: colKindText},
 			{name: "encrypted_result", kind: colKindText},
+			{name: "result_token_hash", kind: colKindText},
 		},
 	},
 	{

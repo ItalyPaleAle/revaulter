@@ -60,8 +60,9 @@ revaulter-cli encrypt [flags]
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
-| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration). Mutually exclusive with `--request-key-file` |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration), or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
+| `--user-id` | | Only with OIDC tokens | ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT from a trusted OIDC issuer. See [Authenticating with an OIDC token](#authenticating-with-an-oidc-token) |
 | `--key-label` | `-l` | Yes | Logical key label used for key derivation |
 | `--algorithm` | `-a` | Yes | AEAD algorithm identifier: `A256GCM` (alias `aes-256-gcm`) or `C20P` (alias `chacha20-poly1305`) |
 | `--message` | `-m` | One of `--message`, `--input`, or `--json` is required | The message to encrypt as a raw UTF-8 string. |
@@ -123,8 +124,9 @@ revaulter-cli decrypt [flags]
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
-| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration). Mutually exclusive with `--request-key-file` |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration), or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
+| `--user-id` | | Only with OIDC tokens | ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT from a trusted OIDC issuer. See [Authenticating with an OIDC token](#authenticating-with-an-oidc-token) |
 | `--key-label` | `-l` | Yes | Logical key label used for key derivation |
 | `--algorithm` | `-a` | Yes | AEAD algorithm identifier: `A256GCM` (alias `aes-256-gcm`) or `C20P` (alias `chacha20-poly1305`). Must match what was used at encryption time |
 | `--value` | `-m` | One of `--value` or `--json` is required | The ciphertext to decrypt, base64-encoded |
@@ -199,8 +201,9 @@ revaulter-cli sign [flags]
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
-| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key. Mutually exclusive with `--request-key-file` |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key, or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
+| `--user-id` | | Only with OIDC tokens | ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT from a trusted OIDC issuer. See [Authenticating with an OIDC token](#authenticating-with-an-oidc-token) |
 | `--key-label` | `-l` | Yes | Logical key label used for signing-key derivation |
 | `--algorithm` | `-a` | Yes | Signing algorithm identifier: `ES256`, `Ed25519`, or `Ed25519ph` |
 | `--input` | `-i` | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. With ES256 and Ed25519ph, the CLI hashes the file's contents locally. |
@@ -298,8 +301,9 @@ The default trust store path is `<user-config-dir>/revaulter-cli/trust.json` (e.
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
-| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key used to authenticate with the server. Mutually exclusive with `--request-key-file` |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key used to authenticate with the server, or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
+| `--user-id` | | Only with OIDC tokens | ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT from a trusted OIDC issuer. See [Authenticating with an OIDC token](#authenticating-with-an-oidc-token) |
 | `--trust-store` | | No | Path to the anchor trust store file (defaults to `<user-config-dir>/revaulter-cli/trust.json`) |
 | `--yes` | `-y` | No | Accept the anchor fingerprint without prompting (for non-interactive use) |
 | `--insecure` | | No | Skip TLS certificate validation |
@@ -344,8 +348,9 @@ For a full setup walkthrough (including installing the public key in `authorized
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
-| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key. Mutually exclusive with `--request-key-file` |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key, or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
+| `--user-id` | | Only with OIDC tokens | ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT from a trusted OIDC issuer. See [Authenticating with an OIDC token](#authenticating-with-an-oidc-token) |
 | `--key-label` | `-l` | Yes | Logical key label for the signing key |
 | `--algorithm` | `-a` | No | Signing algorithm: `ES256` (default) or `Ed25519`. `Ed25519ph` is not supported by the SSH agent |
 | `--socket` | | No | Path to the Unix socket (defaults to `$XDG_RUNTIME_DIR/revaulter/ssh-agent-<key-label>.sock`, or a private per-user directory under `$TMPDIR` if `XDG_RUNTIME_DIR` is unset). The socket is created with `0600` permissions |
@@ -427,6 +432,28 @@ revaulter-cli decrypt \
   --input encrypted-key.json
 ```
 
+## Authenticating with an OIDC token
+
+If you enabled **OIDC tokens** in the web UI (under **Settings → Request auth**), you can pass a short-lived JWT from one of your trusted issuers as the request key, and your user ID with `--user-id`. For example, in a GitHub Actions workflow with `id-token: write` permission:
+
+```bash
+token="$(curl -sSf \
+  -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+  "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://revaulter.example.com" | jq -r .value)"
+
+revaulter-cli sign \
+  --server https://revaulter.example.com \
+  --request-key "$token" \
+  --user-id "<your user ID>" \
+  --key-label release-signing \
+  --algorithm ES256 \
+  --input dist/myapp
+```
+
+You can also pass the token in a file with `--request-key-file`. The CLI reads the file again for every request, so a long-running `ssh-agent` keeps working when the file is renewed in place, as with a Kubernetes projected service account token.
+
+See [Authenticating with OIDC tokens](/docs/oidc-authentication/) for how to set up the trusted issuers.
+
 ## How it works
 
 When you run `revaulter-cli encrypt`, `decrypt`, or `sign`, the CLI:
@@ -435,7 +462,7 @@ When you run `revaulter-cli encrypt`, `decrypt`, or `sign`, the CLI:
 2. Generates an ephemeral ECDH P-256 keypair and an ML-KEM-768 encapsulation
 3. Encrypts the request payload end-to-end to the user's public keys
 4. Submits the encrypted request to the server
-5. Long-polls for the result
+5. Long-polls for the result, authenticating with the result token the server returned in step 4
 6. Decrypts the response envelope locally using its ephemeral private key
 
 The server never has access to the plaintext request or response data.

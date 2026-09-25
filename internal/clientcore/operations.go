@@ -37,6 +37,15 @@ type Request struct {
 	OnSubmitted func(state string)
 }
 
+// PendingRequest identifies a request that was submitted to the server and is waiting for the user's approval
+type PendingRequest struct {
+	// State is the identifier the server assigned to the request
+	State string
+	// ResultToken authenticates the calls that retrieve the request's result, with the ResultToken authentication scheme
+	// It's empty when the server doesn't issue result tokens, in which case the request credential is used instead
+	ResultToken string
+}
+
 // Response is the result of an operation approved by the user
 type Response struct {
 	// State is the identifier the server assigned to the request
@@ -68,38 +77,38 @@ func (c *Client) Execute(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 
-	state, err := c.CreateRequest(ctx, req, kp)
+	pending, err := c.CreateRequest(ctx, req, kp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start operation: %w", err)
 	}
 
 	if req.OnSubmitted != nil {
-		req.OnSubmitted(state)
+		req.OnSubmitted(pending.State)
 	}
 
-	aad := BuildTransportAAD(state, req.Operation, req.Algorithm)
-	payload, err := c.GetResult(ctx, state, kp, aad, req.Timeout)
+	aad := BuildTransportAAD(pending.State, req.Operation, req.Algorithm)
+	payload, err := c.GetResult(ctx, pending, kp, aad, req.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get response: %w", err)
 	}
 
 	return &Response{
-		State:   state,
+		State:   pending.State,
 		Payload: payload,
 	}, nil
 }
 
-// CreateRequest submits a new operation request to the server and returns its state
+// CreateRequest submits a new operation request to the server and returns its state, along with the token to retrieve its result
 // The inner payload is encrypted to the user's static public keys, so the server cannot read it
-func (c *Client) CreateRequest(ctx context.Context, req Request, kp *TransportKeyPair) (string, error) {
+func (c *Client) CreateRequest(ctx context.Context, req Request, kp *TransportKeyPair) (*PendingRequest, error) {
 	if kp == nil {
-		return "", errors.New("missing transport key pair")
+		return nil, errors.New("missing transport key pair")
 	}
 
 	// Fetch the user's static public keys (ECDH + ML-KEM) alongside the hybrid anchor bundle so the client can pin the anchor on first contact and refuse any subsequent pubkey substitution
 	pubkeys, err := c.fetchAndVerifyUserPubkeys(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch user public keys: %w", err)
+		return nil, fmt.Errorf("failed to fetch user public keys: %w", err)
 	}
 
 	// Build the inner payload (sensitive fields)
@@ -118,7 +127,7 @@ func (c *Client) CreateRequest(ctx context.Context, req Request, kp *TransportKe
 	// Encrypt the inner payload with hybrid ECDH + ML-KEM
 	cliEphPub, mlkemCiphertext, nonce, ciphertext, err := EncryptRequestPayload(pubkeys.Ecdh, pubkeys.Mlkem, innerPayload, aad)
 	if err != nil {
-		return "", fmt.Errorf("failed to encrypt request payload: %w", err)
+		return nil, fmt.Errorf("failed to encrypt request payload: %w", err)
 	}
 
 	// Build the outer request body
@@ -136,32 +145,40 @@ func (c *Client) CreateRequest(ctx context.Context, req Request, kp *TransportKe
 
 	body, err := json.Marshal(outerBody)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	httpReq, err := c.newRequest(ctx, http.MethodPost, req.Operation, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	var res protocolv2.RequestResultResponse
+	var res protocolv2.RequestCreateResponse
 	err = c.doJSON(httpReq, &res)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if !res.Pending || res.State == "" {
-		return "", errors.New("invalid create response")
+		return nil, errors.New("invalid create response")
 	}
 
-	return res.State, nil
+	return &PendingRequest{
+		State:       res.State,
+		ResultToken: res.ResultToken,
+	}, nil
 }
 
 // GetResult polls the server until the operation completes and returns the decrypted response payload
-func (c *Client) GetResult(ctx context.Context, state string, kp *TransportKeyPair, aad []byte, timeout time.Duration) ([]byte, error) {
+func (c *Client) GetResult(ctx context.Context, pending *PendingRequest, kp *TransportKeyPair, aad []byte, timeout time.Duration) ([]byte, error) {
+	if pending == nil || pending.State == "" {
+		return nil, errors.New("missing pending request")
+	}
 	if kp == nil {
 		return nil, errors.New("missing transport key pair")
 	}
+
+	state := pending.State
 
 	// Apply a local deadline so the client can't poll indefinitely if the server hangs, drops the state, or keeps returning pending beyond the negotiated timeout
 	// Use the caller-supplied timeout plus a small grace window so the server's expiry fires first and produces a clean "failed" response; fall back to a sensible default when unset
@@ -186,7 +203,14 @@ func (c *Client) GetResult(ctx context.Context, state string, kp *TransportKeyPa
 			return nil, err
 		}
 
-		req, err := c.newRequest(ctx, http.MethodGet, "result/"+state, nil)
+		// Prefer the result token, which stays valid while the request is pending even if the credential is a short-lived OIDC token that expires in the meantime
+		// Servers that don't issue result tokens get the client's credential, which a token provider can refresh on each poll
+		var req *http.Request
+		if pending.ResultToken != "" {
+			req, err = c.newRequestWithAuthorization(ctx, http.MethodGet, protocolv2.AuthSchemeResultToken+" "+pending.ResultToken, "result/"+state, nil)
+		} else {
+			req, err = c.newRequest(ctx, http.MethodGet, "result/"+state, nil)
+		}
 		if err != nil {
 			return nil, err
 		}

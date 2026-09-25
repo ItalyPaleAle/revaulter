@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 import {
+    fetchRequestPubkey,
     openAllowedIPs,
     openSettings,
     openSettingsTab,
@@ -24,6 +25,7 @@ test('settings modal opens with all tabs', async ({ page }) => {
         // Tab buttons are in the nav element
         const nav = page.locator('nav')
         await expect(nav.locator('button', { hasText: 'User' })).toBeVisible()
+        await expect(nav.locator('button', { hasText: 'Request auth' })).toBeVisible()
         await expect(nav.locator('button', { hasText: 'Firewall' })).toBeVisible()
         await expect(nav.locator('button', { hasText: 'Password' })).toBeVisible()
         await expect(nav.locator('button', { hasText: 'Passkeys' })).toBeVisible()
@@ -63,10 +65,10 @@ test('settings panel opens and request key can be regenerated', async ({ page })
     const auth = await registerAndReachReady(page, 'Settings User')
 
     try {
-        await openSettings(page)
+        await openSettingsTab(page, 'Request auth')
 
-        // User tab is the default tab — the request key is inside the bordered container
-        const requestKeyValue = page.locator('div.overflow-x-auto.mono')
+        // The request key is inside the bordered container
+        const requestKeyValue = page.locator('div.overflow-x-auto.mono', { hasText: 'rvk_' })
         const before = await requestKeyValue.textContent()
         await page.getByRole('button', { name: 'Regenerate Regenerate' }).click()
         await page.getByRole('button', { name: 'Yes, regenerate' }).click()
@@ -75,6 +77,106 @@ test('settings panel opens and request key can be regenerated', async ({ page })
     } finally {
         await auth.passkey.dispose()
     }
+})
+
+test('request auth tab enables OIDC tokens and the request key independently', async ({ page, request }) => {
+    const auth = await registerAndReachReady(page, 'Settings User')
+
+    try {
+        await openSettingsTab(page, 'Request auth')
+
+        const requestKeyToggle = page.getByRole('checkbox', { name: /^Request key/ })
+        const oidcToggle = page.getByRole('checkbox', { name: /^OIDC tokens/ })
+
+        // By default, only the request key is enabled, and the OIDC settings are hidden
+        await expect(requestKeyToggle).toBeChecked()
+        await expect(oidcToggle).not.toBeChecked()
+        await expect(page.getByRole('button', { name: 'Add trusted issuer' })).toBeHidden()
+
+        // Enabling OIDC tokens shows the user ID and the trusted issuers, and keeps the request key working
+        await oidcToggle.check()
+        await expect(page.getByText('Authentication methods updated')).toBeVisible()
+        await expect(oidcToggle).toBeChecked()
+        await expect(requestKeyToggle).toBeChecked()
+        await expect(page.getByText(auth.session.userId, { exact: true })).toBeVisible()
+        expect((await fetchRequestPubkey(request, auth.session.requestKey)).status).toBe(200)
+
+        // The audience defaults to the public endpoint of the server
+        await page.getByRole('button', { name: 'Add trusted issuer' }).click()
+        await expect(page.getByLabel('Audience')).toHaveValue(new URL(page.url()).origin)
+
+        // A subject made only of wildcards is rejected
+        await page.getByLabel('Issuer', { exact: true }).fill('https://token.actions.githubusercontent.com')
+        await page.getByLabel('Subject').fill('*')
+        await page.getByRole('button', { name: 'Add issuer' }).click()
+        await expect(page.getByText('subject must not consist only of wildcards')).toBeVisible()
+
+        await page.getByLabel('Name (optional)').fill('Release workflow')
+        await page.getByLabel('Subject').fill('repo:example/app:ref:refs/tags/*')
+        await page.getByRole('button', { name: 'Add issuer' }).click()
+        await expect(page.getByText('OIDC issuer added')).toBeVisible()
+        await expect(page.getByText('Release workflow')).toBeVisible()
+        await expect(page.getByText('OIDC discovery')).toBeVisible()
+
+        // Disabling the request key hides it, and the server rejects it
+        await requestKeyToggle.uncheck()
+        await expect(requestKeyToggle).not.toBeChecked()
+        await expect(page.getByRole('button', { name: 'Regenerate Regenerate' })).toBeHidden()
+        expect((await fetchRequestPubkey(request, auth.session.requestKey)).status).toBe(403)
+
+        // Disabling OIDC tokens hides the issuers without deleting them
+        await oidcToggle.uncheck()
+        await expect(oidcToggle).not.toBeChecked()
+        await expect(page.getByText('Release workflow')).toBeHidden()
+        await oidcToggle.check()
+        await expect(oidcToggle).toBeChecked()
+        await expect(page.getByText('Release workflow')).toBeVisible()
+
+        await page.getByRole('button', { name: 'Remove OIDC issuer' }).click()
+        await expect(page.getByText('OIDC issuer removed')).toBeVisible()
+        await expect(page.getByText('No trusted issuers.')).toBeVisible()
+
+        // Re-enabling the request key makes it work again
+        // The checkbox changes as soon as it's clicked, so wait for the key to be shown again, which happens once the server has saved the change
+        await requestKeyToggle.check()
+        await expect(requestKeyToggle).toBeChecked()
+        await expect(page.getByRole('button', { name: 'Regenerate Regenerate' })).toBeVisible()
+        expect((await fetchRequestPubkey(request, auth.session.requestKey)).status).toBe(200)
+    } finally {
+        await auth.passkey.dispose()
+    }
+})
+
+test.describe(() => {
+    test.use({ serviceWorkers: 'block' })
+
+    test('request auth toggle reverts when saving fails', async ({ page, request }) => {
+        const auth = await registerAndReachReady(page, 'Settings User')
+
+        try {
+            await openSettingsTab(page, 'Request auth')
+
+            // Make the next save fail
+            await page.route('**/v2/auth/request-auth-methods', (route) =>
+                route.fulfill({
+                    status: 500,
+                    contentType: 'application/json',
+                    body: JSON.stringify({ error: 'Simulated failure' }),
+                })
+            )
+
+            const requestKeyToggle = page.getByRole('checkbox', { name: /^Request key/ })
+            await requestKeyToggle.click()
+            await expect(page.getByText('Simulated failure')).toBeVisible()
+
+            // The checkbox shows the saved value again, and the key still works
+            await expect(requestKeyToggle).toBeChecked()
+            await expect(page.getByRole('button', { name: 'Regenerate Regenerate' })).toBeVisible()
+            expect((await fetchRequestPubkey(request, auth.session.requestKey)).status).toBe(200)
+        } finally {
+            await auth.passkey.dispose()
+        }
+    })
 })
 
 test('display name can be updated', async ({ page }) => {

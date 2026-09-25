@@ -1,16 +1,23 @@
 package cliutil
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"unicode"
+
+	"github.com/italypaleale/revaulter/internal/protocolv2"
 )
 
-const MaxRequestKeyFileSize = 4 << 10 // 4KB
+// MaxRequestKeyFileSize is the maximum size of a file containing a request key
+// It matches the maximum size of the JWTs the server accepts, since the file can hold an OIDC token
+const MaxRequestKeyFileSize = 8 << 10 // 8KB
 
 // ReadRequestKeyFile loads a request key from the file at path
 func ReadRequestKeyFile(path string) (string, error) {
@@ -71,6 +78,38 @@ func ReadRequestKeyFile(path string) (string, error) {
 	}
 
 	return requestKey, nil
+}
+
+// OIDCTokenFileProvider returns an OIDC token provider that reads the token from the file at path again for every request
+// If the file can't be read or doesn't contain a JWT, for example while it's being replaced, the provider logs a warning and returns the last token it read, starting with initial
+func OIDCTokenFileProvider(log *slog.Logger, path string, initial string) func(ctx context.Context) string {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+
+	var lock sync.Mutex
+	last := initial
+
+	return func(ctx context.Context) string {
+		token, err := ReadRequestKeyFile(path)
+		if err == nil && !protocolv2.LooksLikeJWT(token) {
+			err = errors.New("file does not contain a JWT")
+		}
+
+		lock.Lock()
+		defer lock.Unlock()
+
+		if err != nil {
+			log.WarnContext(ctx, "Failed to read the OIDC token from the request key file, using the last token that was read",
+				slog.String("path", path),
+				slog.Any("error", err),
+			)
+			return last
+		}
+
+		last = token
+		return token
+	}
 }
 
 // validateRequestKeyFileMode checks that mode describes a file that is allowed to hold a request key

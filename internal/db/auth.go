@@ -56,6 +56,8 @@ type User struct {
 	WrappedKeyEpoch              int64
 	AllowedIPs                   []string
 	Ready                        bool
+	RequestAuthMethods           RequestAuthMethods
+	RequestOIDC                  []RequestOIDCIssuer
 }
 
 type AuthChallenge struct {
@@ -182,23 +184,60 @@ func (s *AuthStore) getUser(ctx context.Context, column string, value string) (*
 		return nil, fmt.Errorf("invalid column requested: %s", column)
 	}
 
-	var (
-		user          User
-		allowedIPsCSV string
-	)
-	query := `SELECT id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, pubkey_bundle_version, wrapped_key_epoch, allowed_ips, ready
+	query := `SELECT ` + userColumns + `
 		FROM v2_users
 		WHERE ` + column + ` = $1`
-	err := s.db.
-		QueryRow(ctx, query, value).
-		Scan(&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey, &user.AnchorEs384PublicKey, &user.AnchorMldsa87PublicKey, &user.PubkeyBundleSignatureEs384, &user.PubkeyBundleSignatureMldsa87, &user.PubkeyBundleVersion, &user.WrappedKeyEpoch, &allowedIPsCSV, &user.Ready)
+	user, err := scanUser(s.db.QueryRow(ctx, query, value))
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
 	}
 
+	return user, nil
+}
+
+// Columns of v2_users that scanUser reads into a User, in the order it expects them
+// Keep the two lists and userColumnCount in sync with each other and with scanUser
+const (
+	// userColumns is for queries on v2_users alone
+	userColumns = `id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, ` +
+		`anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, ` +
+		`pubkey_bundle_version, wrapped_key_epoch, allowed_ips, ready, request_key_enabled, request_oidc_enabled, request_oidc`
+	// userColumnsAliasU is for queries that join v2_users with the alias "u"
+	userColumnsAliasU = `u.id, u.display_name, u.status, u.webauthn_user_id, u.request_key, u.request_enc_ecdh_pubkey, u.request_enc_mlkem_pubkey, ` +
+		`u.anchor_es384_public_key, u.anchor_mldsa87_public_key, u.pubkey_bundle_signature_es384, u.pubkey_bundle_signature_mldsa87, ` +
+		`u.pubkey_bundle_version, u.wrapped_key_epoch, u.allowed_ips, u.ready, u.request_key_enabled, u.request_oidc_enabled, u.request_oidc`
+	// userColumnCount is the number of columns in the lists above
+	userColumnCount = 18
+)
+
+// scanUser reads a row whose first columns are userColumns into a User
+// Additional destinations receive the columns that follow
+// The error from the scanner is returned as-is, so callers can check for "no rows" errors
+func scanUser(scanner interface{ Scan(dest ...any) error }, extra ...any) (*User, error) {
+	var (
+		user          User
+		allowedIPsCSV string
+		requestOIDC   []byte
+	)
+	dest := make([]any, 0, userColumnCount+len(extra))
+	dest = append(dest,
+		&user.ID, &user.DisplayName, &user.Status, &user.WebAuthnUserID, &user.RequestKey, &user.RequestEncEcdhPubkey, &user.RequestEncMlkemPubkey,
+		&user.AnchorEs384PublicKey, &user.AnchorMldsa87PublicKey, &user.PubkeyBundleSignatureEs384, &user.PubkeyBundleSignatureMldsa87,
+		&user.PubkeyBundleVersion, &user.WrappedKeyEpoch, &allowedIPsCSV, &user.Ready, &user.RequestAuthMethods.RequestKey, &user.RequestAuthMethods.OIDC, &requestOIDC,
+	)
+	dest = append(dest, extra...)
+	err := scanner.Scan(dest...)
+	if err != nil {
+		return nil, err
+	}
+
 	user.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
+	user.RequestOIDC, err = parseRequestOIDC(requestOIDC)
+	if err != nil {
+		return nil, err
+	}
 
 	return &user, nil
 }
@@ -372,6 +411,10 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Us
 		WrappedKeyEpoch: 1,
 		AllowedIPs:      nil,
 		Ready:           false,
+		RequestAuthMethods: RequestAuthMethods{
+			RequestKey: true,
+		},
+		RequestOIDC: []RequestOIDCIssuer{},
 	}, nil
 }
 
@@ -418,9 +461,7 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 	}
 
 	now := time.Now().Unix()
-	updatedUser := &User{}
-	var allowedIPsCSV string
-	err := s.db.
+	updatedUser, err := scanUser(s.db.
 		QueryRow(ctx,
 			`UPDATE v2_users
 			SET request_enc_ecdh_pubkey = $1,
@@ -433,30 +474,13 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 				ready = true,
 				updated_at = $8
 			WHERE id = $9 AND ready = false
-			RETURNING
-				id, display_name, status, webauthn_user_id, request_key, request_enc_ecdh_pubkey, request_enc_mlkem_pubkey, anchor_es384_public_key, anchor_mldsa87_public_key, pubkey_bundle_signature_es384, pubkey_bundle_signature_mldsa87, pubkey_bundle_version, wrapped_key_epoch, allowed_ips, ready`,
+			RETURNING `+userColumns,
 			in.RequestEncEcdhPubkey, in.RequestEncMlkemPubkey,
 			in.AnchorEs384PublicKey, in.AnchorMldsa87PublicKey,
 			in.PubkeyBundleSignatureEs384, in.PubkeyBundleSignatureMldsa87,
 			in.PubkeyBundleVersion, now, in.UserID,
-		).
-		Scan(
-			&updatedUser.ID,
-			&updatedUser.DisplayName,
-			&updatedUser.Status,
-			&updatedUser.WebAuthnUserID,
-			&updatedUser.RequestKey,
-			&updatedUser.RequestEncEcdhPubkey,
-			&updatedUser.RequestEncMlkemPubkey,
-			&updatedUser.AnchorEs384PublicKey,
-			&updatedUser.AnchorMldsa87PublicKey,
-			&updatedUser.PubkeyBundleSignatureEs384,
-			&updatedUser.PubkeyBundleSignatureMldsa87,
-			&updatedUser.PubkeyBundleVersion,
-			&updatedUser.WrappedKeyEpoch,
-			&allowedIPsCSV,
-			&updatedUser.Ready,
-		)
+		),
+	)
 	if s.db.IsNoRowsError(err) {
 		var exists bool
 		err = s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1)`, in.UserID).Scan(&exists)
@@ -470,8 +494,6 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 	} else if err != nil {
 		return nil, err
 	}
-
-	updatedUser.AllowedIPs = parseAllowedIPsCSV(allowedIPsCSV)
 
 	// Store the wrapped primary key, wrapped anchor, and first credential attestation on the user's single credential (the one created during registration)
 	_, err = s.db.Exec(ctx,

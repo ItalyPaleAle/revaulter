@@ -135,6 +135,11 @@ type Config struct {
 	// +default false
 	DisableSignup bool `env:"DISABLESIGNUP" yaml:"disableSignup"`
 
+	// If true, Revaulter can connect to private, loopback, link-local, and other non-public addresses when it fetches the OpenID Connect discovery documents and JWKS of the OIDC issuers that users trust
+	// By default, these connections are refused, because the URLs are configured by users
+	// +default false
+	OIDCAllowPrivateAddresses bool `env:"OIDCALLOWPRIVATEADDRESSES" yaml:"oidcAllowPrivateAddresses"`
+
 	// Timeout for sessions before having to authenticate again, as a Go duration.
 	// This cannot be more than 1 hour.
 	// +default 5m

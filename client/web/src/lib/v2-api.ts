@@ -11,7 +11,9 @@ import type {
     V2PendingRequestItem,
     V2PublishedSigningKey,
     V2RegisterBeginResponse,
+    V2RequestAuthMethods,
     V2RequestDetail,
+    V2RequestOIDCIssuer,
     V2ResponseEnvelope,
     V2SessionResponse,
     V2SigningJwk,
@@ -105,6 +107,42 @@ export async function v2RegenerateRequestKey() {
     const res = await Request<{ ok: boolean; requestKey: string }>('/v2/auth/regenerate-request-key', {
         method: 'POST',
     })
+    return res.data
+}
+
+/** Sets which credentials the CLI can use to authenticate requests: the static request key, JWTs from trusted OIDC issuers, or both */
+export async function v2SetRequestAuthMethods(methods: V2RequestAuthMethods) {
+    const res = await Request<{ ok: boolean } & V2RequestAuthMethods>('/v2/auth/request-auth-methods', {
+        postData: methods,
+    })
+    return res.data
+}
+
+/** Adds a trusted OIDC issuer, and returns the updated list */
+export async function v2AddRequestOIDCIssuer(issuer: {
+    displayName: string
+    issuer: string
+    audience: string
+    subject: string
+    jwksUrl: string
+}) {
+    const res = await Request<{ ok: boolean; requestOidcIssuers: V2RequestOIDCIssuer[] }>(
+        '/v2/auth/request-oidc-issuers/add',
+        {
+            postData: issuer,
+        }
+    )
+    return res.data
+}
+
+/** Deletes a trusted OIDC issuer, and returns the updated list */
+export async function v2DeleteRequestOIDCIssuer(id: string) {
+    const res = await Request<{ ok: boolean; requestOidcIssuers: V2RequestOIDCIssuer[] }>(
+        '/v2/auth/request-oidc-issuers/delete',
+        {
+            postData: { id },
+        }
+    )
     return res.data
 }
 
