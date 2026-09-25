@@ -100,9 +100,7 @@ func newMockVerifier(t *testing.T, m *mockTransport) *Verifier {
 		HTTPClient: client,
 		Logger:     slog.New(slog.DiscardHandler),
 	})
-	t.Cleanup(func() {
-		_ = v.Close(t.Context())
-	})
+	closeOnCleanup(t, v)
 
 	return v
 }

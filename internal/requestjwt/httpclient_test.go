@@ -97,9 +97,7 @@ func TestVerifierForbidsPrivateAddressesByDefault(t *testing.T) {
 			TLSConfig: iss.TLSConfig(),
 		}),
 	})
-	t.Cleanup(func() {
-		_ = v.Close(t.Context())
-	})
+	closeOnCleanup(t, v)
 
 	cfg := IssuerConfig{
 		Issuer:   iss.URL,
@@ -142,13 +140,13 @@ func TestNewHTTPClientTracing(t *testing.T) {
 	parent.End()
 
 	// The request's span is a child of the span in the request's context
+	// Only spans in the parent's trace are counted, since the tracer provider is global and other code in the process could make requests in the meantime
 	var spans []sdkTrace.ReadOnlySpan
 	for _, span := range recorder.Ended() {
-		if span.SpanKind() == trace.SpanKindClient {
+		if span.SpanKind() == trace.SpanKindClient && span.SpanContext().TraceID() == parent.SpanContext().TraceID() {
 			spans = append(spans, span)
 		}
 	}
 	require.Len(t, spans, 1)
 	require.Equal(t, parent.SpanContext().SpanID(), spans[0].Parent().SpanID())
-	require.Equal(t, parent.SpanContext().TraceID(), spans[0].SpanContext().TraceID())
 }

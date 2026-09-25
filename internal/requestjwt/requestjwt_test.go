@@ -123,11 +123,23 @@ func newTestVerifier(t *testing.T, iss *TestIssuer) *Verifier {
 	t.Helper()
 
 	v := NewVerifier(NewVerifierOptions{HTTPClient: iss.HTTPClient()})
-	t.Cleanup(func() {
-		_ = v.Close(t.Context())
-	})
+	closeOnCleanup(t, v)
 
 	return v
+}
+
+// closeOnCleanup closes the verifier when the test ends
+// It can't use t.Context(), which is canceled before cleanup functions run: Close would return right away and leave the JWKS cache's workers running into later tests
+func closeOnCleanup(t *testing.T, v *Verifier) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		err := v.Close(ctx)
+		require.NoError(t, err)
+	})
 }
 
 func TestVerifierVerify(t *testing.T) {
