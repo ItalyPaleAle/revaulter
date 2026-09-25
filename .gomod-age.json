@@ -6,13 +6,8 @@
   ],
   "allow": [
     {
-      "module": "github.com/jackc/pgx/v5",
-      "version": "v5.11.0",
-      "reason": ""
-    },
-    {
-      "module": "github.com/lestrrat-go/jwx/v4",
-      "version": "v4.5.0",
+      "module": "github.com/gin-contrib/location/v2",
+      "version": "v2.0.3",
       "reason": ""
     }
   ]
