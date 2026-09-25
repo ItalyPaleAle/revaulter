@@ -8,6 +8,7 @@ import { expect, test } from '@playwright/test'
 import {
     fetchRequestPubkey,
     getSeededRequest,
+    openSettingsTab,
     registerAndReachReady,
     resetBrowserState,
     resetState,
@@ -116,7 +117,7 @@ test('second long-poll subscriber evicts the first and the response is unavailab
 
         const url = `/v2/request/result/${seeded.state}`
         const requestOpts = {
-            headers: { Authorization: `Bearer ${auth.session.requestKey}` },
+            headers: { Authorization: `RequestKey ${auth.session.requestKey}` },
         }
 
         // Start subscriber #1 — it should block on the still-pending request
@@ -209,7 +210,7 @@ test('regenerating the request key invalidates the old public key endpoint', asy
         const before = await fetchRequestPubkey(request, oldKey)
         expect(before.status).toBe(200)
 
-        await page.getByRole('button', { name: 'Open settings' }).click()
+        await openSettingsTab(page, 'Request auth')
         await page.getByRole('button', { name: 'Regenerate Regenerate' }).click()
         await page.getByRole('button', { name: 'Yes, regenerate' }).click()
         await expect(page.getByText('Request key regenerated.')).toBeVisible()

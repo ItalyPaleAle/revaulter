@@ -1,11 +1,11 @@
 package protocolv2
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/italypaleale/revaulter/internal/utils"
 )
 
 // CredentialPublicKeyHash returns base64url(SHA-256(raw COSE credential public-key bytes))
@@ -16,8 +16,7 @@ func CredentialPublicKeyHash(coseBytes []byte) (string, error) {
 		return "", errors.New("COSE public key is empty")
 	}
 
-	sum := sha256.Sum256(coseBytes)
-	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
+	return utils.SHA256Base64URL(coseBytes), nil
 }
 
 // CredentialPublicKeyHashFromStoredCredJSON reads a stored credJSON blob (go-webauthn Credential marshaled as JSON) and returns the credential-public-key hash derived from its `publicKey` field, which holds the raw COSE bytes

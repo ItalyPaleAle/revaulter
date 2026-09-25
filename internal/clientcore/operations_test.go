@@ -1,6 +1,7 @@
 package clientcore
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
@@ -61,7 +62,7 @@ func TestClientExecuteRoundTrip(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/pubkey"):
 			authHeader := r.Header.Get("Authorization")
-			if authHeader != "Bearer request-key-123" {
+			if authHeader != "RequestKey request-key-123" {
 				http.Error(w, "missing or wrong Authorization header: "+authHeader, http.StatusUnauthorized)
 				return
 			}
@@ -79,7 +80,7 @@ func TestClientExecuteRoundTrip(t *testing.T) {
 
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/encrypt"):
 			authHeader := r.Header.Get("Authorization")
-			if authHeader != "Bearer request-key-123" {
+			if authHeader != "RequestKey request-key-123" {
 				http.Error(w, "missing or wrong Authorization header: "+authHeader, http.StatusUnauthorized)
 				return
 			}
@@ -319,8 +320,164 @@ func TestClientGetResultFailed(t *testing.T) {
 
 	kp, err := NewTransportKeyPair()
 	require.NoError(t, err)
-	_, err = client.GetResult(t.Context(), "s1", kp, BuildTransportAAD("s1", "", "A256GCM"), 0)
+	_, err = client.GetResult(t.Context(), &PendingRequest{State: "s1"}, kp, BuildTransportAAD("s1", "", "A256GCM"), 0)
 	require.ErrorContains(t, err, "canceled, denied, or failed")
+}
+
+func TestClientGetResultCredential(t *testing.T) {
+	tests := []struct {
+		name        string
+		resultToken string
+		expected    string
+	}{
+		{
+			name:        "uses the result token when the server issued one",
+			resultToken: "rvr_abc",
+			expected:    "ResultToken rvr_abc",
+		},
+		{
+			name:     "falls back to the request key",
+			expected: "RequestKey request-key-123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotAuth atomic.Value
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotAuth.Store(r.Header.Get("Authorization"))
+				err := json.NewEncoder(w).Encode(protocolv2.RequestResultResponse{
+					State:  "s1",
+					Failed: true,
+				})
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			}))
+			defer srv.Close()
+			client := newTestClient(t, srv, "request-key-123")
+
+			kp, err := NewTransportKeyPair()
+			require.NoError(t, err)
+			_, err = client.GetResult(t.Context(), &PendingRequest{State: "s1", ResultToken: tt.resultToken}, kp, BuildTransportAAD("s1", "", "A256GCM"), 0)
+			require.Error(t, err)
+			require.Equal(t, tt.expected, gotAuth.Load())
+		})
+	}
+}
+
+func TestClientOIDCToken(t *testing.T) {
+	var gotUser, gotAuth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUser.Store(r.Header.Get(protocolv2.UserIDHeader))
+		gotAuth.Store(r.Header.Get("Authorization"))
+		err := json.NewEncoder(w).Encode(PubkeyResponse{UserID: "other-user"})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer srv.Close()
+
+	const token = "eyJhbGciOiJFUzI1NiJ9.e30.c2ln"
+	client, err := NewClient(Config{
+		Server:       srv.URL,
+		OIDCToken:    token,
+		UserID:       "user-1",
+		HTTPClient:   srv.Client(),
+		NoTrustStore: true,
+	})
+	require.NoError(t, err)
+
+	// The server returns another user's keys, which the client must refuse
+	_, err = client.FetchPubkeyBundle(t.Context())
+	require.ErrorContains(t, err, `public keys of user "other-user"`)
+	require.Equal(t, "user-1", gotUser.Load())
+	require.Equal(t, "Bearer "+token, gotAuth.Load())
+}
+
+func TestNewClientCredentials(t *testing.T) {
+	const token = "eyJhbGciOiJFUzI1NiJ9.e30.c2ln"
+	provider := func(context.Context) string {
+		return token
+	}
+
+	tests := []struct {
+		name   string
+		cfg    Config
+		errMsg string
+	}{
+		{name: "request key", cfg: Config{RequestKey: "rvk_abc"}},
+		{name: "OIDC token with user ID", cfg: Config{OIDCToken: token, UserID: "user-1"}},
+		{name: "OIDC token provider with user ID", cfg: Config{OIDCTokenProvider: provider, UserID: "user-1"}},
+		{name: "no credential", cfg: Config{}, errMsg: "one of the properties RequestKey, OIDCToken, or OIDCTokenProvider is required"},
+		{name: "request key and OIDC token", cfg: Config{RequestKey: "rvk_abc", OIDCToken: token, UserID: "user-1"}, errMsg: "mutually exclusive"},
+		{name: "OIDC token and provider", cfg: Config{OIDCToken: token, OIDCTokenProvider: provider, UserID: "user-1"}, errMsg: "mutually exclusive"},
+		{name: "OIDC token without user ID", cfg: Config{OIDCToken: token}, errMsg: "UserID is required"},
+		{name: "OIDC token provider without user ID", cfg: Config{OIDCTokenProvider: provider}, errMsg: "UserID is required"},
+		{name: "OIDC token that isn't a JWT", cfg: Config{OIDCToken: "rvk_abc", UserID: "user-1"}, errMsg: "does not contain a JWT"},
+		{name: "JWT as request key", cfg: Config{RequestKey: token}, errMsg: "pass OIDC tokens in the OIDCToken property"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			cfg.Server = "https://revaulter.example.com"
+			cfg.NoTrustStore = true
+			_, err := NewClient(cfg)
+			if tt.errMsg == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tt.errMsg)
+			}
+		})
+	}
+}
+
+func TestClientOIDCTokenProvider(t *testing.T) {
+	var gotAuth atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth.Store(r.Header.Get("Authorization"))
+		err := json.NewEncoder(w).Encode(PubkeyResponse{UserID: "user-1"})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer srv.Close()
+
+	// The provider returns a different token on each call, like one that refreshes an expired token
+	tokens := []string{"eyJhbGciOiJFUzI1NiJ9.eyJuIjoxfQ.c2ln", "eyJhbGciOiJFUzI1NiJ9.eyJuIjoyfQ.c2ln", "", "not-a-jwt"}
+	var calls atomic.Int32
+	client, err := NewClient(Config{
+		Server: srv.URL,
+		OIDCTokenProvider: func(ctx context.Context) string {
+			require.NotNil(t, ctx)
+			return tokens[calls.Add(1)-1]
+		},
+		UserID:       "user-1",
+		HTTPClient:   srv.Client(),
+		NoTrustStore: true,
+	})
+	require.NoError(t, err)
+
+	// The provider is invoked for every request
+	_, err = client.FetchPubkeyBundle(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "Bearer "+tokens[0], gotAuth.Load())
+
+	_, err = client.FetchPubkeyBundle(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "Bearer "+tokens[1], gotAuth.Load())
+
+	// Invalid tokens fail the request before it's sent
+	_, err = client.FetchPubkeyBundle(t.Context())
+	require.ErrorContains(t, err, "empty token")
+	_, err = client.FetchPubkeyBundle(t.Context())
+	require.ErrorContains(t, err, "not a JWT")
+	require.Equal(t, "Bearer "+tokens[1], gotAuth.Load())
+	require.EqualValues(t, 4, calls.Load())
 }
 
 func TestClientGetResultStateMismatch(t *testing.T) {
@@ -350,7 +507,7 @@ func TestClientGetResultStateMismatch(t *testing.T) {
 
 	kp, err := NewTransportKeyPair()
 	require.NoError(t, err)
-	_, err = client.GetResult(t.Context(), "expected", kp, BuildTransportAAD("expected", "", "A256GCM"), 0)
+	_, err = client.GetResult(t.Context(), &PendingRequest{State: "expected"}, kp, BuildTransportAAD("expected", "", "A256GCM"), 0)
 	require.ErrorContains(t, err, "response state mismatch")
 }
 
@@ -389,7 +546,7 @@ func TestClientSignAndVerify(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/v2/request/pubkey"):
 			authHeader := r.Header.Get("Authorization")
-			if authHeader != "Bearer request-key-sign" {
+			if authHeader != "RequestKey request-key-sign" {
 				http.Error(w, "missing or wrong Authorization header: "+authHeader, http.StatusUnauthorized)
 				return
 			}
@@ -407,7 +564,7 @@ func TestClientSignAndVerify(t *testing.T) {
 
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v2/request/sign"):
 			authHeader := r.Header.Get("Authorization")
-			if authHeader != "Bearer request-key-sign" {
+			if authHeader != "RequestKey request-key-sign" {
 				http.Error(w, "missing or wrong Authorization header: "+authHeader, http.StatusUnauthorized)
 				return
 			}
@@ -644,17 +801,17 @@ func TestClientSignAndVerify(t *testing.T) {
 	client := newTestClient(t, srv, "request-key-sign")
 	kp, err := NewTransportKeyPair()
 	require.NoError(t, err)
-	gotState, err := client.CreateRequest(t.Context(), Request{
+	pending, err := client.CreateRequest(t.Context(), Request{
 		Operation: protocolv2.OperationSign,
 		KeyLabel:  keyLabel,
 		Algorithm: protocolv2.SigningAlgES256,
 		Value:     digestB64,
 	}, kp)
 	require.NoError(t, err)
-	require.Equal(t, state, gotState)
+	require.Equal(t, state, pending.State)
 
-	aad := BuildTransportAAD(gotState, protocolv2.OperationSign, protocolv2.SigningAlgES256)
-	got, err := client.GetResult(t.Context(), gotState, kp, aad, 0)
+	aad := BuildTransportAAD(pending.State, protocolv2.OperationSign, protocolv2.SigningAlgES256)
+	got, err := client.GetResult(t.Context(), pending, kp, aad, 0)
 	require.NoError(t, err)
 	require.True(t, createSeen.Load())
 
@@ -719,6 +876,6 @@ func TestClientGetResultRejectsMalformedEnvelope(t *testing.T) {
 
 	kp, err := NewTransportKeyPair()
 	require.NoError(t, err)
-	_, err = client.GetResult(t.Context(), "s1", kp, BuildTransportAAD("s1", "", "A256GCM"), 0)
+	_, err = client.GetResult(t.Context(), &PendingRequest{State: "s1"}, kp, BuildTransportAAD("s1", "", "A256GCM"), 0)
 	require.Error(t, err)
 }

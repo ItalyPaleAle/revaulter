@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
@@ -28,6 +27,7 @@ import (
 
 	"github.com/italypaleale/revaulter/internal/clientcore"
 	"github.com/italypaleale/revaulter/internal/protocolv2"
+	"github.com/italypaleale/revaulter/internal/utils"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
@@ -314,8 +314,7 @@ func (a *revaulterSSHAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature
 	var value string
 	if a.flags.Algorithm == protocolv2.SigningAlgES256 {
 		// For ES256, compute the SHA-256 digest
-		digest := sha256.Sum256(data)
-		value = base64.RawURLEncoding.EncodeToString(digest[:])
+		value = utils.SHA256Base64URL(data)
 	} else {
 		// For Ed25519, hashing is done during the signing process
 		err = ensureWithinInputLimit("ssh-agent signing input", len(data))

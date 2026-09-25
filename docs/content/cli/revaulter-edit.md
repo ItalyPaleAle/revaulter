@@ -108,7 +108,9 @@ Both sub-commands accept the same flags.
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`). Can also be passed as env var `REVAULTER_SERVER` |
-| `--request-key` | `-k` | Yes | Per-user request key (shown in the web UI after registration). Can also be passed as env var `REVAULTER_REQUEST_KEY` |
+| `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration), or a JWT from a trusted OIDC issuer. Can also be passed as env var `REVAULTER_REQUEST_KEY`. Mutually exclusive with `--request-key-file` |
+| `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key, or a JWT from a trusted OIDC issuer. A JWT is read from the file again for every request, so it can be a token that's refreshed in place, such as a Kubernetes service account token, even while you're editing. Can also be passed as env var `REVAULTER_REQUEST_KEY_FILE`. Mutually exclusive with `--request-key` |
+| `--user-id` | | Only with OIDC tokens | ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT from a trusted OIDC issuer. Can also be passed as env var `REVAULTER_USER_ID` |
 | `--key-label` | `-l` | For new files | Logical key label used to wrap the file's encryption key. Can also be passed as env var `REVAULTER_KEY_LABEL`. Files that already exist carry their own label, which always wins |
 | `--algorithm` | `-a` | No | Algorithm used to wrap the file's encryption key: `A256GCM` (default) or `C20P` |
 | `--editor` | | No | Editor to launch. Can also be passed as env var `VISUAL` or `EDITOR` |

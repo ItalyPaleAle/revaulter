@@ -3,13 +3,14 @@ package protocolv2
 import (
 	"crypto/ecdh"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+
+	"github.com/italypaleale/revaulter/internal/utils"
 )
 
 // ECP256SigningJWK is the public JWK format for a published ES256 signing key
@@ -99,8 +100,7 @@ func (j *ECP256SigningJWK) Thumbprint() (string, error) {
 
 	// Serialize as JSON by hand (in alphabetic order) to ensure the response is consistent
 	canonical := `{"crv":"` + j.Crv + `","kty":"` + j.Kty + `","x":"` + j.X + `","y":"` + j.Y + `"}`
-	h := sha256.Sum256([]byte(canonical))
-	return base64.RawURLEncoding.EncodeToString(h[:]), nil
+	return utils.SHA256Base64URL([]byte(canonical)), nil
 }
 
 // ECP256SigningJWKFromECDH converts a *ecdh.PublicKey on P-256 to a JWK
@@ -242,8 +242,7 @@ func (j *Ed25519SigningJWK) Thumbprint() (string, error) {
 
 	// Serialize as JSON by hand (in alphabetic order) to ensure the response is consistent
 	canonical := `{"crv":"` + j.Crv + `","kty":"` + j.Kty + `","x":"` + j.X + `"}`
-	h := sha256.Sum256([]byte(canonical))
-	return base64.RawURLEncoding.EncodeToString(h[:]), nil
+	return utils.SHA256Base64URL([]byte(canonical)), nil
 }
 
 // Ed25519SigningJWKFromPublicKey converts an Ed25519 public key to a JWK

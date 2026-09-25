@@ -18,6 +18,7 @@ import (
 	"golang.org/x/net/http2"
 
 	"github.com/italypaleale/revaulter/internal/buildinfo"
+	"github.com/italypaleale/revaulter/internal/protocolv2"
 )
 
 // DefaultUserAgent is the User-Agent header sent by clients that do not configure one
@@ -32,8 +33,19 @@ type ConfirmAnchorFunc func(server string, userID string, fingerprint string) (b
 type Config struct {
 	// Address of the Revaulter server, including the scheme
 	Server string
-	// Per-user request key used to authenticate with the server
+	// Static request key used to authenticate with the server, sent with the RequestKey authentication scheme
+	// Exactly one of RequestKey, OIDCToken, and OIDCTokenProvider must be set
 	RequestKey string
+	// JWT signed by one of the user's trusted OIDC issuers, sent with the Bearer authentication scheme
+	// Exactly one of RequestKey, OIDCToken, and OIDCTokenProvider must be set, and OIDCToken requires UserID
+	OIDCToken string
+	// Function that returns a JWT signed by one of the user's trusted OIDC issuers, sent with the Bearer authentication scheme
+	// It's invoked every time a request needs the credential, so it can return a fresh token when the previous one expires
+	// Exactly one of RequestKey, OIDCToken, and OIDCTokenProvider must be set, and OIDCTokenProvider requires UserID
+	OIDCTokenProvider func(ctx context.Context) string
+	// ID of the user the requests are for
+	// It's required with OIDC tokens, and optional with RequestKey; when set, the server checks that it matches the user the credential belongs to
+	UserID string
 
 	// Optional pre-configured HTTP client
 	// When nil, a client is created using the Insecure and NoH2C options
@@ -60,10 +72,11 @@ type Config struct {
 
 // Client is a low-level client for the Revaulter v2 protocol
 type Client struct {
-	server     string
-	requestKey string
-	httpClient *http.Client
-	log        *slog.Logger
+	server        string
+	authorization func(ctx context.Context) (string, error)
+	userID        string
+	httpClient    *http.Client
+	log           *slog.Logger
 
 	trustStorePath string
 	noTrustStore   bool
@@ -76,8 +89,10 @@ func NewClient(cfg Config) (*Client, error) {
 	if server == "" {
 		return nil, errors.New("property Server is required")
 	}
-	if cfg.RequestKey == "" {
-		return nil, errors.New("property RequestKey is required")
+
+	authorization, err := credentialAuthorization(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	log := cfg.Logger
@@ -87,7 +102,6 @@ func NewClient(cfg Config) (*Client, error) {
 
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		var err error
 		httpClient, err = NewHTTPClient(log, server, cfg.Insecure, cfg.NoH2C, cfg.UserAgent)
 		if err != nil {
 			return nil, err
@@ -99,7 +113,8 @@ func NewClient(cfg Config) (*Client, error) {
 
 	return &Client{
 		server:         server,
-		requestKey:     cfg.RequestKey,
+		authorization:  authorization,
+		userID:         cfg.UserID,
 		httpClient:     httpClient,
 		log:            log,
 		trustStorePath: cfg.TrustStorePath,
@@ -196,21 +211,86 @@ func NewHTTPClient(log *slog.Logger, server string, insecure bool, noH2C bool, u
 	}, nil
 }
 
-// newRequestKeyHTTPRequest builds an HTTP request for the v2 request endpoints
-// The key is sent in the Authorization header
-func newRequestKeyHTTPRequest(ctx context.Context, method, server, requestKey, pathSuffix string, body io.Reader) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, method, server+"/v2/request/"+pathSuffix, body)
+// credentialAuthorization validates the credential in cfg, and returns a function that returns the value of the Authorization header that carries it
+func credentialAuthorization(cfg Config) (func(ctx context.Context) (string, error), error) {
+	// Exactly one credential must be set
+	var set int
+	if cfg.RequestKey != "" {
+		set++
+	}
+	if cfg.OIDCToken != "" {
+		set++
+	}
+	if cfg.OIDCTokenProvider != nil {
+		set++
+	}
+	switch {
+	case set == 0:
+		return nil, errors.New("one of the properties RequestKey, OIDCToken, or OIDCTokenProvider is required")
+	case set > 1:
+		return nil, errors.New("properties RequestKey, OIDCToken, and OIDCTokenProvider are mutually exclusive")
+	case cfg.RequestKey == "" && cfg.UserID == "":
+		return nil, errors.New("property UserID is required with OIDC tokens")
+	}
+
+	switch {
+	case cfg.RequestKey != "":
+		if protocolv2.LooksLikeJWT(cfg.RequestKey) {
+			return nil, errors.New("property RequestKey contains a JWT: pass OIDC tokens in the OIDCToken property")
+		}
+		authorization := protocolv2.AuthSchemeRequestKey + " " + cfg.RequestKey
+		return func(context.Context) (string, error) {
+			return authorization, nil
+		}, nil
+
+	case cfg.OIDCToken != "":
+		if !protocolv2.LooksLikeJWT(cfg.OIDCToken) {
+			return nil, errors.New("property OIDCToken does not contain a JWT")
+		}
+		authorization := protocolv2.AuthSchemeBearer + " " + cfg.OIDCToken
+		return func(context.Context) (string, error) {
+			return authorization, nil
+		}, nil
+
+	default:
+		provider := cfg.OIDCTokenProvider
+		return func(ctx context.Context) (string, error) {
+			token := provider(ctx)
+			if token == "" {
+				return "", errors.New("the OIDC token provider returned an empty token")
+			}
+			if !protocolv2.LooksLikeJWT(token) {
+				return "", errors.New("the OIDC token provider returned a value that is not a JWT")
+			}
+			return protocolv2.AuthSchemeBearer + " " + token, nil
+		}, nil
+	}
+}
+
+// newRequestWithAuthorization builds an HTTP request for the v2 request endpoints
+// The authorization is sent in the Authorization header, and the user ID, when configured, in the X-Revaulter-User header
+func (c *Client) newRequestWithAuthorization(ctx context.Context, method, authorization, pathSuffix string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.server+"/v2/request/"+pathSuffix, body)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("Authorization", "Bearer "+requestKey)
+	req.Header.Set("Authorization", authorization)
+	if c.userID != "" {
+		req.Header.Set(protocolv2.UserIDHeader, c.userID)
+	}
+
 	return req, nil
 }
 
-// newRequest builds an HTTP request for the v2 request endpoints, authenticated with the client's request key
+// newRequest builds an HTTP request for the v2 request endpoints, authenticated with the client's credential
 func (c *Client) newRequest(ctx context.Context, method, pathSuffix string, body io.Reader) (*http.Request, error) {
-	return newRequestKeyHTTPRequest(ctx, method, c.server, c.requestKey, pathSuffix, body)
+	authorization, err := c.authorization(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.newRequestWithAuthorization(ctx, method, authorization, pathSuffix, body)
 }
 
 // doJSONRequest performs an HTTP request and decodes the JSON response into out

@@ -61,6 +61,7 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 | `port` | `REVAULTER_PORT` or `PORT` | `8080` | Port to bind to |
 | `bind` | `REVAULTER_BIND` | `0.0.0.0` | Address/interface to bind to |
 | `disableSignup` | `REVAULTER_DISABLESIGNUP` | `false` | Disable creation of new user accounts |
+| `oidcAllowPrivateAddresses` | `REVAULTER_OIDCALLOWPRIVATEADDRESSES` | `false` | Allow fetching the discovery documents and JWKS of [trusted OIDC issuers](/docs/oidc-authentication/) from private, loopback, and link-local addresses, which are refused by default. Enable it only if your issuers are on a private network, and you trust every user who can configure issuers |
 | `sessionTimeout` | `REVAULTER_SESSIONTIMEOUT` | `5m` | Session duration before re-authentication is required (max: `1h`) |
 | `requestTimeout` | `REVAULTER_REQUESTTIMEOUT` | `5m` | Default timeout for requests (can be overridden per-request; max: `24h`) |
 | `trustedProxies` | `REVAULTER_TRUSTEDPROXIES` | | Comma-separated list of IPs/CIDRs to trust for `X-Forwarded-*` headers |

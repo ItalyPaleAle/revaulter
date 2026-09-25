@@ -20,11 +20,6 @@ import (
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
-type v2RequestCreateResponse struct {
-	State   string `json:"state"`
-	Pending bool   `json:"pending"`
-}
-
 // v2RequestSigningPubkeyResponse is the response for GET /v2/request/signing-pubkeys
 type v2RequestSigningPubkeyResponse struct {
 	ID                          string          `json:"id"`
@@ -90,6 +85,13 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
+		// Generate the token the client uses to retrieve the result
+		resultToken, resultTokenHash, err := newResultToken()
+		if err != nil {
+			AbortWithErrorJSON(c, err)
+			return
+		}
+
 		// Save the request in the database
 		now := time.Now()
 		state := uuid.NewV4().String()
@@ -120,6 +122,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 				CreatedAt:        now,
 				ExpiresAt:        now.Add(timeout),
 				EncryptedRequest: string(encEnvelopeJSON),
+				ResultTokenHash:  resultTokenHash,
 			})
 			if rErr != nil {
 				return struct{}{}, rErr
@@ -129,10 +132,10 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			rErr = s.auditEventTx(c, tx, auditFields{
 				EventType:    db.AuditRequestCreate,
 				Outcome:      db.AuditOutcomeSuccess,
-				AuthMethod:   db.AuditAuthMethodRequestKey,
+				AuthMethod:   getRequestAuthMethodFromCtx(c),
 				ActorUserID:  user.ID,
 				RequestState: state,
-				Metadata:     db.RequestAuditMetadata(operation, body.Algorithm, body.KeyLabel, body.Note),
+				Metadata:     requestCreateAuditMetadata(operation, body.Algorithm, body.KeyLabel, body.Note, getRequestJWTClaimsFromCtx(c)),
 			})
 			if rErr != nil {
 				return struct{}{}, rErr
@@ -157,9 +160,10 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 		}
 
 		// Send response
-		c.JSON(http.StatusAccepted, v2RequestCreateResponse{
-			State:   state,
-			Pending: true,
+		c.JSON(http.StatusAccepted, protocolv2.RequestCreateResponse{
+			State:       state,
+			Pending:     true,
+			ResultToken: resultToken,
 		})
 
 		// Publish the new item

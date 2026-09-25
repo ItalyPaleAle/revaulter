@@ -216,6 +216,16 @@ func (env *ResponseEnvelope) Validate() error {
 	return nil
 }
 
+// RequestCreateResponse is the response to a request to create an operation
+type RequestCreateResponse struct {
+	State   string `json:"state"`
+	Pending bool   `json:"pending"`
+	// ResultToken authenticates calls to retrieve the result of this request only
+	// Unlike the request credential, it stays valid until the request is completed or expires, so clients can keep polling after a short-lived JWT expires
+	// Servers that predate result tokens omit it
+	ResultToken string `json:"resultToken,omitempty"`
+}
+
 type RequestResultResponse struct {
 	State            string            `json:"state"`
 	Pending          bool              `json:"pending,omitempty"`

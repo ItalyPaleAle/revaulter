@@ -39,8 +39,10 @@ import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import {
     v2AddCredentialBegin,
     v2AddCredentialFinish,
+    v2AddRequestOIDCIssuer,
     v2CreateSigningKey,
     v2DeleteCredential,
+    v2DeleteRequestOIDCIssuer,
     v2DeleteSigningKey,
     v2FinalizeSignup,
     v2ListCredentials,
@@ -55,6 +57,7 @@ import {
     v2RenameCredential,
     v2Session,
     v2SetAllowedIPs,
+    v2SetRequestAuthMethods,
     v2SetSigningKeyPublished,
     v2UpdateDisplayName,
     v2UpdateWrappedKey,
@@ -66,6 +69,7 @@ import type {
     V2CredentialItem,
     V2PendingRequestItem,
     V2PublishedSigningKey,
+    V2RequestAuthMethods,
     V2SessionResponse,
 } from '$lib/v2-types'
 import { PrfUnavailableError, webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
@@ -174,6 +178,9 @@ function toSessionResponse(authSession: V2AuthSessionInfo): V2SessionResponse {
         userId: authSession.userId,
         displayName: authSession.displayName,
         requestKey: authSession.requestKey,
+        requestKeyEnabled: authSession.requestKeyEnabled,
+        requestOidcEnabled: authSession.requestOidcEnabled,
+        requestOidcIssuers: authSession.requestOidcIssuers ?? [],
         anchorFingerprint: authSession.anchorFingerprint,
         wrappedKeyEpoch: authSession.wrappedKeyEpoch,
         allowedIps: authSession.allowedIps,
@@ -661,6 +668,69 @@ async function doRegenerateRequestKey() {
     }
 }
 
+async function doSetRequestAuthMethods(methods: V2RequestAuthMethods) {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        const res = await v2SetRequestAuthMethods(methods)
+        if (session) {
+            session = {
+                ...session,
+                requestKeyEnabled: res.requestKeyEnabled,
+                requestOidcEnabled: res.requestOidcEnabled,
+            }
+        }
+        settingsSuccess = 'Authentication methods updated'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doAddRequestOIDCIssuer(issuer: {
+    displayName: string
+    issuer: string
+    audience: string
+    subject: string
+    jwksUrl: string
+}): Promise<boolean> {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        const res = await v2AddRequestOIDCIssuer(issuer)
+        if (session) {
+            session = { ...session, requestOidcIssuers: res.requestOidcIssuers }
+        }
+        settingsSuccess = 'OIDC issuer added'
+        return true
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+        return false
+    } finally {
+        settingsBusy = false
+    }
+}
+
+async function doDeleteRequestOIDCIssuer(id: string) {
+    settingsBusy = true
+    settingsError = null
+    settingsSuccess = null
+    try {
+        const res = await v2DeleteRequestOIDCIssuer(id)
+        if (session) {
+            session = { ...session, requestOidcIssuers: res.requestOidcIssuers }
+        }
+        settingsSuccess = 'OIDC issuer removed'
+    } catch (err) {
+        settingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+        settingsBusy = false
+    }
+}
+
 async function doLoadCredentials() {
     try {
         credentials = (await v2ListCredentials()) ?? []
@@ -1102,6 +1172,9 @@ function sortedItems() {
             onLogout={doLogout}
             onPublishSigningKey={doPublishSigningKey}
             onRegenerateRequestKey={doRegenerateRequestKey}
+            onSetRequestAuthMethods={doSetRequestAuthMethods}
+            onAddRequestOIDCIssuer={doAddRequestOIDCIssuer}
+            onDeleteRequestOIDCIssuer={doDeleteRequestOIDCIssuer}
             onRemoveItem={removeItem}
             onRemovePassword={doRemovePassword}
             onRenamePasskey={doRenamePasskey}
@@ -1112,6 +1185,9 @@ function sortedItems() {
             pendingItems={sortedItems()}
             {primaryKey}
             requestKey={session?.requestKey ?? ''}
+            requestKeyEnabled={session?.requestKeyEnabled ?? true}
+            requestOidcEnabled={session?.requestOidcEnabled ?? false}
+            requestOidcIssuers={session?.requestOidcIssuers ?? []}
             anchorFingerprint={session?.anchorFingerprint ?? ''}
             sessionLabel={sessionLabel()}
             settingsBusy={settingsBusy}

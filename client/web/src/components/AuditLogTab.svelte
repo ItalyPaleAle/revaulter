@@ -40,6 +40,9 @@ const eventTypeOptions = [
     'auth.login_finish',
     'auth.logout',
     'auth.request_key_regenerate',
+    'auth.request_auth_methods_change',
+    'auth.request_oidc_issuer_add',
+    'auth.request_oidc_issuer_delete',
     'auth.allowed_ips_change',
     'auth.display_name_change',
     'auth.wrapped_key_update',
@@ -139,6 +142,8 @@ function authMethodLabel(method: string): string {
     switch (method) {
         case 'request_key':
             return 'Request key'
+        case 'request_oidc':
+            return 'OIDC token'
         case 'system':
             return 'System'
         case 'none':

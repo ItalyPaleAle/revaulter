@@ -42,6 +42,8 @@ type V2RequestRecord struct {
 	EncryptedRequest string
 	// ResponseEnvelope is the E2EE response envelope JSON (opaque to the server).
 	ResponseEnvelope *protocolv2.ResponseEnvelope
+	// ResultTokenHash is the SHA-256 of the result token returned when the request was created
+	ResultTokenHash string
 }
 
 type V2RequestListItem struct {
@@ -69,6 +71,8 @@ type CreateRequestInput struct {
 	ExpiresAt   time.Time
 	// EncryptedRequest is the JSON-serialized RequestEncEnvelope.
 	EncryptedRequest string
+	// ResultTokenHash is the SHA-256 of the result token returned to the client
+	ResultTokenHash string
 }
 
 // requestTxTimeout is the timeout for the transactions RequestStore starts on its own
@@ -112,9 +116,9 @@ func (s *RequestStore) CreateRequest(ctx context.Context, in CreateRequestInput)
 	expires := in.ExpiresAt.Unix()
 	_, err := s.db.Exec(ctx,
 		`INSERT INTO v2_requests
-			(state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, encrypted_request)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		in.State, string(V2RequestStatusPending), in.Operation, in.UserID, in.KeyLabel, in.Algorithm, in.RequestorIP, in.Note, now, expires, now, in.EncryptedRequest,
+			(state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, encrypted_request, result_token_hash)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+		in.State, string(V2RequestStatusPending), in.Operation, in.UserID, in.KeyLabel, in.Algorithm, in.RequestorIP, in.Note, now, expires, now, in.EncryptedRequest, in.ResultTokenHash,
 	)
 	return err
 }
@@ -415,6 +419,29 @@ func (s *RequestStore) DeleteTerminalRequest(ctx context.Context, state string, 
 	return err
 }
 
+// GetResultTokenAndOwner returns the hash of the request's result token, and the user who owns the request, in a single query
+// It returns a nil user if the request doesn't exist
+// Unlike GetRequest, it doesn't mark past-deadline requests as expired
+func (s *RequestStore) GetResultTokenAndOwner(ctx context.Context, state string) (resultTokenHash string, owner *User, err error) {
+	owner, err = scanUser(
+		s.db.QueryRow(ctx,
+			`SELECT `+userColumnsAliasU+`, r.result_token_hash
+				FROM v2_requests r
+				JOIN v2_users u ON u.id = r.user_id
+				WHERE r.state = $1`,
+			state,
+		),
+		&resultTokenHash,
+	)
+	if s.db.IsNoRowsError(err) {
+		return "", nil, nil
+	} else if err != nil {
+		return "", nil, err
+	}
+
+	return resultTokenHash, owner, nil
+}
+
 // requestRowScanner is implemented by *sql.Row — used by scanRequestRecord so the same column list is used from SELECT and UPDATE ... RETURNING calls
 type requestRowScanner interface {
 	Scan(dest ...any) error
@@ -445,16 +472,16 @@ func scanRequestRecords(rows requestRowsScanner) ([]*V2RequestRecord, error) {
 	return out, rows.Err()
 }
 
-const requestColumns = `state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, encrypted_request, encrypted_result`
+const requestColumns = `state, status, operation, user_id, key_label, algorithm, requestor_ip, note, created_at, expires_at, updated_at, encrypted_request, encrypted_result, result_token_hash`
 
 func scanRequestRecord(scanner requestRowScanner) (*V2RequestRecord, error) {
 	var (
 		state, status, operation, userID, keyLabel, algorithm, requestorIP, note string
 		createdAt, expiresAt, updatedAt                                          int64
-		encryptedRequest, encryptedResult                                        string
+		encryptedRequest, encryptedResult, resultTokenHash                       string
 	)
 	err := scanner.Scan(
-		&state, &status, &operation, &userID, &keyLabel, &algorithm, &requestorIP, &note, &createdAt, &expiresAt, &updatedAt, &encryptedRequest, &encryptedResult,
+		&state, &status, &operation, &userID, &keyLabel, &algorithm, &requestorIP, &note, &createdAt, &expiresAt, &updatedAt, &encryptedRequest, &encryptedResult, &resultTokenHash,
 	)
 	if err != nil {
 		return nil, err
@@ -473,6 +500,7 @@ func scanRequestRecord(scanner requestRowScanner) (*V2RequestRecord, error) {
 		ExpiresAt:        time.Unix(expiresAt, 0),
 		UpdatedAt:        time.Unix(updatedAt, 0),
 		EncryptedRequest: encryptedRequest,
+		ResultTokenHash:  resultTokenHash,
 	}
 	if encryptedResult != "" {
 		var env protocolv2.ResponseEnvelope

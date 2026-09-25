@@ -121,7 +121,7 @@ databaseDSN:
 ##   Instance-wide secret to derive encryption keys.
 ##   It's recommended to generate with `openssl rand -base64 32`.
 ##
-##   IMPORTANT: rotating `secretKey` changes the PRF salt for every user effectively bricks every existing account. Treat this value as immutable for the lifetime of the instance; if you must rotate it, plan on every user re-registering from scratch.
+##   IMPORTANT: rotating `secretKey` changes the PRF salt for every user effectively bricks every existing account. Treat this value as immutable for the lifetime of the instance - if you must rotate it, plan on every user re-registering from scratch.
 ##
 ##   Note: this value is NOT used to encrypt anything server-side: all request payloads and responses are end-to-end encrypted in the browser, and the server only stores opaque envelopes.
 ## Required
@@ -157,6 +157,13 @@ secretKey:
 ##   Disable creation of new user accounts.
 ## Default: false
 #disableSignup:
+
+## oidcAllowPrivateAddresses (boolean)
+## Description:
+##   If true, Revaulter can connect to private, loopback, link-local, and other non-public addresses when it fetches the OpenID Connect discovery documents and JWKS of the OIDC issuers that users trust
+##   By default, these connections are refused, because the URLs are configured by users
+## Default: false
+#oidcAllowPrivateAddresses:
 
 ## sessionTimeout (duration)
 ## Description:
@@ -212,6 +219,6 @@ secretKey:
 ## logAsJson (boolean)
 ## Description:
 ##   If true, emits logs formatted as JSON, otherwise uses a text-based structured log format.
-## Default: false if a TTY is attached (e.g. in development); true otherwise.
+## Default: false if a TTY is attached (e.g. in development), true otherwise.
 #logAsJson:
 

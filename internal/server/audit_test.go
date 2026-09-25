@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/protocolv2"
+	"github.com/italypaleale/revaulter/internal/requestjwt"
 )
 
 func auditByType(t *testing.T, srv *Server, userID string, eventType db.EventType) []db.AuditEvent {
@@ -339,4 +341,26 @@ func TestAuditLoginFinishFailureWritesRow(t *testing.T) {
 		}
 	}
 	require.True(t, sawFailure, "expected at least one auth.login_finish row with outcome=failure")
+}
+
+func TestRequestCreateAuditMetadataTruncatesClaims(t *testing.T) {
+	claims := &requestjwt.Claims{
+		Issuer:  strings.Repeat("i", 2000),
+		Subject: strings.Repeat("<", 2000),
+		JwtID:   strings.Repeat("é", 2000),
+	}
+
+	// Each claim is truncated, so the payload stays under the audit metadata size limit even when every character must be escaped
+	metadata := requestCreateAuditMetadata("encrypt", "A256GCM", strings.Repeat("k", 128), "note", claims)
+	require.Less(t, len(metadata), 4<<10)
+
+	var decoded map[string]string
+	err := json.Unmarshal(metadata, &decoded)
+	require.NoError(t, err)
+	require.Equal(t, strings.Repeat("<", 200)+"…", decoded["jwtSubject"])
+	require.Equal(t, strings.Repeat("é", 200)+"…", decoded["jwtId"])
+
+	// Short claims are recorded as-is
+	metadata = requestCreateAuditMetadata("encrypt", "A256GCM", "key", "", &requestjwt.Claims{Issuer: "iss", Subject: "sub"})
+	require.JSONEq(t, `{"operation":"encrypt","algorithm":"A256GCM","keyLabel":"key","jwtIssuer":"iss","jwtSubject":"sub"}`, string(metadata))
 }

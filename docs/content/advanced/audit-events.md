@@ -24,7 +24,7 @@ Events are written through one of two paths:
 | `created_at` | INTEGER (Unix seconds) | no | When the audit row was written |
 | `event_type` | TEXT | no | `<area>.<verb>` — see list below |
 | `outcome` | TEXT | no | `success` \| `failure` \| `denied` |
-| `auth_method` | TEXT | no | `session` \| `request_key` \| `system` \| `none` (set on rows from handlers that run before any authentication is established, e.g. `auth.login_finish` failures) |
+| `auth_method` | TEXT | no | `session` \| `request_key` \| `request_oidc` (a JWT from a trusted OIDC issuer) \| `system` \| `none` (set on rows from handlers that run before any authentication is established, e.g. `auth.login_finish` failures) |
 | `actor_user_id` | TEXT | yes | The user who performed the action, NULL for unauthenticated failures and pure system events |
 | `target_user_id` | TEXT | yes | The user the action affects (often equal to `actor_user_id`) |
 | `signing_key_id` | TEXT | yes | Set for `signing_key.*` events |
@@ -50,6 +50,9 @@ Naming convention is `<area>.<verb>` with both halves in `snake_case`. The full 
 | `auth.login_finish` | A login attempt finishes — `outcome=success` for accepted credentials, `outcome=failure` for rejected ones |
 | `auth.logout` | User invokes logout. The session JWT is not invalidated server-side — this records the cookie-clear |
 | `auth.request_key_regenerate` | User rotates the CLI request key |
+| `auth.request_auth_methods_change` | User enables or disables the static request key or OIDC tokens. Metadata: `{requestKeyEnabled, requestOidcEnabled}` |
+| `auth.request_oidc_issuer_add` | User adds a trusted OIDC issuer. Metadata: `{issuerId, issuer, audience, subject, discovery}`, with long values truncated |
+| `auth.request_oidc_issuer_delete` | User removes a trusted OIDC issuer. Metadata: same as `auth.request_oidc_issuer_add` |
 | `auth.allowed_ips_change` | Allowed-IP list updated. Metadata: `{old_count, new_count}` |
 | `auth.display_name_change` | User updates their display name |
 | `auth.wrapped_key_update` | The wrapped primary/anchor key changes. Metadata: `{advance_epoch}` (true when the change is a password rotation) |
@@ -61,12 +64,12 @@ Naming convention is `<area>.<verb>` with both halves in `snake_case`. The full 
 
 | event_type | When it fires |
 | --- | --- |
-| `request.create` | CLI/API submits a new encrypt/decrypt/sign request. Metadata: `{operation, algorithm, keyLabel, note?}` |
+| `request.create` | CLI/API submits a new encrypt/decrypt/sign request. Metadata: `{operation, algorithm, keyLabel, note?, jwtIssuer?, jwtSubject?, jwtId?}` |
 | `request.confirm` | User approves a pending request. Metadata: `{operation, algorithm, keyLabel, note?}` |
 | `request.cancel` | User cancels a pending request. Metadata: `{operation, algorithm, keyLabel, note?}` |
 | `request.expire` | TTL elapses and the background goroutine marks the request expired. `auth_method=system`. Metadata: `{operation, algorithm, keyLabel, note?}` |
 
-The `note` field is only included when the original request carried a non-empty user-facing note.
+The `note` field is only included when the original request carried a non-empty user-facing note. The `jwt*` fields are only included on `request.create` when the request was authenticated with an OIDC token: they hold the token's verified `iss`, `sub`, and `jti` claims, so the audit log shows which workload asked.
 
 ### Signing keys
 

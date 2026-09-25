@@ -26,7 +26,7 @@ sequenceDiagram
     Note over CLI: CLI decrypts locally
 ```
 
-1. A CLI or script submits an encrypt or decrypt request to Revaulter, identified by a per-user request key.
+1. A CLI or script submits an encrypt or decrypt request to Revaulter, identified by a per-user request key or by a short-lived [OIDC token](/docs/oidc-authentication/), such as the ones GitHub Actions issues to workflows.
 2. Revaulter stores the End-to-End Encrypted (E2EE) request in its database and, if configured, sends a webhook notification to the passkey holder.
 3. The user opens the Revaulter web UI and authenticates with their WebAuthn passkey (with optional password second factor).
 4. The browser derives the encryption key from the passkey via WebAuthn PRF, performs the cryptographic operation locally using WebCrypto, and encrypts the result back to the CLI. The server never sees the plaintext or the user's keys.

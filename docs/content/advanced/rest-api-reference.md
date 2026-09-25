@@ -36,7 +36,16 @@ Returns API version information.
 
 ## Request endpoints (`/v2/request`)
 
-These endpoints are used by the CLI (or custom clients) to submit cryptographic requests and poll for results. They do not require a session — requests are authenticated by the per-user request key sent in the `Authorization: Bearer <requestKey>` header. Keys carry an `rvk_` prefix so accidental leakage is easy to detect.
+These endpoints are used by the CLI (or custom clients) to submit cryptographic requests and poll for results. They do not require a session. Instead, requests carry a credential in the `Authorization` header. Each user chooses in the web UI which kinds of credentials are accepted, and can enable both at once:
+
+- **Request key** (enabled by default): the per-user static request key, sent as `Authorization: RequestKey <requestKey>`. Note: request keys carry an `rvk_` prefix.
+- **OIDC token**: a short-lived JWT signed by one of the user's trusted OIDC issuers (e.g. GitHub Actions OIDC token), sent as `Authorization: Bearer <jwt>`. These requests must also include the `X-Revaulter-User: <userId>` header, because the token on its own doesn't identify a Revaulter user. See [Authenticating with OIDC tokens](/docs/oidc-authentication/).
+
+To retrieve the result of a request, clients can also use the request's **result token**, sent as `Authorization: ResultToken <resultToken>`. See `GET /v2/request/result/:state` below.
+
+> For backwards compatibility, the server also accepts a request key with the `Bearer` scheme (`Authorization: Bearer <requestKey>`), or without any scheme (`Authorization: <requestKey>`). New clients should use the `RequestKey` scheme. JWTs are only recognized with the `Bearer` scheme.
+
+The `X-Revaulter-User` header is optional with request keys and result tokens.
 
 ### `POST /v2/request/encrypt`
 
@@ -44,7 +53,7 @@ These endpoints are used by the CLI (or custom clients) to submit cryptographic 
 
 ### `POST /v2/request/sign`
 
-Submit an encrypt, decrypt, or sign request for approval. The request key in the `Authorization` header identifies the user who will approve the request.
+Submit an encrypt, decrypt, or sign request for approval. The credential in the `Authorization` header (and, for OIDC tokens, the `X-Revaulter-User` header) identifies the user who will approve the request.
 
 The request payload is encrypted end-to-end by the CLI before submission. The server stores the encrypted envelope without being able to read it.
 
@@ -70,7 +79,7 @@ The request payload is encrypted end-to-end by the CLI before submission. The se
 ```
 
 | Field | Required | Description |
-|-------|----------|-------------|
+| ------- | ---------- | ------------- |
 | `keyLabel` | Yes | Logical key label for key derivation (max 128 chars) |
 | `algorithm` | Yes | Algorithm identifier (max 64 chars). Encrypt/decrypt accept `A256GCM` (alias `aes-256-gcm`) and `C20P` (alias `chacha20-poly1305`); sign accepts `ES256` |
 | `timeout` | No | Request timeout as seconds or Go duration (default: server `requestTimeout`, max: 24h) |
@@ -86,9 +95,12 @@ The request payload is encrypted end-to-end by the CLI before submission. The se
 ```json
 {
   "state": "<uuid>",
-  "pending": true
+  "pending": true,
+  "resultToken": "rvr_<random>"
 }
 ```
+
+`resultToken` authenticates `GET /v2/request/result/:state` for this request only. Unlike the request credential, it stays valid until the request is completed or expires, so clients can keep polling after a short-lived OIDC token has expired. Servers that predate result tokens omit this field.
 
 ### Inner payload
 
@@ -168,6 +180,8 @@ Returns `412 Precondition Failed` if the user has not completed signup (no encry
 ### `GET /v2/request/result/:state`
 
 Long-poll for the result of a previously submitted request. The server holds the connection until the request is completed, canceled, or the client disconnects.
+
+This endpoint accepts the `resultToken` returned when the request was created, in the `Authorization: ResultToken <resultToken>` header. It also accepts the same credentials as the other request endpoints.
 
 **Pending response:** `202 Accepted`
 
@@ -397,6 +411,9 @@ Complete account registration with the WebAuthn credential response.
     "userId": "<uuid>",
     "displayName": "Alice",
     "requestKey": "AbCdEf0123456789GhIj",
+    "requestKeyEnabled": true,
+    "requestOidcEnabled": false,
+    "requestOidcIssuers": [],
     "wrappedKeyEpoch": 0,
     "allowedIps": [],
     "ttl": 300
@@ -447,6 +464,9 @@ Complete login with the WebAuthn assertion response.
     "userId": "<uuid>",
     "displayName": "Alice",
     "requestKey": "AbCdEf0123456789GhIj",
+    "requestKeyEnabled": true,
+    "requestOidcEnabled": false,
+    "requestOidcIssuers": [],
     "wrappedKeyEpoch": 1,
     "allowedIps": [],
     "ttl": 300
@@ -473,6 +493,18 @@ Get the current session information. Requires an authenticated session.
   "userId": "<uuid>",
   "displayName": "Alice",
   "requestKey": "AbCdEf0123456789GhIj",
+  "requestKeyEnabled": true,
+  "requestOidcEnabled": true,
+  "requestOidcIssuers": [
+    {
+      "id": "<uuid>",
+      "displayName": "Release workflow",
+      "issuer": "https://token.actions.githubusercontent.com",
+      "audience": "https://revaulter.example.com",
+      "subject": "repo:my-org/my-app:ref:refs/tags/*",
+      "createdAt": 1713200000
+    }
+  ],
   "wrappedKeyEpoch": 1,
   "allowedIps": [],
   "ttl": 280
@@ -566,6 +598,96 @@ Generate a new per-user request key. The old key stops working immediately.
   "requestKey": "NewRequestKey1234567"
 }
 ```
+
+#### `POST /v2/auth/request-auth-methods`
+
+Enable or disable the credentials the CLI can use to authenticate requests for this user: the static request key and JWTs from the user's trusted OIDC issuers.
+
+**Request body:**
+
+```json
+{
+  "requestKeyEnabled": false,
+  "requestOidcEnabled": true
+}
+```
+
+**Response:** `200 OK`
+
+```json
+{
+  "ok": true,
+  "requestKeyEnabled": false,
+  "requestOidcEnabled": true
+}
+```
+
+#### `POST /v2/auth/request-oidc-issuers/add`
+
+Add a trusted OIDC issuer. Each user can have up to 25.
+
+**Request body:**
+
+```json
+{
+  "displayName": "Release workflow",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "audience": "https://revaulter.example.com",
+  "subject": "repo:my-org/my-app:ref:refs/tags/*",
+  "jwksUrl": ""
+}
+```
+
+| Field | Required | Description |
+| ------- | ---------- | ------------- |
+| `displayName` | No | Name shown in the web UI (max 100 chars) |
+| `issuer` | Yes | Value of the token's `iss` claim, matched exactly (max 512 chars) |
+| `audience` | Yes | Value that must appear in the token's `aud` claim (max 512 chars) |
+| `subject` | Yes | Pattern the token's `sub` claim must match, where `*` matches any sequence of characters (max 512 chars). It can't consist only of wildcards |
+| `jwksUrl` | No | HTTPS URL of the issuer's JWKS. When empty, it's resolved with OpenID Connect discovery, which requires `issuer` to be an HTTPS URL |
+
+**Response:** `200 OK`, with the updated list
+
+```json
+{
+  "ok": true,
+  "requestOidcIssuers": [
+    {
+      "id": "<uuid>",
+      "displayName": "Release workflow",
+      "issuer": "https://token.actions.githubusercontent.com",
+      "audience": "https://revaulter.example.com",
+      "subject": "repo:my-org/my-app:ref:refs/tags/*",
+      "createdAt": 1713200000
+    }
+  ]
+}
+```
+
+Returns `400 Bad Request` when a field is invalid, and `409 Conflict` when the user already has the maximum number of issuers.
+
+#### `POST /v2/auth/request-oidc-issuers/delete`
+
+Remove a trusted OIDC issuer.
+
+**Request body:**
+
+```json
+{
+  "id": "<uuid>"
+}
+```
+
+**Response:** `200 OK`, with the updated list
+
+```json
+{
+  "ok": true,
+  "requestOidcIssuers": []
+}
+```
+
+Returns `404 Not Found` if the issuer doesn't exist.
 
 #### `POST /v2/auth/update-display-name`
 
