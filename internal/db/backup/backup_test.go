@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -44,7 +45,6 @@ const (
 // canonicalFixture builds the canonical fixture used by the round-trip tests
 //
 // The values are chosen to exercise every supported columnKind: text, bool, uuid, json (jsonb on Postgres), int64, and nullable columns
-// JSON objects list their keys in alphabetical order, since a Postgres backup re-encodes jsonb values with sorted keys and the comparison is byte for byte
 //
 // SchemaLevel must match the count of embedded migrations
 // If a new migration is added under internal/db/migrations, bump this value
@@ -62,7 +62,7 @@ func canonicalFixture() fixtureBackup {
 				{"some_setting", "some-value", "etag-1"},
 			}),
 			tableFixture("v2_users", [][]any{
-				{fxUserAID, "Alice", "active", "wa-A", "rk-A", "ecdh-A", "mlkem-A", "es384-A", "mldsa-A", "sig-es-A", "sig-mldsa-A", int64(1), "10.0.0.0/8", true, ts, ts, int64(1), true, true, `[{"audience":"https://revaulter.example.com","createdAt":1700000000,"id":"oidc-1","issuer":"https://token.actions.githubusercontent.com","subject":"repo:example/app:*"}]`},
+				{fxUserAID, "Alice", "active", "wa-A", "rk-A", "ecdh-A", "mlkem-A", "es384-A", "mldsa-A", "sig-es-A", "sig-mldsa-A", int64(1), "10.0.0.0/8", true, ts, ts, int64(1), true, true, `[{"id":"oidc-1","issuer":"https://token.actions.githubusercontent.com","audience":"https://revaulter.example.com","subject":"repo:example/app:*","createdAt":1700000000}]`},
 				{fxUserBID, "Bob", "active", "wa-B", "rk-B", "", "", "", "", "", "", int64(2), "", false, ts - 100, ts - 50, int64(2), true, false, `[]`},
 			}),
 			tableFixture("v2_published_signing_keys", [][]any{
@@ -275,7 +275,7 @@ func runRoundTrip(t *testing.T, conn *db.DB) {
 		act, ok := actByName[name]
 		require.True(t, ok, "table %q missing from re-exported backup", name)
 		require.Equal(t, exp.Columns, act.Columns, "columns differ for %q", name)
-		require.Equal(t, sortRows(exp.Rows), sortRows(act.Rows), "rows differ for %q", name)
+		requireRowsEqual(t, name, exp.Columns, exp.Rows, act.Rows)
 	}
 }
 
@@ -297,6 +297,44 @@ func sortRows(rows [][]any) [][]any {
 		return fmt.Sprintf("%v", out[i][0]) < fmt.Sprintf("%v", out[j][0])
 	})
 	return out
+}
+
+// requireRowsEqual asserts that two sets of rows from the same table hold the same values, regardless of row order
+func requireRowsEqual(t *testing.T, table string, columns []string, exp [][]any, act [][]any) {
+	t.Helper()
+
+	idx := slices.IndexFunc(backupTables, func(spec tableSpec) bool {
+		return spec.name == table
+	})
+	require.GreaterOrEqual(t, idx, 0, "table %q has no backup spec", table)
+
+	isJSON := make(map[string]bool, len(backupTables[idx].columns))
+	for _, c := range backupTables[idx].columns {
+		isJSON[c.name] = c.kind == colKindJSON
+	}
+
+	exp = sortRows(exp)
+	act = sortRows(act)
+	require.Len(t, act, len(exp), "row count for %q", table)
+
+	for i := range exp {
+		expRow := slices.Clone(exp[i])
+		actRow := slices.Clone(act[i])
+
+		for j, name := range columns {
+			// A NULL JSON value is left in place, so the row comparison checks it is still NULL
+			if !isJSON[name] || expRow[j] == nil {
+				continue
+			}
+
+			require.JSONEq(t, fmt.Sprint(expRow[j]), fmt.Sprint(actRow[j]), "%s.%s differs in row %d", table, name, i)
+
+			// Blank out the checked JSON value so the row comparison covers only the other columns
+			expRow[j], actRow[j] = nil, nil
+		}
+
+		require.Equal(t, expRow, actRow, "row %d differs for %q", i, table)
+	}
 }
 
 // TestBackupSkipsTheAuditShippingKey verifies the backup format carries neither backend's audit stream shipping key
