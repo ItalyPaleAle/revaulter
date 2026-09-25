@@ -147,32 +147,36 @@ test('request auth tab enables OIDC tokens and the request key independently', a
     }
 })
 
-test('request auth toggle reverts when saving fails', async ({ page, request }) => {
-    const auth = await registerAndReachReady(page, 'Settings User')
+test.describe(() => {
+    test.use({ serviceWorkers: 'block' })
 
-    try {
-        await openSettingsTab(page, 'Request auth')
+    test('request auth toggle reverts when saving fails', async ({ page, request }) => {
+        const auth = await registerAndReachReady(page, 'Settings User')
 
-        // Make the next save fail
-        await page.route('**/v2/auth/request-auth-methods', (route) =>
-            route.fulfill({
-                status: 500,
-                contentType: 'application/json',
-                body: JSON.stringify({ error: 'Simulated failure' }),
-            })
-        )
+        try {
+            await openSettingsTab(page, 'Request auth')
 
-        const requestKeyToggle = page.getByRole('checkbox', { name: /^Request key/ })
-        await requestKeyToggle.click()
-        await expect(page.getByText('Simulated failure')).toBeVisible()
+            // Make the next save fail
+            await page.route('**/v2/auth/request-auth-methods', (route) =>
+                route.fulfill({
+                    status: 500,
+                    contentType: 'application/json',
+                    body: JSON.stringify({ error: 'Simulated failure' }),
+                })
+            )
 
-        // The checkbox shows the saved value again, and the key still works
-        await expect(requestKeyToggle).toBeChecked()
-        await expect(page.getByRole('button', { name: 'Regenerate Regenerate' })).toBeVisible()
-        expect((await fetchRequestPubkey(request, auth.session.requestKey)).status).toBe(200)
-    } finally {
-        await auth.passkey.dispose()
-    }
+            const requestKeyToggle = page.getByRole('checkbox', { name: /^Request key/ })
+            await requestKeyToggle.click()
+            await expect(page.getByText('Simulated failure')).toBeVisible()
+
+            // The checkbox shows the saved value again, and the key still works
+            await expect(requestKeyToggle).toBeChecked()
+            await expect(page.getByRole('button', { name: 'Regenerate Regenerate' })).toBeVisible()
+            expect((await fetchRequestPubkey(request, auth.session.requestKey)).status).toBe(200)
+        } finally {
+            await auth.passkey.dispose()
+        }
+    })
 })
 
 test('display name can be updated', async ({ page }) => {
