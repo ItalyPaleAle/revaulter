@@ -16,7 +16,7 @@ import (
 	"github.com/mitchellh/go-homedir"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/contrib/exporters/autoexport"
-	logGlobal "go.opentelemetry.io/otel/log/global"
+	"go.opentelemetry.io/otel"
 	logSdk "go.opentelemetry.io/otel/sdk/log"
 
 	"github.com/italypaleale/revaulter/internal/buildinfo"
@@ -107,7 +107,7 @@ func getLogger(ctx context.Context, cfg *config.Config) (log *slog.Logger, shutd
 	)
 
 	// Set the logger provider globally
-	logGlobal.SetLoggerProvider(provider)
+	otel.SetLoggerProvider(provider)
 
 	// Wrap the handler in a "fanout" one
 	handler = slog.NewMultiHandler(handler, otelslog.NewHandler(buildinfo.AppName, otelslog.WithLoggerProvider(provider)))
