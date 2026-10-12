@@ -20,6 +20,33 @@ val, ok := something.(string)
 if ok { ... }
 ```
 
+In tests, never invoke functions inside assertions that check errors, such as `require.Error`, `require.NoError`, `require.ErrorIs`, `assert.ErrorContains`, and similar.
+Always assign the result to an `err` variable on a separate line first, then pass the variable to the assertion.
+This does not apply to assertions that do not check errors.
+
+```go
+// Wrong
+require.Error(t, something())
+
+// Wrong
+require.ErrorIs(t, something(), context.Canceled)
+
+// Wrong
+require.NoError(t, something())
+
+// Right
+err := something()
+require.Error(t, err)
+
+// Right
+err := something()
+require.ErrorIs(t, err, context.Canceled)
+
+// Right
+err := something()
+require.NoError(t, err)
+```
+
 If you modify `internal/config.Config` or any struct referenced from it, always run `make gen-config` before finishing the task.
 
 The Go build tag `unit` is meant for files that contain helpers for unit tests. It should never be included in a Go test file (ending in `_test.go`).
@@ -84,10 +111,10 @@ go test -tags unit ./...
 
 ## Running the linter
 
-The linter is pinned to a specific version (included in `.github/workflows/ci.yaml`), which must be installed from the pre-compiled binary: builds from package managers are compiled with an older Go and refuse this module's Go version.
+The linter is pinned to a specific version (included in `.golangci-lint-version`), which must be installed from the pre-compiled binary: builds from package managers are compiled with an older Go and refuse this module's Go version.
 
 ```sh
-VERSION="2.x.x" # From .github/workflows/ci.yaml
+VERSION="2.x.x" # From .golangci-lint-version
 curl -sSL https://github.com/golangci/golangci-lint/releases/download/v${VERSION}/golangci-lint-${VERSION}-linux-amd64.tar.gz | tar -xz -C /tmp
 install /tmp/golangci-lint-${VERSION}-linux-amd64/golangci-lint /usr/local/bin
 make lint
