@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
-        with: { go-version: '1.26' }
+        with: { go-version: '1.27.3' }
 
       - name: Build
         run: |
