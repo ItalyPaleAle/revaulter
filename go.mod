@@ -1,6 +1,6 @@
 module github.com/italypaleale/revaulter
 
-go 1.27.2
+go 1.27.3
 
 tool github.com/fchimpan/gomod-age
 
