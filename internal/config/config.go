@@ -40,6 +40,12 @@ type Config struct {
 	// Leave unset to omit the header entirely
 	WebhookKey string `env:"WEBHOOKKEY" yaml:"webhookKey"`
 
+	// If true, webhook notifications can be sent to private, loopback, link-local, and other non-public addresses
+	// By default, these connections are refused to guard against server-side request forgery
+	// Enable this when the receiver is on an internal network, such as a self-hosted ntfy, Gotify, or alert router on the LAN
+	// +default false
+	WebhookAllowPrivateAddresses bool `env:"WEBHOOKALLOWPRIVATEADDRESSES" yaml:"webhookAllowPrivateAddresses"`
+
 	// If set, streams the audit log to this endpoint, for ingestion by a SIEM or another log collector (Splunk HEC, Elastic, Vector, Fluent Bit, Cribl, a plain webhook receiver, …)
 	// Delivery is at-least-once, so the collector must deduplicate on the event `id`
 	AuditStreamUrl string `env:"AUDITSTREAMURL" yaml:"auditStreamUrl"`
