@@ -1,4 +1,4 @@
-import { createPublicKey, verify } from 'node:crypto'
+import { createPublicKey, randomUUID, verify } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -201,6 +201,60 @@ test('new seeded request appears without reload after stream is connected', { ta
         await auth.passkey.dispose()
     }
 })
+
+// A bulk action applies only to the requests listed when it is clicked: a request that arrives later must wait for its own decision
+// Seeded requests carry a dummy payload, so confirming them fails in the browser, but a bulk confirm still reaches the server for each item it touches
+for (const action of ['Confirm all', 'Decline all']) {
+    test(`requests arriving after "${action}" stay pending`, { tag: '@requeststream' }, async ({ page, request }) => {
+        const auth = await registerAndReachReady(page, 'Bulk Action User')
+        const seedData = {
+            userId: auth.session.userId,
+            operation: 'encrypt',
+            algorithm: 'A256GCM',
+            requestor: '203.0.113.25',
+        }
+
+        // Record every browser call that acts on the late request, by URL for fetching its details or by body for confirming or canceling it
+        const lateState = randomUUID()
+        const lateCalls = []
+        page.on('request', (req) => {
+            if (req.url().includes(lateState) || (req.postData() ?? '').includes(lateState)) {
+                lateCalls.push(`${req.method()} ${req.url()}`)
+            }
+        })
+
+        try {
+            await waitForListStream(page)
+
+            const first = await seedPendingRequest(request, { ...seedData, keyLabel: 'bulk-key-1' })
+            const second = await seedPendingRequest(request, { ...seedData, keyLabel: 'bulk-key-2' })
+            await expect(page.getByText('2 pending approvals')).toBeVisible()
+
+            // Wait until the bulk action has reached the server for both listed requests
+            const actsOn = (state) => (res) =>
+                res.url().includes(state) || (res.request().postData() ?? '').includes(state)
+            const handled = Promise.all([
+                page.waitForResponse(actsOn(first.state)),
+                page.waitForResponse(actsOn(second.state)),
+            ])
+            await page.getByRole('button', { name: action }).click()
+            await handled
+
+            await seedPendingRequest(request, { ...seedData, keyLabel: 'bulk-key-late', state: lateState })
+            await expect(page.getByText('bulk-key-late')).toBeVisible()
+
+            // Give a stale bulk action time to act on the new request before checking that nothing touched it
+            await page.waitForTimeout(1500)
+            expect(lateCalls).toEqual([])
+
+            const rec = await getSeededRequest(request, lateState)
+            expect(rec.status).toBe('pending')
+            await expect(page.getByText('bulk-key-late')).toBeVisible()
+        } finally {
+            await auth.passkey.dispose()
+        }
+    })
+}
 
 test('regenerating the request key invalidates the old public key endpoint', async ({ page, request }) => {
     const auth = await registerAndReachReady(page, 'Request User')
