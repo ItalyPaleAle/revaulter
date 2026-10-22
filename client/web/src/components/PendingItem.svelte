@@ -1,5 +1,6 @@
 <script lang="ts">
 import { formatDistanceStrict } from 'date-fns'
+import { untrack } from 'svelte'
 
 import Button from '$components/Button.svelte'
 import Icon from '$components/Icon.svelte'
@@ -44,7 +45,8 @@ let localStatus = $state<string>('pending')
 let error = $state<string | null>(null)
 let detail = $state<V2RequestDetail | null>(null)
 let removeTimer: ReturnType<typeof setTimeout> | null = null
-let handledBulkActionId = $state(0)
+// A bulk action issued before this item was mounted targeted the requests listed at the time, so it must not apply to this one
+let handledBulkActionId = $state(untrack(() => bulkAction?.id ?? 0))
 
 $effect(() => {
     if (
