@@ -58,6 +58,7 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 | `webhookUrl` | `REVAULTER_WEBHOOKURL` | | Webhook endpoint for notifications. Leave unset to disable webhook notifications. |
 | `webhookFormat` | `REVAULTER_WEBHOOKFORMAT` | `plain` | Webhook format: `plain`, `slack`, or `discord` |
 | `webhookKey` | `REVAULTER_WEBHOOKKEY` | | Value sent as `Authorization` header on webhook requests (include the scheme, e.g. `Bearer abc123`) |
+| `webhookAllowPrivateAddresses` | `REVAULTER_WEBHOOKALLOWPRIVATEADDRESSES` | `false` | Allow sending webhook notifications to private, loopback, and link-local addresses, which are refused by default. Enable it only if the receiver is on a private network, for example a self-hosted ntfy, Gotify, or alert router on your LAN |
 | `port` | `REVAULTER_PORT` or `PORT` | `8080` | Port to bind to |
 | `bind` | `REVAULTER_BIND` | `0.0.0.0` | Address/interface to bind to |
 | `disableSignup` | `REVAULTER_DISABLESIGNUP` | `false` | Disable creation of new user accounts |

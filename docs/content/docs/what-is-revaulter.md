@@ -101,3 +101,5 @@ Webhook notifications include:
 - A link to open the Revaulter web UI
 
 An optional `webhookKey` configuration value lets you send an `Authorization` header with each webhook request.
+
+By default, Revaulter refuses to send webhooks to private, loopback, and link-local addresses. If your notification receiver runs on your own network, set `webhookAllowPrivateAddresses` to `true`.

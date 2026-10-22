@@ -63,6 +63,21 @@ func (wr *webhookRequest) GetSlackMessage() (webhook.SlackMessage, error) {
 	}, nil
 }
 
+// GetNtfyMessage returns the message for ntfy, which is required by the webhook.MessageProvider interface
+// The body is the plain-text message, and clicking the notification opens Revaulter
+func (wr *webhookRequest) GetNtfyMessage() (webhook.NtfyMessage, error) {
+	msg, err := wr.GetPlainMessage()
+	if err != nil {
+		return webhook.NtfyMessage{}, err
+	}
+
+	return webhook.NtfyMessage{
+		Title:   "Revaulter request",
+		Message: msg,
+		Click:   wr.BaseURL,
+	}, nil
+}
+
 // escapeSlackText escapes the small set of mrkdwn/meta characters we interpolate
 // This prevents user-controlled fields such as key labels and notes from changing how the webhook message renders
 func escapeSlackText(v string) string {

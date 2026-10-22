@@ -23,6 +23,14 @@
 ##   Leave unset to omit the header entirely
 #webhookKey:
 
+## webhookAllowPrivateAddresses (boolean)
+## Description:
+##   If true, webhook notifications can be sent to private, loopback, link-local, and other non-public addresses
+##   By default, these connections are refused to guard against server-side request forgery
+##   Enable this when the receiver is on an internal network, such as a self-hosted ntfy, Gotify, or alert router on the LAN
+## Default: false
+#webhookAllowPrivateAddresses:
+
 ## auditStreamUrl (string)
 ## Description:
 ##   If set, streams the audit log to this endpoint, for ingestion by a SIEM or another log collector (Splunk HEC, Elastic, Vector, Fluent Bit, Cribl, a plain webhook receiver, …)

@@ -34,6 +34,14 @@ func TestWebhookRequestFormatting(t *testing.T) {
 		require.JSONEq(t, "{\"text\":\"Received a request to encrypt using key label **mykey** for user **Alice**.\\n[Open Revaulter](http://198.51.100.10/app)\\n`(Client IP: 127.0.0.1)`\"}\n", encodeSlackMessage(t, msg))
 	})
 
+	t.Run("format ntfy", func(t *testing.T) {
+		msg, err := baseRequest().GetNtfyMessage()
+		require.NoError(t, err)
+		require.Equal(t, "Revaulter request", msg.Title)
+		require.Equal(t, "Received a request to encrypt using key label **mykey** for user **Alice**.\n\nOpen Revaulter: http://198.51.100.10/app\n\n(Client IP: 127.0.0.1)", msg.Message)
+		require.Equal(t, "http://198.51.100.10/app", msg.Click)
+	})
+
 	t.Run("format slack escapes user-controlled markdown", func(t *testing.T) {
 		escaped := &webhookRequest{
 			BaseURL:       "http://198.51.100.10/app",
