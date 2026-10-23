@@ -74,7 +74,7 @@ import type {
 } from '$lib/v2-types'
 import { PrfUnavailableError, webauthnLoginWithPrf, webauthnRegister } from '$lib/webauthn'
 
-type UIState = 'boot' | 'signin' | 'signup' | 'password-login' | 'password-setup' | 'ready'
+type UIState = 'boot' | 'signin' | 'signup' | 'resume-setup' | 'password-login' | 'password-setup' | 'ready'
 
 const missingPrfError = 'Authenticator did not return PRF output'
 const signupMissingPrfError =
@@ -144,7 +144,15 @@ async function initialize() {
             return
         }
 
-        await v2Session()
+        const existingSession = await v2Session()
+
+        // If the account's setup was interrupted before it was finalized, let the user resume it
+        if (!existingSession.ready) {
+            clearLocalAuthState()
+            session = existingSession
+            uiState = 'resume-setup'
+            return
+        }
 
         // While sessions could survive page reloads, but the PRF secret is intentionally kept in memory only
         // We remove the session state too
@@ -184,6 +192,7 @@ function toSessionResponse(authSession: V2AuthSessionInfo): V2SessionResponse {
         anchorFingerprint: authSession.anchorFingerprint,
         wrappedKeyEpoch: authSession.wrappedKeyEpoch,
         allowedIps: authSession.allowedIps,
+        ready: authSession.ready,
         ttl: authSession.ttl,
     }
 }
@@ -261,7 +270,7 @@ function sessionLabel() {
     return session.displayName.trim() || session.userId
 }
 
-async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-required'> {
+async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-required' | 'setup-required'> {
     primaryKey = null
     sessionAnchor = null
     sessionPassword = null
@@ -297,6 +306,16 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
     loginWrappedPrimaryKey = finish.wrappedPrimaryKey ?? null
     loginWrappedAnchorKey = finish.wrappedAnchorKey ?? null
     loginWrappedKeyStale = finish.wrappedKeyStale
+
+    // The account's setup was not finalized yet, so there are no keys to unwrap
+    if (!finish.session.ready) {
+        if (!finish.credentialPublicKeyHash) {
+            throw new Error('Missing credential identity for signup. Sign in again to continue.')
+        }
+        pendingCredentialPublicKeyHash = finish.credentialPublicKeyHash
+        hasPassword = false
+        return 'setup-required'
+    }
 
     if (finish.wrappedPrimaryKey) {
         // Parse the envelope to determine whether a password is needed
@@ -403,14 +422,7 @@ async function doLogin() {
     pageError = null
 
     try {
-        const outcome = await beginPasskeyLoginStep()
-        if (outcome === 'password-required') {
-            passwordInput = ''
-            uiState = 'password-login'
-            return
-        }
-
-        enterReadyView()
+        continueAfterLogin(await beginPasskeyLoginStep())
     } catch (err) {
         clearLocalAuthState()
         authError = err instanceof Error ? err.message : String(err)
@@ -420,10 +432,42 @@ async function doLogin() {
     }
 }
 
+// Resumes the setup of an account that was registered but not finalized, by signing in with its passkey again
+async function doResumeSetup() {
+    authBusy = true
+    authError = null
+    pageError = null
+
+    try {
+        continueAfterLogin(await beginPasskeyLoginStep())
+    } catch (err) {
+        // Stay on this view so the user can retry, for example after dismissing the passkey prompt
+        authError = err instanceof Error ? err.message : String(err)
+    } finally {
+        authBusy = false
+    }
+}
+
+function continueAfterLogin(outcome: 'authenticated' | 'password-required' | 'setup-required') {
+    if (outcome === 'password-required') {
+        passwordInput = ''
+        uiState = 'password-login'
+        return
+    }
+    if (outcome === 'setup-required') {
+        passwordInput = ''
+        uiState = 'password-setup'
+        return
+    }
+
+    enterReadyView()
+}
+
 async function doRegister() {
     authBusy = true
     authError = null
     pageError = null
+    let registeredSession: V2SessionResponse | null = null
 
     try {
         const begin = await v2RegisterBegin(displayName)
@@ -433,10 +477,11 @@ async function doRegister() {
 
         // Stash the credential public key hash so we can sign it into the attestation after password setup
         pendingCredentialPublicKeyHash = cred.publicKeyHash
-        await v2RegisterFinish({
+        const registered = await v2RegisterFinish({
             challengeId: begin.challengeId,
             credential: (cred.raw as { credential?: unknown })?.credential ?? cred,
         })
+        registeredSession = registered.session ? toSessionResponse(registered.session) : null
 
         const outcome = await beginPasskeyLoginStep()
         if (outcome === 'password-required') {
@@ -449,7 +494,12 @@ async function doRegister() {
         uiState = 'password-setup'
     } catch (err) {
         clearLocalAuthState()
-        if (err instanceof ResponseNotOkError && err.statusCode === 403) {
+        if (registeredSession) {
+            // The account was created, but the setup didn't complete (for example, the passkey prompt was dismissed): let the user resume it
+            session = registeredSession
+            authError = err instanceof Error ? err.message : String(err)
+            uiState = 'resume-setup'
+        } else if (err instanceof ResponseNotOkError && err.statusCode === 403) {
             signupDisabled = true
             authError = err.message || 'Account creation is disabled on this server.'
             uiState = 'signin'
@@ -1197,7 +1247,7 @@ function sortedItems() {
             {signingKeys}
             userId={session?.userId ?? ''}
         />
-    {:else if uiState === 'signup' || uiState === 'password-setup'}
+    {:else if uiState === 'signup' || uiState === 'resume-setup' || uiState === 'password-setup'}
         <AuthSetupView
             authBusy={authBusy}
             authError={authError}
@@ -1210,6 +1260,7 @@ function sortedItems() {
                 passwordInput = value
             }}
             onRegister={doRegister}
+            onResumeSetup={doResumeSetup}
             onReturnToSignIn={returnToSignIn}
             onSetPassword={doSetPassword}
             onSkipPassword={doSkipPassword}
