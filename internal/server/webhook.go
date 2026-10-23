@@ -184,7 +184,7 @@ func escapeGoogleChatText(v string) string {
 	if v == "" {
 		return ""
 	}
-	
+
 	// Google Chat does not document how to escape characters in text messages, so angle brackets are replaced with HTML entities, which cannot start a link or a mention even if they are shown as-is
 	replacer := strings.NewReplacer(
 		"<", "&lt;",
