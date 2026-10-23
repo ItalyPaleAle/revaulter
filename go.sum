@@ -264,8 +264,8 @@ github.com/in-toto/in-toto-golang v0.11.0 h1:nfidMYBFx+E0lnmX5KUnN2Pdm8zdNKal1ay
 github.com/in-toto/in-toto-golang v0.11.0/go.mod h1:u3PjTnwFKjp5a1YCcw8SJg0G+tMeKfVoWsWeFMDCMtw=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
-github.com/italypaleale/go-kit v1.5.1 h1:I+AIWxfSqKD38Qc3fqxGpf7ZYCTGJFUlWor5bi/nF4A=
-github.com/italypaleale/go-kit v1.5.1/go.mod h1:oP/RqtFT9rLk9dBPKKGkhuopIy6pq+7JqXyHUYw1zGA=
+github.com/italypaleale/go-kit v1.6.0 h1:XrPmvb1zA5bEe4jougVsSA23rMdwlA9lmZvUHaOsHkI=
+github.com/italypaleale/go-kit v1.6.0/go.mod h1:OBjcvlAM6SdiVIBMzF2ttN8ZvC2VApQdIPN77WskaOc=
 github.com/italypaleale/go-sql-utils v0.3.11 h1:bL4TLtRHkRS7raEqqI+IQXT8wn8GfnxmDn0zPzfSfns=
 github.com/italypaleale/go-sql-utils v0.3.11/go.mod h1:DkO8yNCRJTC98uqLEZ2/fNEsgjlmdnpueWztB0SRIGk=
 github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 h1:D/V0gu4zQ3cL2WKeVNVM4r2gLxGGf6McLwgXzRTo2RQ=
