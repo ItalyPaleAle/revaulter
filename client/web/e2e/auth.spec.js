@@ -54,7 +54,7 @@ test('passwordless ready user logs in directly to ready view with base64url PRF 
         await skipPasswordSetup(page)
         await openSignInState(page)
         await expect(
-            page.getByText('Session exists but local key material is missing. Sign in again to continue.')
+            page.getByText('For your security, your keys are kept in memory only and are cleared when the page reloads. Sign in again to continue.')
         ).toBeVisible()
 
         const loginRequest = page.waitForRequest((request) => {

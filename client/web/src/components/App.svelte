@@ -157,7 +157,7 @@ async function initialize() {
         // While sessions could survive page reloads, but the PRF secret is intentionally kept in memory only
         // We remove the session state too
         clearLocalAuthState()
-        authError = 'Session exists but local key material is missing. Sign in again to continue.'
+        authError = 'For your security, your keys are kept in memory only and are cleared when the page reloads. Sign in again to continue.'
         uiState = 'signin'
     } catch (err) {
         if (err instanceof ResponseNotOkError) {
