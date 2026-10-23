@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -13,6 +13,22 @@ function goEnv() {
     return {
         ...process.env,
     }
+}
+
+// Returns the commands that are not found as an executable in any PATH directory
+// Tests use this to skip, rather than fail, when the OpenSSH client tools they drive are not installed
+export function missingCommands(commands) {
+    const dirs = (process.env.PATH || '').split(delimiter).filter(Boolean)
+    return commands.filter((command) => {
+        return !dirs.some((dir) => {
+            try {
+                accessSync(join(dir, command), constants.X_OK)
+                return true
+            } catch {
+                return false
+            }
+        })
+    })
 }
 
 function spawnCaptured(command, args, options = {}) {

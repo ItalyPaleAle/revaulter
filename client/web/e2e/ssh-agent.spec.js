@@ -7,6 +7,7 @@ import { expect, test } from '@playwright/test'
 import { openSettingsTab, registerAndReachReady, resetBrowserState, resetState, waitForListStream } from './helpers.mjs'
 import {
     listSshAgentKeys,
+    missingCommands,
     runCLITrust,
     startLocalSshServer,
     startSshAgent,
@@ -22,6 +23,9 @@ test.beforeEach(async ({ page, request }) => {
 test('ssh-agent serves the public key and approves SSH auth through Revaulter', { tag: '@requeststream' }, async ({
     page,
 }) => {
+    const missing = missingCommands(['ssh-add', 'ssh'])
+    test.skip(missing.length > 0, `${missing.join(' and ')} not found on PATH`)
+
     const auth = await registerAndReachReady(page, 'SSH Agent User')
     const tmpRoot = mkdtempSync(join(tmpdir(), 'revaulter-e2e-ssh-agent-'))
     const trustStorePath = join(tmpRoot, 'trust.json')
@@ -96,6 +100,10 @@ test('ssh-agent serves the public key and approves SSH auth through Revaulter', 
 })
 
 test('ssh-agent refuses to advertise a signing key that has not been published', async ({ page }) => {
+    // Without ssh-add, listing the keys would reject because the command fails to spawn, not because the agent refused the key
+    const missing = missingCommands(['ssh-add'])
+    test.skip(missing.length > 0, `${missing.join(' and ')} not found on PATH`)
+
     // An auto-stored or merely derived key carries no anchor-signed publication proof
     // Advertising it anyway would let a compromised server hand back a key of its own, which the user would then copy into authorized_keys
     const auth = await registerAndReachReady(page, 'SSH Agent Unpublished User')
