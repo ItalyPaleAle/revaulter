@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/mldsa"
+	"crypto/mlkem"
 	"crypto/rand"
 	"crypto/sha512"
 	"crypto/tls"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 	"github.com/italypaleale/go-kit/webhook"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -672,7 +674,7 @@ func TestServerV2FinalizeSignupRefreshesSessionForReadyAPI(t *testing.T) {
 }
 
 func TestServerV2SessionEndpointAllowsNonreadyUsers(t *testing.T) {
-	setTestConfig(t, "v2-session-nonready.db")
+	setTestConfig(t, "v2-session-nonready.db", testWebAuthnConfig())
 
 	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
@@ -680,7 +682,7 @@ func TestServerV2SessionEndpointAllowsNonreadyUsers(t *testing.T) {
 	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
-	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-nonready-session", "Nonready Session")
+	sessionCookie, _ := seedV2NonReadyUser(t, srv, "user-nonready-session")
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/auth/session", testServerPort), nil)
 	require.NoError(t, err)
 	req.AddCookie(sessionCookie)
@@ -697,6 +699,95 @@ func TestServerV2SessionEndpointAllowsNonreadyUsers(t *testing.T) {
 	require.Equal(t, http.StatusOK, res.StatusCode)
 	require.Equal(t, true, body["authenticated"])
 	require.Equal(t, "user-nonready-session", body["userId"])
+	require.Equal(t, false, body["ready"])
+}
+
+func TestServerV2ResumeSignupWhenSignupDisabled(t *testing.T) {
+	overrides := testWebAuthnConfig()
+	overrides["disableSignup"] = true
+	setTestConfig(t, "v2-resume-signup.db", overrides)
+
+	srv := newTestServer(t, nil, nil, nil)
+	require.NotNil(t, srv)
+
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	// Returns the status code, the decoded body, and the session cookie set by the response (if any)
+	doPostJSON := func(t *testing.T, path string, body any, cookies ...*http.Cookie) (int, map[string]any, *http.Cookie) {
+		t.Helper()
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, fmt.Sprintf("https://localhost:%d%s", testServerPort, path), bytes.NewReader(b))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		res, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() {
+			_, _ = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		var sessionCookie *http.Cookie
+		for _, c := range res.Cookies() {
+			if c.Name == sessionCookieNameSecure && c.Value != "" {
+				sessionCookie = c
+			}
+		}
+		return res.StatusCode, out, sessionCookie
+	}
+
+	// Both users registered while signup was still enabled, then the signup was interrupted before finalize-signup
+	_, alicePasskey := seedV2NonReadyUser(t, srv, "user-alice")
+	_, bobPasskey := seedV2NonReadyUser(t, srv, "user-bob")
+
+	// Signup stays closed for new accounts
+	status, _, _ := doPostJSON(t, "/v2/auth/register/begin", map[string]any{"displayName": "Mallory"})
+	require.Equal(t, http.StatusForbidden, status)
+
+	// Finalizing requires a session
+	status, _, _ = doPostJSON(t, "/v2/auth/finalize-signup", newV2FinalizeSignupBody(t, "user-alice", alicePasskey))
+	require.Equal(t, http.StatusUnauthorized, status)
+
+	// Signing in as the non-ready user returns a non-ready session and the hash of the credential's public key
+	status, loginBegin, _ := doPostJSON(t, "/v2/auth/login/begin", map[string]any{})
+	require.Equal(t, http.StatusOK, status)
+	challenge, _ := loginBegin["challenge"].(string)
+	status, loginFinish, aliceCookie := doPostJSON(t, "/v2/auth/login/finish", map[string]any{
+		"challengeId": loginBegin["challengeId"],
+		"credential":  alicePasskey.assertionResponse(t, challenge, alicePasskey.userHandle),
+	})
+	require.Equal(t, http.StatusOK, status)
+	require.NotNil(t, aliceCookie)
+	loginSession, _ := loginFinish["session"].(map[string]any)
+	require.Equal(t, false, loginSession["ready"])
+	expectedHash, err := protocolv2.CredentialPublicKeyHash(alicePasskey.coseKey)
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, loginFinish["credentialPublicKeyHash"])
+
+	// Alice's session can't be used to finalize Bob's account
+	status, _, _ = doPostJSON(t, "/v2/auth/finalize-signup", newV2FinalizeSignupBody(t, "user-bob", bobPasskey), aliceCookie)
+	require.Equal(t, http.StatusBadRequest, status)
+	for _, userID := range []string{"user-alice", "user-bob"} {
+		user, getErr := srv.db.AuthStore().GetUserByID(t.Context(), userID)
+		require.NoError(t, getErr)
+		require.False(t, user.Ready)
+	}
+
+	// Alice can finish her own setup even though signup is disabled
+	status, finalize, readyCookie := doPostJSON(t, "/v2/auth/finalize-signup", newV2FinalizeSignupBody(t, "user-alice", alicePasskey), aliceCookie)
+	require.Equal(t, http.StatusOK, status)
+	require.NotNil(t, readyCookie)
+	finalizeSession, _ := finalize["session"].(map[string]any)
+	require.Equal(t, true, finalizeSession["ready"])
+
+	// Once ready, the account can't be finalized again
+	status, _, _ = doPostJSON(t, "/v2/auth/finalize-signup", newV2FinalizeSignupBody(t, "user-alice", alicePasskey), readyCookie)
+	require.Equal(t, http.StatusConflict, status)
 }
 
 func TestServerV2DisableSignup(t *testing.T) {
@@ -1980,4 +2071,131 @@ func TestVerifySignupPubkeyBundle(t *testing.T) {
 		_, vErr := verifySignupPubkeyBundle(newVals(3, sigV2Es, sigV2Ml))
 		require.ErrorContains(t, vErr, "unsupported pubkeyBundleVersion")
 	})
+}
+
+// testWebAuthnConfig returns the config overrides that make the server accept ceremonies from testPasskey
+func testWebAuthnConfig() map[string]any {
+	return map[string]any{
+		"webauthnRpId":    testWebAuthnRPID,
+		"webauthnOrigins": []string{testWebAuthnOrigin},
+	}
+}
+
+// testNonReadyPasskey is a testPasskey registered to a user whose signup was not finalized
+type testNonReadyPasskey struct {
+	*testPasskey
+
+	credentialID string
+	userHandle   []byte
+}
+
+// seedV2NonReadyUser registers a user with a passkey and stops before finalize-signup, leaving the user in the same state as an interrupted signup
+// Requires the server to be configured with testWebAuthnConfig
+func seedV2NonReadyUser(t *testing.T, srv *Server, userID string) (*http.Cookie, *testNonReadyPasskey) {
+	t.Helper()
+
+	waUser, err := newV2WebAuthnUserForRegistration(userID, userID)
+	require.NoError(t, err)
+	creation, session, err := srv.beginWebAuthnSession(waUser)
+	require.NoError(t, err)
+
+	pk := newTestPasskey(t, webauthncose.AlgES256)
+	cred, err := srv.webAuthn.FinishRegistration(waUser, *session, newTestJSONRequest(t, pk.attestationResponse(t, creation.Response.Challenge.String())))
+	require.NoError(t, err)
+	credJSON, err := json.Marshal(cred)
+	require.NoError(t, err)
+
+	credentialID := base64.RawURLEncoding.EncodeToString(cred.ID)
+	user, err := db.ExecuteInTransaction(t.Context(), srv.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (*db.User, error) {
+		return tx.AuthStore().RegisterUser(ctx, db.RegisterUserInput{
+			UserID:         userID,
+			DisplayName:    userID,
+			WebAuthnUserID: base64.RawURLEncoding.EncodeToString(waUser.WebAuthnID()),
+			CredentialID:   credentialID,
+			PublicKey:      string(credJSON),
+			SignCount:      int64(cred.Authenticator.SignCount),
+			SessionTTL:     config.Get().SessionTimeout,
+		})
+	})
+	require.NoError(t, err)
+	require.False(t, user.Ready)
+
+	signed, err := newAuthSessionToken(user, config.Get().SessionTimeout)
+	require.NoError(t, err)
+	token, err := signAuthSessionToken(signed)
+	require.NoError(t, err)
+
+	//#nosec G124 -- test code
+	cookie := &http.Cookie{
+		Name:  sessionCookieNameSecure,
+		Value: token,
+		Path:  "/",
+	}
+	return cookie, &testNonReadyPasskey{
+		testPasskey:  pk,
+		credentialID: credentialID,
+		userHandle:   waUser.WebAuthnID(),
+	}
+}
+
+// newV2FinalizeSignupBody builds a finalize-signup request for userID with a fresh anchor, signing the pubkey bundle and the attestation for the passkey's credential
+func newV2FinalizeSignupBody(t *testing.T, userID string, pk *testNonReadyPasskey) map[string]any {
+	t.Helper()
+
+	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
+	require.NoError(t, err)
+	anchor := &testAnchorKeyPair{Es384Priv: esPriv, Mldsa87Priv: mlPriv}
+	es384JWK, err := protocolv2.ECP384PublicJWKFromECDSA(&esPriv.PublicKey)
+	require.NoError(t, err)
+	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPriv.PublicKey().Bytes())
+
+	requestEncPriv, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	requestEncJWK, err := protocolv2.ECP256PublicJWKFromECDH(requestEncPriv.PublicKey())
+	require.NoError(t, err)
+	requestEncJWKJSON, err := json.Marshal(requestEncJWK)
+	require.NoError(t, err)
+	mlkemKey, err := mlkem.GenerateKey768()
+	require.NoError(t, err)
+	mlkemB64 := base64.RawURLEncoding.EncodeToString(mlkemKey.EncapsulationKey().Bytes())
+
+	bundleSigEs, bundleSigMl := signPubkeyBundleV2(t, anchor, &protocolv2.PubkeyBundlePayloadV2{
+		UserID:                 userID,
+		RequestEncEcdhPubkey:   string(requestEncJWKJSON),
+		RequestEncMlkemPubkey:  mlkemB64,
+		AnchorEs384Crv:         es384JWK.Crv,
+		AnchorEs384Kty:         es384JWK.Kty,
+		AnchorEs384X:           es384JWK.X,
+		AnchorEs384Y:           es384JWK.Y,
+		AnchorMldsa87PublicKey: mlPubB64,
+		V:                      protocolv2.PubkeyBundleVersion2,
+	})
+
+	credentialPublicKeyHash, err := protocolv2.CredentialPublicKeyHash(pk.coseKey)
+	require.NoError(t, err)
+	attestation := &protocolv2.AttestationPayload{
+		UserID:                  userID,
+		CredentialID:            pk.credentialID,
+		CredentialPublicKeyHash: credentialPublicKeyHash,
+		WrappedKeyEpoch:         1,
+		CreatedAt:               time.Now().Unix(),
+	}
+	attestSigEs, attestSigMl := signHybridMessage(t, anchor, protocolv2.CanonicalAttestationMessage(attestation))
+
+	return map[string]any{
+		"requestEncEcdhPubkey":         json.RawMessage(requestEncJWKJSON),
+		"requestEncMlkemPubkey":        mlkemB64,
+		"wrappedPrimaryKey":            "test-wrapped-primary-key",
+		"anchorEs384PublicKey":         es384JWK.CanonicalBody(),
+		"anchorMldsa87PublicKey":       mlPubB64,
+		"pubkeyBundleSignatureEs384":   bundleSigEs,
+		"pubkeyBundleSignatureMldsa87": bundleSigMl,
+		"pubkeyBundleVersion":          protocolv2.PubkeyBundleVersion2,
+		"wrappedAnchorKey":             testValidWrappedAnchorEnvelope(t),
+		"attestationPayload":           attestation.CanonicalBody(),
+		"attestationSignatureEs384":    attestSigEs,
+		"attestationSignatureMldsa87":  attestSigMl,
+	}
 }
