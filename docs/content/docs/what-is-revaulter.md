@@ -86,11 +86,15 @@ Encryption/decryption keys and signing keys are derived deterministically from t
 
 ## Webhook notifications
 
-When `webhookUrl` is configured, Revaulter sends a webhook notification after a request is submitted so the passkey holder knows a request is waiting. Three formats are supported:
+When `webhookUrl` is configured, Revaulter sends a webhook notification after a request is submitted so the passkey holder knows a request is waiting. These formats are supported:
 
 - `plain`: Plain text body (`text/plain`), works with any generic webhook consumer
 - `slack`: Slack-compatible JSON payload, works with Slack and Slack-compatible services
 - `discord`: Discord webhook, uses Slack-compatible format via Discord's `/slack` endpoint
+- `ntfy`: Publishes to an [ntfy](https://ntfy.sh) topic (the URL must include the topic, such as `https://ntfy.sh/mytopic`)
+- `telegram`: Sends a message with a Telegram bot (the URL must be like `https://api.telegram.org/bot<token>/sendMessage?chat_id=<chat>`)
+- `googlechat`: Google Chat incoming webhook
+- `teams`: Microsoft Teams, via a Workflows webhook like the one created by the "Send webhook alerts to a channel" template
 
 Webhook notifications include:
 
@@ -101,3 +105,5 @@ Webhook notifications include:
 - A link to open the Revaulter web UI
 
 An optional `webhookKey` configuration value lets you send an `Authorization` header with each webhook request.
+
+By default, Revaulter refuses to send webhooks to private, loopback, and link-local addresses. If your notification receiver runs on your own network, set `webhookAllowPrivateAddresses` to `true`.

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/italypaleale/go-kit/auditlogs/siem"
+	"github.com/italypaleale/go-kit/webhook"
 	"github.com/lestrrat-go/jwx/v4/jwk"
 )
 
@@ -31,6 +32,10 @@ type Config struct {
 	// - `plain`: sends a webhook with content type `text/plain`, where the request's body is the entire message
 	// - `slack`: for usage with Slack or Slack-compatible endpoints
 	// - `discord`: for usage with Discord (sends Slack-compatible messages)
+	// - `ntfy`: for usage with ntfy (the URL must include the topic, e.g. `https://ntfy.sh/mytopic`)
+	// - `telegram`: for usage with a Telegram bot (the URL must be like `https://api.telegram.org/bot<token>/sendMessage?chat_id=<chat>`)
+	// - `googlechat`: for usage with Google Chat incoming webhooks
+	// - `teams`: for usage with Microsoft Teams, via a Workflows webhook like the one created by the "Send webhook alerts to a channel" template
 	// +default "plain"
 	WebhookFormat string `env:"WEBHOOKFORMAT" yaml:"webhookFormat"`
 
@@ -38,7 +43,13 @@ type Config struct {
 	// Revaulter does NOT add an authentication scheme prefix, so include one yourself if your downstream expects it
 	// For example, set this to `Bearer abc123` for bearer-token auth, or `Basic dXNlcjpwYXNz` for HTTP Basic
 	// Leave unset to omit the header entirely
+	// This is not used with the `telegram` format, where the bot token is part of the URL
 	WebhookKey string `env:"WEBHOOKKEY" yaml:"webhookKey"`
+
+	// If true, webhook notifications can be sent to private addresses (e.g. in the LAN)
+	// By default, these connections are refused to guard against server-side request forgery
+	// +default false
+	WebhookAllowPrivateAddresses bool `env:"WEBHOOKALLOWPRIVATEADDRESSES" yaml:"webhookAllowPrivateAddresses"`
 
 	// If set, streams the audit log to this endpoint, for ingestion by a SIEM or another log collector (Splunk HEC, Elastic, Vector, Fluent Bit, Cribl, a plain webhook receiver, …)
 	// Delivery is at-least-once, so the collector must deduplicate on the event `id`
@@ -253,6 +264,17 @@ func (c *Config) GetTLSPath() string {
 	return ""
 }
 
+// GetWebhookOpts returns the options for the webhook client
+func (c *Config) GetWebhookOpts(log *slog.Logger) webhook.NewWebhookOpts {
+	return webhook.NewWebhookOpts{
+		URL:             c.WebhookUrl,
+		Key:             c.WebhookKey,
+		Format:          webhook.WebhookFormat(c.WebhookFormat),
+		Logger:          log,
+		AllowPrivateIPs: c.WebhookAllowPrivateAddresses,
+	}
+}
+
 // Validate the configuration and performs some sanitization
 func (c *Config) Validate(logger *slog.Logger) error {
 	// Check required variables
@@ -278,7 +300,7 @@ func (c *Config) Validate(logger *slog.Logger) error {
 	// Normalize and validate webhook format
 	c.WebhookFormat = strings.ToLower(c.WebhookFormat)
 	switch c.WebhookFormat {
-	case "discord", "slack", "plain", "":
+	case "discord", "slack", "plain", "ntfy", "telegram", "googlechat", "teams", "":
 		// All good
 	default:
 		return errors.New("config entry key 'webhookFormat' is invalid")

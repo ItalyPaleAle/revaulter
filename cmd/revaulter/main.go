@@ -112,12 +112,7 @@ func main() {
 	// Init the whc object
 	var whc webhook.Webhook
 	if conf.WebhookUrl != "" {
-		whc, err = webhook.NewWebhook(webhook.NewWebhookOpts{
-			URL:    conf.WebhookUrl,
-			Key:    conf.WebhookKey,
-			Format: webhook.WebhookFormat(conf.WebhookFormat),
-			Logger: log.With(slog.String("component", "webhook")),
-		})
+		whc, err = webhook.NewWebhook(conf.GetWebhookOpts(log.With(slog.String("component", "webhook"))))
 		if err != nil {
 			slogkit.FatalError(log, "Failed to create webhook client", err)
 			return

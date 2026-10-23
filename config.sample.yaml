@@ -12,6 +12,10 @@
 ##   - `plain`: sends a webhook with content type `text/plain`, where the request's body is the entire message
 ##   - `slack`: for usage with Slack or Slack-compatible endpoints
 ##   - `discord`: for usage with Discord (sends Slack-compatible messages)
+##   - `ntfy`: for usage with ntfy (the URL must include the topic, e.g. `https://ntfy.sh/mytopic`)
+##   - `telegram`: for usage with a Telegram bot (the URL must be like `https://api.telegram.org/bot<token>/sendMessage?chat_id=<chat>`)
+##   - `googlechat`: for usage with Google Chat incoming webhooks
+##   - `teams`: for usage with Microsoft Teams, via a Workflows webhook like the one created by the "Send webhook alerts to a channel" template
 ## Default: "plain"
 #webhookFormat:
 
@@ -21,7 +25,15 @@
 ##   Revaulter does NOT add an authentication scheme prefix, so include one yourself if your downstream expects it
 ##   For example, set this to `Bearer abc123` for bearer-token auth, or `Basic dXNlcjpwYXNz` for HTTP Basic
 ##   Leave unset to omit the header entirely
+##   This is not used with the `telegram` format, where the bot token is part of the URL
 #webhookKey:
+
+## webhookAllowPrivateAddresses (boolean)
+## Description:
+##   If true, webhook notifications can be sent to private addresses (e.g. in the LAN)
+##   By default, these connections are refused to guard against server-side request forgery
+## Default: false
+#webhookAllowPrivateAddresses:
 
 ## auditStreamUrl (string)
 ## Description:
