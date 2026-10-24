@@ -69,17 +69,21 @@ func (p AttestationPayload) CanonicalBody() string {
 // The signed `CreatedAt` is one of the few non-replay defenses we have: an attacker who captured a signed attestation could otherwise re-submit it later under the same `(userId, credentialId, hash, epoch)` and have the verifier accept the canonical bytes
 // In practice, attacks of this kind are unlikely, but this offers an extra layer of protection
 func (p AttestationPayload) ValidateCreatedAt(now time.Time, skew time.Duration) error {
+	return validateAttestationCreatedAt(p.CreatedAt, now, skew)
+}
+
+func validateAttestationCreatedAt(createdAt int64, now time.Time, skew time.Duration) error {
 	if skew <= 0 {
 		return errors.New("skew must be positive")
 	}
-	if p.CreatedAt <= 0 {
-		return fmt.Errorf("createdAt is missing or non-positive: %d", p.CreatedAt)
+	if createdAt <= 0 {
+		return fmt.Errorf("createdAt is missing or non-positive: %d", createdAt)
 	}
 
-	created := time.Unix(p.CreatedAt, 0)
+	created := time.Unix(createdAt, 0)
 	delta := now.Sub(created)
 	if delta < -skew || delta > skew {
-		return fmt.Errorf("createdAt %d is outside the ±%s acceptance window of server time", p.CreatedAt, skew)
+		return fmt.Errorf("createdAt %d is outside the ±%s acceptance window of server time", createdAt, skew)
 	}
 
 	return nil
@@ -95,6 +99,96 @@ func ParseAttestationPayload(body string) (AttestationPayload, error) {
 	}
 
 	return p, nil
+}
+
+// Attestation payload versions
+// V1 has no `v` line and carries no credential type: every v1 attestation is for a passkey
+// V2 adds the credential type and an explicit `v` line, and is used for every new credential of either type
+const (
+	AttestationVersion1 int64 = 1
+	AttestationVersion2 int64 = 2
+)
+
+// AttestationPayloadV2 is the v2 canonicalized payload that the anchor signs when a new credential is enrolled
+// For passkeys CredentialPublicKeyHash is the hash of the COSE key (CredentialPublicKeyHash); for devices it is DevicePublicKeys.Hash
+// The order is load-bearing: client and server must produce identical bytes
+type AttestationPayloadV2 struct {
+	UserID                  string `key:"userId"`
+	CredentialID            string `key:"credentialId"`
+	CredentialType          string `key:"credentialType"`
+	CredentialPublicKeyHash string `key:"credentialPublicKeyHash"`
+	WrappedKeyEpoch         int64  `key:"wrappedKeyEpoch"`
+	CreatedAt               int64  `key:"createdAt"`
+	V                       int64  `key:"v"`
+}
+
+// CanonicalBody encodes the v2 attestation payload as ordered key=value lines separated by '\n', with no trailing newline
+func (p AttestationPayloadV2) CanonicalBody() string {
+	return canonicalBodyFromTaggedFields(p)
+}
+
+// ValidateCreatedAt rejects attestation payloads whose `createdAt` is outside `[now-skew, now+skew]`, for the same reasons as AttestationPayload.ValidateCreatedAt
+func (p AttestationPayloadV2) ValidateCreatedAt(now time.Time, skew time.Duration) error {
+	return validateAttestationCreatedAt(p.CreatedAt, now, skew)
+}
+
+// ParseAttestationPayloadV2 parses a canonical body string back into an AttestationPayloadV2
+// The input must list every expected key in the documented order, exactly once, with `v=2` and a known credential type
+func ParseAttestationPayloadV2(body string) (AttestationPayloadV2, error) {
+	var p AttestationPayloadV2
+	err := parseTaggedFields(body, &p)
+	if err != nil {
+		return p, err
+	}
+
+	if p.V != AttestationVersion2 {
+		return p, fmt.Errorf("unsupported attestation version %d", p.V)
+	}
+	if !IsValidCredentialType(p.CredentialType) {
+		return p, fmt.Errorf("unsupported credential type %q", p.CredentialType)
+	}
+
+	return p, nil
+}
+
+// AttestationPayloadVersion returns the version of a canonical attestation body without fully parsing it
+// A body whose last line is `v=<n>` has version n; a body without that line is v1
+// The two formats can't be confused because parsing is strict about keys and order
+func AttestationPayloadVersion(body string) (int64, error) {
+	idx := strings.LastIndexByte(body, '\n')
+	last := body[idx+1:]
+
+	value, ok := strings.CutPrefix(last, "v=")
+	if !ok {
+		return AttestationVersion1, nil
+	}
+
+	v, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid attestation version: %w", err)
+	}
+
+	return v, nil
+}
+
+// CanonicalAttestationMessageV2 returns the domain-separated message that both anchor legs sign for a v2 credential attestation
+// The domain-separation prefix is shared with v1: the bodies differ (v2 has a credentialType line and ends with a v line) and parsing is strict about keys and order
+func CanonicalAttestationMessageV2(payload *AttestationPayloadV2) []byte {
+	return prefixedMessage(CredAttestPrefix, payload.CanonicalBody())
+}
+
+// VerifyHybridAttestationV2 verifies that both legs of the hybrid signature cover the canonical v2 attestation message
+// The same security caveats as VerifyHybridAttestation apply: callers MUST independently trust the anchor pubkeys and cross-check every payload field
+func VerifyHybridAttestationV2(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte, payload *AttestationPayloadV2, sigEs384, sigMldsa87 []byte) error {
+	if payload.V != AttestationVersion2 {
+		return fmt.Errorf("unsupported attestation version %d", payload.V)
+	}
+	if !IsValidCredentialType(payload.CredentialType) {
+		return fmt.Errorf("unsupported credential type %q", payload.CredentialType)
+	}
+
+	msg := CanonicalAttestationMessageV2(payload)
+	return verifyHybrid(es384Pub, mldsa87PubBytes, msg, sigEs384, sigMldsa87)
 }
 
 // PubkeyBundlePayload is the canonicalized payload that the anchor signs to bind the user's long-lived transport pubkeys and the anchor pubkeys together into a single hybrid-signed bundle
