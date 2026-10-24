@@ -20,6 +20,7 @@ func (db *DB) ResetAllForTests(ctx context.Context) error {
 	_, err := ExecuteInTransaction(ctx, db, 30*time.Second, func(ctx context.Context, tx *DbTx) (struct{}, error) {
 		tables := []string{
 			"v2_published_signing_keys",
+			"v2_pairing_sessions",
 			"v2_auth_challenge_payloads",
 			"v2_auth_challenges",
 			"v2_user_credentials",

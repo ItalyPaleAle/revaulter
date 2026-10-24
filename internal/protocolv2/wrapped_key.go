@@ -27,8 +27,8 @@ const (
 
 	argon2idSaltSize = 16
 
-	// maxWrappedPrimaryKeyLength bounds the encoded envelope, which with a device's ML-KEM ciphertext is about 2 KB
-	maxWrappedPrimaryKeyLength = 8 << 10
+	// MaxWrappedPrimaryKeyLength bounds the encoded envelope, which with a device's ML-KEM ciphertext is about 2 KB
+	MaxWrappedPrimaryKeyLength = 8 << 10
 
 	wrappedPrimaryKeyNonceSize = 12
 	// wrappedPrimaryKeyCiphertextSize is a 32-byte primary key followed by a 16-byte AES-GCM tag
@@ -64,8 +64,8 @@ func ParseWrappedPrimaryKeyEnvelope(wrapped string) (*WrappedPrimaryKeyEnvelope,
 	if wrapped == "" {
 		return nil, errors.New("wrapped primary key is empty")
 	}
-	if len(wrapped) > maxWrappedPrimaryKeyLength {
-		return nil, fmt.Errorf("wrapped primary key must be at most %d characters", maxWrappedPrimaryKeyLength)
+	if len(wrapped) > MaxWrappedPrimaryKeyLength {
+		return nil, fmt.Errorf("wrapped primary key must be at most %d characters", MaxWrappedPrimaryKeyLength)
 	}
 
 	raw, err := base64.RawURLEncoding.DecodeString(wrapped)

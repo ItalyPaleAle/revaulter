@@ -131,7 +131,7 @@ func TestParseWrappedPrimaryKeyEnvelopeRejectsMalformedInput(t *testing.T) {
 		errMsg  string
 	}{
 		{"empty", "", "is empty"},
-		{"too long", strings.Repeat("A", maxWrappedPrimaryKeyLength+1), "at most"},
+		{"too long", strings.Repeat("A", MaxWrappedPrimaryKeyLength+1), "at most"},
 		{"not base64url", "not base64!", "not valid base64url"},
 		{"not JSON", webEnvelope("v=1"), "not a valid envelope"},
 		{"wrong JSON type", webEnvelope(`{"v":"1"}`), "not a valid envelope"},

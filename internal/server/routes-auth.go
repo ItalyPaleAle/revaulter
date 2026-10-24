@@ -985,6 +985,15 @@ func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, re
 		return NewResponseError(http.StatusConflict, "Cannot change password while a passkey registration is in progress")
 	}
 
+	// Pairing builds the new device's wrapper with the current password, so a password change must not land in the middle of it either
+	pairing, err := as.HasOpenPairingSession(ctx, userID, time.Now())
+	if err != nil {
+		return NewResponseError(http.StatusInternalServerError, "Failed to check pending pairing sessions")
+	}
+	if pairing {
+		return NewResponseError(http.StatusConflict, "Cannot change password while a device is being paired")
+	}
+
 	if req.AdvanceEpoch {
 		_, err = as.AdvanceWrappedKeyEpoch(ctx, userID)
 		if errors.Is(err, db.ErrUserNotFound) {
@@ -2143,6 +2152,12 @@ func loadWebAuthnUser(ctx context.Context, as *db.AuthStore, user *db.User) (*v2
 
 	creds := make([]webauthnlib.Credential, 0, len(records))
 	for _, rec := range records {
+		// Only passkeys are WebAuthn credentials
+		// A device's public-key JSON would otherwise decode into an empty go-webauthn credential without an error
+		if rec.CredentialType != protocolv2.CredentialTypePasskey {
+			continue
+		}
+
 		var cred webauthnlib.Credential
 		err = json.Unmarshal([]byte(rec.PublicKey), &cred)
 		if err != nil {

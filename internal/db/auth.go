@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"modernc.org/sqlite"
 
+	"github.com/italypaleale/revaulter/internal/protocolv2"
 	"github.com/italypaleale/revaulter/internal/utils"
 )
 
@@ -69,9 +70,12 @@ type AuthChallenge struct {
 }
 
 type AuthCredentialRecord struct {
-	ID                          string
-	CredentialID                string
-	DisplayName                 string
+	ID           string
+	CredentialID string
+	DisplayName  string
+	// CredentialType is protocolv2.CredentialTypePasskey or protocolv2.CredentialTypeDevice
+	CredentialType string
+	// PublicKey is the go-webauthn credential JSON for passkeys, and the protocolv2.DevicePublicKeys JSON for devices
 	PublicKey                   string
 	SignCount                   int64
 	WrappedPrimaryKey           string
@@ -96,9 +100,13 @@ type RegisterUserInput struct {
 }
 
 type AddCredentialInput struct {
-	UserID                      string
-	CredentialID                string
-	DisplayName                 string
+	// ID is the record ID; one is generated when empty
+	ID           string
+	UserID       string
+	CredentialID string
+	DisplayName  string
+	// CredentialType defaults to protocolv2.CredentialTypePasskey when empty
+	CredentialType              string
 	PublicKey                   string
 	SignCount                   int64
 	WrappedPrimaryKey           string
@@ -139,10 +147,13 @@ var (
 	ErrPasswordAlreadySet = errors.New("password already set")
 	ErrCredentialNotFound = errors.New("credential not found")
 	ErrLastCredential     = errors.New("cannot delete the last credential")
-	ErrDisplayNameTooLong = errors.New("display name is too long")
-	ErrAlreadyFinalized   = errors.New("user is already finalized")
-	ErrInvalidIP          = errors.New("invalid IP")
-	ErrInvalidCIDR        = errors.New("invalid CIDR")
+	ErrLastPasskey        = errors.New("cannot delete the last passkey")
+
+	ErrCredentialAlreadyExists = errors.New("credential already exists")
+	ErrDisplayNameTooLong      = errors.New("display name is too long")
+	ErrAlreadyFinalized        = errors.New("user is already finalized")
+	ErrInvalidIP               = errors.New("invalid IP")
+	ErrInvalidCIDR             = errors.New("invalid CIDR")
 )
 
 func NewAuthStore(db adapter.Querier, kind BackendKind) (*AuthStore, error) {
@@ -242,9 +253,30 @@ func scanUser(scanner interface{ Scan(dest ...any) error }, extra ...any) (*User
 	return &user, nil
 }
 
+// credentialColumns are the columns of v2_user_credentials that scanCredential reads, in the order it expects them
+const credentialColumns = `id, credential_id, display_name, credential_type, public_key, sign_count, wrapped_primary_key, wrapped_anchor_key, ` +
+	`attestation_payload, attestation_signature_es384, attestation_signature_mldsa87, wrapped_key_epoch, created_at, last_used_at`
+
+// scanCredential reads a row of credentialColumns into a record
+// The error from the scanner is returned as-is, so callers can check for "no rows" errors
+func scanCredential(scanner interface{ Scan(dest ...any) error }) (*AuthCredentialRecord, error) {
+	var rec AuthCredentialRecord
+	err := scanner.Scan(
+		&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.CredentialType, &rec.PublicKey, &rec.SignCount,
+		&rec.WrappedPrimaryKey, &rec.WrappedAnchorKey,
+		&rec.AttestationPayload, &rec.AttestationSignatureEs384, &rec.AttestationSignatureMldsa87,
+		&rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &rec, nil
+}
+
 func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthCredentialRecord, error) {
 	rows, err := s.db.Query(ctx,
-		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_anchor_key, attestation_payload, attestation_signature_es384, attestation_signature_mldsa87, wrapped_key_epoch, created_at, last_used_at
+		`SELECT `+credentialColumns+`
 			FROM v2_user_credentials
 			WHERE user_id = $1
 			ORDER BY created_at ASC`,
@@ -257,12 +289,11 @@ func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthC
 
 	var out []AuthCredentialRecord
 	for rows.Next() {
-		var rec AuthCredentialRecord
-		err = rows.Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.WrappedAnchorKey, &rec.AttestationPayload, &rec.AttestationSignatureEs384, &rec.AttestationSignatureMldsa87, &rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt)
+		rec, err := scanCredential(rows)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, rec)
+		out = append(out, *rec)
 	}
 
 	err = rows.Err()
@@ -444,7 +475,7 @@ func (s *AuthStore) Login(ctx context.Context, in LoginInput) error {
 // FinalizeSignup marks the account as ready and persists all long-lived cryptographic material generated at signup time: the user's transport pubkeys, anchor pubkeys and bundle self-signatures, plus the first credential's wrapped primary key, wrapped anchor key, and hybrid attestation
 // Returns the updated user row
 func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) (*User, error) {
-	if len(in.WrappedPrimaryKey) > 512 {
+	if len(in.WrappedPrimaryKey) > protocolv2.MaxWrappedPrimaryKeyLength {
 		return nil, errors.New("wrappedPrimaryKey is too large")
 	}
 	if len(in.WrappedAnchorKey) > 32<<10 {
@@ -517,36 +548,21 @@ func (s *AuthStore) FinalizeSignup(ctx context.Context, in FinalizeSignupInput) 
 }
 
 func (s *AuthStore) GetCredentialForUser(ctx context.Context, userID string, credentialID string) (*AuthCredentialRecord, error) {
-	var rec AuthCredentialRecord
-	err := s.db.
+	rec, err := scanCredential(s.db.
 		QueryRow(ctx,
-			`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_anchor_key, attestation_payload, attestation_signature_es384, attestation_signature_mldsa87, wrapped_key_epoch, created_at, last_used_at
+			`SELECT `+credentialColumns+`
 			FROM v2_user_credentials
 			WHERE user_id = $1 AND credential_id = $2`,
 			userID, credentialID,
-		).
-		Scan(
-			&rec.ID,
-			&rec.CredentialID,
-			&rec.DisplayName,
-			&rec.PublicKey,
-			&rec.SignCount,
-			&rec.WrappedPrimaryKey,
-			&rec.WrappedAnchorKey,
-			&rec.AttestationPayload,
-			&rec.AttestationSignatureEs384,
-			&rec.AttestationSignatureMldsa87,
-			&rec.WrappedKeyEpoch,
-			&rec.CreatedAt,
-			&rec.LastUsedAt,
-		)
+		),
+	)
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
 	}
 
-	return &rec, nil
+	return rec, nil
 }
 
 func (s *AuthStore) UpdateAllowedIPs(ctx context.Context, userID string, allowedIPs []string) ([]string, error) {
@@ -616,7 +632,7 @@ func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID string, displa
 // UpdateCredentialWrappedKey updates the wrapped primary key and wrapped anchor key associated with a single credential
 // The credential must belong to the given user
 func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID string, userID string, wrappedPrimaryKey string, wrappedAnchorKey string) error {
-	if len(wrappedPrimaryKey) > 512 {
+	if len(wrappedPrimaryKey) > protocolv2.MaxWrappedPrimaryKeyLength {
 		return errors.New("wrappedPrimaryKey is too large")
 	}
 	if len(wrappedAnchorKey) > 32<<10 {
@@ -661,23 +677,22 @@ func (s *AuthStore) HasPendingChallenge(ctx context.Context, userID string, kind
 
 // GetCredentialByCredentialID returns the credential record matching credential_id (base64url encoded WebAuthn credential ID) for the given user
 func (s *AuthStore) GetCredentialByCredentialID(ctx context.Context, credentialID string, userID string) (*AuthCredentialRecord, error) {
-	var rec AuthCredentialRecord
-	err := s.db.QueryRow(ctx,
-		`SELECT id, credential_id, display_name, public_key, sign_count, wrapped_primary_key, wrapped_anchor_key, attestation_payload, attestation_signature_es384, attestation_signature_mldsa87, wrapped_key_epoch, created_at, last_used_at
+	rec, err := scanCredential(s.db.QueryRow(ctx,
+		`SELECT `+credentialColumns+`
 			FROM v2_user_credentials
 			WHERE credential_id = $1 AND user_id = $2`,
 		credentialID, userID,
-	).Scan(&rec.ID, &rec.CredentialID, &rec.DisplayName, &rec.PublicKey, &rec.SignCount, &rec.WrappedPrimaryKey, &rec.WrappedAnchorKey, &rec.AttestationPayload, &rec.AttestationSignatureEs384, &rec.AttestationSignatureMldsa87, &rec.WrappedKeyEpoch, &rec.CreatedAt, &rec.LastUsedAt)
+	))
 	if s.db.IsNoRowsError(err) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
 	}
-	return &rec, nil
+	return rec, nil
 }
 
 func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) error {
-	if len(in.WrappedPrimaryKey) > 512 {
+	if len(in.WrappedPrimaryKey) > protocolv2.MaxWrappedPrimaryKeyLength {
 		return errors.New("wrappedPrimaryKey is too large")
 	}
 	if len(in.WrappedAnchorKey) > 32<<10 {
@@ -687,25 +702,40 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 		return errors.New("attestationPayload is too large")
 	}
 
+	credentialType := in.CredentialType
+	if credentialType == "" {
+		credentialType = protocolv2.CredentialTypePasskey
+	}
+	if !protocolv2.IsValidCredentialType(credentialType) {
+		return fmt.Errorf("invalid credential type %q", credentialType)
+	}
+
+	recordID := in.ID
+	if recordID == "" {
+		recordID = uuid.NewV4().String()
+	}
+
 	// Gate the insert on the user being active so future callers cannot attach a credential to a frozen/disabled user
 	// The epoch subquery and the EXISTS guard both filter on status = 'active', mirroring UpdateCredentialWrappedKey
 	now := time.Now().Unix()
 	affected, err := s.db.Exec(ctx,
 		`INSERT INTO v2_user_credentials (
-				id, user_id, credential_id, display_name, public_key, sign_count,
+				id, user_id, credential_id, display_name, credential_type, public_key, sign_count,
 				wrapped_primary_key, wrapped_anchor_key,
 				attestation_payload, attestation_signature_es384, attestation_signature_mldsa87,
 				wrapped_key_epoch, created_at, last_used_at
-			) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, (
+			) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, (
 				SELECT wrapped_key_epoch FROM v2_users WHERE id = $2 AND status = 'active'
-			), $12, $12
+			), $13, $13
 			WHERE EXISTS (SELECT 1 FROM v2_users WHERE id = $2 AND status = 'active')`,
-		uuid.NewV4().String(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount,
+		recordID, in.UserID, in.CredentialID, in.DisplayName, credentialType, in.PublicKey, in.SignCount,
 		in.WrappedPrimaryKey, in.WrappedAnchorKey,
 		in.AttestationPayload, in.AttestationSignatureEs384, in.AttestationSignatureMldsa87,
 		now,
 	)
-	if err != nil {
+	if isIntegrityViolationError(err) {
+		return ErrCredentialAlreadyExists
+	} else if err != nil {
 		return err
 	}
 
@@ -768,27 +798,29 @@ func (s *AuthStore) DeleteCredential(ctx context.Context, id, userID string) err
 // deleteCredentialPostgres performs the delete in a single atomic statement.
 func (s *AuthStore) deleteCredentialPostgres(ctx context.Context, id, userID string) error {
 	// The `locked` CTE acquires row-level locks via `FOR UPDATE` on all of the user's credential rows, so a concurrent delete on a sibling credential can't race us between the count and the DELETE
-	// The wrapping SELECT always returns exactly one row with the diagnostic counts, so the three outcomes (deleted / not found / last credential) are distinguishable without a second round trip
-	var total, tgt, deleted int
+	// The DELETE runs only if another passkey remains: device credentials can't create accounts or register passkeys, so an account without a passkey could be locked out by losing its devices
+	// The wrapping SELECT always returns exactly one row with the diagnostic counts, so the four outcomes (deleted / not found / last credential / last passkey) are distinguishable without a second round trip
+	var total, tgt, otherPasskeys, deleted int
 	err := s.db.
 		QueryRow(ctx, `
 WITH locked AS MATERIALIZED (
-    SELECT id FROM v2_user_credentials WHERE user_id = $2 FOR UPDATE
+    SELECT id, credential_type FROM v2_user_credentials WHERE user_id = $2 FOR UPDATE
 ),
 del AS (
     DELETE FROM v2_user_credentials
     WHERE id = $1 AND user_id = $2
-      AND (SELECT COUNT(*) FROM locked) > 1
+      AND (SELECT COUNT(*) FROM locked WHERE credential_type = 'passkey' AND id <> $1) > 0
       AND EXISTS (SELECT 1 FROM locked WHERE id = $1)
     RETURNING 1
 )
 SELECT
     (SELECT COUNT(*) FROM locked),
     (SELECT COUNT(*) FROM locked WHERE id = $1),
+    (SELECT COUNT(*) FROM locked WHERE credential_type = 'passkey' AND id <> $1),
     (SELECT COUNT(*) FROM del)
 `,
 			id, userID).
-		Scan(&total, &tgt, &deleted)
+		Scan(&total, &tgt, &otherPasskeys, &deleted)
 	if err != nil {
 		return err
 	}
@@ -800,6 +832,8 @@ SELECT
 		return ErrCredentialNotFound
 	case total <= 1:
 		return ErrLastCredential
+	case otherPasskeys == 0:
+		return ErrLastPasskey
 	default:
 		// Shouldn't happen: either the delete fired or one of the guards tripped
 		return errors.New("delete credential: unexpected state")
@@ -809,18 +843,21 @@ SELECT
 // deleteCredentialSQLite performs the delete in one DML statement
 func (s *AuthStore) deleteCredentialSQLite(ctx context.Context, id string, userID string) error {
 	// SQLite opens writer transactions with `txlock=immediate`, so the implicit transaction this DELETE runs in serializes against every other writer: the `MATERIALIZED` CTE captures a consistent snapshot that no concurrent writer can change before the DELETE fires RETURNING yields one row only when the DELETE actually ran
-	// A `tgt` column of 0 vs. 1 in that row — or an empty result set — distinguishes the three outcomes
+	// The DELETE runs only if another passkey remains, for the same reason as in deleteCredentialPostgres
 	// When nothing was deleted, a small follow-up SELECT disambiguates: races with concurrent writers are benign because the write serialization means the snapshot we observe is still a real past state
-	var total, tgt int
+	var total, tgt, otherPasskeys int
 	err := s.db.
 		QueryRow(ctx, `
 WITH snap AS MATERIALIZED (
-    SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE id = $1) AS tgt
+    SELECT
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE id = $1) AS tgt,
+        COUNT(*) FILTER (WHERE credential_type = 'passkey' AND id <> $1) AS other_passkeys
     FROM v2_user_credentials WHERE user_id = $2
 )
 DELETE FROM v2_user_credentials
 WHERE id = $1 AND user_id = $2
-  AND (SELECT total FROM snap) > 1
+  AND (SELECT other_passkeys FROM snap) > 0
 RETURNING (SELECT total FROM snap), (SELECT tgt FROM snap)
 `,
 			id, userID).
@@ -835,20 +872,27 @@ RETURNING (SELECT total FROM snap), (SELECT tgt FROM snap)
 	// DELETE did not fire - diagnose why
 	err = s.db.
 		QueryRow(ctx, `
-SELECT COUNT(*), COUNT(*) FILTER (WHERE id = $1)
+SELECT
+    COUNT(*),
+    COUNT(*) FILTER (WHERE id = $1),
+    COUNT(*) FILTER (WHERE credential_type = 'passkey' AND id <> $1)
 FROM v2_user_credentials WHERE user_id = $2
 `,
 			id, userID,
 		).
-		Scan(&total, &tgt)
+		Scan(&total, &tgt, &otherPasskeys)
 	if err != nil {
 		return err
 	}
 
-	if tgt == 0 {
+	switch {
+	case tgt == 0:
 		return ErrCredentialNotFound
+	case total <= 1:
+		return ErrLastCredential
+	default:
+		return ErrLastPasskey
 	}
-	return ErrLastCredential
 }
 
 func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
@@ -860,6 +904,14 @@ func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
 	)
 	if err != nil {
 		return fmt.Errorf("error deleting expired auth challenges: %w", err)
+	}
+
+	_, err = s.db.Exec(ctx,
+		`DELETE FROM v2_pairing_sessions WHERE expires_at < $1`,
+		cutoff,
+	)
+	if err != nil {
+		return fmt.Errorf("error deleting expired pairing sessions: %w", err)
 	}
 
 	return nil

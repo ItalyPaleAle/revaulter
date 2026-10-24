@@ -110,6 +110,7 @@ var backupTables = []tableSpec{
 			{name: "wrapped_key_epoch", kind: colKindText},
 			{name: "created_at", kind: colKindText},
 			{name: "last_used_at", kind: colKindText},
+			{name: "credential_type", kind: colKindText},
 		},
 	},
 }
