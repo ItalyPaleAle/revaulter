@@ -73,8 +73,72 @@ type JwkThumbprintVector struct {
 	Thumbprint   string     `json:"thumbprint"`
 }
 
+type DevicePublicKeysVector struct {
+	Name          string                      `json:"name"`
+	Keys          protocolv2.DevicePublicKeys `json:"keys"`
+	CanonicalBody string                      `json:"canonicalBody"`
+	Hash          string                      `json:"hash"`
+}
+
+type AttestationV2Vector struct {
+	Name          string                          `json:"name"`
+	Payload       protocolv2.AttestationPayloadV2 `json:"payload"`
+	CanonicalBody string                          `json:"canonicalBody"`
+	Message       string                          `json:"message"`
+}
+
+type DeviceLoginVector struct {
+	Name          string                        `json:"name"`
+	Payload       protocolv2.DeviceLoginPayload `json:"payload"`
+	CanonicalBody string                        `json:"canonicalBody"`
+	Message       string                        `json:"message"`
+}
+
+type DeviceUnlockInfoVector struct {
+	Name         string `json:"name"`
+	UserID       string `json:"userId"`
+	CredentialID string `json:"credentialId"`
+	EphPub       string `json:"ephPub"`
+	KemCt        string `json:"kemCt"`
+	Info         string `json:"info"`
+}
+
+type PairingPayloadVector struct {
+	Name          string                    `json:"name"`
+	Payload       protocolv2.PairingPayload `json:"payload"`
+	CanonicalBody string                    `json:"canonicalBody"`
+	Text          string                    `json:"text"`
+	Link          string                    `json:"link"`
+}
+
+type PairingMACKeyVector struct {
+	Name      string `json:"name"`
+	Secret    string `json:"secret"`
+	SessionID string `json:"sessionId"`
+	Info      string `json:"info"`
+	MACKey    string `json:"macKey"`
+}
+
+type PairingTranscriptVector struct {
+	Name       string                       `json:"name"`
+	Transcript protocolv2.PairingTranscript `json:"transcript"`
+	Message    string                       `json:"message"`
+	MACKey     string                       `json:"macKey"`
+	MAC        string                       `json:"mac"`
+}
+
+type PairingNonceVector struct {
+	Name    string                         `json:"name"`
+	Payload protocolv2.PairingNoncePayload `json:"payload"`
+	Message string                         `json:"message"`
+	MACKey  string                         `json:"macKey"`
+	MAC     string                         `json:"mac"`
+	Code    string                         `json:"code"`
+}
+
 // CanonicalVectors holds every byte string that the Go and TypeScript implementations must construct identically
 // The TypeScript suite in client/web/src/lib/canonical-vectors.test.ts reads the same JSON file, so a change on either side that is not mirrored in the other breaks both test suites rather than silently producing signatures the other cannot verify
+// The device credential and pairing sections are asserted only by Go until the web client implements pairing
 type CanonicalVectors struct {
 	ES384JwkCanonicalBody []ES384JwkVector              `json:"es384JwkCanonicalBody"`
 	Attestation           []AttestationVector           `json:"attestation"`
@@ -83,6 +147,15 @@ type CanonicalVectors struct {
 	TransportAad          []TransportAadVector          `json:"transportAad"`
 	RequestEncAad         []RequestEncAadVector         `json:"requestEncAad"`
 	JwkThumbprint         []JwkThumbprintVector         `json:"jwkThumbprint"`
+
+	DevicePublicKeys  []DevicePublicKeysVector  `json:"devicePublicKeys"`
+	AttestationV2     []AttestationV2Vector     `json:"attestationV2"`
+	DeviceLogin       []DeviceLoginVector       `json:"deviceLogin"`
+	DeviceUnlockInfo  []DeviceUnlockInfoVector  `json:"deviceUnlockInfo"`
+	PairingPayload    []PairingPayloadVector    `json:"pairingPayload"`
+	PairingMACKey     []PairingMACKeyVector     `json:"pairingMacKey"`
+	PairingTranscript []PairingTranscriptVector `json:"pairingTranscript"`
+	PairingNonce      []PairingNonceVector      `json:"pairingNonce"`
 }
 
 // LoadCanonicalVectors parses the embedded shared test vectors

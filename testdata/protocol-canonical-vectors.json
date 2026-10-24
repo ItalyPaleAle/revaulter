@@ -5,6 +5,7 @@
         "A mismatch between the two implementations means signatures produced by the browser will not verify in Go (or vice versa), so both test suites read this file and assert against it:",
         "  - Go:         internal/protocolv2/canonical_vectors_test.go and internal/clientcore/canonical_vectors_test.go",
         "  - TypeScript: client/web/src/lib/canonical-vectors.test.ts",
+        "The device credential and pairing sections are asserted by Go today, and by TypeScript once the web client implements pairing.",
         "If a value here changes, the wire format changed, and every already-issued signature over the old bytes stops verifying."
     ],
     "es384JwkCanonicalBody": [
@@ -120,6 +121,132 @@
             },
             "canonicalJwk": "{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\"}",
             "thumbprint": "P7IdLIpiTZiFaIoOSqbX3JrSyps3hvZ4Y2SieP96XIY"
+        }
+    ],
+    "devicePublicKeys": [
+        {
+            "name": "device public keys",
+            "keys": {
+                "signP256": "c2lnbi1wMjU2LXZlYw",
+                "kaP256": "a2EtcDI1Ni12ZWM",
+                "signMldsa65": "bWxkc2E2NS12ZWM",
+                "kemMlkem768": "bWxrZW03NjgtdmVj"
+            },
+            "canonicalBody": "signP256=c2lnbi1wMjU2LXZlYw\nkaP256=a2EtcDI1Ni12ZWM\nsignMldsa65=bWxkc2E2NS12ZWM\nkemMlkem768=bWxrZW03NjgtdmVj\nv=1",
+            "hash": "SwJU7fdQdsx4QFaL6iJZTZ941uUB8C1MK4IFa2tqN4U"
+        }
+    ],
+    "attestationV2": [
+        {
+            "name": "passkey attestation v2",
+            "payload": {
+                "userId": "user-vec-1",
+                "credentialId": "cred-vec-2",
+                "credentialType": "passkey",
+                "credentialPublicKeyHash": "aGFzaC12ZWMtMw",
+                "wrappedKeyEpoch": 7,
+                "createdAt": 1730000000,
+                "v": 2
+            },
+            "canonicalBody": "userId=user-vec-1\ncredentialId=cred-vec-2\ncredentialType=passkey\ncredentialPublicKeyHash=aGFzaC12ZWMtMw\nwrappedKeyEpoch=7\ncreatedAt=1730000000\nv=2",
+            "message": "revaulter/v2/cred-attest\nuserId=user-vec-1\ncredentialId=cred-vec-2\ncredentialType=passkey\ncredentialPublicKeyHash=aGFzaC12ZWMtMw\nwrappedKeyEpoch=7\ncreatedAt=1730000000\nv=2"
+        },
+        {
+            "name": "device attestation v2",
+            "payload": {
+                "userId": "user-vec-1",
+                "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+                "credentialType": "device",
+                "credentialPublicKeyHash": "SwJU7fdQdsx4QFaL6iJZTZ941uUB8C1MK4IFa2tqN4U",
+                "wrappedKeyEpoch": 3,
+                "createdAt": 1761300000,
+                "v": 2
+            },
+            "canonicalBody": "userId=user-vec-1\ncredentialId=AAECAwQFBgcICQoLDA0ODw\ncredentialType=device\ncredentialPublicKeyHash=SwJU7fdQdsx4QFaL6iJZTZ941uUB8C1MK4IFa2tqN4U\nwrappedKeyEpoch=3\ncreatedAt=1761300000\nv=2",
+            "message": "revaulter/v2/cred-attest\nuserId=user-vec-1\ncredentialId=AAECAwQFBgcICQoLDA0ODw\ncredentialType=device\ncredentialPublicKeyHash=SwJU7fdQdsx4QFaL6iJZTZ941uUB8C1MK4IFa2tqN4U\nwrappedKeyEpoch=3\ncreatedAt=1761300000\nv=2"
+        }
+    ],
+    "deviceLogin": [
+        {
+            "name": "device login",
+            "payload": {
+                "challenge": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+                "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+                "userId": "user-vec-1",
+                "v": 1
+            },
+            "canonicalBody": "challenge=QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8\ncredentialId=AAECAwQFBgcICQoLDA0ODw\nuserId=user-vec-1\nv=1",
+            "message": "revaulter/v2/device-login\nchallenge=QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8\ncredentialId=AAECAwQFBgcICQoLDA0ODw\nuserId=user-vec-1\nv=1"
+        }
+    ],
+    "deviceUnlockInfo": [
+        {
+            "name": "device unlock info",
+            "userId": "user-vec-1",
+            "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+            "ephPub": "BAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g",
+            "kemCt": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8",
+            "info": "revaulter/v2/deviceUnlock\ncredentialId=AAECAwQFBgcICQoLDA0ODw\nephPub=BAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g\nkemCtHash=gthkCFMLdl5G6_R4BwlQJ-gHvAhnSw3nfuXvL659BJI\nuserId=user-vec-1\nv=1"
+        }
+    ],
+    "pairingPayload": [
+        {
+            "name": "pairing payload",
+            "payload": {
+                "server": "https://vault.example.com",
+                "userId": "user-vec-1",
+                "sessionId": "oKGio6SlpqeoqaqrrK2urw",
+                "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+                "anchorFingerprint": "220a412a5d135da21fbe7b6b95c53f9ccfe9778e253f3f07995ea6c02d4c3009",
+                "v": 1
+            },
+            "canonicalBody": "server=https://vault.example.com\nuserId=user-vec-1\nsessionId=oKGio6SlpqeoqaqrrK2urw\nsecret=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\nanchorFingerprint=220a412a5d135da21fbe7b6b95c53f9ccfe9778e253f3f07995ea6c02d4c3009\nv=1",
+            "text": "revaulter-pair:c2VydmVyPWh0dHBzOi8vdmF1bHQuZXhhbXBsZS5jb20KdXNlcklkPXVzZXItdmVjLTEKc2Vzc2lvbklkPW9LR2lvNlNscHFlb3FhcXJySzJ1cncKc2VjcmV0PUFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgKYW5jaG9yRmluZ2VycHJpbnQ9MjIwYTQxMmE1ZDEzNWRhMjFmYmU3YjZiOTVjNTNmOWNjZmU5Nzc4ZTI1M2YzZjA3OTk1ZWE2YzAyZDRjMzAwOQp2PTE",
+            "link": "revaulter://pair/c2VydmVyPWh0dHBzOi8vdmF1bHQuZXhhbXBsZS5jb20KdXNlcklkPXVzZXItdmVjLTEKc2Vzc2lvbklkPW9LR2lvNlNscHFlb3FhcXJySzJ1cncKc2VjcmV0PUFBRUNBd1FGQmdjSUNRb0xEQTBPRHhBUkVoTVVGUllYR0JrYUd4d2RIaDgKYW5jaG9yRmluZ2VycHJpbnQ9MjIwYTQxMmE1ZDEzNWRhMjFmYmU3YjZiOTVjNTNmOWNjZmU5Nzc4ZTI1M2YzZjA3OTk1ZWE2YzAyZDRjMzAwOQp2PTE"
+        }
+    ],
+    "pairingMacKey": [
+        {
+            "name": "pairing mac key",
+            "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+            "sessionId": "oKGio6SlpqeoqaqrrK2urw",
+            "info": "revaulter/v2/pair/mac\nsessionId=oKGio6SlpqeoqaqrrK2urw\nv=1",
+            "macKey": "Km7KiAKK0IOA8qWw6vZOrZpmVPFEEJ97gjxRZztIZEs"
+        }
+    ],
+    "pairingTranscript": [
+        {
+            "name": "pairing hello transcript",
+            "transcript": {
+                "server": "https://vault.example.com",
+                "userId": "user-vec-1",
+                "sessionId": "oKGio6SlpqeoqaqrrK2urw",
+                "anchorFingerprint": "220a412a5d135da21fbe7b6b95c53f9ccfe9778e253f3f07995ea6c02d4c3009",
+                "credentialId": "AAECAwQFBgcICQoLDA0ODw",
+                "deviceName": "iPhone 17 Pro",
+                "signP256": "c2lnbi1wMjU2LXZlYw",
+                "kaP256": "a2EtcDI1Ni12ZWM",
+                "signMldsa65": "bWxkc2E2NS12ZWM",
+                "kemMlkem768": "bWxrZW03NjgtdmVj",
+                "v": 1
+            },
+            "message": "revaulter/v2/pair/hello\nserver=https://vault.example.com\nuserId=user-vec-1\nsessionId=oKGio6SlpqeoqaqrrK2urw\nanchorFingerprint=220a412a5d135da21fbe7b6b95c53f9ccfe9778e253f3f07995ea6c02d4c3009\ncredentialId=AAECAwQFBgcICQoLDA0ODw\ndeviceName=iPhone 17 Pro\nsignP256=c2lnbi1wMjU2LXZlYw\nkaP256=a2EtcDI1Ni12ZWM\nsignMldsa65=bWxkc2E2NS12ZWM\nkemMlkem768=bWxrZW03NjgtdmVj\nv=1",
+            "macKey": "Km7KiAKK0IOA8qWw6vZOrZpmVPFEEJ97gjxRZztIZEs",
+            "mac": "2xLiIu20xc1rdB8BeIGR5pG5JG6vsD87YWsd2FspjnE"
+        }
+    ],
+    "pairingNonce": [
+        {
+            "name": "pairing nonce and code",
+            "payload": {
+                "helloMac": "2xLiIu20xc1rdB8BeIGR5pG5JG6vsD87YWsd2FspjnE",
+                "nonce": "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8",
+                "v": 1
+            },
+            "message": "revaulter/v2/pair/nonce\nhelloMac=2xLiIu20xc1rdB8BeIGR5pG5JG6vsD87YWsd2FspjnE\nnonce=YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8\nv=1",
+            "macKey": "Km7KiAKK0IOA8qWw6vZOrZpmVPFEEJ97gjxRZztIZEs",
+            "mac": "kTZA9fa43ixyt-6yabJMX4IXYzAKq2y7iRRm9qatXxk",
+            "code": "310299"
         }
     ]
 }
