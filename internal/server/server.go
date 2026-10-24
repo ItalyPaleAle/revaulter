@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-chi/httprate"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
+	"github.com/italypaleale/francis/builtin/signal"
 	"github.com/italypaleale/francis/host/local"
 	"github.com/italypaleale/go-kit/auditlogs/siem"
 	"github.com/italypaleale/go-kit/eventqueue"
@@ -33,7 +34,6 @@ import (
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/metrics"
 	"github.com/italypaleale/revaulter/internal/requestjwt"
-	"github.com/italypaleale/revaulter/internal/utils/broker"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
@@ -61,20 +61,11 @@ var (
 type Server struct {
 	appRouter  *gin.Engine
 	httpClient *http.Client
-	lock       sync.RWMutex
 	webhook    webhook.Webhook
 	metrics    *metrics.RevaulterMetrics
 
-	// Subscribers for pending request list updates
-	pubsub *broker.Broker[*db.V2RequestListItem]
-	// Subscriptions to watch request status changes
-	// Each state can only have one subscription
-	// If another call tries to subscribe to the same state, it will evict the first call
-	subs map[string]chan struct{}
-
-	// Delayed work for request expiry and record deletion
-	requestExpiryQueue *eventqueue.Processor[string, requestExpiryEvent]
-	deleteQueue        *eventqueue.Processor[string, deleteEvent]
+	// Delayed work for record deletion
+	deleteQueue *eventqueue.Processor[string, deleteEvent]
 
 	// Ships audit events to an external collector
 	// Nil when `auditStreamUrl` is not configured
@@ -84,7 +75,11 @@ type Server struct {
 	francis      *local.Host
 	francisStore francisStore
 
-	// Database and request store
+	// Signals that wake the long-polls waiting for a result, and the list streams waiting for changes
+	waiters *signal.SignalService
+	inbox   *signal.SignalService
+
+	// Database
 	db       *db.DB
 	webAuthn *webauthnlib.WebAuthn
 
@@ -133,8 +128,6 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		subs:    map[string]chan struct{}{},
-		pubsub:  broker.NewBroker[*db.V2RequestListItem](),
 		webhook: opts.Webhook,
 		metrics: opts.Metrics,
 		db:      opts.DB,
@@ -152,10 +145,7 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 		wrappedKeyLimiter: httprate.NewRateLimiter(4, 10*time.Minute),
 	}
 
-	// Create the eventqueue processors for performing garbage collection
-	s.requestExpiryQueue = eventqueue.NewProcessor(eventqueue.Options[string, requestExpiryEvent]{
-		ExecuteFn: s.executeRequestExpiryEvent,
-	})
+	// Create the eventqueue processor for performing garbage collection
 	s.deleteQueue = eventqueue.NewProcessor(eventqueue.Options[string, deleteEvent]{
 		ExecuteFn: s.executeDeleteEvent,
 	})
@@ -177,8 +167,6 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 		return err
 	}
 
-	s.pubsub.SetLogger(log.With(slog.String("component", "pubsub")))
-
 	s.webAuthn, err = s.initWebAuthn()
 	if err != nil {
 		return fmt.Errorf("failed to initialize WebAuthn config: %w", err)
@@ -190,6 +178,10 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 		return err
 	}
 	s.francis, err = newFrancisHost(log, s.francisStore)
+	if err != nil {
+		return err
+	}
+	err = s.registerActors(log)
 	if err != nil {
 		return err
 	}
@@ -413,8 +405,7 @@ func (s *Server) Run(ctx context.Context) error {
 	defer s.running.Store(false)
 	defer s.wg.Wait()
 
-	// Stop the background eventqueue processors
-	defer s.requestExpiryQueue.Close()
+	// Stop the background eventqueue processor
 	defer s.deleteQueue.Close()
 
 	// Stop refreshing the JWKS of trusted OIDC issuers
@@ -460,7 +451,6 @@ func (s *Server) Run(ctx context.Context) error {
 			)
 		}
 	}()
-	defer s.pubsub.Shutdown()
 
 	// Start shipping audit events to the external collector, if enabled
 	if s.auditStream != nil {
@@ -550,49 +540,13 @@ func (s *Server) startAppServer(ctx context.Context) error {
 	}()
 
 	if s.db != nil {
-		rs := s.db.RequestStore()
-		as := s.db.AuthStore()
-
-		now := time.Now()
-
-		// Cleanup expired requests
-		expired, err := rs.ExpirePending(ctx, now)
-		if err != nil {
-			return fmt.Errorf("failed to cleanup expired requests at startup: %w", err)
-		}
-		if len(expired) > 0 {
-			s.nudgeAuditStream()
-		}
-
-		// Cleanup expired records
-		_, err = rs.CleanupOldRecords(ctx, now)
-		if err != nil {
-			return fmt.Errorf("failed to cleanup old request records at startup: %w", err)
-		}
-
-		// Load currently-pending items to enqueue for cleanup, for all users
-		list, err := rs.ListPending(ctx, "")
-		if err != nil {
-			return fmt.Errorf("failed to initialize request expiry queue: %w", err)
-		}
-		for _, item := range list {
-			err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
-				State:  item.State,
-				UserID: item.UserID,
-				TTL:    time.Unix(item.Expiry, 0).Add(requestExpiryGrace),
-			})
-			if err != nil {
-				return fmt.Errorf("failed to enqueue request expiry for %s: %w", item.State, err)
-			}
-		}
-
 		// Cleanup expired auth records
-		err = as.CleanupExpired(ctx, time.Now())
+		err := s.db.AuthStore().CleanupExpired(ctx, time.Now())
 		if err != nil {
 			return fmt.Errorf("failed to cleanup expired auth records at startup: %w", err)
 		}
 
-		// Seed the recurring audit-log prune
+		// Seed the recurring audit-log prune, which also removes the envelopes of expired requests
 		// The handler re-enqueues itself, so a single boot-time enqueue keeps the chain running
 		err = s.enqueueAuditPrune(time.Now())
 		if err != nil {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/italypaleale/francis/builtin/signal"
 	"github.com/italypaleale/francis/host/local"
 	sqliteutils "github.com/italypaleale/go-sql-utils/sqlite"
 
@@ -146,6 +147,72 @@ func newFrancisHost(log *slog.Logger, store francisStore) (*local.Host, error) {
 	}
 
 	return host, nil
+}
+
+// registerActors registers the actor types and the signal sets on the Francis host
+// This must be called before the host is started
+func (s *Server) registerActors(log *slog.Logger) error {
+	// A completion is kept for a while, so a waiter that arrives after the signal fired is still answered right away
+	waiters, err := signal.New(signalSetWaiters, signal.WithRetention(15*time.Minute))
+	if err != nil {
+		return fmt.Errorf("failed to create signal set '%s': %w", signalSetWaiters, err)
+	}
+	err = s.francis.RegisterBuiltInActor(waiters)
+	if err != nil {
+		return fmt.Errorf("failed to register signal set '%s': %w", signalSetWaiters, err)
+	}
+	s.waiters = waiters.Service(s.francis.Service())
+
+	inbox, err := signal.New(signalSetInbox, signal.WithRetention(10*time.Minute))
+	if err != nil {
+		return fmt.Errorf("failed to create signal set '%s': %w", signalSetInbox, err)
+	}
+	err = s.francis.RegisterBuiltInActor(inbox)
+	if err != nil {
+		return fmt.Errorf("failed to register signal set '%s': %w", signalSetInbox, err)
+	}
+	s.inbox = inbox.Service(s.francis.Service())
+
+	err = s.francis.RegisterActor(actorTypeUser, s.newUserActorFactory(log))
+	if err != nil {
+		return fmt.Errorf("failed to register actor type '%s': %w", actorTypeUser, err)
+	}
+
+	return nil
+}
+
+// invokeUserActor invokes a method of the revaulter.user actor of a user, and decodes the response
+func invokeUserActor[T any](ctx context.Context, s *Server, userID string, method string, data any) (res T, err error) {
+	env, err := s.francis.Service().Invoke(ctx, actorTypeUser, userID, method, data)
+	if err != nil {
+		return res, fmt.Errorf("failed to invoke method '%s' of the user actor: %w", method, err)
+	}
+
+	if env != nil {
+		err = env.Decode(&res)
+		if err != nil {
+			return res, fmt.Errorf("failed to decode response of method '%s' of the user actor: %w", method, err)
+		}
+	}
+
+	return res, nil
+}
+
+// peekUserActor performs a read-only call to a method of the revaulter.user actor of a user, and decodes the response
+func peekUserActor[T any](ctx context.Context, s *Server, userID string, method string, data any) (res T, err error) {
+	env, err := s.francis.Service().Peek(ctx, actorTypeUser, userID, method, data)
+	if err != nil {
+		return res, fmt.Errorf("failed to peek method '%s' of the user actor: %w", method, err)
+	}
+
+	if env != nil {
+		err = env.Decode(&res)
+		if err != nil {
+			return res, fmt.Errorf("failed to decode response of method '%s' of the user actor: %w", method, err)
+		}
+	}
+
+	return res, nil
 }
 
 // francisRun is a running Francis host

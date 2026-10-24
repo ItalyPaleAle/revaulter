@@ -84,18 +84,6 @@ func (db *DB) AuthStore() *AuthStore {
 	return as
 }
 
-// RequestStore returns an instance of RequestStore
-func (db *DB) RequestStore() *RequestStore {
-	as, err := NewRequestStore(db, db.kind)
-	if err != nil {
-		// Indicates a development-time error
-		panic(err)
-	}
-	as.conn = db
-
-	return as
-}
-
 // SigningKeyStore returns an instance of SigningKeyStore
 func (db *DB) SigningKeyStore() *SigningKeyStore {
 	as, err := NewSigningKeyStore(db)
@@ -129,17 +117,6 @@ type DbTx struct {
 // AuthStore returns an instance of AuthStore
 func (tx *DbTx) AuthStore() *AuthStore {
 	as, err := NewAuthStore(tx, tx.kind)
-	if err != nil {
-		// Indicates a development-time error
-		panic(err)
-	}
-
-	return as
-}
-
-// RequestStore returns an instance of RequestStore
-func (tx *DbTx) RequestStore() *RequestStore {
-	as, err := NewRequestStore(tx, tx.kind)
 	if err != nil {
 		// Indicates a development-time error
 		panic(err)

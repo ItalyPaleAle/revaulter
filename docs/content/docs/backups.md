@@ -36,6 +36,12 @@ The `restore` command applies migrations up to the schema level recorded in the 
 
 > ⚠️ **Warning:** Stop the running Revaulter instance before restoring into its database.
 
+### What is not backed up
+
+Pending requests are short-lived, so they are never included in backups. They are stored in Francis, the embedded actor host, rather than in the main database tables (see [Short-lived data](/docs/installing-revaulter/#short-lived-data)), and their encrypted payloads are in a table that `revaulter backup` skips.
+
+After a restore, requests that were pending when the backup was taken are gone, and their callers must create them again.
+
 ## Direct database backups
 
 ### SQLite backups
@@ -55,5 +61,7 @@ sqlite3 /data/revaulter.db ".backup /backups/revaulter-$(date +%F).db"
 ### PostgreSQL backups
 
 With PostgreSQL, in addition to the built-in `revaulter backup` subcommand above, you can use standard backup tooling such as `pg_dump` for logical backups, or physical backups and WAL archiving if you need point-in-time recovery. Make sure your backup strategy covers the Revaulter database, retains copies off-host, and is tested by restoring into a fresh PostgreSQL instance.
+
+A `pg_dump` of the database also includes the `francis` schema and the `v2_request_payloads` table, which hold short-lived data only. Carrying them along is harmless; to leave them out, pass `--exclude-schema=francis --exclude-table-data=v2_request_payloads`.
 
 After restoring PostgreSQL, start Revaulter with the restored database and the same `secretKey` value that was used originally.

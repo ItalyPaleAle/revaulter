@@ -158,9 +158,14 @@ func TestServerRequestOIDCAuthentication(t *testing.T) {
 		resultToken, _ := body["resultToken"].(string)
 		require.True(t, strings.HasPrefix(resultToken, resultTokenPrefix))
 
-		rec, err := srv.db.RequestStore().GetRequest(t.Context(), state)
-		require.NoError(t, err)
-		require.Equal(t, bob.ID, rec.UserID)
+		// The request is stored in Bob's actor, and the result token names Bob
+		rec := getTestRequest(t, srv, bob.ID, state)
+		require.NotNil(t, rec)
+		require.True(t, resultTokenMatches(resultToken, rec.ResultTokenHash))
+		tokenUserID, ok := parseResultToken(resultToken)
+		require.True(t, ok)
+		require.Equal(t, bob.ID, tokenUserID)
+		require.Nil(t, getTestRequest(t, srv, alice.ID, state))
 
 		// The audit log records the method and the verified claims
 		events, _, err := srv.db.AuditStore().List(t.Context(), db.AuditFilter{UserID: bob.ID, EventType: db.AuditRequestCreate}, 10, "")

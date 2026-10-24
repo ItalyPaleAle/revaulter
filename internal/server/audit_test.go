@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/json"
@@ -267,37 +266,19 @@ func TestAuditRequestExpireFromBackground(t *testing.T) {
 
 	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
+	startTestServer(t, srv)
 
-	// We don't start the HTTP server, just exercise the goroutine handler directly
-	// First, seed a user and a pending request via the request store
+	// Seed a user and a request that is already past its deadline, so the actor's cleanup alarm expires it right away
 	_, alice := seedV2SessionCookie(t, srv, "user-audit-expire", "Expire Alice")
 
 	state := "expire-state-1"
-	expiresAt := time.Now().Add(-1 * time.Second)
-	_, err := db.ExecuteInTransaction(t.Context(), srv.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
-		rErr := tx.RequestStore().CreateRequest(ctx, db.CreateRequestInput{
-			State:            state,
-			UserID:           alice.ID,
-			Operation:        "encrypt",
-			RequestorIP:      "127.0.0.1",
-			KeyLabel:         "expire-label",
-			Algorithm:        "A256GCM",
-			CreatedAt:        time.Now().Add(-1 * time.Minute),
-			ExpiresAt:        expiresAt,
-			EncryptedRequest: "{}",
-		})
-		return struct{}{}, rErr
-	})
-	require.NoError(t, err)
+	seedTestRequest(t, srv, alice.ID, state, time.Now().Add(-10*time.Second))
 
-	// Run the expiry handler synchronously
-	srv.executeRequestExpiryEvent(requestExpiryEvent{
-		State:  state,
-		UserID: alice.ID,
-		TTL:    expiresAt,
-	})
-
-	rows := auditByType(t, srv, alice.ID, db.AuditRequestExpire)
+	var rows []db.AuditEvent
+	require.Eventually(t, func() bool {
+		rows = auditByType(t, srv, alice.ID, db.AuditRequestExpire)
+		return len(rows) > 0
+	}, 10*time.Second, 50*time.Millisecond, "the request was not expired")
 	require.Len(t, rows, 1)
 	require.Equal(t, db.AuditAuthMethodSystem, rows[0].AuthMethod)
 	require.NotNil(t, rows[0].RequestState)

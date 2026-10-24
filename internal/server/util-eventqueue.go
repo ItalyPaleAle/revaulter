@@ -6,27 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
-
-// requestExpiryGrace is added to a request's deadline when scheduling its expiry event, so the deadline has passed when the event fires
-const requestExpiryGrace = 5 * time.Second
-
-// requestExpiryEvent implements eventqueue.Queueable
-type requestExpiryEvent struct {
-	State  string
-	UserID string
-	TTL    time.Time
-}
-
-func (e requestExpiryEvent) Key() string {
-	return "request-expiry:" + e.State
-}
-
-func (e requestExpiryEvent) DueTime() time.Time {
-	return e.TTL
-}
 
 // deleteEvent implements eventqueue.Queueable
 type deleteEvent struct {
@@ -44,89 +25,12 @@ func (e deleteEvent) DueTime() time.Time {
 	return e.TTL
 }
 
-func (s *Server) executeRequestExpiryEvent(ev requestExpiryEvent) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	log := logging.LogFromContext(ctx)
-
-	// MarkExpired also writes the audit event for the expiry
-	rs := s.db.RequestStore()
-	rec, err := rs.MarkExpired(ctx, ev.State)
-	if err != nil {
-		log.WarnContext(ctx, "error expiring request", slog.Any("error", err), slog.String("state", ev.State))
-		return
-	}
-
-	if rec != nil {
-		s.nudgeAuditStream()
-	} else {
-		// The request was not expired by this call
-		// It may have been expired lazily by a read (which doesn't notify anyone), resolved by the user, deleted, or not be past its deadline yet
-		rec, err = rs.GetRequest(ctx, ev.State)
-		if err != nil {
-			log.WarnContext(ctx, "error reading request to expire", slog.Any("error", err), slog.String("state", ev.State))
-			return
-		}
-
-		switch {
-		case rec == nil:
-			// The request was already deleted, but list streams may still be showing it
-			s.publishListItem(&db.V2RequestListItem{
-				State:  ev.State,
-				Status: "removed",
-				UserID: ev.UserID,
-			})
-			return
-		case rec.Status == db.V2RequestStatusPending:
-			// The deadline hasn't passed yet, for example because the event fired within the same second as the deadline: try again later
-			err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
-				State:  ev.State,
-				UserID: rec.UserID,
-				TTL:    rec.ExpiresAt.Add(requestExpiryGrace),
-			})
-			if err != nil {
-				log.WarnContext(ctx, "failed to re-enqueue request expiry", slog.Any("error", err), slog.String("state", ev.State))
-			}
-			return
-		case rec.Status != db.V2RequestStatusExpired:
-			// Completed or canceled requests are handled by the route that resolved them
-			return
-		}
-
-		// The request was expired lazily: notify subscribers and schedule the cleanup below
-	}
-
-	s.lock.Lock()
-	s.notifySubscriber(ev.State)
-	s.lock.Unlock()
-
-	s.publishListItem(&db.V2RequestListItem{
-		State:  ev.State,
-		Status: "removed",
-		UserID: rec.UserID,
-	})
-	err = s.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "request-delete:" + ev.State,
-		Kind:    "request",
-		ID:      ev.State,
-		TTL:     ev.TTL.Add(10 * time.Minute),
-	})
-	if err != nil {
-		log.WarnContext(ctx, "failed to enqueue request delete", slog.Any("error", err), slog.String("state", ev.State))
-	}
-}
-
 func (s *Server) executeDeleteEvent(ev deleteEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	log := logging.LogFromContext(ctx)
 
 	switch ev.Kind {
-	case "request":
-		err := s.db.RequestStore().DeleteTerminalRequest(ctx, ev.ID, &ev.TTL)
-		if err != nil {
-			log.WarnContext(ctx, "request cleanup failed", slog.Any("error", err), slog.String("state", ev.ID))
-		}
 	case "challenge":
 		err := s.db.AuthStore().DeleteExpiredAuthChallenge(ctx, ev.ID, ev.TTL)
 		if err != nil {
@@ -148,6 +52,14 @@ func (s *Server) executeDeleteEvent(ev deleteEvent) {
 				slog.Int64("removed", removed),
 				slog.Int64("threshold_unix", threshold),
 			)
+		}
+
+		// Remove the envelopes of requests that the revaulter.user actors missed, for example after their state was lost
+		removed, err = s.db.RequestPayloadStore().DeleteExpired(ctx, time.Now().Add(-requestRemoveGrace))
+		if err != nil {
+			log.WarnContext(ctx, "request payload prune failed", slog.Any("error", err))
+		} else if removed > 0 {
+			log.InfoContext(ctx, "expired request payloads pruned", slog.Int64("removed", removed))
 		}
 
 		// Re-enqueue the next prune

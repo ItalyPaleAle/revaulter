@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/protocolv2"
 )
 
@@ -242,6 +241,14 @@ func TestValidateV2CreateBodyRejectsInvalidInput(t *testing.T) {
 			},
 			wantErr: "encryptedPayload is empty or invalid",
 		},
+		{
+			name: "encrypted payload too large",
+			op:   protocolv2.OperationEncrypt,
+			mutateBody: func(body *protocolv2.RequestCreateBody) {
+				body.EncryptedPayload = base64.RawURLEncoding.EncodeToString(make([]byte, protocolv2.MaxEnvelopeCiphertextSize+1))
+			},
+			wantErr: "encryptedPayload cannot be larger than 300 KB",
+		},
 	}
 
 	for _, tt := range tests {
@@ -257,6 +264,14 @@ func TestValidateV2CreateBodyRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestValidateEnvelopeCiphertextSize(t *testing.T) {
+	err := validateEnvelopeCiphertextSize("responseEnvelope", base64.RawURLEncoding.EncodeToString(make([]byte, protocolv2.MaxEnvelopeCiphertextSize)))
+	require.NoError(t, err)
+
+	err = validateEnvelopeCiphertextSize("responseEnvelope", base64.RawURLEncoding.EncodeToString(make([]byte, protocolv2.MaxEnvelopeCiphertextSize+1)))
+	require.EqualError(t, err, "Invalid responseEnvelope: ciphertext cannot be larger than 300 KB")
+}
+
 // TestServerV2RequestResultContextCancelClearsSubscription verifies that when the long-poll's request context is canceled, the handler unsubscribes itself
 func TestServerV2RequestResultContextCancelClearsSubscription(t *testing.T) {
 	setTestConfig(t, "v2-result-ctx-cancel.db")
@@ -270,20 +285,7 @@ func TestServerV2RequestResultContextCancelClearsSubscription(t *testing.T) {
 	_, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
 
 	const state = "state-result-ctx-cancel"
-	rs := srv.db.RequestStore()
-	now := time.Now().UTC().Truncate(time.Second)
-	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
-		State:            state,
-		UserID:           aliceUser.ID,
-		Operation:        "encrypt",
-		RequestorIP:      "127.0.0.1",
-		KeyLabel:         "alice-key",
-		Algorithm:        "A256GCM",
-		CreatedAt:        now,
-		ExpiresAt:        now.Add(10 * time.Minute),
-		EncryptedRequest: `{}`,
-	})
-	require.NoError(t, err)
+	seedTestRequest(t, srv, aliceUser.ID, state, time.Now().Add(10*time.Minute))
 
 	// Issue a long-poll with a cancelable context so we can simulate the caller disconnecting
 	ctx, cancel := context.WithCancel(t.Context())
@@ -306,18 +308,16 @@ func TestServerV2RequestResultContextCancelClearsSubscription(t *testing.T) {
 		resCh <- pollResult{res: res, err: dErr}
 	}()
 
-	// Wait for the subscription to be registered before canceling
+	// Wait for the waiter to be registered before canceling
 	require.Eventually(t, func() bool {
-		srv.lock.RLock()
-		defer srv.lock.RUnlock()
-		_, ok := srv.subs[state]
-		return ok
-	}, 2*time.Second, 5*time.Millisecond, "subscription was not registered")
+		rec := getTestRequest(t, srv, aliceUser.ID, state)
+		return rec != nil && rec.Waiter != ""
+	}, 2*time.Second, 5*time.Millisecond, "waiter was not registered")
 
 	// Cancel the request context
 	cancel()
 
-	// The client receives an error because the connection was aborted; either way the handler must have returned and the subscription must be cleared
+	// The client receives an error because the connection was aborted; either way the handler must have returned and the waiter must be cleared
 	select {
 	case r := <-resCh:
 		if r.res != nil {
@@ -329,11 +329,9 @@ func TestServerV2RequestResultContextCancelClearsSubscription(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		srv.lock.RLock()
-		defer srv.lock.RUnlock()
-		_, ok := srv.subs[state]
-		return !ok
-	}, 2*time.Second, 5*time.Millisecond, "subscription was not removed after context cancel")
+		rec := getTestRequest(t, srv, aliceUser.ID, state)
+		return rec != nil && rec.Waiter == ""
+	}, 2*time.Second, 5*time.Millisecond, "waiter was not removed after context cancel")
 }
 
 // TestServerV2RequestResultSecondSubscriberEvictsFirst verifies that opening a second long-poll for the same state evicts the first one
@@ -350,20 +348,7 @@ func TestServerV2RequestResultSecondSubscriberEvictsFirst(t *testing.T) {
 	_, aliceUser := seedV2SessionCookie(t, srv, "user-alice", "Alice")
 
 	const state = "state-result-evict"
-	rs := srv.db.RequestStore()
-	now := time.Now().UTC().Truncate(time.Second)
-	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
-		State:            state,
-		UserID:           aliceUser.ID,
-		Operation:        "encrypt",
-		RequestorIP:      "127.0.0.1",
-		KeyLabel:         "alice-key",
-		Algorithm:        "A256GCM",
-		CreatedAt:        now,
-		ExpiresAt:        now.Add(10 * time.Minute),
-		EncryptedRequest: `{}`,
-	})
-	require.NoError(t, err)
+	seedTestRequest(t, srv, aliceUser.ID, state, time.Now().Add(10*time.Minute))
 
 	type pollResult struct {
 		status int
@@ -399,36 +384,30 @@ func TestServerV2RequestResultSecondSubscriberEvictsFirst(t *testing.T) {
 		return ch
 	}
 
-	waitForSub := func(prev chan struct{}) chan struct{} {
+	waitForWaiter := func(prev string) string {
 		t.Helper()
-		var ch chan struct{}
+		var waiter string
 		require.Eventually(t, func() bool {
-			srv.lock.RLock()
-			defer srv.lock.RUnlock()
-			ch = srv.subs[state]
-			return ch != nil && ch != prev
-		}, 2*time.Second, 5*time.Millisecond, "expected new subscription channel")
-		return ch
+			rec := getTestRequest(t, srv, aliceUser.ID, state)
+			if rec == nil {
+				return false
+			}
+			waiter = rec.Waiter
+			return waiter != "" && waiter != prev
+		}, 2*time.Second, 5*time.Millisecond, "expected a new waiter")
+		return waiter
 	}
 
-	// Subscriber #1 starts the long-poll; capture its watch channel via the server's subscription map
+	// Subscriber #1 starts the long-poll; capture its waiter token from the user's actor
 	sub1 := startPoll()
-	ch1 := waitForSub(nil)
+	waiter1 := waitForWaiter("")
 
-	// Subscriber #2 starts and must replace subscriber #1 in the map
+	// Subscriber #2 starts and must replace subscriber #1
 	sub2 := startPoll()
-	ch2 := waitForSub(ch1)
-	require.NotEqual(t, ch1, ch2, "second subscription must replace the first")
+	waiter2 := waitForWaiter(waiter1)
+	require.NotEqual(t, waiter1, waiter2, "second subscription must replace the first")
 
-	// The first subscriber's channel must already be closed by subscribeState
-	select {
-	case _, ok := <-ch1:
-		require.False(t, ok, "evicted channel must be closed without a value")
-	case <-time.After(time.Second):
-		t.Fatal("evicted channel was not closed by subscribeState")
-	}
-
-	// Subscriber #1 must promptly return 202 pending — its subscription is gone, so it cannot receive the result
+	// Subscriber #1 must promptly return 202 pending — it was evicted, so it cannot receive the result
 	select {
 	case r := <-sub1:
 		require.NoError(t, r.err)
@@ -438,21 +417,16 @@ func TestServerV2RequestResultSecondSubscriberEvictsFirst(t *testing.T) {
 		t.Fatal("evicted subscriber #1 did not return")
 	}
 
-	// Subscriber #2 should still be active in the subscription map; verify it is the same channel we captured
-	srv.lock.RLock()
-	current := srv.subs[state]
-	srv.lock.RUnlock()
-	require.Equal(t, ch2, current, "subscriber #2 must remain the active subscription")
-
-	// Drive the request to a terminal state (cancel) and notify subscribers
-	// We bypass the API confirm endpoint to avoid coupling this test to CSRF / session details
-	rec, err := rs.CancelRequest(t.Context(), state, aliceUser.ID)
-	require.NoError(t, err)
+	// Subscriber #2 should still be the active waiter, even after subscriber #1 returned
+	rec := getTestRequest(t, srv, aliceUser.ID, state)
 	require.NotNil(t, rec)
+	require.Equal(t, waiter2, rec.Waiter, "subscriber #2 must remain the active waiter")
 
-	srv.lock.Lock()
-	srv.notifySubscriber(state)
-	srv.lock.Unlock()
+	// Drive the request to a terminal state (cancel), which wakes the waiter
+	// We bypass the API confirm endpoint to avoid coupling this test to CSRF / session details
+	res, err := invokeUserActor[userChangeRes](t.Context(), srv, aliceUser.ID, userMethodCancel, userChangeReq{State: state})
+	require.NoError(t, err)
+	require.Empty(t, res.Error)
 
 	// Subscriber #2 receives the terminal response
 	select {

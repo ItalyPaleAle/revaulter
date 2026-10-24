@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -86,13 +87,12 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 		}
 
 		// Generate the token the client uses to retrieve the result
-		resultToken, resultTokenHash, err := newResultToken()
+		resultToken, resultTokenHash, err := newResultToken(user.ID)
 		if err != nil {
 			AbortWithErrorJSON(c, err)
 			return
 		}
 
-		// Save the request in the database
 		now := time.Now()
 		state := uuid.NewV4().String()
 
@@ -108,54 +108,36 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
-		// Needs to be executed in a transaction for consistency
-		_, err = db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
-			// Store the request in the database
-			rErr := tx.RequestStore().CreateRequest(ctx, db.CreateRequestInput{
-				State:            state,
-				UserID:           user.ID,
-				Operation:        operation,
-				RequestorIP:      c.ClientIP(),
-				KeyLabel:         body.KeyLabel,
-				Algorithm:        body.Algorithm,
-				Note:             body.Note,
-				CreatedAt:        now,
-				ExpiresAt:        now.Add(timeout),
-				EncryptedRequest: string(encEnvelopeJSON),
-				ResultTokenHash:  resultTokenHash,
-			})
-			if rErr != nil {
-				return struct{}{}, rErr
-			}
-
-			// Create the audit log event
-			rErr = s.auditEventTx(c, tx, auditFields{
-				EventType:    db.AuditRequestCreate,
-				Outcome:      db.AuditOutcomeSuccess,
-				AuthMethod:   getRequestAuthMethodFromCtx(c),
-				ActorUserID:  user.ID,
-				RequestState: state,
-				Metadata:     requestCreateAuditMetadata(operation, body.Algorithm, body.KeyLabel, body.Note, getRequestJWTClaimsFromCtx(c)),
-			})
-			if rErr != nil {
-				return struct{}{}, rErr
-			}
-
-			return struct{}{}, nil
+		// Store the request in the user's actor, which also writes the envelope and the audit log event, and notifies the list streams
+		auditIn := s.auditInputFromContext(c, auditFields{
+			EventType:    db.AuditRequestCreate,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   getRequestAuthMethodFromCtx(c),
+			ActorUserID:  user.ID,
+			RequestState: state,
+			Metadata:     requestCreateAuditMetadata(operation, body.Algorithm, body.KeyLabel, body.Note, getRequestJWTClaimsFromCtx(c)),
+		})
+		res, err := invokeUserActor[userCreateRes](c.Request.Context(), s, user.ID, userMethodCreate, userCreateReq{
+			State: state,
+			Request: userRequest{
+				Operation:       operation,
+				KeyLabel:        body.KeyLabel,
+				Algorithm:       body.Algorithm,
+				RequestorIP:     c.ClientIP(),
+				Note:            body.Note,
+				CreatedAt:       now,
+				ExpiresAt:       now.Add(timeout),
+				ResultTokenHash: resultTokenHash,
+			},
+			EncryptedRequest: string(encEnvelopeJSON),
+			Audit:            &auditIn,
 		})
 		if err != nil {
 			AbortWithErrorJSON(c, err)
 			return
 		}
-
-		// Enqueue the request for cleanup when it expires
-		err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
-			State:  state,
-			UserID: user.ID,
-			TTL:    now.Add(timeout + requestExpiryGrace),
-		})
-		if err != nil {
-			AbortWithErrorJSON(c, err)
+		if res.Error == userActorErrTooManyPending {
+			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusTooManyRequests, "Too many pending requests: a user can have at most %d", maxPendingRequestsPerUser))
 			return
 		}
 
@@ -164,20 +146,6 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			State:       state,
 			Pending:     true,
 			ResultToken: resultToken,
-		})
-
-		// Publish the new item
-		s.publishListItem(&db.V2RequestListItem{
-			State:     state,
-			Status:    string(db.V2RequestStatusPending),
-			Operation: operation,
-			UserID:    user.ID,
-			KeyLabel:  body.KeyLabel,
-			Algorithm: body.Algorithm,
-			Requestor: c.ClientIP(),
-			Date:      now.Unix(),
-			Expiry:    now.Add(timeout).Unix(),
-			Note:      body.Note,
 		})
 
 		// Notify users via webhook in background when configured
@@ -243,7 +211,10 @@ func (s *Server) RouteV2RequestPubkey(c *gin.Context) {
 }
 
 // RouteV2RequestResult is the handler for GET /v2/request/result/:state
+// It's a long-poll: it waits until the request is final, or until the client gives up
 func (s *Server) RouteV2RequestResult(c *gin.Context) {
+	ctx := c.Request.Context()
+
 	state := c.Param("state")
 	if state == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Missing parameter state"))
@@ -258,122 +229,132 @@ func (s *Server) RouteV2RequestResult(c *gin.Context) {
 		return
 	}
 
-	rs := s.db.RequestStore()
-
-	// Initial read to validate ownership before subscribing
-	// We must not allow subscriptions to a state the caller doesn't own
-	rec, err := rs.GetRequest(c.Request.Context(), state)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	if rec == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
-		return
-	}
-
-	// Verify the request belongs to the user identified by the request key
-	// Collapse the mismatch into the same error as "not found" so callers can't probe for another user's states
-	if rec.UserID != user.ID {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
-		return
-	}
-
-	// Subscribe now that ownership is verified
-	// A single subscription covers the whole long-poll: terminal transitions are final, so notifySubscriber fires at most once per state
-	s.lock.Lock()
-	watch := s.subscribeState(state)
-	s.lock.Unlock()
-	defer func() {
-		s.lock.Lock()
-		s.unsubscribeState(state, watch)
-		s.lock.Unlock()
-	}()
-
-	for {
-		// Re-read on every iteration: closes the race between the ownership read and the subscribe, and reflects state after each wakeup
-		// UserID is immutable, so we don't need to re-check ownership
-		rec, err = rs.GetRequest(c.Request.Context(), state)
+	// Requests owned by other users live in other actors, so they are reported as missing, and callers can't probe for another user's states
+	for i := 0; ; i++ {
+		// Register as the request's waiter, which evicts any previous long-poll for the same request
+		// Reading the status and registering happen in the same turn, so a change made after this always wakes us
+		sub, err := invokeUserActor[userSubscribeRes](ctx, s, user.ID, userMethodSubscribe, userStateReq{State: state})
 		if err != nil {
 			AbortWithErrorJSON(c, err)
 			return
 		}
-		if rec == nil {
-			AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "State not found or expired"))
+		if !sub.Found {
+			// The request may have been collected by another caller while we were waiting
+			status := http.StatusNotFound
+			if i > 0 {
+				status = http.StatusBadRequest
+			}
+			AbortWithErrorJSON(c, NewResponseError(status, "State not found or expired"))
 			return
 		}
 
-		switch rec.Status {
-		case db.V2RequestStatusCompleted:
-			// This method deletes the request only if it's still pending, so it's safe to not use a transaction
-			// Besides, thanks to the subscription handling, we get concurrency control anyways
-			rec, err = rs.GetAndDeleteTerminalRequest(c.Request.Context(), state)
-			if err != nil {
-				AbortWithErrorJSON(c, err)
-				return
-			}
-			if rec == nil {
-				continue
-			}
-
-			// Send response
-			c.JSON(http.StatusOK, protocolv2.RequestResultResponse{
-				State:            rec.State,
-				Done:             true,
-				ResponseEnvelope: rec.ResponseEnvelope,
-			})
-			return
-		case db.V2RequestStatusCanceled, db.V2RequestStatusExpired:
-			// This method deletes the request only if it's still pending, so it's safe to not use a transaction
-			// Besides, thanks to the subscription handling, we get concurrency control anyways
-			rec, err = rs.GetAndDeleteTerminalRequest(c.Request.Context(), state)
-			if err != nil {
-				AbortWithErrorJSON(c, err)
-				return
-			}
-			if rec == nil {
-				continue
-			}
-
-			// Send response
-			c.JSON(http.StatusConflict, protocolv2.RequestResultResponse{
-				State:  rec.State,
-				Failed: true,
-			})
+		if sub.Status.IsTerminal() {
+			s.sendRequestResult(c, user.ID, state)
 			return
 		}
 
-		// Pending: wait for notification or disconnect
-		select {
-		case _, ok := <-watch:
-			// ok is false when subscribeState closed the channel without sending: another caller took over the subscription, so this caller must return
-			if !ok {
-				// Log the eviction
-				logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
-					"Long-poll subscription evicted by a newer caller for the same state",
-					slog.String("state", state),
-					slog.String("user_id", user.ID),
-					slog.String("client_ip", c.ClientIP()),
-				)
-				c.JSON(http.StatusAccepted, protocolv2.RequestResultResponse{
-					State:   rec.State,
-					Pending: true,
-				})
-				return
-			}
-
-			// ok is true when notifySubscriber sent a value before closing: a real notification, so re-check the state
-			continue
-		case <-c.Request.Context().Done():
+		// Pending: wait until the request changes, another long-poll evicts us, or the client disconnects
+		reason, err := s.waitForRequest(ctx, user.ID, state, sub.Waiter)
+		switch {
+		case err != nil && ctx.Err() != nil:
 			// Context canceled; usually the client has disconnected
 			// Send response anyway
 			c.JSON(http.StatusAccepted, protocolv2.RequestResultResponse{
-				State:   rec.State,
+				State:   state,
+				Pending: true,
+			})
+			return
+		case err != nil:
+			AbortWithErrorJSON(c, err)
+			return
+		case reason == waiterReasonEvicted:
+			logging.LogFromContext(ctx).WarnContext(ctx,
+				"Long-poll subscription evicted by a newer caller for the same state",
+				slog.String("state", state),
+				slog.String("user_id", user.ID),
+				slog.String("client_ip", c.ClientIP()),
+			)
+			c.JSON(http.StatusAccepted, protocolv2.RequestResultResponse{
+				State:   state,
 				Pending: true,
 			})
 			return
 		}
+
+		// The request changed, so check its status again
+	}
+}
+
+// waitForRequest waits for the signal that wakes the long-poll registered as waiter, and returns the reason it was woken
+// It always removes the waiter before returning
+func (s *Server) waitForRequest(ctx context.Context, userID string, state string, waiter string) (string, error) {
+	env, err := s.waiters.Wait(ctx, waiterSignalID(state, waiter))
+	if err != nil {
+		// Remove the waiter, using a separate context because the request's may be canceled
+		unsubCtx, unsubCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer unsubCancel()
+		_, unsubErr := invokeUserActor[struct{}](unsubCtx, s, userID, userMethodUnsubscribe, userStateReq{
+			State:  state,
+			Waiter: waiter,
+		})
+		if unsubErr != nil {
+			logging.LogFromContext(ctx).WarnContext(ctx, "Failed to remove long-poll waiter", slog.String("state", state), slog.Any("error", unsubErr))
+		}
+
+		return "", err
+	}
+
+	// The actor removes the waiter before waking it
+	var wake waiterWake
+	if env != nil {
+		err = env.Decode(&wake)
+		if err != nil {
+			return "", fmt.Errorf("failed to decode wake-up reason: %w", err)
+		}
+	}
+
+	return wake.Reason, nil
+}
+
+// sendRequestResult collects the result of a final request and sends it as response
+func (s *Server) sendRequestResult(c *gin.Context, userID string, state string) {
+	// Collecting the result removes the request in the same turn, so only one caller can get it
+	res, err := invokeUserActor[userCollectRes](c.Request.Context(), s, userID, userMethodCollect, userStateReq{State: state})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if !res.Found {
+		// Another caller collected the result first
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
+		return
+	}
+
+	switch res.Status {
+	case db.V2RequestStatusCompleted:
+		var env protocolv2.ResponseEnvelope
+		err = json.Unmarshal([]byte(res.EncryptedResult), &env)
+		if err != nil {
+			AbortWithErrorJSON(c, fmt.Errorf("failed to decode response envelope: %w", err))
+			return
+		}
+
+		c.JSON(http.StatusOK, protocolv2.RequestResultResponse{
+			State:            state,
+			Done:             true,
+			ResponseEnvelope: &env,
+		})
+	case db.V2RequestStatusCanceled, db.V2RequestStatusExpired:
+		c.JSON(http.StatusConflict, protocolv2.RequestResultResponse{
+			State:  state,
+			Failed: true,
+		})
+	default:
+		// Should never happen, as collect returns pending requests without removing them
+		c.JSON(http.StatusAccepted, protocolv2.RequestResultResponse{
+			State:   state,
+			Pending: true,
+		})
 	}
 }
 
@@ -457,7 +438,23 @@ func validateV2CreateBody(op string, body *protocolv2.RequestCreateBody) error {
 	if err != nil || encryptedPayload == nil {
 		return NewResponseError(http.StatusBadRequest, "encryptedPayload is empty or invalid")
 	}
+	if len(encryptedPayload) > protocolv2.MaxEnvelopeCiphertextSize {
+		return NewResponseErrorf(http.StatusRequestEntityTooLarge, "encryptedPayload cannot be larger than %d KB", protocolv2.MaxEnvelopeCiphertextSize>>10)
+	}
 	body.EncryptedPayload = base64.RawURLEncoding.EncodeToString(encryptedPayload)
+
+	return nil
+}
+
+// validateEnvelopeCiphertextSize returns an error if the base64-encoded ciphertext of an envelope is larger than allowed
+func validateEnvelopeCiphertextSize(field string, ciphertext string) error {
+	decoded, err := utils.DecodeBase64String(ciphertext)
+	if err != nil {
+		return NewResponseErrorf(http.StatusBadRequest, "Invalid %s: invalid ciphertext format", field)
+	}
+	if len(decoded) > protocolv2.MaxEnvelopeCiphertextSize {
+		return NewResponseErrorf(http.StatusRequestEntityTooLarge, "Invalid %s: ciphertext cannot be larger than %d KB", field, protocolv2.MaxEnvelopeCiphertextSize>>10)
+	}
 
 	return nil
 }

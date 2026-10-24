@@ -113,14 +113,31 @@ func (s *Server) MiddlewareRequestResult(c *gin.Context) {
 		return
 	}
 
-	// Load the request's result token and its owner in a single query, and check the token against the one issued for the request
+	// The token embeds the ID of the user who owns the request, so we know which user's actor to ask
 	// Every mismatch returns the same error as an unknown state, so callers can't probe for another user's states
-	resultTokenHash, user, err := s.db.RequestStore().GetResultTokenAndOwner(c.Request.Context(), c.Param("state"))
+	userID, ok := parseResultToken(token)
+	if !ok {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
+		return
+	}
+
+	// Check the token against the one issued for the request, before looking up the user
+	res, err := peekUserActor[userGetRes](c.Request.Context(), s, userID, userMethodGet, userStateReq{State: c.Param("state")})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	if user == nil || user.Status != "active" || !resultTokenMatches(token, resultTokenHash) {
+	if !res.Found || !resultTokenMatches(token, res.Request.ResultTokenHash) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
+		return
+	}
+
+	user, err := s.db.AuthStore().GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if user == nil || user.Status != "active" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
 		return
 	}
