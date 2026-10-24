@@ -60,6 +60,8 @@ func GetDefaultConfig() *Config {
 		SessionTimeout: 5 * time.Minute,
 		RequestTimeout: 5 * time.Minute,
 		WebAuthnRPName: "Revaulter",
+
+		FrancisPeerAddress: "127.0.0.1:7571",
 	}
 }
 

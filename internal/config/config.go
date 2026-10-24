@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,6 +117,23 @@ type Config struct {
 	// If no scheme is present, the value is treated as a local SQLite file path.
 	// +required
 	DatabaseDSN string `env:"DATABASEDSN" yaml:"databaseDSN"`
+
+	// Address (host and port) that other Revaulter replicas use to reach this one.
+	// Each replica runs an embedded Francis host, and replicas that share a database and the same `secretKey` form a cluster: they forward calls to each other on this address, over mutual TLS on UDP.
+	// It must be reachable by the other replicas, and it should never be exposed publicly.
+	// When this is not a loopback address, `sessionSigningKey` is required, so every replica accepts the sessions signed by the others.
+	// +default "127.0.0.1:7571"
+	FrancisPeerAddress string `env:"FRANCISPEERADDRESS" yaml:"francisPeerAddress"`
+
+	// UDP port the Francis peer server listens on.
+	// Set this when the port in `francisPeerAddress` is mapped to a different port, for example by a container runtime.
+	// +default the port of `francisPeerAddress`
+	FrancisBindPort int `env:"FRANCISBINDPORT" yaml:"francisBindPort"`
+
+	// Connection string for the database where Francis keeps its data, using the same format as `databaseDSN`.
+	// Francis holds short-lived data only, such as pending requests and timers, and it's never included in backups.
+	// +default for Postgres, a `francis` schema in the database of `databaseDSN`; for SQLite, a file next to the main database, named after it with the `.francis.db` extension
+	FrancisDatabaseDSN string `env:"FRANCISDATABASEDSN" yaml:"francisDatabaseDSN"`
 
 	// Instance-wide secret to derive encryption keys.
 	// It's recommended to generate with `openssl rand -base64 32`.
@@ -220,6 +239,9 @@ type internal struct {
 
 	// Base64-encoded PRF salt
 	prfSalt string
+
+	// Pre-shared key the Francis cluster CA is derived from
+	francisPSK []byte
 }
 
 // GetPRFSalt returns the PRF salt
@@ -230,6 +252,28 @@ func (c *Config) GetPRFSalt() string {
 // TokenSigningKey returns the derived signing key used for JWT sessions
 func (c *Config) TokenSigningKey() jwk.SymmetricKey {
 	return c.internal.tokenSigningKey
+}
+
+// FrancisPSK returns the pre-shared key the Francis cluster CA is derived from
+// Replicas that share `secretKey` derive the same key, so they trust each other
+func (c *Config) FrancisPSK() []byte {
+	return c.internal.francisPSK
+}
+
+// FrancisPeerAddressIsLoopback returns true if `francisPeerAddress` is a loopback address, meaning this replica can't form a cluster with others
+// It returns false if the address can't be parsed
+func (c *Config) FrancisPeerAddressIsLoopback() bool {
+	host, _, err := net.SplitHostPort(c.FrancisPeerAddress)
+	if err != nil {
+		return false
+	}
+
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // GetLoadedConfigPath returns the path to the config file that was loaded
@@ -320,12 +364,45 @@ func (c *Config) Validate(logger *slog.Logger) error {
 		return errors.New("session signing key is too short: must be at least 20 characters")
 	}
 
+	// Validate the Francis options
+	err = c.validateFrancis()
+	if err != nil {
+		return err
+	}
+
 	// Check for invalid values
 	if c.SessionTimeout < time.Second || c.SessionTimeout > time.Hour {
 		return errors.New("config entry key 'sessionTimeout' is invalid: must be between 1s and 1h")
 	}
 	if c.RequestTimeout < time.Second {
 		return errors.New("config entry key 'requestTimeout' is invalid: must be greater than 1s")
+	}
+
+	return nil
+}
+
+// validateFrancis validates the options for the embedded Francis host
+func (c *Config) validateFrancis() error {
+	if c.FrancisPeerAddress == "" {
+		return errors.New("config entry key 'francisPeerAddress' is required")
+	}
+
+	_, portStr, err := net.SplitHostPort(c.FrancisPeerAddress)
+	if err != nil {
+		return fmt.Errorf("config entry key 'francisPeerAddress' is invalid: %w", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return errors.New("config entry key 'francisPeerAddress' is invalid: port must be between 1 and 65535")
+	}
+
+	if c.FrancisBindPort < 0 || c.FrancisBindPort > 65535 {
+		return errors.New("config entry key 'francisBindPort' is invalid: must be between 1 and 65535")
+	}
+
+	// Sessions signed by one replica must be accepted by the others, which a random per-process key prevents
+	if c.SessionSigningKey == "" && !c.FrancisPeerAddressIsLoopback() {
+		return errors.New("config entry key 'sessionSigningKey' is required when 'francisPeerAddress' is not a loopback address")
 	}
 
 	return nil
@@ -396,6 +473,12 @@ func (c *Config) SetSecretKey(logger *slog.Logger) (err error) {
 		return fmt.Errorf("failed to derive PRF salt: %w", err)
 	}
 	c.internal.prfSalt = base64.RawURLEncoding.EncodeToString(prfSalt)
+
+	// Use HKDF to derive the 256-bit pre-shared key for the Francis cluster
+	c.internal.francisPSK, err = hkdf.Key(sha256.New, sk, nil, "revaulter-francis-psk", 32)
+	if err != nil {
+		return fmt.Errorf("failed to derive Francis cluster key: %w", err)
+	}
 
 	// Use HKDF to derive the 256-bit token signing key from a session-specific secret
 	tokenSigningKeyRaw, err := c.tokenSigningKeyRaw(logger)

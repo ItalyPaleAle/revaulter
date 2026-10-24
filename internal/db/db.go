@@ -18,6 +18,7 @@ import (
 	sqliteutils "github.com/italypaleale/go-sql-utils/sqlite"
 	transactions "github.com/italypaleale/go-sql-utils/transactions/adapter"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -170,6 +171,29 @@ func ExecuteInTransaction[T any](ctx context.Context, db *DB, timeout time.Durat
 	})
 }
 
+// IsPostgresConnectionString returns true if the connection string is for Postgres, and false if it's for SQLite
+func IsPostgresConnectionString(connString string) bool {
+	// Postgres connection strings begin with "postgres://" or "postgresql://"
+	connString = strings.TrimSpace(connString)
+	return strings.HasPrefix(connString, "postgres://") || strings.HasPrefix(connString, "postgresql://")
+}
+
+// EnsurePostgresSchema creates a schema in the Postgres database, if it doesn't exist already
+func EnsurePostgresSchema(ctx context.Context, connString string, schema string) error {
+	conn, err := pgx.Connect(ctx, strings.TrimSpace(connString))
+	if err != nil {
+		return fmt.Errorf("failed to connect to Postgres: %w", err)
+	}
+	defer conn.Close(context.WithoutCancel(ctx))
+
+	_, err = conn.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+pgx.Identifier{schema}.Sanitize())
+	if err != nil {
+		return fmt.Errorf("failed to create schema '%s': %w", schema, err)
+	}
+
+	return nil
+}
+
 // Open the connection
 func Open(ctx context.Context, connString string) (*DB, error) {
 	connString = strings.TrimSpace(connString)
@@ -178,8 +202,7 @@ func Open(ctx context.Context, connString string) (*DB, error) {
 	}
 
 	switch {
-	// Postgres connection strings begin with "postgres://" or "postgresql://"
-	case strings.HasPrefix(connString, "postgres://"), strings.HasPrefix(connString, "postgresql://"):
+	case IsPostgresConnectionString(connString):
 		cfg, err := pgxpool.ParseConfig(connString)
 		if err != nil {
 			return nil, fmt.Errorf("invalid Postgres connection string: %w", err)

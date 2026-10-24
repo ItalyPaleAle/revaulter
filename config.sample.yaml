@@ -128,6 +128,29 @@
 ## Required
 databaseDSN:
 
+## francisPeerAddress (string)
+## Description:
+##   Address (host and port) that other Revaulter replicas use to reach this one.
+##   Each replica runs an embedded Francis host, and replicas that share a database and the same `secretKey` form a cluster: they forward calls to each other on this address, over mutual TLS on UDP.
+##   It must be reachable by the other replicas, and it should never be exposed publicly.
+##   When this is not a loopback address, `sessionSigningKey` is required, so every replica accepts the sessions signed by the others.
+## Default: "127.0.0.1:7571"
+#francisPeerAddress:
+
+## francisBindPort (number)
+## Description:
+##   UDP port the Francis peer server listens on.
+##   Set this when the port in `francisPeerAddress` is mapped to a different port, for example by a container runtime.
+## Default: the port of `francisPeerAddress`
+#francisBindPort:
+
+## francisDatabaseDSN (string)
+## Description:
+##   Connection string for the database where Francis keeps its data, using the same format as `databaseDSN`.
+##   Francis holds short-lived data only, such as pending requests and timers, and it's never included in backups.
+## Default: for Postgres, a `francis` schema in the database of `databaseDSN`; for SQLite, a file next to the main database, named after it with the `.francis.db` extension
+#francisDatabaseDSN:
+
 ## secretKey (string)
 ## Description:
 ##   Instance-wide secret to derive encryption keys.

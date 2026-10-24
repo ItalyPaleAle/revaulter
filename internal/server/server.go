@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-chi/httprate"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
+	"github.com/italypaleale/francis/host/local"
 	"github.com/italypaleale/go-kit/auditlogs/siem"
 	"github.com/italypaleale/go-kit/eventqueue"
 	slogkit "github.com/italypaleale/go-kit/slog"
@@ -78,6 +79,10 @@ type Server struct {
 	// Ships audit events to an external collector
 	// Nil when `auditStreamUrl` is not configured
 	auditStream *siem.Shipper
+
+	// Embedded Francis host, and where it keeps its data
+	francis      *local.Host
+	francisStore francisStore
 
 	// Database and request store
 	db       *db.DB
@@ -177,6 +182,16 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 	s.webAuthn, err = s.initWebAuthn()
 	if err != nil {
 		return fmt.Errorf("failed to initialize WebAuthn config: %w", err)
+	}
+
+	// Init the Francis host
+	s.francisStore, err = resolveFrancisStore(config.Get())
+	if err != nil {
+		return err
+	}
+	s.francis, err = newFrancisHost(log, s.francisStore)
+	if err != nil {
+		return err
 	}
 
 	// Init the audit log stream, if enabled
@@ -409,9 +424,25 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = s.requestJWT.Close(closeCtx)
 	}()
 
+	// Start the Francis host before the app server, so handlers can call actors right away
+	// It's stopped after the app server has drained, as in-flight requests may still need it
+	francisRun, err := s.runFrancis(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to start Francis host: %w", err)
+	}
+	defer func() {
+		stopErr := francisRun.Stop()
+		if stopErr != nil {
+			logging.LogFromContext(ctx).WarnContext(ctx,
+				"Francis host shutdown error",
+				slog.Any("error", stopErr),
+			)
+		}
+	}()
+
 	// App server
 	s.wg.Add(1)
-	err := s.startAppServer(ctx)
+	err = s.startAppServer(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start app server: %w", err)
 	}
@@ -447,8 +478,12 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	}
 
-	// Block until the context is canceled
-	<-ctx.Done()
+	// Block until the context is canceled, or the Francis host stops on its own
+	select {
+	case <-ctx.Done():
+	case <-francisRun.done:
+		return fmt.Errorf("the Francis host stopped unexpectedly: %w", francisRun.err)
+	}
 
 	// Servers are stopped with deferred calls
 	return nil

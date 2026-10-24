@@ -1071,6 +1071,10 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 		config.SetTestConfig(map[string]any{
 			"tLSCertPEM": cert,
 			"tLSKeyPEM":  key,
+
+			// Each server gets its own Francis host, with an in-memory store
+			"francisPeerAddress": freeUDPAddress(t),
+			"francisDatabaseDSN": ":memory:",
 		}),
 	)
 	dbConn := db.NewTestDatabaseForServerTests(t)
@@ -1328,6 +1332,19 @@ func startTestServer(t *testing.T, srv *Server) {
 		// At the end of the test, there should be no error
 		require.NoError(t, <-startErrCh, "received an unexpected error in startErrCh")
 	})
+}
+
+// freeUDPAddress returns a loopback address with a UDP port that is currently free, for the Francis peer server
+func freeUDPAddress(t *testing.T) string {
+	t.Helper()
+
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	addr := conn.LocalAddr().String()
+	err = conn.Close()
+	require.NoError(t, err)
+
+	return addr
 }
 
 func clientForListener(ln net.Listener) *http.Client {
