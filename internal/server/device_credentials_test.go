@@ -3,6 +3,14 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/mldsa"
+	"crypto/mlkem"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -55,6 +63,12 @@ func withCookie(cookie *http.Cookie) func(req *http.Request) {
 	}
 }
 
+func withBearer(token string) func(req *http.Request) {
+	return func(req *http.Request) {
+		req.Header.Set("Authorization", protocolv2.AuthSchemeBearer+" "+token)
+	}
+}
+
 func addTestDeviceCredential(t *testing.T, srv *Server, in db.AddCredentialInput) {
 	t.Helper()
 
@@ -63,6 +77,91 @@ func addTestDeviceCredential(t *testing.T, srv *Server, in db.AddCredentialInput
 		return struct{}{}, tx.AuthStore().AddCredential(ctx, in)
 	})
 	require.NoError(t, err)
+}
+
+// testDeviceKeys holds the four private keys of a device credential, standing in for the Secure Enclave
+type testDeviceKeys struct {
+	credentialID string
+	signP256     *ecdsa.PrivateKey
+	kaP256       *ecdh.PrivateKey
+	signMldsa65  *mldsa.PrivateKey
+	kem          *mlkem.DecapsulationKey768
+	public       protocolv2.DevicePublicKeys
+}
+
+func newTestDeviceKeys(t *testing.T) *testDeviceKeys {
+	t.Helper()
+
+	credentialID := make([]byte, protocolv2.DeviceCredentialIDSize)
+	_, err := rand.Read(credentialID)
+	require.NoError(t, err)
+
+	signP256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	kaP256, err := ecdh.P256().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	signMldsa65, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+	kem, err := mlkem.GenerateKey768()
+	require.NoError(t, err)
+
+	signP256Bytes, err := signP256.PublicKey.Bytes()
+	require.NoError(t, err)
+
+	return &testDeviceKeys{
+		credentialID: base64.RawURLEncoding.EncodeToString(credentialID),
+		signP256:     signP256,
+		kaP256:       kaP256,
+		signMldsa65:  signMldsa65,
+		kem:          kem,
+		public: protocolv2.DevicePublicKeys{
+			SignP256:    base64.RawURLEncoding.EncodeToString(signP256Bytes),
+			KaP256:      base64.RawURLEncoding.EncodeToString(kaP256.PublicKey().Bytes()),
+			SignMldsa65: base64.RawURLEncoding.EncodeToString(signMldsa65.PublicKey().Bytes()),
+			KemMlkem768: base64.RawURLEncoding.EncodeToString(kem.EncapsulationKey().Bytes()),
+		},
+	}
+}
+
+// sign returns the base64url raw r||s P-256 signature and ML-DSA-65 signature of msg, in the formats CryptoKit produces
+func (d *testDeviceKeys) sign(t *testing.T, msg []byte) (sigP256 string, sigMldsa65 string) {
+	t.Helper()
+
+	digest := sha256.Sum256(msg)
+	r, s, err := ecdsa.Sign(rand.Reader, d.signP256, digest[:])
+	require.NoError(t, err)
+	sig := make([]byte, protocolv2.P256SignatureSize)
+	r.FillBytes(sig[:protocolv2.P256SignatureSize/2])
+	s.FillBytes(sig[protocolv2.P256SignatureSize/2:])
+
+	mlSig, err := d.signMldsa65.Sign(rand.Reader, msg, nil)
+	require.NoError(t, err)
+
+	return base64.RawURLEncoding.EncodeToString(sig), base64.RawURLEncoding.EncodeToString(mlSig)
+}
+
+// publicKeyJSON returns the device public keys in the format stored in the credential's public_key column
+func (d *testDeviceKeys) publicKeyJSON(t *testing.T) string {
+	t.Helper()
+
+	b, err := json.Marshal(d.public)
+	require.NoError(t, err)
+
+	return string(b)
+}
+
+// addToUser stores the device as a credential of userID
+func (d *testDeviceKeys) addToUser(t *testing.T, srv *Server, userID string) {
+	t.Helper()
+
+	addTestDeviceCredential(t, srv, db.AddCredentialInput{
+		UserID:            userID,
+		CredentialID:      d.credentialID,
+		DisplayName:       "iPhone",
+		PublicKey:         d.publicKeyJSON(t),
+		WrappedPrimaryKey: "device-wrapped-primary-key",
+		WrappedAnchorKey:  testValidWrappedAnchorEnvelope(t),
+	})
 }
 
 func TestLoadWebAuthnUserSkipsDeviceCredentials(t *testing.T) {
