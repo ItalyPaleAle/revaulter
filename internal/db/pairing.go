@@ -203,11 +203,12 @@ func (s *AuthStore) HasOpenPairingSession(ctx context.Context, userID string, no
 	return exists, nil
 }
 
-// DeleteExpiredPairingSession deletes a session once it expired more than 10 minutes before now
+// DeleteExpiredPairingSession deletes a session once it expired at least 10 minutes before now
+// The cleanup queue calls it with now set to the session's expiry plus 10 minutes
 func (s *AuthStore) DeleteExpiredPairingSession(ctx context.Context, id string, now time.Time) error {
 	cutoff := now.Add(-10 * time.Minute).Unix()
 	_, err := s.db.Exec(ctx,
-		`DELETE FROM v2_pairing_sessions WHERE id = $1 AND expires_at < $2`,
+		`DELETE FROM v2_pairing_sessions WHERE id = $1 AND expires_at <= $2`,
 		id, cutoff,
 	)
 	if err != nil {

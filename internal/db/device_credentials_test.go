@@ -398,7 +398,8 @@ func TestAuthStorePairingSessions(t *testing.T) {
 		t.Run("deleting one expired session", func(t *testing.T) {
 			p := createSession(t, "user-1", protocolv2.PairingTTL)
 
-			err := as.DeleteExpiredPairingSession(t.Context(), p.ID, time.Now().Add(protocolv2.PairingTTL+11*time.Minute))
+			// The cleanup queue passes the expiry plus 10 minutes
+			err := as.DeleteExpiredPairingSession(t.Context(), p.ID, p.ExpiresAt.Add(10*time.Minute))
 			require.NoError(t, err)
 			_, err = as.GetPairingSession(t.Context(), p.ID)
 			require.ErrorIs(t, err, ErrPairingSessionNotFound)

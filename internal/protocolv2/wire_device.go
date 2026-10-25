@@ -41,12 +41,14 @@ type DeviceLoginFinishResponse struct {
 
 // Pairing session statuses
 // A session moves forward only: created, then hello, then nonce, then completed; it can be canceled at any point before completion
+// PairingStatusExpired is never stored: the server reports it for a session that reached its expiry before completing
 const (
 	PairingStatusCreated   = "created"
 	PairingStatusHello     = "hello"
 	PairingStatusNonce     = "nonce"
 	PairingStatusCompleted = "completed"
 	PairingStatusCanceled  = "canceled"
+	PairingStatusExpired   = "expired"
 )
 
 // PairingCreateRequest is the body of POST /v2/auth/pairing/create, sent by the existing client

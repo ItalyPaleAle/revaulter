@@ -54,6 +54,9 @@ var (
 	// Rate limit for unauthenticated public signing key fetch
 	// 120 req/m
 	publicKeyRateLimitRPM = 120
+	// Rate limit for the pairing status routes, which both clients poll every 1 to 2 seconds, often from the same IP
+	// 180 req/m
+	pairingPollRateLimitRPM = 180
 )
 
 // Server is the server based on Gin
@@ -285,6 +288,7 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	requestRateLimiter := MiddlewareRateLimit(requestRateLimit)
 	authRateLimiter := MiddlewareRateLimit(authRateLimitRPM)
 	publicKeyRateLimiter := MiddlewareRateLimit(publicKeyRateLimitRPM)
+	pairingPollRateLimiter := MiddlewareRateLimit(pairingPollRateLimitRPM)
 
 	// v2 routes (WebAuthn + browser crypto flow)
 	v2RouteGroup := s.appRouter.Group("/v2")
@@ -345,6 +349,17 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/credentials/rename", sessionReadyMw, s.RouteV2AuthRenameCredential)
 	v2AuthGroup.POST("/credentials/delete", sessionReadyMw, s.RouteV2AuthDeleteCredential)
 	v2AuthGroup.POST("/logout", sessionMw, s.RouteV2AuthLogout)
+	v2AuthGroup.POST("/pairing/create", sessionReadyMw, s.RouteV2PairingCreate)
+	v2AuthGroup.POST("/pairing/hello", s.MiddlewareMaxBodySize(maxPairingHelloBodySize), s.RouteV2PairingHello)
+	v2AuthGroup.POST("/pairing/nonce", sessionReadyMw, s.RouteV2PairingNonce)
+	v2AuthGroup.POST("/pairing/complete", sessionReadyMw, s.RouteV2PairingComplete)
+	v2AuthGroup.POST("/pairing/cancel", sessionReadyMw, s.RouteV2PairingCancel)
+
+	// The pairing status routes are polled, so they get their own rate limit instead of the auth one
+	v2PairingPollGroup := v2RouteGroup.Group("/auth/pairing")
+	v2PairingPollGroup.Use(csrfMw, pairingPollRateLimiter)
+	v2PairingPollGroup.GET("/:id", sessionReadyMw, s.RouteV2PairingGet)
+	v2PairingPollGroup.GET("/:id/device", s.RouteV2PairingDeviceStatus)
 
 	// Add test routes if any
 	for _, addRoutes := range testRoutes {

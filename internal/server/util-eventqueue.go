@@ -132,6 +132,11 @@ func (s *Server) executeDeleteEvent(ev deleteEvent) {
 		if err != nil {
 			log.WarnContext(ctx, "auth challenge cleanup failed", slog.Any("error", err), slog.String("challenge_id", ev.ID))
 		}
+	case "pairing":
+		err := s.db.AuthStore().DeleteExpiredPairingSession(ctx, ev.ID, ev.TTL)
+		if err != nil {
+			log.WarnContext(ctx, "pairing session cleanup failed", slog.Any("error", err), slog.String("pairing_session_id", ev.ID))
+		}
 	case "nonready-user":
 		err := s.db.AuthStore().DeleteNonreadyUser(ctx, ev.ID, ev.TTL)
 		if err != nil {

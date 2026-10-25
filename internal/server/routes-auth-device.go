@@ -281,8 +281,7 @@ func parseStoredDevicePublicKeys(stored string) (*protocolv2.ParsedDevicePublicK
 	return pub.Parse()
 }
 
-// isDeviceCredentialID reports whether id has the format of a device credential ID: base64url of protocolv2.DeviceCredentialIDSize bytes
+// isDeviceCredentialID reports whether id has the format of a device credential ID
 func isDeviceCredentialID(id string) bool {
-	b, err := base64.RawURLEncoding.Strict().DecodeString(id)
-	return err == nil && len(b) == protocolv2.DeviceCredentialIDSize
+	return isBase64URLOfSize(id, protocolv2.DeviceCredentialIDSize)
 }

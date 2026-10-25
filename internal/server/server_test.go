@@ -1194,6 +1194,22 @@ type testAnchorKeyPair struct {
 func seedV2AnchorForUser(t *testing.T, srv *Server, userID string) *testAnchorKeyPair {
 	t.Helper()
 
+	anchor := newTestAnchorKeyPair(t)
+
+	// Update the user record directly so tests can layer an anchor on top of seedV2SessionCookie without rerunning the full signup flow
+	_, err := srv.db.Exec(t.Context(),
+		`UPDATE v2_users SET anchor_es384_public_key = $1, anchor_mldsa87_public_key = $2 WHERE id = $3`,
+		anchor.Es384JWKBody, anchor.Mldsa87PubBase64, userID,
+	)
+	require.NoError(t, err)
+
+	return anchor
+}
+
+// newTestAnchorKeyPair generates a hybrid anchor pair without storing it
+func newTestAnchorKeyPair(t *testing.T) *testAnchorKeyPair {
+	t.Helper()
+
 	esPriv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	require.NoError(t, err)
 	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
@@ -1205,13 +1221,6 @@ func seedV2AnchorForUser(t *testing.T, srv *Server, userID string) *testAnchorKe
 	require.NoError(t, err)
 	es384Body := es384JWK.CanonicalBody()
 	mlPubB64 := base64.RawURLEncoding.EncodeToString(mlPubBytes)
-
-	// Update the user record directly so tests can layer an anchor on top of seedV2SessionCookie without rerunning the full signup flow
-	_, err = srv.db.Exec(t.Context(),
-		`UPDATE v2_users SET anchor_es384_public_key = $1, anchor_mldsa87_public_key = $2 WHERE id = $3`,
-		es384Body, mlPubB64, userID,
-	)
-	require.NoError(t, err)
 
 	return &testAnchorKeyPair{
 		Es384Priv:        esPriv,
