@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/italypaleale/revaulter/internal/db"
@@ -213,4 +214,230 @@ func TestServerV2UpdateWrappedKeyRefusedWhilePairing(t *testing.T) {
 	status, out = doV2JSON(t, client, http.MethodPost, "/v2/auth/update-wrapped-key", body, withCookie(sessionCookie))
 	require.Equal(t, http.StatusOK, status)
 	require.Equal(t, true, out["ok"])
+}
+
+func TestServerV2ListCredentialsTypes(t *testing.T) {
+	setTestConfig(t, "v2-list-credential-types.db")
+	srv := newTestServer(t, nil, nil, nil)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	cookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+	device := newTestDeviceKeys(t)
+	addTestDeviceCredential(t, srv, db.AddCredentialInput{
+		UserID:                      "user-alice",
+		CredentialID:                device.credentialID,
+		DisplayName:                 "iPhone",
+		PublicKey:                   device.publicKeyJSON(t),
+		WrappedPrimaryKey:           testDeviceWrappedPrimaryKey(t, device),
+		WrappedAnchorKey:            testValidWrappedAnchorEnvelope(t),
+		AttestationPayload:          "test-attestation-payload",
+		AttestationSignatureEs384:   "test-es384-signature",
+		AttestationSignatureMldsa87: "test-mldsa87-signature",
+	})
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, fmt.Sprintf("https://localhost:%d/v2/auth/credentials", testServerPort), nil)
+	require.NoError(t, err)
+	req.AddCookie(cookie)
+	res, err := client.Do(req)
+	require.NoError(t, err)
+	defer res.Body.Close()
+	require.Equal(t, http.StatusOK, res.StatusCode)
+
+	var items []map[string]any
+	err = json.NewDecoder(res.Body).Decode(&items)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	byType := map[string]map[string]any{}
+	for _, item := range items {
+		typ, _ := item["type"].(string)
+		byType[typ] = item
+	}
+
+	passkey := byType[protocolv2.CredentialTypePasskey]
+	require.NotNil(t, passkey)
+	assert.Equal(t, "cred-user-alice", passkey["credentialId"])
+	assert.NotContains(t, passkey, "publicKeys")
+	assert.NotContains(t, passkey, "attestationPayload")
+
+	dev := byType[protocolv2.CredentialTypeDevice]
+	require.NotNil(t, dev)
+	assert.Equal(t, device.credentialID, dev["credentialId"])
+	assert.Equal(t, "iPhone", dev["displayName"])
+	assert.Equal(t, "test-attestation-payload", dev["attestationPayload"])
+	assert.Equal(t, "test-es384-signature", dev["attestationSignatureEs384"])
+	assert.Equal(t, "test-mldsa87-signature", dev["attestationSignatureMldsa87"])
+	assert.Equal(t, map[string]any{
+		"signP256":    device.public.SignP256,
+		"kaP256":      device.public.KaP256,
+		"signMldsa65": device.public.SignMldsa65,
+		"kemMlkem768": device.public.KemMlkem768,
+	}, dev["publicKeys"])
+
+	// The wrappers are never listed
+	assert.NotContains(t, dev, "wrappedPrimaryKey")
+	assert.NotContains(t, dev, "wrappedAnchorKey")
+}
+
+func TestServerV2UpdateWrappedKeyBatch(t *testing.T) {
+	setTestConfig(t, "v2-wrapped-key-batch.db")
+	srv := newTestServer(t, nil, nil, nil)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	cookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+	device1 := newTestDeviceKeys(t)
+	device1.addToUser(t, srv, "user-alice")
+	device2 := newTestDeviceKeys(t)
+	device2.addToUser(t, srv, "user-alice")
+	anchorKey := testValidWrappedAnchorEnvelope(t)
+
+	update := func(t *testing.T, body map[string]any) (int, map[string]any) {
+		t.Helper()
+		return doV2JSON(t, client, http.MethodPost, "/v2/auth/update-wrapped-key", body, withCookie(cookie))
+	}
+	userEpoch := func(t *testing.T) int64 {
+		t.Helper()
+		user, err := srv.db.AuthStore().GetUserByID(t.Context(), "user-alice")
+		require.NoError(t, err)
+		require.NotNil(t, user)
+		return user.WrappedKeyEpoch
+	}
+	wrapper := func(t *testing.T, credentialID string) (string, int64) {
+		t.Helper()
+		cred, err := srv.db.AuthStore().GetCredentialForUser(t.Context(), "user-alice", credentialID)
+		require.NoError(t, err)
+		require.NotNil(t, cred)
+		return cred.WrappedPrimaryKey, cred.WrappedKeyEpoch
+	}
+
+	t.Run("re-wraps every credential with the epoch advance", func(t *testing.T) {
+		device1Key := testDeviceWrappedPrimaryKey(t, device1)
+		device2Key := testDeviceWrappedPrimaryKey(t, device2)
+		status, out := update(t, map[string]any{
+			"advanceEpoch": true,
+			"updates": []map[string]any{
+				{"credentialId": "cred-user-alice", "wrappedPrimaryKey": "new-passkey-blob", "wrappedAnchorKey": anchorKey},
+				{"credentialId": device1.credentialID, "wrappedPrimaryKey": device1Key, "wrappedAnchorKey": anchorKey},
+				{"credentialId": device2.credentialID, "wrappedPrimaryKey": device2Key, "wrappedAnchorKey": anchorKey},
+			},
+		})
+		require.Equal(t, http.StatusOK, status, out)
+
+		require.Equal(t, int64(2), userEpoch(t))
+		for id, want := range map[string]string{"cred-user-alice": "new-passkey-blob", device1.credentialID: device1Key, device2.credentialID: device2Key} {
+			got, epoch := wrapper(t, id)
+			assert.Equal(t, want, got, id)
+			assert.Equal(t, int64(2), epoch, id)
+		}
+
+		rows := auditByType(t, srv, "user-alice", db.AuditAuthWrappedKeyUpdate)
+		assert.Len(t, rows, 3)
+	})
+
+	t.Run("an unknown credential rolls back the whole batch", func(t *testing.T) {
+		before, _ := wrapper(t, device1.credentialID)
+
+		status, _ := update(t, map[string]any{
+			"advanceEpoch": true,
+			"updates": []map[string]any{
+				{"credentialId": device1.credentialID, "wrappedPrimaryKey": testDeviceWrappedPrimaryKey(t, device1), "wrappedAnchorKey": anchorKey},
+				{"credentialId": "cred-unknown", "wrappedPrimaryKey": "blob", "wrappedAnchorKey": anchorKey},
+			},
+		})
+		require.Equal(t, http.StatusNotFound, status)
+
+		require.Equal(t, int64(2), userEpoch(t))
+		after, _ := wrapper(t, device1.credentialID)
+		assert.Equal(t, before, after)
+	})
+
+	t.Run("a device needs a device envelope", func(t *testing.T) {
+		before, _ := wrapper(t, "cred-user-alice")
+
+		status, out := update(t, map[string]any{
+			"advanceEpoch": true,
+			"updates": []map[string]any{
+				{"credentialId": "cred-user-alice", "wrappedPrimaryKey": "another-passkey-blob", "wrappedAnchorKey": anchorKey},
+				{"credentialId": device2.credentialID, "wrappedPrimaryKey": "not-an-envelope", "wrappedAnchorKey": anchorKey},
+			},
+		})
+		require.Equal(t, http.StatusBadRequest, status)
+		assert.Contains(t, out["error"], device2.credentialID)
+
+		require.Equal(t, int64(2), userEpoch(t))
+		after, _ := wrapper(t, "cred-user-alice")
+		assert.Equal(t, before, after)
+
+		// The single-credential form applies the same check
+		status, _ = update(t, map[string]any{"credentialId": device2.credentialID, "wrappedPrimaryKey": "not-an-envelope", "wrappedAnchorKey": anchorKey})
+		require.Equal(t, http.StatusBadRequest, status)
+	})
+
+	t.Run("invalid batches", func(t *testing.T) {
+		valid := map[string]any{"credentialId": device1.credentialID, "wrappedPrimaryKey": testDeviceWrappedPrimaryKey(t, device1), "wrappedAnchorKey": anchorKey}
+		tooMany := make([]map[string]any, maxWrappedKeyUpdates+1)
+		for i := range tooMany {
+			tooMany[i] = map[string]any{"credentialId": fmt.Sprintf("cred-%d", i), "wrappedPrimaryKey": "blob"}
+		}
+
+		cases := map[string]map[string]any{
+			"combined with credentialId": {"credentialId": "cred-user-alice", "updates": []map[string]any{valid}},
+			"duplicate credential":       {"updates": []map[string]any{valid, valid}},
+			"missing credentialId":       {"updates": []map[string]any{{"wrappedPrimaryKey": "blob"}}},
+			"too many updates":           {"updates": tooMany},
+			"invalid anchor envelope":    {"updates": []map[string]any{{"credentialId": device1.credentialID, "wrappedPrimaryKey": "blob", "wrappedAnchorKey": "nope"}}},
+		}
+		for name, body := range cases {
+			t.Run(name, func(t *testing.T) {
+				status, _ := update(t, body)
+				require.Equal(t, http.StatusBadRequest, status)
+			})
+		}
+	})
+}
+
+func TestServerV2DeleteLastPasskey(t *testing.T) {
+	setTestConfig(t, "v2-delete-last-passkey.db")
+	srv := newTestServer(t, nil, nil, nil)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	cookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+	device := newTestDeviceKeys(t)
+	device.addToUser(t, srv, "user-alice")
+
+	records, err := srv.db.AuthStore().ListCredentials(t.Context(), "user-alice")
+	require.NoError(t, err)
+	var passkeyID, deviceID string
+	for _, rec := range records {
+		switch rec.CredentialType {
+		case protocolv2.CredentialTypePasskey:
+			passkeyID = rec.ID
+		case protocolv2.CredentialTypeDevice:
+			deviceID = rec.ID
+		}
+	}
+	require.NotEmpty(t, passkeyID)
+	require.NotEmpty(t, deviceID)
+
+	deleteCredential := func(t *testing.T, id string) (int, map[string]any) {
+		t.Helper()
+		return doV2JSON(t, client, http.MethodPost, "/v2/auth/credentials/delete", map[string]any{"id": id}, withCookie(cookie))
+	}
+
+	// The only passkey can't go while a device remains
+	status, out := deleteCredential(t, passkeyID)
+	require.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "An account must keep at least one passkey", out["error"])
+
+	// The device can
+	status, out = deleteCredential(t, deviceID)
+	require.Equal(t, http.StatusOK, status, out)
+
+	// Now the passkey is the last credential
+	status, out = deleteCredential(t, passkeyID)
+	require.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, "Cannot delete the last credential", out["error"])
 }

@@ -178,15 +178,37 @@ type v2AuthUpdateWrappedKeyRequest struct {
 	WrappedPrimaryKey string `json:"wrappedPrimaryKey"`
 	WrappedAnchorKey  string `json:"wrappedAnchorKey"`
 	AdvanceEpoch      bool   `json:"advanceEpoch"`
+	// Updates changes several credentials' wrappers in the same transaction as the epoch advance, so a password change can re-wrap every device at once
+	// It replaces the single-credential fields above, which must then be empty
+	Updates []v2AuthWrappedKeyUpdate `json:"updates"`
 }
 
+type v2AuthWrappedKeyUpdate struct {
+	CredentialID      string `json:"credentialId"`
+	WrappedPrimaryKey string `json:"wrappedPrimaryKey"`
+	WrappedAnchorKey  string `json:"wrappedAnchorKey"`
+}
+
+// maxWrappedKeyUpdates bounds the number of credentials one update-wrapped-key request can change
+const maxWrappedKeyUpdates = 100
+
 type v2AuthCredentialItem struct {
-	ID              string `json:"id"`
+	ID string `json:"id"`
+	// CredentialID is the WebAuthn credential ID of a passkey, or the ID a device generated when it paired
+	// update-wrapped-key takes this ID, while rename and delete take ID
+	CredentialID    string `json:"credentialId"`
+	Type            string `json:"type"`
 	DisplayName     string `json:"displayName"`
 	WrappedKeyEpoch int64  `json:"wrappedKeyEpoch"`
 	WrappedKeyStale bool   `json:"wrappedKeyStale"`
 	CreatedAt       int64  `json:"createdAt"`
 	LastUsedAt      int64  `json:"lastUsedAt"`
+
+	// Set for devices only, so a client can check the anchor's attestation of the keys before it wraps a primary key to them
+	PublicKeys                  *protocolv2.DevicePublicKeys `json:"publicKeys,omitempty"`
+	AttestationPayload          string                       `json:"attestationPayload,omitempty"`
+	AttestationSignatureEs384   string                       `json:"attestationSignatureEs384,omitempty"`
+	AttestationSignatureMldsa87 string                       `json:"attestationSignatureMldsa87,omitempty"`
 }
 
 type v2AddCredentialChallengePayload struct {
@@ -941,24 +963,28 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "Invalid request body"))
 		return
 	}
-	if req.CredentialID == "" {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "credentialId is required"))
+	updates, err := req.wrappedKeyUpdates()
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, err.Error()))
 		return
 	}
 
-	// Structurally validate the wrapped-anchor envelope before persistence
+	// Structurally validate the wrapped-anchor envelopes before persistence
 	// An empty value means the caller is not updating the anchor for this credential, so only validate when non-empty
-	if req.WrappedAnchorKey != "" {
-		err = validateWrappedAnchorEnvelope(req.WrappedAnchorKey)
+	for _, u := range updates {
+		if u.WrappedAnchorKey == "" {
+			continue
+		}
+		err = validateWrappedAnchorEnvelope(u.WrappedAnchorKey)
 		if err != nil {
 			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusBadRequest, "invalid wrappedAnchorKey: %v", err))
 			return
 		}
 	}
 
-	// Rest of the method must run in a transaction
+	// Rest of the method must run in a transaction, so a failure on any credential leaves every wrapper and the epoch unchanged
 	_, err = db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
-		return struct{}{}, s.updateWrappedKey(c, tx, userID, &req)
+		return struct{}{}, s.updateWrappedKey(c, tx, userID, req.AdvanceEpoch, updates)
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -971,7 +997,43 @@ func (s *Server) RouteV2AuthUpdateWrappedKey(c *gin.Context) {
 	})
 }
 
-func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, req *v2AuthUpdateWrappedKeyRequest) error {
+// wrappedKeyUpdates returns the wrappers the request changes, from either the single-credential fields or updates
+func (r *v2AuthUpdateWrappedKeyRequest) wrappedKeyUpdates() ([]v2AuthWrappedKeyUpdate, error) {
+	if len(r.Updates) == 0 {
+		if r.CredentialID == "" {
+			return nil, errors.New("credentialId is required")
+		}
+
+		return []v2AuthWrappedKeyUpdate{{
+			CredentialID:      r.CredentialID,
+			WrappedPrimaryKey: r.WrappedPrimaryKey,
+			WrappedAnchorKey:  r.WrappedAnchorKey,
+		}}, nil
+	}
+
+	if r.CredentialID != "" || r.WrappedPrimaryKey != "" || r.WrappedAnchorKey != "" {
+		return nil, errors.New("updates can't be combined with credentialId, wrappedPrimaryKey or wrappedAnchorKey")
+	}
+	if len(r.Updates) > maxWrappedKeyUpdates {
+		return nil, fmt.Errorf("at most %d updates are allowed", maxWrappedKeyUpdates)
+	}
+
+	seen := make(map[string]struct{}, len(r.Updates))
+	for i, u := range r.Updates {
+		if u.CredentialID == "" {
+			return nil, fmt.Errorf("updates[%d]: credentialId is required", i)
+		}
+		_, dup := seen[u.CredentialID]
+		if dup {
+			return nil, fmt.Errorf("updates[%d]: duplicate credentialId", i)
+		}
+		seen[u.CredentialID] = struct{}{}
+	}
+
+	return r.Updates, nil
+}
+
+func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, advanceEpoch bool, updates []v2AuthWrappedKeyUpdate) error {
 	ctx := c.Request.Context()
 	as := tx.AuthStore()
 
@@ -994,7 +1056,7 @@ func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, re
 		return NewResponseError(http.StatusConflict, "Cannot change password while a device is being paired")
 	}
 
-	if req.AdvanceEpoch {
+	if advanceEpoch {
 		_, err = as.AdvanceWrappedKeyEpoch(ctx, userID)
 		if errors.Is(err, db.ErrUserNotFound) {
 			return NewResponseError(http.StatusNotFound, "User not found")
@@ -1003,7 +1065,40 @@ func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, re
 		}
 	}
 
-	err = as.UpdateCredentialWrappedKey(ctx, req.CredentialID, userID, req.WrappedPrimaryKey, req.WrappedAnchorKey)
+	for _, u := range updates {
+		err = s.updateCredentialWrappedKey(c, tx, userID, advanceEpoch, u)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Server) updateCredentialWrappedKey(c *gin.Context, tx *db.DbTx, userID string, advanceEpoch bool, u v2AuthWrappedKeyUpdate) error {
+	ctx := c.Request.Context()
+	as := tx.AuthStore()
+
+	cred, err := as.GetCredentialForUser(ctx, userID, u.CredentialID)
+	if err != nil {
+		return err
+	}
+	if cred == nil {
+		return NewResponseError(http.StatusNotFound, "Credential not found")
+	}
+
+	// A device unwraps its primary key with its Secure Enclave keys, so its wrapper must stay a device envelope
+	if cred.CredentialType == protocolv2.CredentialTypeDevice {
+		env, pErr := protocolv2.ParseWrappedPrimaryKeyEnvelope(u.WrappedPrimaryKey)
+		if pErr != nil {
+			return NewResponseErrorf(http.StatusBadRequest, "invalid wrappedPrimaryKey for credential %s: %v", u.CredentialID, pErr)
+		}
+		if !env.IsDevice() {
+			return NewResponseErrorf(http.StatusBadRequest, "invalid wrappedPrimaryKey for credential %s: not a device envelope", u.CredentialID)
+		}
+	}
+
+	err = as.UpdateCredentialWrappedKey(ctx, u.CredentialID, userID, u.WrappedPrimaryKey, u.WrappedAnchorKey)
 	if errors.Is(err, db.ErrCredentialNotFound) {
 		return NewResponseError(http.StatusNotFound, "Credential not found")
 	} else if err != nil {
@@ -1011,22 +1106,17 @@ func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, re
 	}
 
 	// Save the audit log entry
-	err = s.auditEventTx(c, tx, auditFields{
+	return s.auditEventTx(c, tx, auditFields{
 		EventType:    db.AuditAuthWrappedKeyUpdate,
 		Outcome:      db.AuditOutcomeSuccess,
 		AuthMethod:   db.AuditAuthMethodSession,
 		ActorUserID:  userID,
 		TargetUserID: userID,
-		CredentialID: req.CredentialID,
+		CredentialID: u.CredentialID,
 		Metadata: jsonMetadata(map[string]any{
-			"advanceEpoch": req.AdvanceEpoch,
+			"advanceEpoch": advanceEpoch,
 		}),
 	})
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // RouteV2AuthListCredentials is the handler for GET /v2/auth/credentials
@@ -1064,11 +1154,27 @@ func (s *Server) RouteV2AuthListCredentials(c *gin.Context) {
 	for i, rec := range records {
 		items[i] = v2AuthCredentialItem{
 			ID:              rec.ID,
+			CredentialID:    rec.CredentialID,
+			Type:            rec.CredentialType,
 			DisplayName:     rec.DisplayName,
 			WrappedKeyEpoch: rec.WrappedKeyEpoch,
 			WrappedKeyStale: rec.WrappedKeyEpoch > 0 && rec.WrappedKeyEpoch < user.WrappedKeyEpoch,
 			CreatedAt:       rec.CreatedAt,
 			LastUsedAt:      rec.LastUsedAt,
+		}
+
+		if rec.CredentialType == protocolv2.CredentialTypeDevice {
+			var pub protocolv2.DevicePublicKeys
+			err = json.Unmarshal([]byte(rec.PublicKey), &pub)
+			if err != nil {
+				AbortWithErrorJSON(c, NewResponseErrorf(http.StatusInternalServerError, "stored device public keys are invalid: %v", err))
+				return
+			}
+
+			items[i].PublicKeys = &pub
+			items[i].AttestationPayload = rec.AttestationPayload
+			items[i].AttestationSignatureEs384 = rec.AttestationSignatureEs384
+			items[i].AttestationSignatureMldsa87 = rec.AttestationSignatureMldsa87
 		}
 	}
 
@@ -1523,6 +1629,9 @@ func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
 	switch {
 	case errors.Is(err, db.ErrLastCredential):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Cannot delete the last credential"))
+		return
+	case errors.Is(err, db.ErrLastPasskey):
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "An account must keep at least one passkey"))
 		return
 	case errors.Is(err, db.ErrCredentialNotFound):
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Credential not found"))
