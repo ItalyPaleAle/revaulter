@@ -24,11 +24,11 @@ Events are written through one of two paths:
 | `created_at` | INTEGER (Unix seconds) | no | When the audit row was written |
 | `event_type` | TEXT | no | `<area>.<verb>` — see list below |
 | `outcome` | TEXT | no | `success` \| `failure` \| `denied` |
-| `auth_method` | TEXT | no | `session` \| `request_key` \| `request_oidc` (a JWT from a trusted OIDC issuer) \| `system` \| `none` (set on rows from handlers that run before any authentication is established, e.g. `auth.login_finish` failures) |
+| `auth_method` | TEXT | no | `session` \| `request_key` \| `request_oidc` (a JWT from a trusted OIDC issuer) \| `system` \| `none` (set on rows from handlers that run before any authentication is established, e.g. `auth.login_finish` failures and `auth.pairing_hello`) |
 | `actor_user_id` | TEXT | yes | The user who performed the action, NULL for unauthenticated failures and pure system events |
 | `target_user_id` | TEXT | yes | The user the action affects (often equal to `actor_user_id`) |
 | `signing_key_id` | TEXT | yes | Set for `signing_key.*` events |
-| `credential_id` | TEXT | yes | Set for `auth.credential_*` events and `auth.login_finish` |
+| `credential_id` | TEXT | yes | Set for `auth.credential_*`, `auth.wrapped_key_update`, `auth.login_finish`, `auth.device_login_finish`, `auth.pairing_hello` and `auth.pairing_complete` events |
 | `request_state` | TEXT | yes | The v2 protocol request `state` for `request.*` events |
 | `http_request_id` | TEXT | yes | Correlates the audit row with the HTTP access log |
 | `client_ip` | TEXT | yes | NULL for system events |
@@ -55,10 +55,15 @@ Naming convention is `<area>.<verb>` with both halves in `snake_case`. The full 
 | `auth.request_oidc_issuer_delete` | User removes a trusted OIDC issuer. Metadata: same as `auth.request_oidc_issuer_add` |
 | `auth.allowed_ips_change` | Allowed-IP list updated. Metadata: `{old_count, new_count}` |
 | `auth.display_name_change` | User updates their display name |
-| `auth.wrapped_key_update` | The wrapped primary/anchor key changes. Metadata: `{advance_epoch}` (true when the change is a password rotation) |
+| `auth.wrapped_key_update` | A credential's wrapped primary/anchor key changes, with one row per credential when a request re-wraps several. Metadata: `{advanceEpoch}` (true when the change is a password rotation) |
 | `auth.credential_add_finish` | New passkey registered |
-| `auth.credential_rename` | Passkey renamed |
-| `auth.credential_delete` | Passkey deleted |
+| `auth.credential_rename` | Passkey or device renamed |
+| `auth.credential_delete` | Passkey or device deleted |
+| `auth.device_login_finish` | A native app's device login finishes: `outcome=success` when both device signatures verify, `outcome=failure` otherwise |
+| `auth.pairing_create` | User opens a pairing session for a new device, which cancels any session they still had open. Metadata: `{pairingSessionId}` |
+| `auth.pairing_hello` | The new device sends its hello. The device has no session, so `auth_method=none` and the row is attributed to the session's owner, failures included. Metadata: `{pairingSessionId}` |
+| `auth.pairing_complete` | User completes the pairing and the device credential is added. Metadata: `{pairingSessionId}` |
+| `auth.pairing_cancel` | User cancels a pairing session. Metadata: `{pairingSessionId}` |
 
 ### Requests
 

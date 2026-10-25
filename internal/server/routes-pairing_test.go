@@ -654,6 +654,15 @@ func TestServerV2PairingCreateChecks(t *testing.T) {
 
 		require.Equal(t, http.StatusConflict, create(t, serverURL))
 	})
+
+	t.Run("refusals are audited", func(t *testing.T) {
+		// The two conflicts above; a malformed server is refused before the transaction
+		rows := auditByType(t, srv, "user-alice", db.AuditAuthPairingCreate)
+		require.Len(t, rows, 2)
+		for _, row := range rows {
+			assert.Equal(t, db.AuditOutcomeFailure, row.Outcome)
+		}
+	})
 }
 
 func TestServerV2PairingPollingRateLimit(t *testing.T) {

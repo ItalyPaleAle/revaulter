@@ -360,7 +360,9 @@ Exactly one of `confirm` or `cancel` must be `true`. When confirming, `responseE
 
 ## Auth endpoints (`/v2/auth`)
 
-Authentication and user management endpoints. Registration and login endpoints are public; all others require an authenticated session.
+Authentication and user management endpoints. Registration and login endpoints are public, and so are the device login endpoints and the two pairing endpoints the new device calls; all others require an authenticated session.
+
+The web app's session is a cookie. A native app's device login returns the same session as a token instead, which it sends as `Authorization: Bearer <sessionToken>`. Requests with a bearer token are exempt from the CSRF checks.
 
 ### Registration
 
@@ -478,6 +480,67 @@ Complete login with the WebAuthn assertion response.
 ```
 
 When `wrappedKeyStale` is `true`, the credential's wrapped key is at an older epoch than the user's current epoch. The client should re-wrap the primary key and upload it via `POST /v2/auth/update-wrapped-key`.
+
+### Device login
+
+Native apps log in with a device credential: Secure Enclave keys registered by [pairing](#device-pairing). The device signs a server-issued challenge with both its P-256 and ML-DSA-65 keys, and the server verifies both signatures. See the [crypto architecture](/docs/crypto-architecture/#device-credentials) for the signed message.
+
+#### `POST /v2/auth/device/login/begin`
+
+Get a challenge for a device credential. The response is the same whether or not the user and credential exist, so it doesn't reveal which do.
+
+**Request body:**
+
+```json
+{
+  "userId": "<uuid>",
+  "credentialId": "<base64url, 16 bytes>"
+}
+```
+
+**Response:** `200 OK`
+
+```json
+{
+  "challengeId": "<uuid>",
+  "challenge": "<base64url, 32 bytes>",
+  "expiresAt": 1713200060
+}
+```
+
+The challenge expires after 60 seconds.
+
+#### `POST /v2/auth/device/login/finish`
+
+Complete a device login with the two signatures over the login message.
+
+**Request body:**
+
+```json
+{
+  "challengeId": "<uuid>",
+  "credentialId": "<base64url>",
+  "signatureP256": "<base64url, raw r||s, 64 bytes>",
+  "signatureMldsa65": "<base64url, 3309 bytes>"
+}
+```
+
+**Response:** `200 OK`
+
+```json
+{
+  "authenticated": true,
+  "sessionToken": "<token>",
+  "sessionExpiresAt": 1713200300,
+  "userId": "<uuid>",
+  "wrappedPrimaryKey": "<base64url>",
+  "wrappedAnchorKey": "<base64url>",
+  "credentialWrappedKeyEpoch": 1,
+  "wrappedKeyStale": false
+}
+```
+
+No cookie is set: the app sends `sessionToken` as a bearer token, and reads the rest of the session from `GET /v2/auth/session`. Returns `400 Bad Request` for malformed fields, `401 Unauthorized` when a signature doesn't verify or the credential isn't a device of that user, `409 Conflict` when the challenge was already used or expired, and `429 Too Many Requests` when the user's wrapped key was delivered too many times recently (the same limit as passkey logins).
 
 ### Session management
 
@@ -719,9 +782,27 @@ Update the wrapped primary key for a specific credential. Used after a password 
 ```json
 {
   "credentialId": "<base64url>",
-  "wrappedPrimaryKey": "<base64url>"
+  "wrappedPrimaryKey": "<base64url>",
+  "wrappedAnchorKey": "<base64url>",
+  "advanceEpoch": true
 }
 ```
+
+Set `advanceEpoch` when the change is a password change: the user's epoch goes up by one, and every credential not re-wrapped in the same request becomes stale.
+
+To re-wrap several credentials in one transaction, such as the current passkey and every device after a password change, send `updates` instead of the single-credential fields:
+
+```json
+{
+  "advanceEpoch": true,
+  "updates": [
+    { "credentialId": "<base64url>", "wrappedPrimaryKey": "<base64url>", "wrappedAnchorKey": "<base64url>" },
+    { "credentialId": "<base64url>", "wrappedPrimaryKey": "<base64url>", "wrappedAnchorKey": "<base64url>" }
+  ]
+}
+```
+
+`updates` takes at most 100 entries, each for a different credential, and can't be combined with `credentialId`, `wrappedPrimaryKey` or `wrappedAnchorKey`. If any entry fails, nothing changes, including the epoch. A device's `wrappedPrimaryKey` must be a device envelope.
 
 **Response:** `200 OK`
 
@@ -731,26 +812,51 @@ Update the wrapped primary key for a specific credential. Used after a password 
 }
 ```
 
+Returns `404 Not Found` if a credential doesn't exist, and `409 Conflict` while a passkey registration or a device pairing is in progress, since either one wraps the primary key with the current password.
+
 ### Credential management
 
 #### `GET /v2/auth/credentials`
 
-List all WebAuthn credentials for the authenticated user.
+List all credentials for the authenticated user: passkeys and devices.
 
 **Response:** `200 OK`
 
 ```json
 [
   {
-    "id": "<base64url>",
+    "id": "<uuid>",
+    "credentialId": "<base64url>",
+    "type": "passkey",
     "displayName": "YubiKey 5",
     "wrappedKeyEpoch": 1,
     "wrappedKeyStale": false,
     "createdAt": 1713100000,
     "lastUsedAt": 1713200000
+  },
+  {
+    "id": "<uuid>",
+    "credentialId": "<base64url>",
+    "type": "device",
+    "displayName": "Alice's iPhone",
+    "wrappedKeyEpoch": 1,
+    "wrappedKeyStale": false,
+    "createdAt": 1713150000,
+    "lastUsedAt": 1713200000,
+    "publicKeys": {
+      "signP256": "<base64url>",
+      "kaP256": "<base64url>",
+      "signMldsa65": "<base64url>",
+      "kemMlkem768": "<base64url>"
+    },
+    "attestationPayload": "<canonical body>",
+    "attestationSignatureEs384": "<base64url>",
+    "attestationSignatureMldsa87": "<base64url>"
   }
 ]
 ```
+
+`id` is the record ID that rename and delete take; `credentialId` is the ID that update-wrapped-key takes. Devices also carry their public keys and the anchor's attestation of them, which a client must verify before it wraps a primary key to the device.
 
 #### `POST /v2/auth/credentials/add/begin`
 
@@ -822,7 +928,7 @@ Rename a credential.
 
 #### `POST /v2/auth/credentials/delete`
 
-Delete a credential. The user must have at least one remaining credential.
+Delete a credential. The user must have at least one remaining credential, and at least one passkey: devices are paired from a passkey session, so an account of only devices couldn't pair again.
 
 **Request body:**
 
@@ -839,6 +945,189 @@ Delete a credential. The user must have at least one remaining credential.
   "ok": true
 }
 ```
+
+Returns `409 Conflict` with `Cannot delete the last credential`, or with `An account must keep at least one passkey` when the request would leave only devices.
+
+### Device pairing
+
+Pairing adds a device credential for a native app, from a client that is already signed in. The existing client opens a session and shows a payload (as a QR code, a link or text) that carries a secret the server never sees. The new device answers with a hello, the existing client checks it and sends a nonce, both screens show a 6-digit code that the user compares, and the existing client completes the pairing by wrapping the primary key to the device. See the [crypto architecture](/docs/crypto-architecture/#pairing) for the messages.
+
+The new device has no session: the 128-bit session ID is its capability for the session's 5-minute lifetime. Nothing the device's endpoints return needs to stay secret, because the nonce is authenticated with a key derived from the payload secret.
+
+Both clients poll the two status endpoints every 1 to 2 seconds. Those have their own limit of 180 requests per minute per IP, while the other pairing endpoints share the auth endpoints' limit.
+
+Sessions move from `created` to `hello` to `nonce` to `completed`, and can be `canceled` before that. Status responses report `expired` for a session that reached its expiry first.
+
+#### `POST /v2/auth/pairing/create`
+
+Open a pairing session. Called by the existing client. Any session the user still had open is canceled.
+
+**Request body:**
+
+```json
+{
+  "server": "https://revaulter.example.com"
+}
+```
+
+`server` is the base URL the client puts in the payload. It must use `https`, or `http` on a loopback address.
+
+**Response:** `200 OK`
+
+```json
+{
+  "sessionId": "<base64url, 16 bytes>",
+  "expiresAt": 1713200300
+}
+```
+
+Returns `409 Conflict` while a passkey registration is in progress, or when the account has no anchor key.
+
+#### `POST /v2/auth/pairing/hello`
+
+Send the new device's hello. Called by the new device, without a session. The body is capped at 16 KiB.
+
+**Request body:**
+
+```json
+{
+  "sessionId": "<base64url>",
+  "hello": {
+    "deviceName": "Alice's iPhone",
+    "credentialId": "<base64url, 16 bytes>",
+    "publicKeys": {
+      "signP256": "<base64url>",
+      "kaP256": "<base64url>",
+      "signMldsa65": "<base64url>",
+      "kemMlkem768": "<base64url>"
+    },
+    "signatureP256": "<base64url>",
+    "signatureMldsa65": "<base64url>",
+    "mac": "<base64url>"
+  }
+}
+```
+
+The server checks the key encodings and both signatures over the pairing transcript, which it rebuilds from the session. It can't check `mac`, which needs the payload secret: the existing client does.
+
+**Response:** `200 OK`
+
+```json
+{
+  "ok": true
+}
+```
+
+Returns `400 Bad Request` for a malformed hello or a signature that doesn't verify, `404 Not Found` for an unknown session, and `409 Conflict` when the session already has a hello, has ended, or the credential ID is already registered.
+
+#### `GET /v2/auth/pairing/:id`
+
+Get a session's status and, once it arrives, the device's hello. Called by the existing client.
+
+**Response:** `200 OK`
+
+```json
+{
+  "sessionId": "<base64url>",
+  "status": "hello",
+  "expiresAt": 1713200300,
+  "hello": { "...as sent to /v2/auth/pairing/hello..." }
+}
+```
+
+Returns `404 Not Found` for a session of another user.
+
+#### `POST /v2/auth/pairing/nonce`
+
+Send the nonce, after checking the hello's MAC and signatures. Called by the existing client.
+
+**Request body:**
+
+```json
+{
+  "sessionId": "<base64url>",
+  "nonce": "<base64url, 32 bytes>",
+  "nonceMac": "<base64url, 32 bytes>"
+}
+```
+
+**Response:** `200 OK`
+
+```json
+{
+  "ok": true
+}
+```
+
+Returns `409 Conflict` if the session isn't waiting for a nonce.
+
+#### `GET /v2/auth/pairing/:id/device`
+
+Get a session's status and, once it is set, the nonce. Called by the new device, without a session.
+
+**Response:** `200 OK`
+
+```json
+{
+  "status": "nonce",
+  "expiresAt": 1713200300,
+  "nonce": "<base64url>",
+  "nonceMac": "<base64url>"
+}
+```
+
+#### `POST /v2/auth/pairing/complete`
+
+Add the device credential, once the user has confirmed that both screens show the same code. Called by the existing client.
+
+**Request body:**
+
+```json
+{
+  "sessionId": "<base64url>",
+  "displayName": "Alice's iPhone",
+  "wrappedPrimaryKey": "<base64url>",
+  "wrappedAnchorKey": "<base64url>",
+  "attestationPayload": "<canonical body>",
+  "attestationSignatureEs384": "<base64url>",
+  "attestationSignatureMldsa87": "<base64url>"
+}
+```
+
+`displayName` is optional and defaults to the hello's `deviceName`. `wrappedPrimaryKey` must be a device envelope. The attestation must be a version 2 payload for a `device` credential, signed by the user's anchor, whose credential ID and public key hash match the hello, at the user's current epoch, created within 2 minutes of the server's clock.
+
+**Response:** `200 OK`
+
+```json
+{
+  "id": "<uuid>",
+  "credentialId": "<base64url>"
+}
+```
+
+Returns `400 Bad Request` when a check fails and `409 Conflict` if the session isn't waiting for completion.
+
+#### `POST /v2/auth/pairing/cancel`
+
+End a session before it completes. Called by the existing client.
+
+**Request body:**
+
+```json
+{
+  "sessionId": "<base64url>"
+}
+```
+
+**Response:** `200 OK`
+
+```json
+{
+  "ok": true
+}
+```
+
+Returns `409 Conflict` if the session has already ended.
 
 ---
 
