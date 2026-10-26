@@ -54,7 +54,7 @@ test('passwordless ready user logs in directly to ready view with base64url PRF 
         await skipPasswordSetup(page)
         await openSignInState(page)
         await expect(
-            page.getByText('Session exists but local key material is missing. Sign in again to continue.')
+            page.getByText('For your security, your keys are kept in memory only and are cleared when the page reloads. Sign in again to continue.')
         ).toBeVisible()
 
         const loginRequest = page.waitForRequest((request) => {
@@ -197,9 +197,30 @@ test('reload during non-ready setup resumes via session endpoint', async ({ page
     await installSessionCookie(context, request, 'user-nonready')
 
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Finish setting up your account' })).toBeVisible()
     await page.reload()
-    await expect(page.getByRole('heading', { name: 'Sign in to Revaulter' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Finish setting up your account' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Continue account setup' })).toBeVisible()
+})
+
+test('interrupted signup can be resumed after reload', async ({ page }) => {
+    const passkey = await createVirtualPasskey(page)
+
+    try {
+        // Simulate the second passkey prompt failing right after the account was created
+        await page.route('**/v2/auth/login/begin', (route) => route.abort(), { times: 1 })
+        await page.goto('/')
+        await page.getByRole('button', { name: 'Create a new account' }).click()
+        await page.getByRole('button', { name: 'Create account with passkey' }).click()
+        await expect(page.getByRole('heading', { name: 'Finish setting up your account' })).toBeVisible()
+
+        await page.reload()
+        await page.getByRole('button', { name: 'Continue account setup' }).click()
+        await expect(page.getByRole('heading', { name: 'Add a password' })).toBeVisible()
+        await skipPasswordSetup(page)
+    } finally {
+        await passkey.dispose()
+    }
 })
 
 async function openSignInState(page) {
