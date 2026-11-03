@@ -328,7 +328,8 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
 	v2AuthGroup.POST("/login/finish", s.RouteV2AuthLoginFinish)
-	v2AuthGroup.GET("/session", sessionReadyMw, s.RouteV2AuthSession)
+	// Session and finalize-signup accept non-ready users, so a signup that was interrupted can be resumed
+	v2AuthGroup.GET("/session", sessionMw, s.RouteV2AuthSession)
 	v2AuthGroup.POST("/finalize-signup", sessionMw, s.RouteV2AuthFinalizeSignup)
 	v2AuthGroup.POST("/allowed-ips", sessionReadyMw, s.RouteV2AuthAllowedIPs)
 	v2AuthGroup.POST("/regenerate-request-key", sessionReadyMw, s.RouteV2AuthRequestKeyRegenerate)

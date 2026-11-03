@@ -257,3 +257,4 @@ After starting Revaulter:
 4. Optionally configure allowed IP addresses for your account from the settings page.
 
 > Account self-registration can be disabled by setting `disableSignup: true` after initial setup.
+> If your account setup was interrupted after the passkey was registered, you can still sign in with that passkey and finish it while signup is disabled.

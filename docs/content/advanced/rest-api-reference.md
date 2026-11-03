@@ -416,6 +416,7 @@ Complete account registration with the WebAuthn credential response.
     "requestOidcIssuers": [],
     "wrappedKeyEpoch": 0,
     "allowedIps": [],
+    "ready": false,
     "ttl": 300
   }
 }
@@ -469,6 +470,7 @@ Complete login with the WebAuthn assertion response.
     "requestOidcIssuers": [],
     "wrappedKeyEpoch": 1,
     "allowedIps": [],
+    "ready": true,
     "ttl": 300
   },
   "wrappedPrimaryKey": "<base64url>",
@@ -479,11 +481,13 @@ Complete login with the WebAuthn assertion response.
 
 When `wrappedKeyStale` is `true`, the credential's wrapped key is at an older epoch than the user's current epoch. The client should re-wrap the primary key and upload it via `POST /v2/auth/update-wrapped-key`.
 
+When `session.ready` is `false`, the account was registered but its setup was never finalized (for example, because the signup was interrupted). The response then has no `wrappedPrimaryKey`, and includes `credentialPublicKeyHash` instead: the client uses it to sign the first-credential attestation and resume the setup with `POST /v2/auth/finalize-signup`.
+
 ### Session management
 
 #### `GET /v2/auth/session`
 
-Get the current session information. Requires an authenticated session.
+Get the current session information. Requires an authenticated session, which may belong to a user whose setup is not complete yet (`ready` is `false`).
 
 **Response:** `200 OK`
 
@@ -507,6 +511,7 @@ Get the current session information. Requires an authenticated session.
   ],
   "wrappedKeyEpoch": 1,
   "allowedIps": [],
+  "ready": true,
   "ttl": 280
 }
 ```
@@ -528,6 +533,8 @@ End the current session.
 #### `POST /v2/auth/finalize-signup`
 
 Upload the user's wrapped primary key and static public encryption keys after registration. Called by the browser after deriving keys from the WebAuthn PRF output.
+
+This only completes the setup of the signed-in user, and only while that user is not ready. It is available even when `disableSignup` is `true`, so a signup that was interrupted can still be finished; it returns `409 Conflict` if the account is already finalized.
 
 **Request body:**
 

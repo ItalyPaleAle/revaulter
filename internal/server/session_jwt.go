@@ -143,6 +143,7 @@ func sessionInfoFromUser(user *db.User, ttl int) *v2AuthSessionInfo {
 		AnchorFingerprint:  computeAnchorFingerprint(user),
 		WrappedKeyEpoch:    user.WrappedKeyEpoch,
 		AllowedIPs:         allowedIPs,
+		Ready:              user.Ready,
 		TTL:                max(ttl, 0),
 	}
 }
