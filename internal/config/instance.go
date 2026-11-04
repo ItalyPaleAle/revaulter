@@ -53,14 +53,13 @@ func GetDefaultConfig() *Config {
 	}
 
 	return &Config{
-		LogLevel:       "info",
-		LogAsJSON:      !isatty.IsTerminal(os.Stdout.Fd()),
-		Port:           port,
-		Bind:           "0.0.0.0",
-		SessionTimeout: 5 * time.Minute,
-		RequestTimeout: 5 * time.Minute,
-		WebAuthnRPName: "Revaulter",
-
+		LogLevel:           "info",
+		LogAsJSON:          !isatty.IsTerminal(os.Stdout.Fd()),
+		Port:               port,
+		Bind:               "0.0.0.0",
+		SessionTimeout:     5 * time.Minute,
+		RequestTimeout:     5 * time.Minute,
+		WebAuthnRPName:     "Revaulter",
 		FrancisPeerAddress: "127.0.0.1:7571",
 	}
 }

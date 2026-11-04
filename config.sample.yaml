@@ -131,7 +131,7 @@ databaseDSN:
 ## francisPeerAddress (string)
 ## Description:
 ##   Address (host and port) that other Revaulter replicas use to reach this one.
-##   Each replica runs an embedded Francis host, and replicas that share a database and the same `secretKey` form a cluster: they forward calls to each other on this address, over mutual TLS on UDP.
+##   Each replica runs an embedded Francis host, and replicas that share a database and form a cluster: they forward calls to each other on this address using WebTransport (UDP-based).
 ##   It must be reachable by the other replicas, and it should never be exposed publicly.
 ##   When this is not a loopback address, `sessionSigningKey` is required, so every replica accepts the sessions signed by the others.
 ## Default: "127.0.0.1:7571"

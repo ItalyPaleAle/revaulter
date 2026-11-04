@@ -71,9 +71,9 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 | `logHealthChecks` | `REVAULTER_LOGHEALTHCHECKS` | `false` | Include `/healthz` requests in the request logs |
 | `logLevel` | `REVAULTER_LOGLEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `logAsJson` | `REVAULTER_LOGASJSON` | auto | Emit JSON logs (defaults to `true` when no TTY is attached) |
-| `francisPeerAddress` | `REVAULTER_FRANCISPEERADDRESS` | `127.0.0.1:7571` | Address (host and port) other replicas use to reach this one (see [Short-lived data](#short-lived-data) below). When it's not a loopback address, `sessionSigningKey` is required |
+| `francisPeerAddress` | `REVAULTER_FRANCISPEERADDRESS` | `127.0.0.1:7571` | Address (host and port) other replicas use to reach this one (when it's not a loopback address, `sessionSigningKey` is required) |
 | `francisBindPort` | `REVAULTER_FRANCISBINDPORT` | Port of `francisPeerAddress` | UDP port the peer server listens on |
-| `francisDatabaseDSN` | `REVAULTER_FRANCISDATABASEDSN` | Derived from `databaseDSN` | Where short-lived data is stored (see [Short-lived data](#short-lived-data) below) |
+| `francisDatabaseDSN` | `REVAULTER_FRANCISDATABASEDSN` | Derived from `databaseDSN` | Where short-lived data is stored |
 
 ### Optional WebAuthn configuration
 
@@ -116,7 +116,7 @@ Revaulter keeps short-lived data, such as pending requests and their timers, in 
 
 Set `francisDatabaseDSN` to store it elsewhere. Like the main SQLite file, a SQLite file for Francis must not be stored on a networked filesystem.
 
-This data is never included in backups, and losing it only cancels the requests that are pending at the time.
+The data stored in Francis is ephemeral and never included in backups.
 
 ## Secret key
 
