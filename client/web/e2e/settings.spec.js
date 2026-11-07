@@ -147,7 +147,7 @@ test('request auth tab enables OIDC tokens and the request key independently', a
     }
 })
 
-test.describe(() => {
+test.describe('request auth toggle', () => {
     test.use({ serviceWorkers: 'block' })
 
     test('request auth toggle reverts when saving fails', async ({ page, request }) => {

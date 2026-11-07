@@ -1,4 +1,8 @@
 # Enforce 7 day minimum release age
 minimumReleaseAge: 10080
 minimumReleaseAgeStrict: true
-minimumReleaseAgeExclude: []
+minimumReleaseAgeExclude:
+    - "@vitest/mocker@5.1.0"
+    - "@vitest/spy@5.1.0"
+    - "vite-plugin-sri-gen@1.7.6"
+    - "vitest@5.1.0"
