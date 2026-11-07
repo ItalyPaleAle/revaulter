@@ -76,6 +76,7 @@ type v2AuthSessionInfo struct {
 	AnchorFingerprint  string                 `json:"anchorFingerprint"`
 	WrappedKeyEpoch    int64                  `json:"wrappedKeyEpoch"`
 	AllowedIPs         []string               `json:"allowedIps"`
+	Ready              bool                   `json:"ready"`
 	TTL                int                    `json:"ttl"`
 }
 
@@ -99,6 +100,7 @@ type v2AuthLoginFinishResponse struct {
 	WrappedPrimaryKey         string             `json:"wrappedPrimaryKey,omitempty"`
 	WrappedAnchorKey          string             `json:"wrappedAnchorKey,omitempty"`
 	CredentialWrappedKeyEpoch int64              `json:"credentialWrappedKeyEpoch,omitempty"`
+	CredentialPublicKeyHash   string             `json:"credentialPublicKeyHash,omitempty"`
 	WrappedKeyStale           bool               `json:"wrappedKeyStale"`
 }
 
@@ -511,6 +513,15 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		Session:       sessionInfoFromUser(res.user, int(max(time.Until(res.sess.ExpiresAt), 0).Seconds())),
 	}
 
+	// If the user's signup was interrupted before finalize-signup, return the hash of the credential's public key, which the client needs to sign the first-credential attestation and resume the setup
+	if !res.user.Ready && res.cred != nil {
+		resp.CredentialPublicKeyHash, err = protocolv2.CredentialPublicKeyHashFromStoredCredJSON(res.cred.PublicKey)
+		if err != nil {
+			AbortWithErrorJSON(c, NewResponseErrorf(http.StatusInternalServerError, "failed to derive credential public key hash: %v", err))
+			return
+		}
+	}
+
 	// Throttle wrapped primary key delivery
 	// The wrapped primary key is the user's encrypted root-key material:
 	// an attacker that controls a passkey could otherwise call /v2/auth/login/finish in a tight loop and harvest the blob for offline password cracking
@@ -555,15 +566,9 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 
 // RouteV2AuthFinalizeSignup is the handler for POST /v2/auth/finalize-signup
 func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
-	cfg := config.Get()
-
-	// Stop if account creation is disabled
-	if cfg.DisableSignup {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusForbidden, "Account creation is disabled"))
-		return
-	}
-
 	// Get the user from the context
+	// This endpoint is not gated by disableSignup: it only completes the setup of the signed-in user, which already exists and is not ready yet, and it can't create new accounts
+	// This lets a user whose signup was interrupted finish it after signup has been disabled
 	userID := c.GetString(contextKeyUserID)
 	if userID == "" {
 		AbortWithErrorJSON(c, noSessionResponseError)

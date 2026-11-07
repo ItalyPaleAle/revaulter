@@ -161,6 +161,7 @@ export type V2AuthSessionInfo = {
     anchorFingerprint: string
     wrappedKeyEpoch: number
     allowedIps: string[]
+    ready: boolean
     ttl: number
 }
 
@@ -179,6 +180,8 @@ export type V2LoginFinishResponse = {
     wrappedPrimaryKey?: string
     wrappedAnchorKey?: string
     credentialWrappedKeyEpoch?: number
+    // Set only when the account's setup was not finalized yet
+    credentialPublicKeyHash?: string
     wrappedKeyStale: boolean
 }
 
@@ -193,6 +196,7 @@ export type V2SessionResponse = {
     anchorFingerprint: string
     wrappedKeyEpoch: number
     allowedIps: string[]
+    ready: boolean
     ttl: number
 }
 

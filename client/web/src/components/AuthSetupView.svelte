@@ -14,12 +14,13 @@ interface Props {
     onDisplayNameInput: (value: string) => void
     onPasswordInput: (value: string) => void
     onRegister: () => Promise<void>
+    onResumeSetup: () => Promise<void>
     onReturnToSignIn: () => Promise<void>
     onSetPassword: () => Promise<void>
     onSkipPassword: () => void
     pageError: string | null
     passwordInput: string
-    uiState: 'signup' | 'password-setup'
+    uiState: 'signup' | 'resume-setup' | 'password-setup'
 }
 
 let {
@@ -30,6 +31,7 @@ let {
     onDisplayNameInput,
     onPasswordInput,
     onRegister,
+    onResumeSetup,
     onReturnToSignIn,
     onSetPassword,
     onSkipPassword,
@@ -54,12 +56,18 @@ function authHeadline() {
     if (uiState === 'signup') {
         return 'Create a new account'
     }
+    if (uiState === 'resume-setup') {
+        return 'Finish setting up your account'
+    }
     return 'Add a password'
 }
 
 function authBodyCopy() {
     if (uiState === 'signup') {
         return 'Register a new Revaulter user with a resident passkey. You can add an optional password after registration.'
+    }
+    if (uiState === 'resume-setup') {
+        return "Your passkey was registered, but the account setup didn't complete. Continue with the same passkey to finish it."
     }
     return 'Passwords are optional. If you set one now, Revaulter will ask for it after future passkey sign-ins before unlocking local keys.'
 }
@@ -128,6 +136,23 @@ function authBodyCopy() {
                         Create account with passkey
                     </Button>
                 </form>
+            {:else if uiState === 'resume-setup'}
+                <Button
+                    type="button"
+                    variant="primary"
+                    size="lg"
+                    width="full"
+                    disabled={authBusy}
+                    onclick={() => {
+                        if (!authBusy) {
+                            void onResumeSetup()
+                        }
+                    }}
+                >
+                    {#if authBusy}<LoadingSpinner size="1rem" />{/if}
+                    <Icon icon="key" title="Passkey" size="4" />
+                    Continue account setup
+                </Button>
             {:else}
                 <form
                     class="space-y-4"
