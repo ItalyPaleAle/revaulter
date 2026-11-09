@@ -23,7 +23,7 @@ func (db *DB) ResetAllForTests(ctx context.Context) error {
 			"v2_auth_challenge_payloads",
 			"v2_auth_challenges",
 			"v2_user_credentials",
-			"v2_requests",
+			"v2_request_payloads",
 			"v2_users",
 		}
 		for _, table := range tables {
@@ -39,16 +39,19 @@ func (db *DB) ResetAllForTests(ctx context.Context) error {
 	return err
 }
 
-// ForceExpireRequestForTests sets the request expiry in the past for deterministic test setup
-func (s *RequestStore) ForceExpireRequestForTests(ctx context.Context, state string, expiresAt time.Time) error {
+// GetRequestPayloadOwnerForTests returns the ID of the user who owns a request, or an empty string if the request has no payload row
+func (s *RequestPayloadStore) GetRequestPayloadOwnerForTests(ctx context.Context, state string) (string, error) {
 	if s == nil || s.db == nil {
-		return fmt.Errorf("request store is not initialized")
+		return "", fmt.Errorf("request payload store is not initialized")
 	}
 
-	_, err := s.db.Exec(ctx, `UPDATE v2_requests SET expires_at = $1 WHERE state = $2`, expiresAt.Unix(), state)
-	if err != nil {
-		return fmt.Errorf("failed to force-expire request %s: %w", state, err)
+	var userID string
+	err := s.db.QueryRow(ctx, `SELECT user_id FROM v2_request_payloads WHERE state = $1`, state).Scan(&userID)
+	if s.db.IsNoRowsError(err) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to read owner of request %s: %w", state, err)
 	}
 
-	return nil
+	return userID, nil
 }

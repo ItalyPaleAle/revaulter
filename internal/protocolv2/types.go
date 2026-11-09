@@ -21,6 +21,10 @@ const (
 // MaxNoteLength is the maximum length for the user-facing request note
 const MaxNoteLength = 80
 
+// MaxEnvelopeCiphertextSize is the maximum size, in bytes, of the decoded ciphertext in a request or response envelope
+// Clients limit the value and the additional data of an operation to 100 KB each, and the encrypted payload carries both base64-encoded, together with the client's transport keys, so this allows for both at their maximum size
+const MaxEnvelopeCiphertextSize = 300 << 10
+
 // SigningAlgES256 is the JWA identifier for ECDSA using P-256 with SHA-256
 const SigningAlgES256 = "ES256"
 

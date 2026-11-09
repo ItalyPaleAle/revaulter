@@ -243,6 +243,99 @@ func TestValidateAuditStream(t *testing.T) {
 	})
 }
 
+func TestValidateFrancis(t *testing.T) {
+	// Set initial variables in the global object
+	oldConfig := config
+	config = GetDefaultConfig()
+	t.Cleanup(func() {
+		config = oldConfig
+	})
+
+	t.Cleanup(SetTestConfig(map[string]any{
+		"databaseDSN": "sqlite://./test.db",
+		"secretKey":   testSecretKey,
+	}))
+
+	t.Run("succeeds with the default peer address", func(t *testing.T) {
+		err := config.Validate(nil)
+		require.NoError(t, err)
+		assert.True(t, config.FrancisPeerAddressIsLoopback())
+	})
+
+	t.Run("fails without a peer address", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"francisPeerAddress": "",
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'francisPeerAddress' is required")
+	})
+
+	t.Run("fails when the peer address has no port", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"francisPeerAddress": "127.0.0.1",
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'francisPeerAddress' is invalid")
+	})
+
+	t.Run("fails when the peer address has an invalid port", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"francisPeerAddress": "127.0.0.1:0",
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'francisPeerAddress' is invalid")
+	})
+
+	t.Run("fails when the bind port is out of range", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"francisBindPort": 70000,
+		}))
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'francisBindPort' is invalid")
+	})
+
+	t.Run("requires a session signing key with a non-loopback peer address", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"francisPeerAddress": "10.0.0.5:7571",
+		}))
+
+		assert.False(t, config.FrancisPeerAddressIsLoopback())
+
+		err := config.Validate(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "'sessionSigningKey' is required")
+	})
+
+	t.Run("succeeds with a non-loopback peer address and a session signing key", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"francisPeerAddress": "revaulter-1.internal:7571",
+			"sessionSigningKey":  "session-signing-key-0123456789",
+		}))
+
+		err := config.Validate(nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("treats localhost as loopback", func(t *testing.T) {
+		t.Cleanup(SetTestConfig(map[string]any{
+			"francisPeerAddress": "localhost:7571",
+		}))
+
+		assert.True(t, config.FrancisPeerAddressIsLoopback())
+
+		err := config.Validate(nil)
+		require.NoError(t, err)
+	})
+}
+
 func TestSetSecretKey(t *testing.T) {
 	t.Run("fails with an empty secret", func(t *testing.T) {
 		cfg := &Config{}
@@ -296,5 +389,26 @@ func TestSetSecretKey(t *testing.T) {
 		kid, ok := tokenSigningKey.KeyID()
 		require.True(t, ok)
 		require.Equal(t, "CPJB5Nriy3r1JzMy", kid)
+	})
+
+	t.Run("derives the Francis cluster key from the secret key", func(t *testing.T) {
+		cfg := &Config{
+			SecretKey:         testSecretKey,
+			SessionSigningKey: "session-signing-key-0123456789",
+		}
+
+		err := cfg.SetSecretKey(nil)
+		require.NoError(t, err)
+
+		require.Equal(t, "404e93396b8ba2b7de9a69301912a1328dc660a4e188752d693e51cd2c57c82a", hex.EncodeToString(cfg.FrancisPSK()))
+
+		// A different session signing key doesn't change the cluster key
+		other := &Config{
+			SecretKey:         testSecretKey,
+			SessionSigningKey: "another-session-signing-key-0123",
+		}
+		err = other.SetSecretKey(nil)
+		require.NoError(t, err)
+		require.Equal(t, cfg.FrancisPSK(), other.FrancisPSK())
 	})
 }

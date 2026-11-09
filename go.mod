@@ -11,6 +11,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-chi/httprate v0.16.1
 	github.com/go-webauthn/webauthn v0.18.2
+	github.com/italypaleale/francis v0.2.1
 	github.com/italypaleale/go-kit v1.7.1
 	github.com/italypaleale/go-sql-utils v0.3.12
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
@@ -47,6 +48,7 @@ require (
 )
 
 require (
+	github.com/alphadose/haxmap v1.4.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
@@ -58,6 +60,7 @@ require (
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20260821105541-05f79448fa77 // indirect
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7 // indirect
+	github.com/dunglas/httpsfv v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/fchimpan/gomod-age v0.1.1-0.20260405015303-09005169a479 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
@@ -128,8 +131,10 @@ require (
 	github.com/prometheus/otlptranslator v1.0.0 // indirect
 	github.com/prometheus/procfs v0.23.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/quic-go/quic-go v0.65.0 // indirect
+	github.com/quic-go/quic-go v0.64.1 // indirect
+	github.com/quic-go/webtransport-go v0.13.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.11.1 // indirect
 	github.com/shibumi/go-pathspec v1.3.0 // indirect
 	github.com/sigstore/rekor v1.5.5 // indirect
@@ -142,6 +147,8 @@ require (
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.2 // indirect
+	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
@@ -163,6 +170,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/arch v0.32.0 // indirect
+	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect

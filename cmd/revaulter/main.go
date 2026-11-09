@@ -17,6 +17,7 @@ import (
 	"github.com/italypaleale/revaulter/cmd/revaulter/backup"
 	"github.com/italypaleale/revaulter/cmd/revaulter/healthcheck"
 	"github.com/italypaleale/revaulter/cmd/revaulter/migrate"
+	"github.com/italypaleale/revaulter/internal/actors"
 	"github.com/italypaleale/revaulter/internal/buildinfo"
 	"github.com/italypaleale/revaulter/internal/config"
 	"github.com/italypaleale/revaulter/internal/db"
@@ -160,6 +161,16 @@ func main() {
 	}
 	shutdownFns = append(shutdownFns, traceExporter.Shutdown)
 
+	// Create the Francis host, which runs the actors that hold short-lived state, like pending requests
+	actorsHost, err := actors.NewHost(actors.NewHostOptions{
+		Log: log,
+		DB:  dbConn,
+	})
+	if err != nil {
+		slogkit.FatalError(log, "Failed to create the Francis host", err)
+		return
+	}
+
 	// Create the Server object
 	srv, err := server.NewServer(server.NewServerOpts{
 		Log:           log,
@@ -167,16 +178,30 @@ func main() {
 		Metrics:       metrics,
 		TraceExporter: traceExporter,
 		DB:            dbConn,
+		Actors:        actorsHost,
 	})
 	if err != nil {
 		slogkit.FatalError(log, "Cannot initialize the server", err)
 		return
 	}
 
-	// Run the service
-	// This call blocks until the context is canceled
+	// The server starts once the Francis host is ready, so actors can be called from the first request
+	// The Francis host stops only after the server has drained, as in-flight requests may still call actors
+	actorsReady := servicerunner.NewReady()
+	serverDrained := servicerunner.NewReady()
+
+	// Run the services
+	// This call blocks until the context is canceled, or until one of the services stops
 	err = servicerunner.
-		NewServiceRunner(srv.Run).
+		NewServiceRunner(
+			func(ctx context.Context) error {
+				return actorsHost.Run(ctx, actorsReady, serverDrained)
+			},
+			func(ctx context.Context) error {
+				defer serverDrained.Signal()
+				return actorsReady.Await(srv.Run)(ctx)
+			},
+		).
 		Run(ctx)
 	if err != nil {
 		slogkit.FatalError(log, "Failed to run services", err)
