@@ -15,7 +15,6 @@ import (
 
 	location "github.com/gin-contrib/location/v2"
 	"github.com/gin-gonic/gin"
-	"github.com/go-chi/httprate"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/italypaleale/go-kit/auditlogs/siem"
 	"github.com/italypaleale/go-kit/eventqueue"
@@ -54,6 +53,10 @@ var (
 	// Rate limit for unauthenticated public signing key fetch
 	// 120 req/m
 	publicKeyRateLimitRPM = 120
+	// Rate limit for wrapped primary key delivery, per user
+	// 4 logins per 10 minutes
+	wrappedKeyRateLimit       = 4
+	wrappedKeyRateLimitPeriod = 10 * time.Minute
 )
 
 // Server is the server based on Gin
@@ -84,7 +87,7 @@ type Server struct {
 	// Per-user rate limiter for wrapped primary key delivery
 	// Protects delivery of the wrapped root-key blob to a WebAuthn-authenticated client
 	// and reduces abuse of the password-gated unwrap flow
-	wrappedKeyLimiter *httprate.RateLimiter
+	wrappedKeyLimiter *actors.RateLimiter
 
 	// Servers
 	appSrv *http.Server
@@ -144,9 +147,6 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 			}),
 			Logger: opts.Log,
 		}),
-
-		// Throttle wrapped primary key delivery to 4 successful logins per 10-minute window, per user
-		wrappedKeyLimiter: httprate.NewRateLimiter(4, 10*time.Minute),
 	}
 
 	// Create the eventqueue processor for performing garbage collection
@@ -184,6 +184,12 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 
 	// Wake the audit log stream when actors write audit events
 	s.actors.SetAuditEventHandler(s.nudgeAuditStream)
+
+	// Throttle wrapped primary key delivery per user
+	s.wrappedKeyLimiter, err = s.actors.NewRateLimiter("revaulter-wrapped-key", wrappedKeyRateLimit, wrappedKeyRateLimitPeriod)
+	if err != nil {
+		return err
+	}
 
 	// Init the app server
 	err = s.initAppServer(log)
@@ -281,10 +287,20 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	sessionMw := s.MiddlewareSession(false)
 	sessionReadyMw := s.MiddlewareSession(true)
 
-	// Rate limiters for request creation and authentication endpoints
-	requestRateLimiter := MiddlewareRateLimit(requestRateLimit)
-	authRateLimiter := MiddlewareRateLimit(authRateLimitRPM)
-	publicKeyRateLimiter := MiddlewareRateLimit(publicKeyRateLimitRPM)
+	// Rate limiters for request creation, authentication, and public key endpoints, by client IP
+	// They run on the Francis host, so all replicas share each client's budget
+	requestRateLimiter, err := s.newRateLimitMiddleware("revaulter-request", requestRateLimit, time.Minute)
+	if err != nil {
+		return err
+	}
+	authRateLimiter, err := s.newRateLimitMiddleware("revaulter-auth", authRateLimitRPM, time.Minute)
+	if err != nil {
+		return err
+	}
+	publicKeyRateLimiter, err := s.newRateLimitMiddleware("revaulter-pubkey", publicKeyRateLimitRPM, time.Minute)
+	if err != nil {
+		return err
+	}
 
 	// v2 routes (WebAuthn + browser crypto flow)
 	v2RouteGroup := s.appRouter.Group("/v2")

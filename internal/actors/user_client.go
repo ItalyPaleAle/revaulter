@@ -93,6 +93,11 @@ func (c UserClient) Subscribe(ctx context.Context, state string) (Subscription, 
 // It returns true if the long-poll was evicted
 // If it returns an error, for example because ctx was canceled, the waiter has been removed
 func (c UserClient) WaitForResult(ctx context.Context, state string, waiter string) (evicted bool, err error) {
+	err = c.host.checkRunning()
+	if err != nil {
+		return false, err
+	}
+
 	env, err := c.host.waiters.Wait(ctx, waiterSignalID(state, waiter))
 	if err != nil {
 		// Remove the waiter, using a separate context because ctx may be canceled
@@ -137,7 +142,12 @@ func (c UserClient) Snapshot(ctx context.Context) (Snapshot, error) {
 
 // WaitForChange waits until a bell returned by Snapshot rings, which means the user's pending requests changed
 func (c UserClient) WaitForChange(ctx context.Context, bell string) error {
-	_, err := c.host.inbox.Wait(ctx, bell)
+	err := c.host.checkRunning()
+	if err != nil {
+		return err
+	}
+
+	_, err = c.host.inbox.Wait(ctx, bell)
 	return err
 }
 

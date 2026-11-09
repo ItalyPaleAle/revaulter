@@ -5,8 +5,10 @@
 package actors
 
 import (
+	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -22,4 +24,29 @@ func TestPeerAddress(t *testing.T) string {
 	require.NoError(t, err)
 
 	return addr
+}
+
+// RunTestHost runs a host in background until the test ends, and returns once it accepts calls
+func RunTestHost(t *testing.T, h *Host) {
+	t.Helper()
+
+	runCtx, runCancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- h.Run(runCtx, nil, nil)
+	}()
+	t.Cleanup(func() {
+		runCancel()
+		runErr := <-errCh
+		require.NoError(t, runErr)
+	})
+
+	select {
+	case <-h.Ready():
+		// All good
+	case runErr := <-errCh:
+		t.Fatalf("the host stopped before becoming ready: %v", runErr)
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the host to be ready")
+	}
 }

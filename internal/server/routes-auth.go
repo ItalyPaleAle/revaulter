@@ -519,8 +519,8 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	if res.cred != nil && res.cred.WrappedPrimaryKey != "" {
 		resp.CredentialWrappedKeyEpoch = res.cred.WrappedKeyEpoch
 		resp.WrappedKeyStale = res.cred.WrappedKeyEpoch > 0 && res.cred.WrappedKeyEpoch < res.user.WrappedKeyEpoch
-		overLimit := s.wrappedKeyLimiter.OnLimit(c.Writer, c.Request, "v2-wrapped-key:"+res.user.ID)
-		if overLimit {
+		allowed, retryAfter := s.wrappedKeyLimiter.Allow(c.Request.Context(), res.user.ID)
+		if !allowed {
 			// A WebAuthn-authenticated client that exceeds the budget has a 429 returned
 			logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
 				"Refused wrapped-key delivery: per-user rate limit exceeded",
@@ -528,6 +528,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 				slog.String("client_ip", c.ClientIP()),
 			)
 
+			setRetryAfter(c, retryAfter)
 			AbortWithErrorJSON(c, NewResponseError(http.StatusTooManyRequests, "Too many login attempts; please retry later"))
 			return
 		}

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/italypaleale/francis/actor"
@@ -18,6 +20,9 @@ import (
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
+
+// ErrHostNotRunning is returned when an actor is called while the Francis host isn't running
+var ErrHostNotRunning = errors.New("the Francis host is not running")
 
 // Host is the embedded Francis host, with the actor types and signal sets that Revaulter registers on it
 type Host struct {
@@ -32,6 +37,12 @@ type Host struct {
 	// Signals that wake the long-polls waiting for a result, and the list streams waiting for changes
 	waiters *signal.SignalService
 	inbox   *signal.SignalService
+
+	// Set while the host accepts calls
+	running atomic.Bool
+	// Closed once the host accepts calls
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 // NewHostOptions contains the options for NewHost
@@ -84,6 +95,7 @@ func NewHost(opts NewHostOptions) (*Host, error) {
 		db:           opts.DB,
 		log:          opts.Log,
 		onAuditEvent: func() {},
+		ready:        make(chan struct{}),
 	}
 
 	err = h.register()
@@ -139,7 +151,16 @@ func (h *Host) SetAuditEventHandler(fn func()) {
 
 // Ready returns a channel that is closed once the host has started and accepts calls
 func (h *Host) Ready() <-chan struct{} {
-	return h.host.Ready()
+	return h.ready
+}
+
+// checkRunning returns ErrHostNotRunning if the host doesn't accept calls
+// Francis can't take calls before it has started, so every call must check this first
+func (h *Host) checkRunning() error {
+	if !h.running.Load() {
+		return ErrHostNotRunning
+	}
+	return nil
 }
 
 // Run the Francis host until ctx is canceled
@@ -167,6 +188,10 @@ func (h *Host) Run(ctx context.Context, ready *servicerunner.Ready, drained *ser
 			slog.String("peerAddress", config.Get().FrancisPeerAddress),
 			slog.String("store", string(h.store.kind)),
 		)
+		h.running.Store(true)
+		h.readyOnce.Do(func() {
+			close(h.ready)
+		})
 		if ready != nil {
 			ready.Signal()
 		}
@@ -182,6 +207,7 @@ func (h *Host) Run(ctx context.Context, ready *servicerunner.Ready, drained *ser
 	case <-ctx.Done():
 		// The app is shutting down
 	case err = <-hostErrCh:
+		h.running.Store(false)
 		return fmt.Errorf("the Francis host stopped unexpectedly: %w", err)
 	}
 
@@ -190,6 +216,7 @@ func (h *Host) Run(ctx context.Context, ready *servicerunner.Ready, drained *ser
 		_ = drained.Await(func(context.Context) error { return nil })(context.Background())
 	}
 
+	h.running.Store(false)
 	hostCancel()
 	err = <-hostErrCh
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -201,6 +228,11 @@ func (h *Host) Run(ctx context.Context, ready *servicerunner.Ready, drained *ser
 
 // invoke invokes a method of an actor, and decodes the response
 func invoke[T any](ctx context.Context, h *Host, actorType string, actorID string, method string, data any) (res T, err error) {
+	err = h.checkRunning()
+	if err != nil {
+		return res, err
+	}
+
 	env, err := h.host.Service().Invoke(ctx, actorType, actorID, method, data)
 	if err != nil {
 		return res, fmt.Errorf("failed to invoke method '%s' of actor '%s': %w", method, actorType, err)
@@ -211,6 +243,11 @@ func invoke[T any](ctx context.Context, h *Host, actorType string, actorID strin
 
 // peek performs a read-only call to a method of an actor, and decodes the response
 func peek[T any](ctx context.Context, h *Host, actorType string, actorID string, method string, data any) (res T, err error) {
+	err = h.checkRunning()
+	if err != nil {
+		return res, err
+	}
+
 	env, err := h.host.Service().Peek(ctx, actorType, actorID, method, data)
 	if err != nil {
 		return res, fmt.Errorf("failed to peek method '%s' of actor '%s': %w", method, actorType, err)

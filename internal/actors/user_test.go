@@ -531,6 +531,16 @@ func TestHostRunWaitsForDrained(t *testing.T) {
 func newTestHost(t *testing.T, dbConn *db.DB, francisDSN string, configOverrides ...map[string]any) *Host {
 	t.Helper()
 
+	h := newUnstartedTestHost(t, dbConn, francisDSN, configOverrides...)
+	RunTestHost(t, h)
+
+	return h
+}
+
+// newUnstartedTestHost creates a Francis host for tests like newTestHost, without starting it
+func newUnstartedTestHost(t *testing.T, dbConn *db.DB, francisDSN string, configOverrides ...map[string]any) *Host {
+	t.Helper()
+
 	cfg := map[string]any{
 		"databaseDSN": ":memory:",
 		// #nosec G101 -- Hardcoded credentials are test ones
@@ -548,28 +558,6 @@ func newTestHost(t *testing.T, dbConn *db.DB, francisDSN string, configOverrides
 		DB:  dbConn,
 	})
 	require.NoError(t, err)
-
-	// Run the host until the test ends
-	runCtx, runCancel := context.WithCancel(context.Background())
-	ready := servicerunner.NewReady()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- h.Run(runCtx, ready, nil)
-	}()
-	t.Cleanup(func() {
-		runCancel()
-		runErr := <-errCh
-		require.NoError(t, runErr)
-	})
-
-	select {
-	case <-h.Ready():
-		// All good
-	case runErr := <-errCh:
-		t.Fatalf("the host stopped before becoming ready: %v", runErr)
-	case <-time.After(10 * time.Second):
-		t.Fatal("timed out waiting for the host to be ready")
-	}
 
 	return h
 }

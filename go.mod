@@ -9,7 +9,6 @@ require (
 	github.com/fxamacker/cbor/v2 v2.10.0
 	github.com/gin-contrib/location/v2 v2.0.4
 	github.com/gin-gonic/gin v1.12.0
-	github.com/go-chi/httprate v0.16.1
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/italypaleale/francis v0.2.1
 	github.com/italypaleale/go-kit v1.7.1
@@ -151,7 +150,6 @@ require (
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
-	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.10.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/bridges/prometheus v0.72.0 // indirect
@@ -174,6 +172,7 @@ require (
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/time v0.16.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261019180522-ce908d29299b // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b // indirect
 	google.golang.org/grpc v1.84.0 // indirect
