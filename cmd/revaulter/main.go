@@ -161,10 +161,13 @@ func main() {
 	}
 	shutdownFns = append(shutdownFns, traceExporter.Shutdown)
 
-	// Create the Francis host, which runs the actors that hold short-lived state, like pending requests
+	// Create the Francis host which runs the actors that hold short-lived state
 	actorsHost, err := actors.NewHost(actors.NewHostOptions{
-		Log: log,
-		DB:  dbConn,
+		Log:     log,
+		DB:      dbConn,
+		Metrics: metrics,
+		// Notifications for new requests are sent as jobs, which are retried when they fail
+		Notifier: server.NewWebhookNotifier(whc),
 	})
 	if err != nil {
 		slogkit.FatalError(log, "Failed to create the Francis host", err)
@@ -174,7 +177,6 @@ func main() {
 	// Create the Server object
 	srv, err := server.NewServer(server.NewServerOpts{
 		Log:           log,
-		Webhook:       whc,
 		Metrics:       metrics,
 		TraceExporter: traceExporter,
 		DB:            dbConn,

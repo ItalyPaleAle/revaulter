@@ -1,4 +1,4 @@
--- Request metadata now lives in the revaulter.user actor in Francis, so only the encrypted envelopes stay in the main database
+-- Request metadata is kept in the revaulter.user actor, so the main database stores only the encrypted envelopes
 -- Requests in flight at upgrade time are discarded
 DROP TABLE IF EXISTS v2_requests;
 

@@ -317,7 +317,7 @@ func TestServerV2RequestResultContextCancelClearsSubscription(t *testing.T) {
 	// Cancel the request context
 	cancel()
 
-	// The client receives an error because the connection was aborted; either way the handler must have returned and the waiter must be cleared
+	// The client gets an error because the connection was aborted, and the handler must have returned and cleared the waiter
 	select {
 	case r := <-resCh:
 		if r.res != nil {
@@ -407,7 +407,7 @@ func TestServerV2RequestResultSecondSubscriberEvictsFirst(t *testing.T) {
 	waiter2 := waitForWaiter(waiter1)
 	require.NotEqual(t, waiter1, waiter2, "second subscription must replace the first")
 
-	// Subscriber #1 must promptly return 202 pending — it was evicted, so it cannot receive the result
+	// Subscriber #1 must return 202 pending promptly, as it was evicted and can't receive the result
 	select {
 	case r := <-sub1:
 		require.NoError(t, r.err)

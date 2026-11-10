@@ -16,16 +16,16 @@ import (
 
 // Methods of the revaulter.user actor used by the e2e tests only
 const (
-	userMethodTestReset  = "test-reset"
+	userMethodTestReset  = methodTestReset
 	userMethodTestExpire = "test-expire"
 )
 
 func init() {
-	testMethods = invokeTestMethod
+	testUserMethods = invokeUserTestMethod
 }
 
-// invokeTestMethod handles the methods of the revaulter.user actor used by the e2e tests
-func invokeTestMethod(ctx context.Context, a *userActor, method string, data actor.Envelope) (any, bool, error) {
+// invokeUserTestMethod handles the methods of the revaulter.user actor used by the e2e tests
+func invokeUserTestMethod(ctx context.Context, a *userActor, method string, data actor.Envelope) (any, bool, error) {
 	switch method {
 	case userMethodTestReset:
 		return nil, true, a.testReset(ctx)
@@ -38,31 +38,6 @@ func invokeTestMethod(ctx context.Context, a *userActor, method string, data act
 		return nil, true, a.testExpire(ctx, in)
 	default:
 		return nil, false, nil
-	}
-}
-
-// TestResetAllUsers removes the requests of every user
-// Each actor deletes its own state, so active actors don't keep serving a stale copy
-func (h *Host) TestResetAllUsers(ctx context.Context) error {
-	svc := h.host.Service()
-	var after string
-	for {
-		list, err := svc.ListStates(ctx, actorTypeUser, &actor.ListStatesOpts{After: after})
-		if err != nil {
-			return fmt.Errorf("failed to list user actors: %w", err)
-		}
-
-		for _, st := range list.States {
-			_, err = invoke[struct{}](ctx, h, actorTypeUser, st.ActorID, userMethodTestReset, nil)
-			if err != nil {
-				return err
-			}
-		}
-
-		after = list.AfterID()
-		if after == "" {
-			return nil
-		}
 	}
 }
 

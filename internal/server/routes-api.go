@@ -329,7 +329,7 @@ func (s *Server) routeV2APIListStream(c *gin.Context) {
 	waitCtx, waitCancel := context.WithTimeout(ctx, time.Duration(sessionTTL)*time.Second)
 	defer waitCancel()
 
-	// Get the current pending items and the bell to wait on, read together so no change can slip in between
+	// Get the current pending items and the bell to wait on, read together so no change can happen in between
 	userActor := s.actors.User(userID)
 	snap, err := userActor.Snapshot(ctx)
 	if err != nil {

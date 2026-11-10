@@ -16,10 +16,7 @@ import (
 	location "github.com/gin-contrib/location/v2"
 	"github.com/gin-gonic/gin"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
-	"github.com/italypaleale/go-kit/auditlogs/siem"
-	"github.com/italypaleale/go-kit/eventqueue"
 	slogkit "github.com/italypaleale/go-kit/slog"
-	"github.com/italypaleale/go-kit/webhook"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -63,17 +60,10 @@ var (
 type Server struct {
 	appRouter  *gin.Engine
 	httpClient *http.Client
-	webhook    webhook.Webhook
 	metrics    *metrics.RevaulterMetrics
 
-	// Delayed work for record deletion
-	deleteQueue *eventqueue.Processor[string, deleteEvent]
-
-	// Ships audit events to an external collector
-	// Nil when `auditStreamUrl` is not configured
-	auditStream *siem.Shipper
-
-	// Embedded Francis host, which runs the actors that hold short-lived state, like pending requests
+	// Embedded Francis host, which runs the actors that hold short-lived state
+	// It also runs the audit log stream and prunes the audit logs
 	// It's started before the server runs, and stopped after it has drained
 	actors *actors.Host
 
@@ -110,12 +100,11 @@ type Server struct {
 // NewServerOpts contains options for the NewServer method
 type NewServerOpts struct {
 	Log           *slog.Logger
-	Webhook       webhook.Webhook
 	Metrics       *metrics.RevaulterMetrics
 	TraceExporter sdkTrace.SpanExporter
 	DB            *db.DB
 
-	// Francis host for the actors
+	// Francis host for the actors, which also sends the notifications for new requests
 	// The caller must start it before running the server, and stop it after the server returns
 	Actors *actors.Host
 }
@@ -134,7 +123,6 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		webhook: opts.Webhook,
 		metrics: opts.Metrics,
 		db:      opts.DB,
 		actors:  opts.Actors,
@@ -148,11 +136,6 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 			Logger: opts.Log,
 		}),
 	}
-
-	// Create the eventqueue processor for performing garbage collection
-	s.deleteQueue = eventqueue.NewProcessor(eventqueue.Options[string, deleteEvent]{
-		ExecuteFn: s.executeDeleteEvent,
-	})
 
 	// Init the object
 	err := s.init(opts.Log, opts.TraceExporter)
@@ -175,15 +158,6 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 	if err != nil {
 		return fmt.Errorf("failed to initialize WebAuthn config: %w", err)
 	}
-
-	// Init the audit log stream, if enabled
-	s.auditStream, err = s.initAuditStream(log)
-	if err != nil {
-		return fmt.Errorf("failed to initialize the audit log stream: %w", err)
-	}
-
-	// Wake the audit log stream when actors write audit events
-	s.actors.SetAuditEventHandler(s.nudgeAuditStream)
 
 	// Throttle wrapped primary key delivery per user
 	s.wrappedKeyLimiter, err = s.actors.NewRateLimiter("revaulter-wrapped-key", wrappedKeyRateLimit, wrappedKeyRateLimitPeriod)
@@ -414,9 +388,6 @@ func (s *Server) Run(ctx context.Context) error {
 	defer s.running.Store(false)
 	defer s.wg.Wait()
 
-	// Stop the background eventqueue processor
-	defer s.deleteQueue.Close()
-
 	// Stop refreshing the JWKS of trusted OIDC issuers
 	defer func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -425,11 +396,13 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	// App server
-	s.wg.Add(1)
+	// Increment the wait group only once the server has started, since the deferred shutdown below decrements it
 	err := s.startAppServer(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start app server: %w", err)
 	}
+
+	s.wg.Add(1)
 	defer func() {
 		// Handle graceful shutdown
 		defer s.wg.Done()
@@ -444,14 +417,6 @@ func (s *Server) Run(ctx context.Context) error {
 			)
 		}
 	}()
-
-	// Start shipping audit events to the external collector, if enabled
-	if s.auditStream != nil {
-		err = s.startAuditStream(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to start the audit log stream: %w", err)
-		}
-	}
 
 	// If we have a tlsCertWatchFn, invoke that
 	if s.tlsCertWatchFn != nil {
@@ -528,20 +493,6 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		}
 	}()
 
-	if s.db != nil {
-		// Cleanup expired auth records
-		err := s.db.AuthStore().CleanupExpired(ctx, time.Now())
-		if err != nil {
-			return fmt.Errorf("failed to cleanup expired auth records at startup: %w", err)
-		}
-
-		// Seed the recurring audit-log prune, which also removes the envelopes of expired requests
-		// The handler re-enqueues itself, so a single boot-time enqueue keeps the chain running
-		err = s.enqueueAuditPrune(time.Now())
-		if err != nil {
-			return fmt.Errorf("failed to seed audit prune: %w", err)
-		}
-	}
 	return nil
 }
 

@@ -1001,16 +1001,16 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 	}
 
 	actorsHost, err := actors.NewHost(actors.NewHostOptions{
-		Log: log,
-		DB:  dbConn,
+		Log:      log,
+		DB:       dbConn,
+		Notifier: NewWebhookNotifier(webhookClient),
 	})
 	require.NoError(t, err)
 
 	srv, err := NewServer(NewServerOpts{
-		Log:     log,
-		Webhook: webhookClient,
-		DB:      dbConn,
-		Actors:  actorsHost,
+		Log:    log,
+		DB:     dbConn,
+		Actors: actorsHost,
 	})
 	require.NoError(t, err)
 
@@ -1562,9 +1562,7 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 	require.EqualValues(t, 2, user.WrappedKeyEpoch)
 
 	// Starting an add-credential WebAuthn ceremony must block concurrent password changes
-	_, err = db.ExecuteInTransaction(t.Context(), srv.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (any, error) {
-		return tx.AuthStore().BeginChallenge(ctx, "add-credential", "user-alice", "pending-add", time.Now().UTC().Add(5*time.Minute), nil)
-	})
+	_, err = srv.actors.BeginChallenge(t.Context(), actors.ChallengeKindAddCredential, "user-alice", time.Now().Add(5*time.Minute), nil)
 	require.NoError(t, err)
 
 	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "blocked-while-pending", "wrappedAnchorKey": validAnchor, "advanceEpoch": true}, sessionCookie)

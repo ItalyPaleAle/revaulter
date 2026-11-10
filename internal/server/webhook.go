@@ -1,15 +1,38 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"strings"
 
 	"github.com/italypaleale/go-kit/webhook"
+
+	"github.com/italypaleale/revaulter/internal/actors"
 )
 
 // webhookTitle is the title of the notification, for the formats that support one
 const webhookTitle = "Revaulter request"
+
+// NewWebhookNotifier returns the notifier that sends the notifications for new requests to the webhook
+func NewWebhookNotifier(wh webhook.Webhook) actors.Notifier {
+	// Return nil when wh is nil, which disables notifications
+	if wh == nil {
+		return nil
+	}
+
+	return func(ctx context.Context, n actors.RequestNotification) error {
+		return wh.SendWebhook(ctx, &webhookRequest{
+			BaseURL:       n.BaseURL,
+			OperationName: n.Operation,
+			AssignedUser:  n.UserDisplayName,
+			KeyLabel:      n.KeyLabel,
+			Algorithm:     n.Algorithm,
+			Requestor:     n.RequestorIP,
+			Note:          n.Note,
+		})
+	}
+}
 
 type webhookRequest struct {
 	BaseURL string

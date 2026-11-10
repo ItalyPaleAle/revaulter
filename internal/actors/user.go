@@ -58,9 +58,9 @@ const (
 	waiterReasonEvicted = "evicted"
 )
 
-// testMethods handles the methods used by the e2e tests, returning false when the method isn't one of them
-// This is only set in test builds
-var testMethods func(ctx context.Context, a *userActor, method string, data actor.Envelope) (res any, handled bool, err error)
+// testUserMethods handles the methods of the revaulter.user actor used by the e2e tests, returning false when the method isn't one of them
+// This is only set in e2e builds
+var testUserMethods func(ctx context.Context, a *userActor, method string, data actor.Envelope) (res any, handled bool, err error)
 
 // userActorErrorCode is returned by the revaulter.user actor when an operation can't be performed
 // These are returned as part of the response rather than as errors, so they reach the caller the same way whether the actor ran locally or on another replica
@@ -274,7 +274,7 @@ type waiterWake struct {
 }
 
 // userActor is the revaulter.user actor, which holds all requests of a user
-// It replaces the requests table, the expiry timers, and the in-memory notifications, so every replica sees the same requests
+// All replicas call the same actor for a user, so they see the same requests
 type userActor struct {
 	userID string
 	host   *Host
@@ -351,8 +351,8 @@ func (a *userActor) Invoke(ctx context.Context, method string, data actor.Envelo
 		return a.snapshot(ctx)
 	}
 
-	if testMethods != nil {
-		res, handled, err := testMethods(ctx, a, method, data)
+	if testUserMethods != nil {
+		res, handled, err := testUserMethods(ctx, a, method, data)
 		if handled {
 			return res, err
 		}
@@ -570,7 +570,7 @@ func (a *userActor) create(ctx context.Context, in CreateRequestInput) (userCrea
 	}
 
 	if in.Audit != nil {
-		a.host.onAuditEvent()
+		a.host.NudgeAuditStream()
 	}
 
 	now := time.Now()
@@ -636,7 +636,7 @@ func (a *userActor) confirm(ctx context.Context, in userChangeReq) (userChangeRe
 	}
 
 	if in.Audit != nil {
-		a.host.onAuditEvent()
+		a.host.NudgeAuditStream()
 	}
 
 	return a.finish(ctx, st, in.State, db.V2RequestStatusCompleted, now)
@@ -661,7 +661,7 @@ func (a *userActor) cancel(ctx context.Context, in userChangeReq) (userChangeRes
 			return userChangeRes{}, fmt.Errorf("failed to write audit event: %w", err)
 		}
 
-		a.host.onAuditEvent()
+		a.host.NudgeAuditStream()
 	}
 
 	return a.finish(ctx, st, in.State, db.V2RequestStatusCanceled, time.Now())
@@ -727,7 +727,7 @@ func (a *userActor) expire(ctx context.Context, st *userActorState, states []str
 		return "", nil, fmt.Errorf("failed to write audit events for request expiry: %w", err)
 	}
 
-	a.host.onAuditEvent()
+	a.host.NudgeAuditStream()
 
 	waiters = make(map[string]string, len(states))
 	for _, state := range states {
@@ -893,7 +893,7 @@ func (a *userActor) collect(ctx context.Context, in userStateReq) (CollectedResu
 	return res, nil
 }
 
-// snapshot returns the bell and the pending requests, read in the same turn so no change can slip in between
+// snapshot returns the bell and the pending requests, read in the same turn so no change can happen in between
 func (a *userActor) snapshot(ctx context.Context) (Snapshot, error) {
 	st, err := a.loadState(ctx)
 	if err != nil {

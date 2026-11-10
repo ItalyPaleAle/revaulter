@@ -1,0 +1,47 @@
+---
+title: "Running multiple replicas"
+weight: 26
+---
+
+You can run several replicas of the Revaulter server behind a load balancer for high availability.
+
+## Requirements
+
+- A PostgreSQL database (with SQLite, you can only run a single replica)
+- At most 4 replicas
+- The same version of Revaulter on every replica
+
+## Configuration
+
+Every replica uses the same configuration, except for `francisPeerAddress`:
+
+- `databaseDSN`, `secretKey` and `sessionSigningKey` must have the same values on all replicas. `sessionSigningKey` is required.
+- `francisPeerAddress` is the address (host and port) the other replicas use to reach this one. Each replica sets its own address, such as its IP address with port `7571`, and it must be able to listen on that address.
+
+Replicas connect to each other over UDP on the port configured in `francisPeerAddress`. Allow traffic on that port between the replicas only, and don't expose it publicly.
+
+On Kubernetes, you can set `francisPeerAddress` from the pod's IP address:
+
+```yaml
+env:
+  - name: POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP
+  - name: REVAULTER_FRANCISPEERADDRESS
+    value: "$(POD_IP):7571"
+```
+
+## Load balancer
+
+You can use any load balancer, including nginx, Traefik, Caddy, HAProxy.
+
+Configure health checks on the `/healthz` path.
+
+## When a replica stops
+
+A CLI command that is waiting for a result from a replica that stops ends with an error. Run the command again.
+
+## Upgrading
+
+Stop all replicas, then start them again on the new version.

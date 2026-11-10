@@ -135,7 +135,7 @@ func (c UserClient) Collect(ctx context.Context, state string) (CollectedResult,
 	return invoke[CollectedResult](ctx, c.host, actorTypeUser, c.userID, userMethodCollect, userStateReq{State: state})
 }
 
-// Snapshot returns the user's pending requests, and the bell that rings at the next change, read together so no change can slip in between
+// Snapshot returns the user's pending requests, and the bell that rings at the next change, read together so no change can happen in between
 func (c UserClient) Snapshot(ctx context.Context) (Snapshot, error) {
 	return invoke[Snapshot](ctx, c.host, actorTypeUser, c.userID, userMethodSnapshot, nil)
 }

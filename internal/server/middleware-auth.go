@@ -20,6 +20,9 @@ const (
 	contextKeyUserID          = "UserID"
 	contextKeyRequestUser     = "RequestUser"
 
+	// Set by the session middleware for users that haven't finalized their signup yet, to the ID of the signup
+	contextKeySignupID = "SignupID"
+
 	// Set by the request middlewares to the method the credential was authenticated with, as a db.AuditAuthMethod
 	contextKeyRequestAuthMethod = "RequestAuthMethod"
 	// Set by the request middlewares to the verified claims, when the credential is a JWT
@@ -71,6 +74,9 @@ func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 		ttl := int(max(time.Until(sess.ExpiresAt), 0).Seconds())
 		c.Set(contextKeySessionTTL, ttl)
 		c.Set(contextKeyUserID, sess.UserID)
+		if sess.SignupID != "" {
+			c.Set(contextKeySignupID, sess.SignupID)
+		}
 	}
 }
 

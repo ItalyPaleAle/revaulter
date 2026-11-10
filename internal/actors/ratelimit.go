@@ -65,7 +65,7 @@ func (r *RateLimiter) Allow(ctx context.Context, key string) (allowed bool, retr
 
 	allowed, retryAfter, err = r.svc.Allow(allowCtx, key)
 	if err != nil {
-		// When the caller's context is done, the call won't go anywhere anyways, so there's nothing to report
+		// When the caller's context is done, nobody is waiting for the result, so there's nothing to report
 		if ctx.Err() == nil {
 			r.log.WarnContext(ctx, "Rate limit check failed, allowing the call",
 				slog.String("key", key),

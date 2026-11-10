@@ -2,8 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -58,14 +56,6 @@ type User struct {
 	Ready                        bool
 	RequestAuthMethods           RequestAuthMethods
 	RequestOIDC                  []RequestOIDCIssuer
-}
-
-type AuthChallenge struct {
-	ID        string
-	Kind      string
-	UserID    string
-	Challenge string
-	ExpiresAt time.Time
 }
 
 type AuthCredentialRecord struct {
@@ -135,7 +125,6 @@ var (
 	ErrUserAlreadyExists  = errors.New("user already exists")
 	ErrUserNotFound       = errors.New("user not found")
 	ErrInvalidLogin       = errors.New("invalid login")
-	ErrInvalidChallenge   = errors.New("challenge is invalid or expired")
 	ErrPasswordAlreadySet = errors.New("password already set")
 	ErrCredentialNotFound = errors.New("credential not found")
 	ErrLastCredential     = errors.New("cannot delete the last credential")
@@ -271,100 +260,6 @@ func (s *AuthStore) ListCredentials(ctx context.Context, userID string) ([]AuthC
 	}
 
 	return out, nil
-}
-
-func (s *AuthStore) BeginChallenge(ctx context.Context, kind string, userID string, challenge string, expiresAt time.Time, payload any) (*AuthChallenge, error) {
-	// Must be invoked as a transaction
-	if !s.db.IsTransaction() {
-		// Indicates a development-time error
-		panic("BeginChallenge must be invoked in a transaction")
-	}
-
-	if challenge == "" {
-		return nil, errors.New("challenge is empty")
-	}
-	if expiresAt.IsZero() {
-		expiresAt = time.Now().UTC().Add(5 * time.Minute)
-	}
-
-	rec := &AuthChallenge{
-		ID:        uuid.NewV4().String(),
-		Kind:      kind,
-		UserID:    userID,
-		Challenge: challenge,
-		ExpiresAt: expiresAt,
-	}
-
-	var payloadBytes []byte
-	if payload != nil {
-		var err error
-		payloadBytes, err = json.Marshal(payload)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Insert the challenge
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO v2_auth_challenges (id, kind, user_id, challenge, expires_at) VALUES ($1, $2, $3, $4, $5)`,
-		rec.ID, rec.Kind, rec.UserID, rec.Challenge, rec.ExpiresAt.Unix(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Insert the payload
-	if len(payloadBytes) > 0 {
-		_, err = s.db.Exec(ctx,
-			`INSERT INTO v2_auth_challenge_payloads (challenge_id, session_data) VALUES ($1, $2)`,
-			rec.ID, string(payloadBytes),
-		)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return rec, nil
-}
-
-// ConsumeChallenge atomically marks the challenge row as used and returns its payload
-// When userID is non-empty, the consume succeeds only if the row's user_id matches
-// This prevents an attacker who learned a challenge ID from consuming a challenge that belongs to a different user (which would let them DoS the legitimate ceremony)
-// Pass userID = "" for flows where no authenticated user is bound to the challenge yet (register, login)
-func (s *AuthStore) ConsumeChallenge(ctx context.Context, id string, kind string, userID string, out any) error {
-	now := time.Now().Unix()
-
-	// Atomically mark the challenge as used and retrieve the payload
-	// When $4 is empty the user-binding clause is a no-op so register/login challenges still consume normally
-	var payload sql.NullString
-	err := s.db.
-		QueryRow(ctx, `UPDATE v2_auth_challenges
-			SET used_at = $1
-			WHERE id = $2 AND kind = $3 AND used_at IS NULL AND expires_at >= $1
-				AND ($4 = '' OR user_id = $4)
-			RETURNING (
-				SELECT session_data
-				FROM v2_auth_challenge_payloads
-				WHERE challenge_id = v2_auth_challenges.id
-			)`, now, id, kind, userID).
-		Scan(&payload)
-	if s.db.IsNoRowsError(err) {
-		return ErrInvalidChallenge
-	} else if err != nil {
-		return err
-	}
-
-	// If there's no destination, or if the payload is NULL, return
-	if out == nil || !payload.Valid {
-		return nil
-	}
-
-	// Unmarshal the payload
-	err = json.Unmarshal([]byte(payload.String), out)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*User, error) {
@@ -643,22 +538,6 @@ func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID
 	return nil
 }
 
-// HasPendingChallenge reports whether the user has an unconsumed, non-expired challenge of the given kind
-func (s *AuthStore) HasPendingChallenge(ctx context.Context, userID string, kind string) (bool, error) {
-	now := time.Now().Unix()
-	var exists bool
-	err := s.db.
-		QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM v2_auth_challenges WHERE user_id = $1 AND kind = $2 AND used_at IS NULL AND expires_at >= $3)`,
-			userID, kind, now,
-		).
-		Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
-}
-
 // GetCredentialByCredentialID returns the credential record matching credential_id (base64url encoded WebAuthn credential ID) for the given user
 func (s *AuthStore) GetCredentialByCredentialID(ctx context.Context, credentialID string, userID string) (*AuthCredentialRecord, error) {
 	var rec AuthCredentialRecord
@@ -849,44 +728,6 @@ FROM v2_user_credentials WHERE user_id = $2
 		return ErrCredentialNotFound
 	}
 	return ErrLastCredential
-}
-
-func (s *AuthStore) CleanupExpired(ctx context.Context, now time.Time) error {
-	cutoff := now.Add(-10 * time.Minute).Unix()
-
-	_, err := s.db.Exec(ctx,
-		`DELETE FROM v2_auth_challenges WHERE expires_at < $1 OR used_at IS NOT NULL`,
-		cutoff,
-	)
-	if err != nil {
-		return fmt.Errorf("error deleting expired auth challenges: %w", err)
-	}
-
-	return nil
-}
-
-func (s *AuthStore) DeleteExpiredAuthChallenge(ctx context.Context, id string, now time.Time) error {
-	cutoff := now.Add(-10 * time.Minute).Unix()
-	_, err := s.db.Exec(ctx,
-		`DELETE FROM v2_auth_challenges WHERE id = $1 AND (expires_at < $2 OR used_at IS NOT NULL)`,
-		id, cutoff,
-	)
-	if err != nil {
-		return fmt.Errorf("error deleting auth challenge: %w", err)
-	}
-	return nil
-}
-
-func (s *AuthStore) DeleteNonreadyUser(ctx context.Context, id string, now time.Time) error {
-	cutoff := now.Add(-24*time.Hour - 10*time.Minute).Unix()
-	_, err := s.db.Exec(ctx,
-		`DELETE FROM v2_users WHERE id = $1 AND ready = false AND created_at < $2`,
-		id, cutoff,
-	)
-	if err != nil {
-		return fmt.Errorf("error deleting non-ready user: %w", err)
-	}
-	return nil
 }
 
 func NormalizeAllowedIPs(allowedIPs []string) ([]string, error) {

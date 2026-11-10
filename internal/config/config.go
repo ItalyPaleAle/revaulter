@@ -118,19 +118,20 @@ type Config struct {
 	// +required
 	DatabaseDSN string `env:"DATABASEDSN" yaml:"databaseDSN"`
 
-	// Address (host:port) that other Revaulter replicas use to reach this one.
-	// It must be reachable by the other replicas for UDP connections, and it should never be exposed publicly.
+	// Address (host:port) that the other replicas use to reach this one, when running multiple replicas.
+	// This replica must be able to listen on it, and the other replicas must be able to reach it over UDP.
+	// It should never be exposed publicly.
 	// When this is not a loopback address, `sessionSigningKey` is required, so every replica accepts the sessions signed by the others.
 	// +default "127.0.0.1:7571"
 	FrancisPeerAddress string `env:"FRANCISPEERADDRESS" yaml:"francisPeerAddress"`
 
-	// UDP port the Francis peer server listens on.
-	// Set this when the port in `francisPeerAddress` is mapped to a different port, for example by a container runtime.
+	// UDP port this replica listens on for the other replicas.
+	// Set this only if it's different from the port in `francisPeerAddress`, for example when traffic to that port is forwarded to another port on this host.
 	// +default the port of `francisPeerAddress`
 	FrancisBindPort int `env:"FRANCISBINDPORT" yaml:"francisBindPort"`
 
-	// Connection string for the database where Francis keeps its data, using the same format as `databaseDSN`.
-	// Francis holds short-lived data only, such as pending requests and timers, and it's never included in backups.
+	// Connection string for the database that holds short-lived data, such as pending requests and unfinished signups, using the same format as `databaseDSN`.
+	// This data is never included in backups.
 	// It's recommended to use the default value.
 	// +default for Postgres, a `francis` schema in the database of `databaseDSN`; for SQLite, a file next to the main database, named after it with the `.francis.db` extension
 	FrancisDatabaseDSN string `env:"FRANCISDATABASEDSN" yaml:"francisDatabaseDSN"`
@@ -316,6 +317,8 @@ func (c *Config) GetWebhookOpts(log *slog.Logger) webhook.NewWebhookOpts {
 		Format:          webhook.WebhookFormat(c.WebhookFormat),
 		Logger:          log,
 		AllowPrivateIPs: c.WebhookAllowPrivateAddresses,
+		// Each notification is a job of the revaulter.notifier actor, which retries it when it fails
+		MaxAttempts: 1,
 	}
 }
 

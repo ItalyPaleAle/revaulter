@@ -541,6 +541,13 @@ func newTestHost(t *testing.T, dbConn *db.DB, francisDSN string, configOverrides
 func newUnstartedTestHost(t *testing.T, dbConn *db.DB, francisDSN string, configOverrides ...map[string]any) *Host {
 	t.Helper()
 
+	return newUnstartedTestHostWithOptions(t, NewHostOptions{DB: dbConn}, francisDSN, configOverrides...)
+}
+
+// newUnstartedTestHostWithOptions creates a Francis host for tests with the given options, without starting it
+func newUnstartedTestHostWithOptions(t *testing.T, opts NewHostOptions, francisDSN string, configOverrides ...map[string]any) *Host {
+	t.Helper()
+
 	cfg := map[string]any{
 		"databaseDSN": ":memory:",
 		// #nosec G101 -- Hardcoded credentials are test ones
@@ -553,10 +560,10 @@ func newUnstartedTestHost(t *testing.T, dbConn *db.DB, francisDSN string, config
 	}
 	t.Cleanup(config.SetTestConfig(cfg))
 
-	h, err := NewHost(NewHostOptions{
-		Log: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn})),
-		DB:  dbConn,
-	})
+	if opts.Log == nil {
+		opts.Log = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	}
+	h, err := NewHost(opts)
 	require.NoError(t, err)
 
 	return h

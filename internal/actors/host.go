@@ -18,6 +18,7 @@ import (
 
 	"github.com/italypaleale/revaulter/internal/config"
 	"github.com/italypaleale/revaulter/internal/db"
+	"github.com/italypaleale/revaulter/internal/metrics"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
@@ -31,8 +32,15 @@ type Host struct {
 	db    *db.DB
 	log   *slog.Logger
 
-	// Called after an actor writes audit events
-	onAuditEvent func()
+	// Audit log stream, which runs on the host where the revaulter.audit actor is active
+	// Nil when `auditStreamUrl` is not configured
+	auditStream *auditStream
+	// Nudges for an audit log stream that runs on another host
+	auditNudges chan struct{}
+
+	// Sends the notifications for new requests
+	// Nil when notifications are not enabled
+	notifier Notifier
 
 	// Signals that wake the long-polls waiting for a result, and the list streams waiting for changes
 	waiters *signal.SignalService
@@ -47,8 +55,13 @@ type Host struct {
 
 // NewHostOptions contains the options for NewHost
 type NewHostOptions struct {
-	Log *slog.Logger
-	DB  *db.DB
+	Log     *slog.Logger
+	DB      *db.DB
+	Metrics *metrics.RevaulterMetrics
+
+	// Sends the notifications for new requests
+	// It's optional, and when it's nil, no notification is sent
+	Notifier Notifier
 }
 
 // NewHost creates the Francis host from the configuration, and registers the actor types and the signal sets on it
@@ -89,13 +102,20 @@ func NewHost(opts NewHostOptions) (*Host, error) {
 		return nil, fmt.Errorf("failed to create Francis host: %w", err)
 	}
 
+	auditStream, err := newAuditStream(opts.DB, opts.Metrics, opts.Log)
+	if err != nil {
+		return nil, err
+	}
+
 	h := &Host{
-		host:         lh,
-		store:        st,
-		db:           opts.DB,
-		log:          opts.Log,
-		onAuditEvent: func() {},
-		ready:        make(chan struct{}),
+		host:        lh,
+		store:       st,
+		db:          opts.DB,
+		log:         opts.Log,
+		auditStream: auditStream,
+		auditNudges: make(chan struct{}, 1),
+		notifier:    opts.Notifier,
+		ready:       make(chan struct{}),
 	}
 
 	err = h.register()
@@ -137,16 +157,44 @@ func (h *Host) register() error {
 		return fmt.Errorf("failed to register actor type '%s': %w", actorTypeUser, err)
 	}
 
-	return nil
-}
-
-// SetAuditEventHandler sets the function that is called after an actor writes audit events, for example to wake the audit log stream
-// It must be called before Run
-func (h *Host) SetAuditEventHandler(fn func()) {
-	if fn == nil {
-		fn = func() {}
+	// Register the revaulter.challenge actor
+	err = h.host.RegisterActor(actorTypeChallenge, h.newChallengeActor, local.WithIdleTimeout(challengeActorIdleTimeout))
+	if err != nil {
+		return fmt.Errorf("failed to register actor type '%s': %w", actorTypeChallenge, err)
 	}
-	h.onAuditEvent = fn
+
+	// Register the revaulter.signup actor
+	err = h.host.RegisterActor(actorTypeSignup, h.newSignupActor)
+	if err != nil {
+		return fmt.Errorf("failed to register actor type '%s': %w", actorTypeSignup, err)
+	}
+
+	// Register the revaulter.notifier actor, when notifications are enabled
+	// Its jobs are retried when sending a notification fails
+	if h.notifier != nil {
+		err = h.host.RegisterActor(actorTypeNotifier, h.newNotifierActor,
+			// Francis v0.2.1 counts attempts from 0 and gives up only once the count exceeds this value, so it allows one more attempt than it's set to
+			local.WithMaxAttempts(notifierMaxAttempts-1),
+			local.WithInitialRetryDelay(notifierInitialRetryDelay),
+			local.WithDeadLetteredJobRetention(notifierDeadLetteredRetention),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to register actor type '%s': %w", actorTypeNotifier, err)
+		}
+	}
+
+	// Register the revaulter.audit singleton actor
+	// While the audit log stream is enabled, the actor stays active, so the stream keeps running on the host that holds it
+	var auditOpts []local.RegisterActorOption
+	if h.auditStream != nil {
+		auditOpts = append(auditOpts, local.WithIdleTimeout(-1))
+	}
+	err = h.host.RegisterSingletonActor(actorTypeAudit, h.newAuditActor, auditOpts...)
+	if err != nil {
+		return fmt.Errorf("failed to register actor type '%s': %w", actorTypeAudit, err)
+	}
+
+	return nil
 }
 
 // Ready returns a channel that is closed once the host has started and accepts calls
@@ -167,7 +215,7 @@ func (h *Host) checkRunning() error {
 // It's meant to run in a service runner: ready is signaled once the host accepts calls, so the services that call actors can wait for it with ready.Await
 // After ctx is canceled, the host keeps running until drained is signaled, so in-flight requests can still call actors while the app server drains
 // The services that wait on ready must signal drained whenever they return, even if they never started, or the host never stops
-// Either Ready can be nil
+// Both ready and drained can be nil
 func (h *Host) Run(ctx context.Context, ready *servicerunner.Ready, drained *servicerunner.Ready) error {
 	err := h.store.prepare(ctx)
 	if err != nil {
@@ -202,6 +250,25 @@ func (h *Host) Run(ctx context.Context, ready *servicerunner.Ready, drained *ser
 		<-hostErrCh
 		return ctx.Err()
 	}
+
+	// Send the nudges for an audit log stream that runs on another host
+	nudgerCtx, nudgerCancel := context.WithCancel(hostCtx)
+	defer nudgerCancel()
+	var nudgerWg sync.WaitGroup
+	if h.auditStream != nil {
+		nudgerWg.Go(func() {
+			h.runAuditNudger(nudgerCtx)
+		})
+	}
+
+	// Make sure the audit log stream stops with the host, even if the host didn't deactivate the revaulter.audit actor
+	defer func() {
+		nudgerCancel()
+		nudgerWg.Wait()
+		if h.auditStream != nil {
+			h.auditStream.stop()
+		}
+	}()
 
 	select {
 	case <-ctx.Done():

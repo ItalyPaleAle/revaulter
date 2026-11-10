@@ -12,7 +12,6 @@ import (
 	"uuid"
 
 	"github.com/gin-gonic/gin"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/italypaleale/revaulter/internal/actors"
 	"github.com/italypaleale/revaulter/internal/config"
@@ -54,7 +53,6 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := config.Get()
 		log := logging.LogFromContext(c.Request.Context())
-		span := trace.SpanFromContext(c.Request.Context())
 
 		// Get the user from the context
 		user := getRequestUserFromCtx(c)
@@ -141,42 +139,25 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			return
 		}
 
+		// Schedule the notification for the user, when notifications are enabled
+		// It's sent in background, and retried if it fails
+		// The request exists already, so this uses a context that isn't canceled if the client disconnects, and a failure is only logged
+		notifyCtx, notifyCancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
+		err = s.actors.NotifyRequestCreated(notifyCtx, user.ID, state, s.getBaseURL())
+		notifyCancel()
+		if err != nil {
+			log.ErrorContext(c.Request.Context(), "Error scheduling the notification for the request",
+				slog.String("state", state),
+				slog.Any("error", err),
+			)
+		}
+
 		// Send response
 		c.JSON(http.StatusAccepted, protocolv2.RequestCreateResponse{
 			State:       state,
 			Pending:     true,
 			ResultToken: resultToken,
 		})
-
-		// Notify users via webhook in background when configured
-		if s.webhook == nil {
-			// Webhooks not configured, skip
-			return
-		}
-
-		go func() {
-			displayName := user.DisplayName
-			if displayName == "" {
-				displayName = user.ID
-			}
-
-			// Use a background context because the request's context is canceled when the handler returns
-			webhookCtx := trace.ContextWithSpan(context.Background(), span)
-			webhookErr := s.webhook.SendWebhook(webhookCtx, &webhookRequest{
-				BaseURL:       s.getBaseURL(),
-				OperationName: operation,
-				AssignedUser:  displayName,
-				KeyLabel:      body.KeyLabel,
-				Algorithm:     body.Algorithm,
-				Requestor:     c.ClientIP(),
-				Note:          body.Note,
-			})
-			if webhookErr != nil {
-				log.ErrorContext(webhookCtx, "Error sending webhook", slog.Any("error", webhookErr))
-				return
-			}
-			log.InfoContext(webhookCtx, "Sent webhook notification")
-		}()
 	}
 }
 

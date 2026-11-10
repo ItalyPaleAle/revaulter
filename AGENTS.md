@@ -99,6 +99,12 @@ All clickable `<button>` elements must expose `cursor: pointer` when enabled.
 
 Prefer the shared button component at `client/src/components/Button.svelte` instead of ad hoc button markup so button behavior and styling stay standardized.
 
+## Documentation
+
+Be concise.
+
+Write docs for end users, who don't care about internal implementation details.
+
 ## Running tests
 
 Always pass `-tags unit` when running Go tests — several test helpers are guarded by that build tag, so tests will fail to compile without it.

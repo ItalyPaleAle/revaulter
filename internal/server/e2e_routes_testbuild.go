@@ -139,8 +139,8 @@ func init() {
 
 // RouteE2EReset is the handler for POST /__e2e__/reset
 func (s *Server) RouteE2EReset(c *gin.Context) {
-	// Remove the requests of every user from Francis
-	err := s.actors.TestResetAllUsers(c.Request.Context())
+	// Remove the requests of every user, and all challenges and signups, from Francis
+	err := s.actors.TestResetAll(c.Request.Context())
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -175,6 +175,12 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 		req.State = "ready-no-password"
 	}
 
+	// Users that haven't finalized their signup are in the revaulter.signup actor, and not in the database
+	if req.State == "registered-nonready" {
+		s.e2eSeedSignup(c, req)
+		return
+	}
+
 	// Execute the rest in a transaction
 	user, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Minute, func(ctx context.Context, tx *db.DbTx) (*db.User, error) {
 		as := tx.AuthStore()
@@ -193,8 +199,6 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 		}
 
 		switch req.State {
-		case "registered-nonready":
-			// Keep the user unfinalized
 		case "ready-no-password", "ready-with-password":
 			user, getUserErr := as.GetUserByID(c.Request.Context(), req.UserID)
 			if getUserErr != nil {
@@ -269,6 +273,45 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 	})
 }
 
+// e2eSignupID returns the ID of the signup of a seeded user that hasn't finalized their signup
+func e2eSignupID(userID string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("e2e-webauthn-" + userID))
+}
+
+// e2eSeedSignup seeds a user that has registered a passkey, but hasn't finalized their signup
+func (s *Server) e2eSeedSignup(c *gin.Context, req e2eSeedUserRequest) {
+	ctx := c.Request.Context()
+	signupClient := s.actors.Signup(e2eSignupID(req.UserID))
+	err := signupClient.Begin(ctx, actors.Signup{
+		UserID:         req.UserID,
+		DisplayName:    req.DisplayName,
+		WebAuthnUserID: e2eSignupID(req.UserID),
+		ExpiresAt:      time.Now().Add(5 * time.Minute),
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	signup, err := signupClient.Register(ctx, actors.SignupCredential{
+		ID:        "e2e-cred-" + req.UserID,
+		PublicKey: `{}`,
+		SignCount: 1,
+	}, nil)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	// Send response
+	c.JSON(http.StatusOK, e2eSeedUserResponse{
+		OK:          true,
+		UserID:      signup.UserID,
+		DisplayName: signup.DisplayName,
+		Ready:       false,
+	})
+}
+
 // RouteE2ESeedSession is the handler for /__e2e__/seed-session
 func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 	// Parse the request body
@@ -280,6 +323,17 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 	}
 	if req.UserID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "userId is required"))
+		return
+	}
+
+	// Users that haven't finalized their signup get a session for their signup
+	signup, err := s.actors.Signup(e2eSignupID(req.UserID)).Get(c.Request.Context())
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if signup != nil && signup.Phase == actors.SignupPhaseRegistered {
+		s.e2eSendSession(c, newSignupSessionToken(signup, config.Get().SessionTimeout))
 		return
 	}
 
@@ -315,6 +369,11 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 		return
 	}
 
+	s.e2eSendSession(c, sess)
+}
+
+// e2eSendSession signs a session token and sends it in the response of /__e2e__/seed-session
+func (s *Server) e2eSendSession(c *gin.Context, sess *authSessionToken) {
 	// Sign the session token
 	token, err := signAuthSessionToken(sess)
 	if err != nil {

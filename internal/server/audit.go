@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"log/slog"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -11,13 +10,6 @@ import (
 	"github.com/italypaleale/revaulter/internal/requestjwt"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
-
-// auditRetention is how long v2_audit_events rows are kept before the recurring prune deletes them
-const auditRetention = 30 * 24 * time.Hour
-
-// auditPruneInterval is how often the recurring prune fires
-// Implemented as a self-rescheduling deleteEvent on the existing deleteQueue
-const auditPruneInterval = 24 * time.Hour
 
 // auditFields is the per-call data the helpers do NOT auto-fill
 // Caller-provided context (target/key/credential ids, request state, metadata) goes here
@@ -55,7 +47,7 @@ func (s *Server) auditEvent(c *gin.Context, f auditFields) {
 		return
 	}
 
-	s.nudgeAuditStream()
+	s.actors.NudgeAuditStream()
 }
 
 // auditEventTx writes an audit row inside an existing transaction
@@ -67,7 +59,7 @@ func (s *Server) auditEventTx(c *gin.Context, tx *db.DbTx, f auditFields) error 
 		return err
 	}
 
-	s.nudgeAuditStream()
+	s.actors.NudgeAuditStream()
 
 	return nil
 }
