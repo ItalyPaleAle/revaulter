@@ -65,6 +65,61 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 	})
 }
 
+func TestAuthStoreLoginCounter(t *testing.T) {
+	runDBTest(t, func(t *testing.T, conn *DB) {
+		err := RunMigrations(t.Context(), conn, nil)
+		require.NoError(t, err)
+
+		tests := []struct {
+			name        string
+			firstCount  int64
+			secondCount int64
+			wantCount   int64
+			wantError   bool
+		}{
+			{name: "out of order", firstCount: 3, secondCount: 2, wantCount: 3, wantError: true},
+			{name: "duplicate", firstCount: 3, secondCount: 3, wantCount: 3, wantError: true},
+			{name: "increasing", firstCount: 3, secondCount: 4, wantCount: 4},
+			{name: "counterless", firstCount: 0, secondCount: 0, wantCount: 0},
+			{name: "starts counting", firstCount: 0, secondCount: 2, wantCount: 2},
+			{name: "stops counting", firstCount: 3, secondCount: 0, wantCount: 0},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				credentialID := "credential-" + tt.name
+				_, err := ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (struct{}, error) {
+					_, rErr := tx.AuthStore().RegisterUser(ctx, RegisterUserInput{
+						UserID:         tt.name,
+						WebAuthnUserID: "webauthn-" + tt.name,
+						CredentialID:   credentialID,
+						PublicKey:      `{}`,
+						SignCount:      1,
+					})
+					return struct{}{}, rErr
+				})
+				require.NoError(t, err)
+
+				as := conn.AuthStore()
+				err = as.Login(t.Context(), LoginInput{UserID: tt.name, CredentialID: credentialID, SignCount: tt.firstCount})
+				require.NoError(t, err)
+
+				// A login verified against an earlier snapshot must still pass the current counter check at write time
+				err = as.Login(t.Context(), LoginInput{UserID: tt.name, CredentialID: credentialID, SignCount: tt.secondCount})
+				if tt.wantError {
+					require.ErrorIs(t, err, ErrInvalidLogin)
+				} else {
+					require.NoError(t, err)
+				}
+
+				creds, err := as.ListCredentials(t.Context(), tt.name)
+				require.NoError(t, err)
+				require.Len(t, creds, 1)
+				require.Equal(t, tt.wantCount, creds[0].SignCount)
+			})
+		}
+	})
+}
+
 func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
 	runDBTest(t, func(t *testing.T, conn *DB) {
 		require.NoError(t, RunMigrations(t.Context(), conn, nil))

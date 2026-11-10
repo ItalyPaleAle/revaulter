@@ -81,6 +81,7 @@ type signupErrorCode string
 const (
 	signupErrNotFound         signupErrorCode = "not-found"
 	signupErrAlreadyFinalized signupErrorCode = "already-finalized"
+	signupErrInvalidLogin     signupErrorCode = "invalid-login"
 )
 
 type signupGetRes struct {
@@ -300,6 +301,12 @@ func (a *signupActor) login(ctx context.Context, in signupLoginReq) (signupRes, 
 		return signupRes{Error: signupErrNotFound}, nil
 	}
 
+	// Check the current counter in the same turn that updates it, since login verification may have read an older snapshot
+	// Zero counters are accepted for authenticators without a counter
+	if in.SignCount != 0 && in.SignCount <= st.Credential.SignCount {
+		return signupRes{Error: signupErrInvalidLogin}, nil
+	}
+
 	if in.Audit != nil {
 		_, err = a.host.db.AuditStore().Insert(ctx, *in.Audit)
 		if err != nil {
@@ -444,6 +451,7 @@ func (c SignupClient) Register(ctx context.Context, cred SignupCredential, audit
 
 // Login records a sign-in with the passkey of a registered signup, updating its sign count, and writes the audit event, which is optional
 // It returns ErrSignupNotFound if the signup doesn't exist, has expired, or has a different passkey
+// It returns db.ErrInvalidLogin if a non-zero authenticator counter does not increase
 func (c SignupClient) Login(ctx context.Context, credentialID string, signCount int64, audit *db.AuditEventInput) (*Signup, error) {
 	return c.call(ctx, signupMethodLogin, signupLoginReq{
 		CredentialID: credentialID,
@@ -477,6 +485,8 @@ func (c SignupClient) call(ctx context.Context, method string, data any) (*Signu
 		return nil, ErrSignupNotFound
 	case signupErrAlreadyFinalized:
 		return nil, ErrSignupAlreadyFinalized
+	case signupErrInvalidLogin:
+		return nil, db.ErrInvalidLogin
 	}
 
 	return &res.Signup, nil

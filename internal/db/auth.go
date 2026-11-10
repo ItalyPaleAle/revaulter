@@ -313,6 +313,8 @@ func (s *AuthStore) RegisterUser(ctx context.Context, in RegisterUserInput) (*Us
 	}, nil
 }
 
+// Login atomically checks the authenticator counter and records the sign-in
+// Zero counters are accepted for authenticators without a counter
 func (s *AuthStore) Login(ctx context.Context, in LoginInput) error {
 	now := time.Now().Unix()
 	err := s.db.
@@ -323,6 +325,7 @@ func (s *AuthStore) Login(ctx context.Context, in LoginInput) error {
 			AND user_id = (
 				SELECT id FROM v2_users WHERE id = $4 AND status = 'active'
 			)
+			AND ($1 = 0 OR sign_count < $1)
 			RETURNING user_id`,
 			in.SignCount, now, in.CredentialID, in.UserID,
 		).

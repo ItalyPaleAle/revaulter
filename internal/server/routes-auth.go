@@ -1687,7 +1687,7 @@ func (s *Server) loginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (logi
 		return loginFinishRes{}, invalidLoginResponseError
 	}
 
-	// Validate the authenticator sign count
+	// Reject counter anomalies early, before the database or signup actor checks the current counter atomically
 	err = s.validateAuthenticatorSignCount(c, discoveredUser, cred)
 	if err != nil {
 		return loginFinishRes{}, err
@@ -1760,7 +1760,7 @@ func (s *Server) loginFinishSignup(c *gin.Context, signup *actors.Signup, creden
 		CredentialID: credentialID,
 	})
 	signup, err := s.actors.Signup(signup.WebAuthnUserID).Login(c.Request.Context(), credentialID, signCount, &audit)
-	if errors.Is(err, actors.ErrSignupNotFound) {
+	if errors.Is(err, actors.ErrSignupNotFound) || errors.Is(err, db.ErrInvalidLogin) {
 		return loginFinishRes{}, invalidLoginResponseError
 	} else if err != nil {
 		return loginFinishRes{}, err

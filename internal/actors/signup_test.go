@@ -189,6 +189,43 @@ func TestSignupActorCleanup(t *testing.T) {
 	}, 15*time.Second, 100*time.Millisecond, "the expired signup was not deleted")
 }
 
+func TestSignupActorLoginCounter(t *testing.T) {
+	h := newTestHost(t, newTestDB(t), ":memory:")
+	const (
+		signupID = "signup-login-counter"
+		userID   = "user-signup-login-counter"
+	)
+	signup := registerTestSignup(t, h, signupID, userID)
+	credentialID := "cred-" + signupID
+	audit := signupTestAudit(db.AuditAuthLoginFinish, userID)
+
+	// Both logins can have verified against this snapshot before either reaches the actor
+	stale, err := signup.Get(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, stale)
+	require.EqualValues(t, 1, stale.Credential.SignCount)
+
+	_, err = signup.Login(t.Context(), credentialID, 3, audit)
+	require.NoError(t, err)
+	for _, count := range []int64{2, 3} {
+		_, err = signup.Login(t.Context(), credentialID, count, audit)
+		require.ErrorIs(t, err, db.ErrInvalidLogin)
+	}
+
+	got, err := signup.Get(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.EqualValues(t, 3, got.Credential.SignCount)
+	require.Len(t, auditEvents(t, h, userID, db.AuditAuthLoginFinish), 1)
+
+	// Newer counters and authenticators that report zero remain supported
+	for _, count := range []int64{4, 0, 0, 1} {
+		got, err = signup.Login(t.Context(), credentialID, count, audit)
+		require.NoError(t, err)
+		require.Equal(t, count, got.Credential.SignCount)
+	}
+}
+
 // registerTestSignup creates a signup with a registered passkey
 func registerTestSignup(t *testing.T, h *Host, signupID string, userID string) SignupClient {
 	t.Helper()
