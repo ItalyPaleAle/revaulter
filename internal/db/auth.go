@@ -96,6 +96,9 @@ type AddCredentialInput struct {
 	AttestationPayload          string
 	AttestationSignatureEs384   string
 	AttestationSignatureMldsa87 string
+	// Wrapped key epoch the attestation was verified against
+	// The credential is added only if the user is still at this epoch
+	WrappedKeyEpoch int64
 }
 
 type LoginInput struct {
@@ -132,6 +135,8 @@ var (
 	ErrAlreadyFinalized   = errors.New("user is already finalized")
 	ErrInvalidIP          = errors.New("invalid IP")
 	ErrInvalidCIDR        = errors.New("invalid CIDR")
+	// ErrWrappedKeyEpochChanged is returned when adding a credential for a user whose wrapped key epoch is different from the one the credential was created for
+	ErrWrappedKeyEpochChanged = errors.New("wrapped key epoch changed")
 )
 
 func NewAuthStore(db adapter.Querier, kind BackendKind) (*AuthStore, error) {
@@ -155,6 +160,32 @@ func (s *AuthStore) CountUsers(ctx context.Context) (int, error) {
 
 func (s *AuthStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
 	return s.getUser(ctx, "id", userID)
+}
+
+// GetUserByIDForUpdate returns the user like GetUserByID, and locks the user's row until the transaction ends
+// Changes that depend on the user's wrapped key epoch take this lock, so they can't interleave
+func (s *AuthStore) GetUserByIDForUpdate(ctx context.Context, userID string) (*User, error) {
+	// Must be invoked as a transaction
+	if !s.db.IsTransaction() {
+		// Indicates a development-time error
+		panic("GetUserByIDForUpdate must be invoked in a transaction")
+	}
+
+	// On Postgres, lock the row with FOR UPDATE
+	// SQLite transactions take the write lock when they begin (txlock=immediate), so they're already serialized
+	query := `SELECT ` + userColumns + ` FROM v2_users WHERE id = $1`
+	if s.kind == BackendPostgres {
+		query += ` FOR UPDATE`
+	}
+
+	user, err := scanUser(s.db.QueryRow(ctx, query, userID))
+	if s.db.IsNoRowsError(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	return user, nil
 }
 
 func (s *AuthStore) GetUserByWebAuthnUserID(ctx context.Context, webAuthnUserID string) (*User, error) {
@@ -558,6 +589,8 @@ func (s *AuthStore) GetCredentialByCredentialID(ctx context.Context, credentialI
 	return &rec, nil
 }
 
+// AddCredential adds a credential to an active user, if the user's wrapped key epoch is still in.WrappedKeyEpoch
+// It returns ErrUserNotFound if the user doesn't exist or isn't active, and ErrWrappedKeyEpochChanged if the epoch is different
 func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) error {
 	if len(in.WrappedPrimaryKey) > 512 {
 		return errors.New("wrappedPrimaryKey is too large")
@@ -569,8 +602,8 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 		return errors.New("attestationPayload is too large")
 	}
 
-	// Gate the insert on the user being active so future callers cannot attach a credential to a frozen/disabled user
-	// The epoch subquery and the EXISTS guard both filter on status = 'active', mirroring UpdateCredentialWrappedKey
+	// Insert only if the user is active and still at the epoch the credential was created for
+	// The credential stores that epoch, so key material wrapped with an older password is never marked as current
 	now := time.Now().Unix()
 	affected, err := s.db.Exec(ctx,
 		`INSERT INTO v2_user_credentials (
@@ -578,24 +611,34 @@ func (s *AuthStore) AddCredential(ctx context.Context, in AddCredentialInput) er
 				wrapped_primary_key, wrapped_anchor_key,
 				attestation_payload, attestation_signature_es384, attestation_signature_mldsa87,
 				wrapped_key_epoch, created_at, last_used_at
-			) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, (
-				SELECT wrapped_key_epoch FROM v2_users WHERE id = $2 AND status = 'active'
-			), $12, $12
-			WHERE EXISTS (SELECT 1 FROM v2_users WHERE id = $2 AND status = 'active')`,
+			) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13
+			WHERE EXISTS (SELECT 1 FROM v2_users WHERE id = $2 AND status = 'active' AND wrapped_key_epoch = $12)`,
 		uuid.NewV4().String(), in.UserID, in.CredentialID, in.DisplayName, in.PublicKey, in.SignCount,
 		in.WrappedPrimaryKey, in.WrappedAnchorKey,
 		in.AttestationPayload, in.AttestationSignatureEs384, in.AttestationSignatureMldsa87,
-		now,
+		in.WrappedKeyEpoch, now,
 	)
 	if err != nil {
 		return err
 	}
 
-	if affected == 0 {
+	if affected > 0 {
+		return nil
+	}
+
+	// Nothing was inserted, so find out whether the user is gone or the epoch changed
+	var exists bool
+	err = s.db.
+		QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM v2_users WHERE id = $1 AND status = 'active')`, in.UserID).
+		Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		return ErrUserNotFound
 	}
 
-	return nil
+	return ErrWrappedKeyEpochChanged
 }
 
 func (s *AuthStore) AdvanceWrappedKeyEpoch(ctx context.Context, userID string) (int64, error) {

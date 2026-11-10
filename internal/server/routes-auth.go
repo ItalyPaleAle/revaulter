@@ -945,6 +945,15 @@ func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, re
 	ctx := c.Request.Context()
 	as := tx.AuthStore()
 
+	// Lock the user until the transaction ends, so adding a passkey can't interleave with the password change
+	lockedUser, err := as.GetUserByIDForUpdate(ctx, userID)
+	if err != nil {
+		return NewResponseError(http.StatusInternalServerError, "Failed to load user")
+	}
+	if lockedUser == nil {
+		return NewResponseError(http.StatusNotFound, "User not found")
+	}
+
 	// Refuse the update while an add-credential WebAuthn ceremony is in flight for this user
 	// The in-flight ceremony will wrap the new credential's primary key with the current password, and letting the password change land in between would leave that new credential wrapped with the old password while the signed-in credential picks up the new one
 	pending, err := s.actors.HasPendingAddCredentialChallenge(ctx, userID)
@@ -1261,8 +1270,9 @@ func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCreden
 		return addCredentialFinishRes{}, NewResponseError(http.StatusConflict, "Challenge is missing WebAuthn session data")
 	}
 
-	// Load the user
-	storedUser, err := as.GetUserByID(c.Request.Context(), vals.userID)
+	// Load the user, and lock it until the transaction ends
+	// A password change takes the same lock, so it can't change the wrapped key epoch between the checks below and the insert
+	storedUser, err := as.GetUserByIDForUpdate(c.Request.Context(), vals.userID)
 	if err != nil {
 		return addCredentialFinishRes{}, err
 	}
@@ -1363,8 +1373,11 @@ func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCreden
 		AttestationPayload:          vals.req.AttestationPayload,
 		AttestationSignatureEs384:   vals.req.AttestationSignatureEs384,
 		AttestationSignatureMldsa87: vals.req.AttestationSignatureMldsa87,
+		WrappedKeyEpoch:             storedUser.WrappedKeyEpoch,
 	})
-	if err != nil {
+	if errors.Is(err, db.ErrWrappedKeyEpochChanged) {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusConflict, "The password changed while the passkey was being added, try again")
+	} else if err != nil {
 		return addCredentialFinishRes{}, err
 	}
 
