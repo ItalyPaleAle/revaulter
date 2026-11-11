@@ -321,3 +321,53 @@ func waitForExpiry(t *testing.T, h *Host, user UserClient, userID string, state 
 	require.NotNil(t, req)
 	assert.Equal(t, db.V2RequestStatusExpired, req.Status)
 }
+
+// A long-poll that misses the signal that wakes it finds out when it checks the request
+// These tests remove the waiter from the request before changing it, so no signal is sent, as if sending it failed
+func TestUserActorLongPollRecoversFromMissedWakeups(t *testing.T) {
+	const userID = "user-actor-missed-wakeup"
+	prevInterval := longPollRecheckInterval
+	longPollRecheckInterval = 200 * time.Millisecond
+	t.Cleanup(func() {
+		longPollRecheckInterval = prevInterval
+	})
+
+	h := newTestHost(t, newTestDB(t, userID), ":memory:")
+	user := h.User(userID)
+
+	dropWaiter := func(t *testing.T, state string, waiter string) {
+		t.Helper()
+
+		_, err := invoke[struct{}](t.Context(), h, actorTypeUser, userID, userMethodUnsubscribe, userStateReq{State: state, Waiter: waiter})
+		require.NoError(t, err)
+	}
+
+	t.Run("a long-poll finds a change it wasn't woken for", func(t *testing.T) {
+		const state = "missed-confirm"
+		seedTestRequest(t, h, userID, state, time.Now().Add(10*time.Minute))
+		sub, err := user.Subscribe(t.Context(), state)
+		require.NoError(t, err)
+		require.NotEmpty(t, sub.Waiter)
+
+		dropWaiter(t, state, sub.Waiter)
+		_, err = user.Confirm(t.Context(), state, `{"ciphertext":"cmVz"}`, nil)
+		require.NoError(t, err)
+
+		evicted, err := waitForResult(t, user, state, sub.Waiter)
+		require.NoError(t, err)
+		assert.False(t, evicted)
+	})
+
+	t.Run("a long-poll finds out it's no longer the current one", func(t *testing.T) {
+		const state = "missed-eviction"
+		seedTestRequest(t, h, userID, state, time.Now().Add(10*time.Minute))
+		sub, err := user.Subscribe(t.Context(), state)
+		require.NoError(t, err)
+
+		dropWaiter(t, state, sub.Waiter)
+
+		evicted, err := waitForResult(t, user, state, sub.Waiter)
+		require.NoError(t, err)
+		assert.True(t, evicted)
+	})
+}

@@ -49,6 +49,7 @@ const (
 	userMethodList        = "list"
 	userMethodGet         = "get"
 	userMethodRepair      = "repair"
+	userMethodCheck       = "check"
 )
 
 // Reasons sent to the long-poll waiting for the result of a request
@@ -267,6 +268,14 @@ type CollectedResult struct {
 	EncryptedResult string
 }
 
+// requestCheck is the status of a request, for a long-poll that checks it while waiting
+type requestCheck struct {
+	Found  bool
+	Status db.V2RequestStatus
+	// Token of the long-poll that currently waits for the result, if any
+	Waiter string
+}
+
 type userGetRes struct {
 	Found   bool
 	Request Request
@@ -363,6 +372,14 @@ func (a *userActor) Invoke(ctx context.Context, method string, data actor.Envelo
 
 	case userMethodSnapshot:
 		return a.snapshot(ctx)
+
+	case userMethodCheck:
+		var in userStateReq
+		err := decodeActorEnvelope(data, &in)
+		if err != nil {
+			return nil, err
+		}
+		return a.check(ctx, in)
 
 	case userMethodRepair:
 		// Loading the state sets the cleanup alarm again, in case it's missing
@@ -560,7 +577,7 @@ func (a *userActor) wakeWaiter(ctx context.Context, state string, waiter string,
 
 	err := a.host.waiters.Complete(ctx, waiterSignalID(state, waiter), waiterWake{Reason: reason})
 	if err != nil && !errors.Is(err, signal.ErrAlreadyCompleted) {
-		// The caller will see the change the next time it polls
+		// The long-poll finds out when it checks the request again
 		a.log.WarnContext(ctx, "Failed to wake long-poll", slog.String("state", state), slog.Any("error", err))
 	}
 }
@@ -960,6 +977,35 @@ func (a *userActor) subscribe(ctx context.Context, in userStateReq) (Subscriptio
 		Found:  true,
 		Status: r.Status,
 		Waiter: waiter,
+	}, nil
+}
+
+// check returns the status of a request, and the waiter of its current long-poll
+// Like subscribe, it finishes a request that's finished in the main database or past its deadline, but it doesn't register a waiter
+func (a *userActor) check(ctx context.Context, in userStateReq) (requestCheck, error) {
+	st, err := a.loadState(ctx)
+	if err != nil {
+		return requestCheck{}, err
+	}
+
+	r := st.Requests[in.State]
+	if r == nil {
+		return requestCheck{}, nil
+	}
+
+	err = a.syncRequest(ctx, &st, in.State)
+	if err != nil {
+		return requestCheck{}, err
+	}
+	err = a.expireOne(ctx, &st, in.State, time.Now())
+	if err != nil {
+		return requestCheck{}, err
+	}
+
+	return requestCheck{
+		Found:  true,
+		Status: r.Status,
+		Waiter: r.Waiter,
 	}, nil
 }
 
