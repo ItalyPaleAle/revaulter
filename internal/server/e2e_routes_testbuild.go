@@ -595,14 +595,25 @@ func (s *Server) RouteE2ESeedCredential(c *gin.Context) {
 		return
 	}
 
-	// Store the credential in the database
+	// Store the credential in the database, at the user's current epoch
+	user, err := s.db.AuthStore().GetUserByID(c.Request.Context(), req.UserID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if user == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+		return
+	}
+
 	credID := "e2e-cred-extra-" + uuid.NewV4().String()[:8]
 	err = s.db.AuthStore().AddCredential(c.Request.Context(), db.AddCredentialInput{
-		UserID:       req.UserID,
-		CredentialID: credID,
-		DisplayName:  req.DisplayName,
-		PublicKey:    `{}`,
-		SignCount:    0,
+		UserID:          req.UserID,
+		CredentialID:    credID,
+		DisplayName:     req.DisplayName,
+		PublicKey:       `{}`,
+		SignCount:       0,
+		WrappedKeyEpoch: user.WrappedKeyEpoch,
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)

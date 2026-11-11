@@ -449,6 +449,7 @@ func TestAuthStoreCredentialWrappedKeyEpochRotation(t *testing.T) {
 				PublicKey:         `{"kty":"EC"}`,
 				SignCount:         1,
 				WrappedPrimaryKey: "wrapped-2-v1",
+				WrappedKeyEpoch:   1,
 			})
 			require.NoError(t, err)
 
@@ -521,11 +522,12 @@ func TestAuthStoreCredentialCRUD(t *testing.T) {
 
 			// Add a second credential
 			err = as.AddCredential(ctx, AddCredentialInput{
-				UserID:       "user-1",
-				CredentialID: "cred-2",
-				DisplayName:  "My Phone",
-				PublicKey:    `{"kty":"EC","crv":"P-256"}`,
-				SignCount:    0,
+				UserID:          "user-1",
+				CredentialID:    "cred-2",
+				DisplayName:     "My Phone",
+				PublicKey:       `{"kty":"EC","crv":"P-256"}`,
+				SignCount:       0,
+				WrappedKeyEpoch: 1,
 			})
 			require.NoError(t, err)
 
@@ -573,5 +575,113 @@ func TestAuthStoreCredentialCRUD(t *testing.T) {
 
 			return nil, nil
 		})
+	})
+}
+
+func TestAuthStoreAddCredentialRequiresEpoch(t *testing.T) {
+	runDBTest(t, func(t *testing.T, conn *DB) {
+		err := RunMigrations(t.Context(), conn, nil)
+		require.NoError(t, err)
+
+		_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+			as := tx.AuthStore()
+			registerReadyUser(t, ctx, as, "user-1")
+
+			newCredential := func(credentialID string, epoch int64) AddCredentialInput {
+				return AddCredentialInput{
+					UserID:          "user-1",
+					CredentialID:    credentialID,
+					PublicKey:       `{"kty":"EC"}`,
+					WrappedKeyEpoch: epoch,
+				}
+			}
+
+			// The user is at epoch 1
+			err := as.AddCredential(ctx, newCredential("cred-epoch-2", 2))
+			require.ErrorIs(t, err, ErrWrappedKeyEpochChanged)
+
+			_, err = as.AdvanceWrappedKeyEpoch(ctx, "user-1")
+			require.NoError(t, err)
+
+			// A credential created before the epoch advanced is refused
+			err = as.AddCredential(ctx, newCredential("cred-epoch-1", 1))
+			require.ErrorIs(t, err, ErrWrappedKeyEpochChanged)
+
+			err = as.AddCredential(ctx, newCredential("cred-epoch-2", 2))
+			require.NoError(t, err)
+			rec, err := as.GetCredentialByCredentialID(ctx, "cred-epoch-2", "user-1")
+			require.NoError(t, err)
+			require.NotNil(t, rec)
+			require.EqualValues(t, 2, rec.WrappedKeyEpoch)
+
+			err = as.AddCredential(ctx, AddCredentialInput{UserID: "user-missing", CredentialID: "cred-missing", PublicKey: `{}`, WrappedKeyEpoch: 1})
+			require.ErrorIs(t, err, ErrUserNotFound)
+
+			return nil, nil
+		})
+	})
+}
+
+func TestAuthStoreGetUserByIDForUpdateSerializesEpochChanges(t *testing.T) {
+	runDBTest(t, func(t *testing.T, conn *DB) {
+		err := RunMigrations(t.Context(), conn, nil)
+		require.NoError(t, err)
+
+		_, err = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+			registerReadyUser(t, ctx, tx.AuthStore(), "user-1")
+			return nil, nil
+		})
+		require.NoError(t, err)
+
+		// While a passkey is being added with the user locked, a password change that advances the epoch must wait
+		advanced := make(chan error, 1)
+		var advancedEarly bool
+		_, err = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+			as := tx.AuthStore()
+			user, rErr := as.GetUserByIDForUpdate(ctx, "user-1")
+			if rErr != nil {
+				return nil, rErr
+			}
+
+			go func() {
+				_, aErr := ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (int64, error) {
+					return tx.AuthStore().AdvanceWrappedKeyEpoch(ctx, "user-1")
+				})
+				advanced <- aErr
+			}()
+
+			select {
+			case <-advanced:
+				advancedEarly = true
+			case <-time.After(500 * time.Millisecond):
+				// The password change is still waiting
+			}
+
+			return nil, as.AddCredential(ctx, AddCredentialInput{
+				UserID:          "user-1",
+				CredentialID:    "cred-new",
+				PublicKey:       `{"kty":"EC"}`,
+				WrappedKeyEpoch: user.WrappedKeyEpoch,
+			})
+		})
+		require.NoError(t, err)
+		require.False(t, advancedEarly, "the epoch changed while the user was locked")
+
+		select {
+		case err = <-advanced:
+			require.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("the password change didn't complete after the lock was released")
+		}
+
+		// The new credential keeps the epoch it was created for, so it's reported as stale after the password change
+		as := conn.AuthStore()
+		user, err := as.GetUserByID(t.Context(), "user-1")
+		require.NoError(t, err)
+		require.EqualValues(t, 2, user.WrappedKeyEpoch)
+		rec, err := as.GetCredentialByCredentialID(t.Context(), "cred-new", "user-1")
+		require.NoError(t, err)
+		require.NotNil(t, rec)
+		require.EqualValues(t, 1, rec.WrappedKeyEpoch)
 	})
 }
