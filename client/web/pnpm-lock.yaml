@@ -187,9 +187,9 @@ importers:
       date-fns:
         specifier: 4.4.0
         version: 4.4.0
-      js-cookie:
-        specifier: 3.0.8
-        version: 3.0.8
+      svelte:
+        specifier: 5.57.3
+        version: 5.57.3
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
@@ -209,9 +209,6 @@ importers:
       '@tsconfig/svelte':
         specifier: 5.0.8
         version: 5.0.8
-      '@types/js-cookie':
-        specifier: 3.0.6
-        version: 3.0.6
       '@types/node':
         specifier: 26.6.6
         version: 26.6.6
@@ -236,9 +233,6 @@ importers:
       postcss-url:
         specifier: 10.1.4
         version: 10.1.4(postcss@8.5.32)
-      svelte:
-        specifier: 5.57.3
-        version: 5.57.3
       svelte-check:
         specifier: 4.7.7
         version: 4.7.7(picomatch@4.0.7)(svelte@5.57.3)(typescript@6.0.3)
@@ -1333,9 +1327,6 @@ packages:
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
 
-  '@types/js-cookie@3.0.6':
-    resolution: {integrity: sha512-wkw9yd1kEXOPnvEeEV1Go1MmxtBJL0RR79aOTAApecWFVu7w0NNXNqhcWgvw2YgZDYadliXkl14pa3WXw5jlCQ==}
-
   '@types/node@26.6.6':
     resolution: {integrity: sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==}
 
@@ -2011,9 +2002,6 @@ packages:
   jiti@2.7.0:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
-
-  js-cookie@3.0.8:
-    resolution: {integrity: sha512-yeJd4aNAdYZQjaon2bpD/Gb0B/omw7HQOsynXXcOiWVCacbBcPlgn8S/d1X6blFSaHao7ozqtW7NZW19xpCtIw==}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -4002,8 +3990,6 @@ snapshots:
 
   '@types/estree@1.0.9': {}
 
-  '@types/js-cookie@3.0.6': {}
-
   '@types/node@26.6.6':
     dependencies:
       undici-types: 8.9.0
@@ -4672,8 +4658,6 @@ snapshots:
       picocolors: 1.1.1
 
   jiti@2.7.0: {}
-
-  js-cookie@3.0.8: {}
 
   js-tokens@4.0.0: {}
 
