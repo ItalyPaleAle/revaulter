@@ -75,25 +75,6 @@ var backupTables = []tableSpec{
 		},
 	},
 	{
-		name: "v2_requests",
-		columns: []columnSpec{
-			{name: "state", kind: colKindText},
-			{name: "status", kind: colKindText},
-			{name: "operation", kind: colKindText},
-			{name: "user_id", kind: colKindText},
-			{name: "key_label", kind: colKindText},
-			{name: "algorithm", kind: colKindText},
-			{name: "requestor_ip", kind: colKindText},
-			{name: "note", kind: colKindText},
-			{name: "created_at", kind: colKindText},
-			{name: "expires_at", kind: colKindText},
-			{name: "updated_at", kind: colKindText},
-			{name: "encrypted_request", kind: colKindText},
-			{name: "encrypted_result", kind: colKindText},
-			{name: "result_token_hash", kind: colKindText},
-		},
-	},
-	{
 		name: "v2_user_credentials",
 		columns: []columnSpec{
 			{name: "id", kind: colKindText},

@@ -30,10 +30,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/italypaleale/go-kit/servicerunner"
 	"github.com/italypaleale/go-kit/webhook"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/italypaleale/revaulter/internal/actors"
 	"github.com/italypaleale/revaulter/internal/config"
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/protocolv2"
@@ -454,7 +456,6 @@ func TestServerV2APIListStreamScopesToSignedInUser(t *testing.T) {
 
 	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	rs := srv.db.RequestStore()
 
 	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
@@ -462,33 +463,9 @@ func TestServerV2APIListStreamScopesToSignedInUser(t *testing.T) {
 	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice-stream", "Alice")
 	_, bobUser := seedV2SessionCookie(t, srv, "user-bob-stream", "Bob")
 
-	// Seed one pending request for each user directly against the store so the test doesn't depend on the encrypt endpoint
-	now := time.Now().UTC().Truncate(time.Second)
-	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
-		State:            "alice-stream-state",
-		UserID:           aliceUser.ID,
-		Operation:        "encrypt",
-		RequestorIP:      "127.0.0.1",
-		KeyLabel:         "alice-key",
-		Algorithm:        "A256GCM",
-		CreatedAt:        now,
-		ExpiresAt:        now.Add(10 * time.Minute),
-		EncryptedRequest: `{}`,
-	})
-	require.NoError(t, err)
-
-	err = rs.CreateRequest(t.Context(), db.CreateRequestInput{
-		State:            "bob-stream-state",
-		UserID:           bobUser.ID,
-		Operation:        "encrypt",
-		RequestorIP:      "127.0.0.1",
-		KeyLabel:         "bob-key",
-		Algorithm:        "A256GCM",
-		CreatedAt:        now,
-		ExpiresAt:        now.Add(10 * time.Minute),
-		EncryptedRequest: `{}`,
-	})
-	require.NoError(t, err)
+	// Seed one pending request for each user directly in their actors so the test doesn't depend on the encrypt endpoint
+	seedTestRequest(t, srv, aliceUser.ID, "alice-stream-state", time.Now().Add(10*time.Minute))
+	seedTestRequest(t, srv, bobUser.ID, "bob-stream-state", time.Now().Add(10*time.Minute))
 
 	// Open the stream
 	// Note stream is closed with a cleanup function
@@ -526,13 +503,9 @@ func TestServerV2APIListStreamScopesToSignedInUser(t *testing.T) {
 		// expected — initial batch exhausted
 	}
 
-	// Reading the initial line proves the handler has already Subscribe()'d and Flush()'d, so any publish after this point is observable
-	// A pubsub event targeting a different user must be filtered out by the UserID check in the handler
-	srv.publishListItem(&db.V2RequestListItem{
-		State:  "bob-live-update",
-		Status: "removed",
-		UserID: bobUser.ID,
-	})
+	// Reading the initial line proves the handler has already taken its snapshot, so any change after this point is observable
+	// A change to Bob's requests must not reach Alice's stream, as it rings Bob's bell only
+	seedTestRequest(t, srv, bobUser.ID, "bob-live-update", time.Now().Add(10*time.Minute))
 	select {
 	case leaked := <-lines:
 		t.Fatalf("Alice received a message targeting Bob: %s", leaked)
@@ -540,16 +513,13 @@ func TestServerV2APIListStreamScopesToSignedInUser(t *testing.T) {
 		// expected — filtered
 	}
 
-	// A pubsub event targeting Alice must be delivered within a couple of flush ticks
-	srv.publishListItem(&db.V2RequestListItem{
-		State:  "alice-live-update",
-		Status: "removed",
-		UserID: aliceUser.ID,
-	})
+	// A new request for Alice must be delivered shortly after it's created
+	seedTestRequest(t, srv, aliceUser.ID, "alice-live-update", time.Now().Add(10*time.Minute))
 	live := readLine(t, 2*time.Second)
 	require.NoError(t, json.Unmarshal([]byte(live), &item))
 	require.Equal(t, "alice-live-update", item["state"])
 	require.Equal(t, aliceUser.ID, item["userId"])
+	require.Equal(t, string(db.V2RequestStatusPending), item["status"])
 }
 
 func TestServerV2APIListStreamSuppressesDuplicateInitialEvents(t *testing.T) {
@@ -557,25 +527,12 @@ func TestServerV2APIListStreamSuppressesDuplicateInitialEvents(t *testing.T) {
 
 	srv := newTestServer(t, nil, nil, nil)
 	require.NotNil(t, srv)
-	rs := srv.db.RequestStore()
 
 	startTestServer(t, srv)
 	client := clientForListener(srv.appListener)
 
 	aliceCookie, aliceUser := seedV2SessionCookie(t, srv, "user-alice-stream-dup", "Alice")
-	now := time.Now().UTC().Truncate(time.Second)
-	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
-		State:            "alice-stream-dup-state",
-		UserID:           aliceUser.ID,
-		Operation:        "encrypt",
-		RequestorIP:      "127.0.0.1",
-		KeyLabel:         "alice-key",
-		Algorithm:        "A256GCM",
-		CreatedAt:        now,
-		ExpiresAt:        now.Add(10 * time.Minute),
-		EncryptedRequest: `{}`,
-	})
-	require.NoError(t, err)
+	seedTestRequest(t, srv, aliceUser.ID, "alice-stream-dup-state", time.Now().Add(10*time.Minute))
 
 	// Note stream is closed with a cleanup function
 	//nolint:bodyclose
@@ -592,12 +549,17 @@ func TestServerV2APIListStreamSuppressesDuplicateInitialEvents(t *testing.T) {
 		t.Fatal("timed out waiting for initial stream item")
 	}
 
-	// A live publish for a state already replayed by the initial list should not duplicate the item
-	srv.publishListItem(&db.V2RequestListItem{
-		State:  "alice-stream-dup-state",
-		Status: string(db.V2RequestStatusPending),
-		UserID: aliceUser.ID,
-	})
+	// Another change re-reads the list, which must not duplicate the item already sent
+	seedTestRequest(t, srv, aliceUser.ID, "alice-stream-dup-other", time.Now().Add(10*time.Minute))
+	select {
+	case line, ok := <-lines:
+		require.True(t, ok, "stream closed before delivering the new item")
+		var item map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &item))
+		require.Equal(t, "alice-stream-dup-other", item["state"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the new stream item")
+	}
 	select {
 	case dup, ok := <-lines:
 		if ok {
@@ -608,11 +570,8 @@ func TestServerV2APIListStreamSuppressesDuplicateInitialEvents(t *testing.T) {
 	}
 
 	// Removal events for an initial state must still be delivered so the UI can clear the item
-	srv.publishListItem(&db.V2RequestListItem{
-		State:  "alice-stream-dup-state",
-		Status: "removed",
-		UserID: aliceUser.ID,
-	})
+	_, err := srv.actors.User(aliceUser.ID).Cancel(t.Context(), "alice-stream-dup-state", nil)
+	require.NoError(t, err)
 	select {
 	case line, ok := <-lines:
 		require.True(t, ok, "stream closed before delivering removal")
@@ -922,51 +881,6 @@ func TestServerV2CreateRequestSkipsWebhookWhenDisabled(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, res.StatusCode)
 }
 
-func TestServerExecuteRequestExpiryEventExpiresAndSchedulesDeletion(t *testing.T) {
-	setTestConfig(t, "v2-expiry-callback.db")
-
-	srv := newTestServer(t, nil, nil, nil)
-	require.NotNil(t, srv)
-	rs := srv.db.RequestStore()
-
-	_, user := seedV2SessionCookie(t, srv, "user-expiry-callback", "Expiry Callback")
-	now := time.Now().UTC().Truncate(time.Second)
-	err := rs.CreateRequest(t.Context(), db.CreateRequestInput{
-		State:            "state-expiry-callback",
-		UserID:           user.ID,
-		Operation:        "encrypt",
-		RequestorIP:      "127.0.0.1",
-		KeyLabel:         "callback-key",
-		Algorithm:        "A256GCM",
-		CreatedAt:        now.Add(-2 * time.Minute),
-		ExpiresAt:        now.Add(-1 * time.Minute),
-		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
-	})
-	require.NoError(t, err)
-
-	srv.executeRequestExpiryEvent(requestExpiryEvent{
-		State:  "state-expiry-callback",
-		UserID: user.ID,
-		TTL:    now.Add(-1 * time.Minute),
-	})
-
-	rec, err := rs.GetRequest(t.Context(), "state-expiry-callback")
-	require.NoError(t, err)
-	require.NotNil(t, rec)
-	require.Equal(t, db.V2RequestStatusExpired, rec.Status)
-
-	srv.executeDeleteEvent(deleteEvent{
-		KeyName: "request-delete:state-expiry-callback",
-		Kind:    "request",
-		ID:      "state-expiry-callback",
-		TTL:     now.Add(10 * time.Minute),
-	})
-
-	rec, err = rs.GetRequest(t.Context(), "state-expiry-callback")
-	require.NoError(t, err)
-	require.Nil(t, rec)
-}
-
 func TestServerV2AuthLogoutDeletesSessionImmediately(t *testing.T) {
 	setTestConfig(t, "v2-logout.db")
 
@@ -1071,6 +985,10 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 		config.SetTestConfig(map[string]any{
 			"tLSCertPEM": cert,
 			"tLSKeyPEM":  key,
+
+			// Each server gets its own Francis host, with an in-memory store
+			"francisPeerAddress": actors.TestPeerAddress(t),
+			"francisDatabaseDSN": ":memory:",
 		}),
 	)
 	dbConn := db.NewTestDatabaseForServerTests(t)
@@ -1082,10 +1000,17 @@ func newTestServer(t *testing.T, wh *mockWebhook, httpClientTransport http.Round
 		webhookClient = wh
 	}
 
+	actorsHost, err := actors.NewHost(actors.NewHostOptions{
+		Log:      log,
+		DB:       dbConn,
+		Notifier: NewWebhookNotifier(webhookClient),
+	})
+	require.NoError(t, err)
+
 	srv, err := NewServer(NewServerOpts{
-		Log:     log,
-		Webhook: webhookClient,
-		DB:      dbConn,
+		Log:    log,
+		DB:     dbConn,
+		Actors: actorsHost,
 	})
 	require.NoError(t, err)
 
@@ -1176,6 +1101,35 @@ func seedV2SessionCookie(t *testing.T, srv *Server, userID string, displayName s
 		Value: token,
 		Path:  "/",
 	}, user
+}
+
+// seedTestRequest creates a pending request for the user directly in the user's actor, without an audit event
+// The server must be running
+func seedTestRequest(t *testing.T, srv *Server, userID string, state string, expiresAt time.Time) {
+	t.Helper()
+
+	err := srv.actors.User(userID).Create(t.Context(), actors.CreateRequestInput{
+		State: state,
+		Request: actors.Request{
+			Operation:   "encrypt",
+			KeyLabel:    "test-key",
+			Algorithm:   "A256GCM",
+			RequestorIP: "127.0.0.1",
+			CreatedAt:   time.Now(),
+			ExpiresAt:   expiresAt,
+		},
+		EncryptedRequest: `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"test","y":"test"},"nonce":"bm9uY2U","ciphertext":"Y3Q"}`,
+	})
+	require.NoError(t, err)
+}
+
+// getTestRequest returns a request from the user's actor, or nil if it doesn't exist
+func getTestRequest(t *testing.T, srv *Server, userID string, state string) *actors.Request {
+	t.Helper()
+
+	rec, err := srv.actors.User(userID).Get(t.Context(), state)
+	require.NoError(t, err)
+	return rec
 }
 
 // testAnchorKeyPair holds the private halves of a hybrid anchor pair plus the wire-format pubkeys that match what FinalizeSignup stores
@@ -1304,20 +1258,34 @@ func signHybridMessage(t *testing.T, anchor *testAnchorKeyPair, msg []byte) (sig
 func startTestServer(t *testing.T, srv *Server) {
 	t.Helper()
 
-	// Start the server in a background goroutine
+	// Start the Francis host and the server in background goroutines, in the same way as the main package does
 	srvCtx, srvCancel := context.WithCancel(t.Context())
+	actorsReady := servicerunner.NewReady()
+	serverDrained := servicerunner.NewReady()
 	startErrCh := make(chan error, 1)
 	go func() {
-		startErrCh <- srv.Run(srvCtx)
+		startErrCh <- servicerunner.
+			NewServiceRunner(
+				func(ctx context.Context) error {
+					return srv.actors.Run(ctx, actorsReady, serverDrained)
+				},
+				func(ctx context.Context) error {
+					defer serverDrained.Signal()
+					return actorsReady.Await(srv.Run)(ctx)
+				},
+			).
+			Run(srvCtx)
 	}()
 
 	// Ensure the server has started and there's no error
-	// This may report false positives if the server just takes longer to start, but we'll still catch those errors later on
+	// The app server starts right after the Francis host is ready
 	select {
-	case <-time.After(100 * time.Millisecond):
+	case <-srv.actors.Ready():
 		// all good
 	case err := <-startErrCh:
 		t.Fatalf("Received an unexpected error in startErrCh: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timed out waiting for the Francis host to be ready")
 	}
 
 	// Tear down the test server when test is done
@@ -1594,9 +1562,7 @@ func TestServerV2UpdateWrappedKey(t *testing.T) {
 	require.EqualValues(t, 2, user.WrappedKeyEpoch)
 
 	// Starting an add-credential WebAuthn ceremony must block concurrent password changes
-	_, err = db.ExecuteInTransaction(t.Context(), srv.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (any, error) {
-		return tx.AuthStore().BeginChallenge(ctx, "add-credential", "user-alice", "pending-add", time.Now().UTC().Add(5*time.Minute), nil)
-	})
+	_, err = srv.actors.BeginChallenge(t.Context(), actors.ChallengeKindAddCredential, "user-alice", time.Now().Add(5*time.Minute), nil)
 	require.NoError(t, err)
 
 	res, body = doPostJSON(t, "/v2/auth/update-wrapped-key", map[string]any{"credentialId": credentialID, "wrappedPrimaryKey": "blocked-while-pending", "wrappedAnchorKey": validAnchor, "advanceEpoch": true}, sessionCookie)

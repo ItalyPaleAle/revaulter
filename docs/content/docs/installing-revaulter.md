@@ -3,7 +3,7 @@ title: "Installing Revaulter"
 weight: 25
 ---
 
-Revaulter is distributed as a container image and runs as a single-container service.
+Revaulter is distributed as a container image and runs as a single-container service. With PostgreSQL, you can also run [multiple replicas](/docs/multiple-replicas/).
 
 ## Requirements
 
@@ -18,7 +18,7 @@ Revaulter is distributed as a container image and runs as a single-container ser
 ## Container images
 
 | Image | Description |
-|-------|-------------|
+| ---- | ---- |
 | `ghcr.io/italypaleale/revaulter:2` | Revaulter server |
 | `ghcr.io/italypaleale/revaulter-cli:2` | Revaulter CLI |
 | `ghcr.io/italypaleale/revaulter-edit:2` | Revaulter local file encryption utility |
@@ -37,14 +37,14 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 ### Required configuration
 
 | Key | Env var | Description |
-|-----|---------|-------------|
+| ---- | ---- | ---- |
 | `databaseDSN` | `REVAULTER_DATABASEDSN` | Database connection string (see [Database](#database) below) |
 | `secretKey` | `REVAULTER_SECRETKEY` | Instance-wide secret for key derivation (see [Secret key](#secret-key) below) |
 
 ### Recommended configuration
 
 | Key | Env var | Default | Description |
-|-----|---------|---------|-------------|
+| ---- | ---- | ---- | ---- |
 | `baseUrl` | `REVAULTER_BASEURL` | `https://localhost:<port>` | Public URL where users access the web UI. Used for webhook links and WebAuthn origin validation. |
 | `sessionSigningKey` | `REVAULTER_SESSIONSIGNINGKEY` | Random at startup | Secret used to sign session tokens. Set this in production so sessions survive restarts. |
 | `tlsPath` | `REVAULTER_TLSPATH` | Config file directory | Directory containing `tls-cert.pem` and `tls-key.pem`. Revaulter watches for changes and auto-reloads. |
@@ -54,8 +54,8 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 ### Optional configuration
 
 | Key | Env var | Default | Description |
-|-----|---------|---------|-------------|
-| `webhookUrl` | `REVAULTER_WEBHOOKURL` | | Webhook endpoint for notifications. Leave unset to disable webhook notifications. |
+| ---- | ---- | ---- | ---- |
+| `webhookUrl` | `REVAULTER_WEBHOOKURL` | | Webhook endpoint for notifications. Leave unset to disable webhook notifications. A notification that fails is retried up to 2 more times, unless the request isn't pending anymore. |
 | `webhookFormat` | `REVAULTER_WEBHOOKFORMAT` | `plain` | Webhook format: `plain`, `slack`, `discord`, `ntfy`, `telegram`, `googlechat`, or `teams` |
 | `webhookKey` | `REVAULTER_WEBHOOKKEY` | | Value sent as `Authorization` header on webhook requests (include the scheme, e.g. `Bearer abc123`) |
 | `webhookAllowPrivateAddresses` | `REVAULTER_WEBHOOKALLOWPRIVATEADDRESSES` | `false` | Allow sending webhook notifications to private addresses (e.g. those in the LAN), which are refused by default. Enable it only if the receiver is on a private network, for example a self-hosted ntfy, Gotify, or alert router on your LAN |
@@ -71,13 +71,16 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 | `logHealthChecks` | `REVAULTER_LOGHEALTHCHECKS` | `false` | Include `/healthz` requests in the request logs |
 | `logLevel` | `REVAULTER_LOGLEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `logAsJson` | `REVAULTER_LOGASJSON` | auto | Emit JSON logs (defaults to `true` when no TTY is attached) |
+| `francisPeerAddress` | `REVAULTER_FRANCISPEERADDRESS` | `127.0.0.1:7571` | Address (host and port) the other replicas use to reach this one when [running multiple replicas](/docs/multiple-replicas/) |
+| `francisBindPort` | `REVAULTER_FRANCISBINDPORT` | Port of `francisPeerAddress` | UDP port this replica listens on for the other replicas, if it's different from the port in `francisPeerAddress` |
+| `francisDatabaseDSN` | `REVAULTER_FRANCISDATABASEDSN` | Derived from `databaseDSN` | Where [short-lived data](#short-lived-data) is stored |
 
 ### Optional WebAuthn configuration
 
 These settings are necessary in some scenarios only. Revaulter derives sensible defaults from `baseUrl`.
 
 | Key | Env var | Default | Description |
-|-----|---------|---------|-------------|
+| ---- | ---- | ---- | ---- |
 | `webauthnRpId` | `REVAULTER_WEBAUTHNRPID` | Derived from `baseUrl` | WebAuthn Relying Party ID |
 | `webauthnRpName` | `REVAULTER_WEBAUTHNRPNAME` | `Revaulter` | WebAuthn Relying Party display name |
 | `webauthnOrigins` | `REVAULTER_WEBAUTHNORIGINS` | `baseUrl` | Allowed WebAuthn origins |
@@ -87,12 +90,12 @@ These settings are necessary in some scenarios only. Revaulter derives sensible 
 Revaulter supports SQLite and PostgreSQL. The backend is detected automatically from the DSN:
 
 | DSN format | Backend |
-|------------|---------|
+| ---- | ---- |
 | `postgres://user:pass@host:5432/dbname` | PostgreSQL |
 | `sqlite:///path/to/file.db` | SQLite |
 | `/path/to/file.db` (no scheme) | SQLite |
 
-SQLite requires no external dependencies and is a good default for single-node deployments.
+SQLite requires no external dependencies and is a good default for a single server. To run [multiple replicas](/docs/multiple-replicas/), use PostgreSQL.
 
 For PostgreSQL, use a standard connection string, for example:
 
@@ -101,6 +104,19 @@ postgres://revaulter:password@db.example.com:5432/revaulter
 ```
 
 > ⚠️ **Warning:** When using SQLite, the database file must **not** be stored on a networked filesystem, like NFS or SMB.
+
+### Short-lived data
+
+Revaulter keeps short-lived data (including pending requests) in an embedded [Francis](https://gofrancis.dev) actor host. Francis stores its data separately from the main database:
+
+| Main database | Francis data storage |
+| ---- | ---- |
+| PostgreSQL | A `francis` schema in the same database, created automatically |
+| SQLite, e.g. `/data/revaulter.db` | A file in the same folder, e.g. `/data/revaulter.francis.db` |
+
+Set `francisDatabaseDSN` to store it elsewhere. Like the main SQLite file, this database must not be stored on a networked filesystem.
+
+The data stored in Francis is ephemeral and never included in backups.
 
 ## Secret key
 
@@ -123,6 +139,8 @@ openssl rand -base64 32
 ```
 
 Set `sessionSigningKey` in production so session tokens remain valid across restarts. If this value is omitted, Revaulter generates a random signing key at startup; existing sessions are invalidated whenever the process restarts.
+
+When [running multiple replicas](/docs/multiple-replicas/), `sessionSigningKey` is required, and it must be the same on all of them.
 
 ## TLS
 
@@ -253,6 +271,7 @@ After starting Revaulter:
 
 1. Open the web UI at your configured `baseUrl`.
 2. Create an account: registration uses WebAuthn, so you'll need a passkey-capable authenticator with PRF support.
+   > Finish creating the account within 24 hours of registering the passkey, or you'll need to start over.
 3. After registration, the UI shows your **request key**: this is the per-user key that CLI requests are routed by.
 4. Optionally configure allowed IP addresses for your account from the settings page.
 

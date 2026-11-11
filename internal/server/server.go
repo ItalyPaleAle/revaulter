@@ -15,24 +15,20 @@ import (
 
 	location "github.com/gin-contrib/location/v2"
 	"github.com/gin-gonic/gin"
-	"github.com/go-chi/httprate"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
-	"github.com/italypaleale/go-kit/auditlogs/siem"
-	"github.com/italypaleale/go-kit/eventqueue"
 	slogkit "github.com/italypaleale/go-kit/slog"
-	"github.com/italypaleale/go-kit/webhook"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/italypaleale/revaulter/internal/actors"
 	"github.com/italypaleale/revaulter/internal/buildinfo"
 	"github.com/italypaleale/revaulter/internal/config"
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/metrics"
 	"github.com/italypaleale/revaulter/internal/requestjwt"
-	"github.com/italypaleale/revaulter/internal/utils/broker"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
@@ -54,32 +50,24 @@ var (
 	// Rate limit for unauthenticated public signing key fetch
 	// 120 req/m
 	publicKeyRateLimitRPM = 120
+	// Rate limit for wrapped primary key delivery, per user
+	// 4 logins per 10 minutes
+	wrappedKeyRateLimit       = 4
+	wrappedKeyRateLimitPeriod = 10 * time.Minute
 )
 
 // Server is the server based on Gin
 type Server struct {
 	appRouter  *gin.Engine
 	httpClient *http.Client
-	lock       sync.RWMutex
-	webhook    webhook.Webhook
 	metrics    *metrics.RevaulterMetrics
 
-	// Subscribers for pending request list updates
-	pubsub *broker.Broker[*db.V2RequestListItem]
-	// Subscriptions to watch request status changes
-	// Each state can only have one subscription
-	// If another call tries to subscribe to the same state, it will evict the first call
-	subs map[string]chan struct{}
+	// Embedded Francis host, which runs the actors that hold short-lived state
+	// It also runs the audit log stream and prunes the audit logs
+	// It's started before the server runs, and stopped after it has drained
+	actors *actors.Host
 
-	// Delayed work for request expiry and record deletion
-	requestExpiryQueue *eventqueue.Processor[string, requestExpiryEvent]
-	deleteQueue        *eventqueue.Processor[string, deleteEvent]
-
-	// Ships audit events to an external collector
-	// Nil when `auditStreamUrl` is not configured
-	auditStream *siem.Shipper
-
-	// Database and request store
+	// Database
 	db       *db.DB
 	webAuthn *webauthnlib.WebAuthn
 
@@ -89,7 +77,7 @@ type Server struct {
 	// Per-user rate limiter for wrapped primary key delivery
 	// Protects delivery of the wrapped root-key blob to a WebAuthn-authenticated client
 	// and reduces abuse of the password-gated unwrap flow
-	wrappedKeyLimiter *httprate.RateLimiter
+	wrappedKeyLimiter *actors.RateLimiter
 
 	// Servers
 	appSrv *http.Server
@@ -112,14 +100,21 @@ type Server struct {
 // NewServerOpts contains options for the NewServer method
 type NewServerOpts struct {
 	Log           *slog.Logger
-	Webhook       webhook.Webhook
 	Metrics       *metrics.RevaulterMetrics
 	TraceExporter sdkTrace.SpanExporter
 	DB            *db.DB
+
+	// Francis host for the actors, which also sends the notifications for new requests
+	// The caller must start it before running the server, and stop it after the server returns
+	Actors *actors.Host
 }
 
 // NewServer creates a new Server object and initializes it
 func NewServer(opts NewServerOpts) (*Server, error) {
+	if opts.Actors == nil {
+		return nil, errors.New("option Actors is required")
+	}
+
 	// Create the HTTP client
 	// Update its transport to include tracing information
 	httpClient := &http.Client{
@@ -128,11 +123,9 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
 
 	s := &Server{
-		subs:    map[string]chan struct{}{},
-		pubsub:  broker.NewBroker[*db.V2RequestListItem](),
-		webhook: opts.Webhook,
 		metrics: opts.Metrics,
 		db:      opts.DB,
+		actors:  opts.Actors,
 
 		httpClient: httpClient,
 
@@ -142,18 +135,7 @@ func NewServer(opts NewServerOpts) (*Server, error) {
 			}),
 			Logger: opts.Log,
 		}),
-
-		// Throttle wrapped primary key delivery to 4 successful logins per 10-minute window, per user
-		wrappedKeyLimiter: httprate.NewRateLimiter(4, 10*time.Minute),
 	}
-
-	// Create the eventqueue processors for performing garbage collection
-	s.requestExpiryQueue = eventqueue.NewProcessor(eventqueue.Options[string, requestExpiryEvent]{
-		ExecuteFn: s.executeRequestExpiryEvent,
-	})
-	s.deleteQueue = eventqueue.NewProcessor(eventqueue.Options[string, deleteEvent]{
-		ExecuteFn: s.executeDeleteEvent,
-	})
 
 	// Init the object
 	err := s.init(opts.Log, opts.TraceExporter)
@@ -172,17 +154,15 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 		return err
 	}
 
-	s.pubsub.SetLogger(log.With(slog.String("component", "pubsub")))
-
 	s.webAuthn, err = s.initWebAuthn()
 	if err != nil {
 		return fmt.Errorf("failed to initialize WebAuthn config: %w", err)
 	}
 
-	// Init the audit log stream, if enabled
-	s.auditStream, err = s.initAuditStream(log)
+	// Throttle wrapped primary key delivery per user
+	s.wrappedKeyLimiter, err = s.actors.NewRateLimiter("revaulter-wrapped-key", wrappedKeyRateLimit, wrappedKeyRateLimitPeriod)
 	if err != nil {
-		return fmt.Errorf("failed to initialize the audit log stream: %w", err)
+		return err
 	}
 
 	// Init the app server
@@ -281,10 +261,20 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	sessionMw := s.MiddlewareSession(false)
 	sessionReadyMw := s.MiddlewareSession(true)
 
-	// Rate limiters for request creation and authentication endpoints
-	requestRateLimiter := MiddlewareRateLimit(requestRateLimit)
-	authRateLimiter := MiddlewareRateLimit(authRateLimitRPM)
-	publicKeyRateLimiter := MiddlewareRateLimit(publicKeyRateLimitRPM)
+	// Rate limiters for request creation, authentication, and public key endpoints, by client IP
+	// They run on the Francis host, so all replicas share each client's budget
+	requestRateLimiter, err := s.newRateLimitMiddleware("revaulter-request", requestRateLimit, time.Minute)
+	if err != nil {
+		return err
+	}
+	authRateLimiter, err := s.newRateLimitMiddleware("revaulter-auth", authRateLimitRPM, time.Minute)
+	if err != nil {
+		return err
+	}
+	publicKeyRateLimiter, err := s.newRateLimitMiddleware("revaulter-pubkey", publicKeyRateLimitRPM, time.Minute)
+	if err != nil {
+		return err
+	}
 
 	// v2 routes (WebAuthn + browser crypto flow)
 	v2RouteGroup := s.appRouter.Group("/v2")
@@ -398,10 +388,6 @@ func (s *Server) Run(ctx context.Context) error {
 	defer s.running.Store(false)
 	defer s.wg.Wait()
 
-	// Stop the background eventqueue processors
-	defer s.requestExpiryQueue.Close()
-	defer s.deleteQueue.Close()
-
 	// Stop refreshing the JWKS of trusted OIDC issuers
 	defer func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -410,11 +396,13 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	// App server
-	s.wg.Add(1)
+	// Increment the wait group only once the server has started, since the deferred shutdown below decrements it
 	err := s.startAppServer(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start app server: %w", err)
 	}
+
+	s.wg.Add(1)
 	defer func() {
 		// Handle graceful shutdown
 		defer s.wg.Done()
@@ -429,15 +417,6 @@ func (s *Server) Run(ctx context.Context) error {
 			)
 		}
 	}()
-	defer s.pubsub.Shutdown()
-
-	// Start shipping audit events to the external collector, if enabled
-	if s.auditStream != nil {
-		err = s.startAuditStream(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to start the audit log stream: %w", err)
-		}
-	}
 
 	// If we have a tlsCertWatchFn, invoke that
 	if s.tlsCertWatchFn != nil {
@@ -514,56 +493,6 @@ func (s *Server) startAppServer(ctx context.Context) error {
 		}
 	}()
 
-	if s.db != nil {
-		rs := s.db.RequestStore()
-		as := s.db.AuthStore()
-
-		now := time.Now()
-
-		// Cleanup expired requests
-		expired, err := rs.ExpirePending(ctx, now)
-		if err != nil {
-			return fmt.Errorf("failed to cleanup expired requests at startup: %w", err)
-		}
-		if len(expired) > 0 {
-			s.nudgeAuditStream()
-		}
-
-		// Cleanup expired records
-		_, err = rs.CleanupOldRecords(ctx, now)
-		if err != nil {
-			return fmt.Errorf("failed to cleanup old request records at startup: %w", err)
-		}
-
-		// Load currently-pending items to enqueue for cleanup, for all users
-		list, err := rs.ListPending(ctx, "")
-		if err != nil {
-			return fmt.Errorf("failed to initialize request expiry queue: %w", err)
-		}
-		for _, item := range list {
-			err = s.requestExpiryQueue.Enqueue(requestExpiryEvent{
-				State:  item.State,
-				UserID: item.UserID,
-				TTL:    time.Unix(item.Expiry, 0).Add(requestExpiryGrace),
-			})
-			if err != nil {
-				return fmt.Errorf("failed to enqueue request expiry for %s: %w", item.State, err)
-			}
-		}
-
-		// Cleanup expired auth records
-		err = as.CleanupExpired(ctx, time.Now())
-		if err != nil {
-			return fmt.Errorf("failed to cleanup expired auth records at startup: %w", err)
-		}
-
-		// Seed the recurring audit-log prune
-		// The handler re-enqueues itself, so a single boot-time enqueue keeps the chain running
-		err = s.enqueueAuditPrune(time.Now())
-		if err != nil {
-			return fmt.Errorf("failed to seed audit prune: %w", err)
-		}
-	}
 	return nil
 }
 

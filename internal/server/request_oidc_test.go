@@ -158,9 +158,14 @@ func TestServerRequestOIDCAuthentication(t *testing.T) {
 		resultToken, _ := body["resultToken"].(string)
 		require.True(t, strings.HasPrefix(resultToken, resultTokenPrefix))
 
-		rec, err := srv.db.RequestStore().GetRequest(t.Context(), state)
-		require.NoError(t, err)
-		require.Equal(t, bob.ID, rec.UserID)
+		// The request is stored in Bob's actor, and the result token names Bob
+		rec := getTestRequest(t, srv, bob.ID, state)
+		require.NotNil(t, rec)
+		require.True(t, resultTokenMatches(resultToken, rec.ResultTokenHash))
+		tokenUserID, ok := parseResultToken(resultToken)
+		require.True(t, ok)
+		require.Equal(t, bob.ID, tokenUserID)
+		require.Nil(t, getTestRequest(t, srv, alice.ID, state))
 
 		// The audit log records the method and the verified claims
 		events, _, err := srv.db.AuditStore().List(t.Context(), db.AuditFilter{UserID: bob.ID, EventType: db.AuditRequestCreate}, 10, "")
@@ -530,4 +535,35 @@ func TestServerRequestOIDCSettingsRoutes(t *testing.T) {
 	events, _, err := srv.db.AuditStore().List(t.Context(), db.AuditFilter{UserID: alice.ID, EventType: db.AuditAuthRequestAuthMethods}, 10, "")
 	require.NoError(t, err)
 	require.Len(t, events, 2)
+}
+
+func TestResultToken(t *testing.T) {
+	t.Run("embeds the user ID", func(t *testing.T) {
+		for _, userID := range []string{"0b5e5d0c-8c1f-4c6a-9b0e-5f2b6f1f4e1a", "user_with_underscores", "u"} {
+			token, hash, err := newResultToken(userID)
+			require.NoError(t, err)
+			require.True(t, strings.HasPrefix(token, resultTokenPrefix+userID+"_"))
+			require.True(t, resultTokenMatches(token, hash))
+
+			parsed, ok := parseResultToken(token)
+			require.True(t, ok)
+			assert.Equal(t, userID, parsed)
+		}
+	})
+
+	t.Run("rejects malformed tokens", func(t *testing.T) {
+		for _, token := range []string{
+			"",
+			"rvr_",
+			"rvr_abc",
+			"rvr__abc",
+			"rvr_user_",
+			"xyz_user_abc",
+			"rvr_a/b_abc",
+			"rvr_" + strings.Repeat("u", maxResultTokenUserIDLength+1) + "_abc",
+		} {
+			_, ok := parseResultToken(token)
+			assert.False(t, ok, token)
+		}
+	})
 }

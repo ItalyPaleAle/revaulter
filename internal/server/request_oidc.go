@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,8 @@ import (
 const (
 	// resultTokenPrefix is prepended to result tokens, so leaked tokens are easy to recognize
 	resultTokenPrefix = "rvr_"
+	// maxResultTokenUserIDLength is the maximum length of the user ID embedded in a result token
+	maxResultTokenUserIDLength = 128
 
 	// requestJWTVerifyTimeout bounds the time spent verifying a JWT, including fetching the issuer's keys
 	requestJWTVerifyTimeout = 15 * time.Second
@@ -122,15 +125,39 @@ func (s *Server) verifyRequestJWT(parentCtx context.Context, user *db.User, peek
 	return nil, fmt.Errorf("%w: issuer=%q subject=%q audience=%q", errRequestJWTNoMatchingIssuer, peek.Issuer, peek.Subject, peek.Audience)
 }
 
-// newResultToken generates a result token, and returns it with the hash stored in the database
-func newResultToken() (token string, hash string, err error) {
+// newResultToken generates a result token for a request owned by userID, and returns it with the hash stored in the request
+// The token embeds the ID of the user, so the server knows which user's actor holds the request
+func newResultToken(userID string) (token string, hash string, err error) {
 	random, err := utils.RandomString(32)
 	if err != nil {
 		return "", "", err
 	}
 
-	token = resultTokenPrefix + random
+	token = resultTokenPrefix + userID + "_" + random
 	return token, utils.SHA256Hex([]byte(token)), nil
+}
+
+// parseResultToken returns the ID of the user embedded in a result token
+// It returns false if the token isn't well-formed
+func parseResultToken(token string) (userID string, ok bool) {
+	rest, ok := strings.CutPrefix(token, resultTokenPrefix)
+	if !ok {
+		return "", false
+	}
+
+	// The random part is base62, so the last underscore separates it from the user ID, which may itself contain underscores
+	idx := strings.LastIndexByte(rest, '_')
+	if idx <= 0 || idx == len(rest)-1 {
+		return "", false
+	}
+	userID = rest[:idx]
+
+	// User IDs are actor IDs, which can't contain slashes
+	if len(userID) > maxResultTokenUserIDLength || strings.ContainsRune(userID, '/') {
+		return "", false
+	}
+
+	return userID, true
 }
 
 // resultTokenMatches returns true if token is the result token whose hash is stored in expectedHash

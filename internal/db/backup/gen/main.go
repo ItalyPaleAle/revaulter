@@ -25,10 +25,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// skipTables lists tables intentionally excluded from backups because they hold ephemeral data (short-lived auth challenges) that has no value after expiry
+// skipTables lists tables intentionally excluded from backups because they hold ephemeral data (request envelopes) that has no value after expiry
 var skipTables = map[string]bool{
-	"v2_auth_challenges":         true,
-	"v2_auth_challenge_payloads": true,
+	"v2_request_payloads": true,
 }
 
 // skipColumns lists individual columns excluded from backups, keyed by "table.column"
@@ -360,7 +359,7 @@ func topoSort(tables map[string]*table) ([]*table, error) {
 
 		t, ok := tables[name]
 		if !ok {
-			// FK target is a skipped table (e.g. v2_auth_challenges) — skip
+			// The FK target is a skipped table, such as v2_request_payloads, so skip it
 			state[name] = visited
 			return nil
 		}

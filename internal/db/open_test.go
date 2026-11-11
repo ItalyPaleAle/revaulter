@@ -91,3 +91,28 @@ func newPostgresTestDB(t *testing.T, baseDSN string) *DB {
 
 	return conn
 }
+
+func TestUseAfterCloseReturnsError(t *testing.T) {
+	runDBTest(t, func(t *testing.T, conn *DB) {
+		err := RunMigrations(t.Context(), conn, nil)
+		require.NoError(t, err)
+
+		err = conn.Close(t.Context())
+		require.NoError(t, err)
+
+		// Background work that runs after the connection is closed must get an error, not a nil-pointer panic
+		require.NotPanics(t, func() {
+			_, err = conn.RequestPayloadStore().DeleteExpired(t.Context(), time.Now())
+		})
+		require.Error(t, err)
+
+		require.NotPanics(t, func() {
+			_, err = conn.Begin(t.Context())
+		})
+		require.Error(t, err)
+
+		// Closing again is a no-op
+		err = conn.Close(t.Context())
+		require.NoError(t, err)
+	})
+}

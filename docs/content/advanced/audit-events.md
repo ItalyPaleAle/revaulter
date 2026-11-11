@@ -97,7 +97,7 @@ The schema-level cap of 4 KiB on `metadata` is a defence-in-depth limit, not a l
 
 ## Retention
 
-Rows older than **30 days** are pruned automatically by a background task that runs once at startup and then every 24 hours.
+Rows older than **30 days** are pruned automatically by a background task that runs when Revaulter starts and then every 24 hours.
 
 When [streaming to a SIEM](#streaming-to-a-siem) is enabled, the prune is held back to whatever the stream has already shipped, so a collector outage cannot cost you events. That hold has a ceiling of **90 days**, after which rows are pruned even if they have not been delivered. The `revaulter_audit_stream_lag_seconds` metric surfaces a backlog long before that ceiling is reached.
 

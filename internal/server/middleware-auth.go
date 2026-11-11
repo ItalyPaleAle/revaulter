@@ -20,6 +20,9 @@ const (
 	contextKeyUserID          = "UserID"
 	contextKeyRequestUser     = "RequestUser"
 
+	// Set by the session middleware for users that haven't finalized their signup yet, to the ID of the signup
+	contextKeySignupID = "SignupID"
+
 	// Set by the request middlewares to the method the credential was authenticated with, as a db.AuditAuthMethod
 	contextKeyRequestAuthMethod = "RequestAuthMethod"
 	// Set by the request middlewares to the verified claims, when the credential is a JWT
@@ -71,6 +74,9 @@ func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 		ttl := int(max(time.Until(sess.ExpiresAt), 0).Seconds())
 		c.Set(contextKeySessionTTL, ttl)
 		c.Set(contextKeyUserID, sess.UserID)
+		if sess.SignupID != "" {
+			c.Set(contextKeySignupID, sess.SignupID)
+		}
 	}
 }
 
@@ -113,14 +119,31 @@ func (s *Server) MiddlewareRequestResult(c *gin.Context) {
 		return
 	}
 
-	// Load the request's result token and its owner in a single query, and check the token against the one issued for the request
+	// The token embeds the ID of the user who owns the request, so we know which user's actor to ask
 	// Every mismatch returns the same error as an unknown state, so callers can't probe for another user's states
-	resultTokenHash, user, err := s.db.RequestStore().GetResultTokenAndOwner(c.Request.Context(), c.Param("state"))
+	userID, ok := parseResultToken(token)
+	if !ok {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
+		return
+	}
+
+	// Check the token against the one issued for the request, before looking up the user
+	rec, err := s.actors.User(userID).Get(c.Request.Context(), c.Param("state"))
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
-	if user == nil || user.Status != "active" || !resultTokenMatches(token, resultTokenHash) {
+	if rec == nil || !resultTokenMatches(token, rec.ResultTokenHash) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
+		return
+	}
+
+	user, err := s.db.AuthStore().GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if user == nil || user.Status != "active" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "State not found or expired"))
 		return
 	}

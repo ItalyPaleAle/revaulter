@@ -19,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/italypaleale/revaulter/internal/actors"
 	"github.com/italypaleale/revaulter/internal/config"
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/protocolv2"
@@ -138,16 +139,19 @@ func init() {
 
 // RouteE2EReset is the handler for POST /__e2e__/reset
 func (s *Server) RouteE2EReset(c *gin.Context) {
-	// Reset the database
-	err := s.db.ResetAllForTests(c.Request.Context())
+	// Remove the requests of every user, and all challenges and signups, from Francis
+	err := s.actors.TestResetAll(c.Request.Context())
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	s.lock.Lock()
-	s.subs = map[string]chan struct{}{}
-	s.lock.Unlock()
+	// Reset the database
+	err = s.db.ResetAllForTests(c.Request.Context())
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
 
 	c.JSON(http.StatusOK, e2eOKResponse{
 		OK: true,
@@ -171,6 +175,12 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 		req.State = "ready-no-password"
 	}
 
+	// Users that haven't finalized their signup are in the revaulter.signup actor, and not in the database
+	if req.State == "registered-nonready" {
+		s.e2eSeedSignup(c, req)
+		return
+	}
+
 	// Execute the rest in a transaction
 	user, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Minute, func(ctx context.Context, tx *db.DbTx) (*db.User, error) {
 		as := tx.AuthStore()
@@ -189,8 +199,6 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 		}
 
 		switch req.State {
-		case "registered-nonready":
-			// Keep the user unfinalized
 		case "ready-no-password", "ready-with-password":
 			user, getUserErr := as.GetUserByID(c.Request.Context(), req.UserID)
 			if getUserErr != nil {
@@ -265,6 +273,45 @@ func (s *Server) RouteE2ESeedUser(c *gin.Context) {
 	})
 }
 
+// e2eSignupID returns the ID of the signup of a seeded user that hasn't finalized their signup
+func e2eSignupID(userID string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("e2e-webauthn-" + userID))
+}
+
+// e2eSeedSignup seeds a user that has registered a passkey, but hasn't finalized their signup
+func (s *Server) e2eSeedSignup(c *gin.Context, req e2eSeedUserRequest) {
+	ctx := c.Request.Context()
+	signupClient := s.actors.Signup(e2eSignupID(req.UserID))
+	err := signupClient.Begin(ctx, actors.Signup{
+		UserID:         req.UserID,
+		DisplayName:    req.DisplayName,
+		WebAuthnUserID: e2eSignupID(req.UserID),
+		ExpiresAt:      time.Now().Add(5 * time.Minute),
+	})
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	signup, err := signupClient.Register(ctx, actors.SignupCredential{
+		ID:        "e2e-cred-" + req.UserID,
+		PublicKey: `{}`,
+		SignCount: 1,
+	}, nil)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	// Send response
+	c.JSON(http.StatusOK, e2eSeedUserResponse{
+		OK:          true,
+		UserID:      signup.UserID,
+		DisplayName: signup.DisplayName,
+		Ready:       false,
+	})
+}
+
 // RouteE2ESeedSession is the handler for /__e2e__/seed-session
 func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 	// Parse the request body
@@ -276,6 +323,17 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 	}
 	if req.UserID == "" {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "userId is required"))
+		return
+	}
+
+	// Users that haven't finalized their signup get a session for their signup
+	signup, err := s.actors.Signup(e2eSignupID(req.UserID)).Get(c.Request.Context())
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if signup != nil && signup.Phase == actors.SignupPhaseRegistered {
+		s.e2eSendSession(c, newSignupSessionToken(signup, config.Get().SessionTimeout))
 		return
 	}
 
@@ -311,6 +369,11 @@ func (s *Server) RouteE2ESeedSession(c *gin.Context) {
 		return
 	}
 
+	s.e2eSendSession(c, sess)
+}
+
+// e2eSendSession signs a session token and sends it in the response of /__e2e__/seed-session
+func (s *Server) e2eSendSession(c *gin.Context, sess *authSessionToken) {
 	// Sign the session token
 	token, err := signAuthSessionToken(sess)
 	if err != nil {
@@ -361,22 +424,22 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 		req.Status = string(db.V2RequestStatusPending)
 	}
 
-	rs := s.db.RequestStore()
-
-	// Note: we are not using a transaction here as this is just test code
-	// Create the request in the database
+	// Create the request in the user's actor, without an audit event
+	ctx := c.Request.Context()
 	now := time.Now().UTC()
 	encryptedRequest := `{"cliEphemeralPublicKey":{"kty":"EC","crv":"P-256","x":"AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","y":"AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"mlkemCiphertext":"dGVzdC1tbGtlbS1jaXBoZXJ0ZXh0","nonce":"MTIzNDU2Nzg5MDEy","ciphertext":"dGVzdC1yZXF1ZXN0LWNpcGhlcnRleHQifQ}`
-	err = rs.CreateRequest(c.Request.Context(), db.CreateRequestInput{
-		State:            req.State,
-		UserID:           req.UserID,
-		Operation:        req.Operation,
-		RequestorIP:      req.Requestor,
-		KeyLabel:         req.KeyLabel,
-		Algorithm:        req.Algorithm,
-		Note:             req.Note,
-		CreatedAt:        now,
-		ExpiresAt:        now.Add(time.Duration(req.TimeoutSec) * time.Second),
+	userActor := s.actors.User(req.UserID)
+	err = userActor.Create(ctx, actors.CreateRequestInput{
+		State: req.State,
+		Request: actors.Request{
+			Operation:   req.Operation,
+			KeyLabel:    req.KeyLabel,
+			Algorithm:   req.Algorithm,
+			RequestorIP: req.Requestor,
+			Note:        req.Note,
+			CreatedAt:   now,
+			ExpiresAt:   now.Add(time.Duration(req.TimeoutSec) * time.Second),
+		},
 		EncryptedRequest: encryptedRequest,
 	})
 	if err != nil {
@@ -387,23 +450,11 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 	// Update the request if needed
 	switch req.Status {
 	case string(db.V2RequestStatusPending):
-		// Publish the pending item
-		s.publishListItem(&db.V2RequestListItem{
-			State:     req.State,
-			Status:    req.Status,
-			Operation: req.Operation,
-			UserID:    req.UserID,
-			KeyLabel:  req.KeyLabel,
-			Algorithm: req.Algorithm,
-			Requestor: req.Requestor,
-			Date:      now.Unix(),
-			Expiry:    now.Add(time.Duration(req.TimeoutSec) * time.Second).Unix(),
-			Note:      req.Note,
-		})
+		// Nothing to do
 	case string(db.V2RequestStatusCanceled):
-		_, err = rs.CancelRequest(c.Request.Context(), req.State, req.UserID)
+		_, err = userActor.Cancel(ctx, req.State, nil)
 	case string(db.V2RequestStatusCompleted):
-		_, err = rs.CompleteRequest(c.Request.Context(), req.State, req.UserID, protocolv2.ResponseEnvelope{
+		envJSON, _ := json.Marshal(protocolv2.ResponseEnvelope{
 			TransportAlg: protocolv2.TransportAlg,
 			BrowserEphemeralPublicKey: protocolv2.ECP256PublicJWK{
 				Kty: "EC",
@@ -416,13 +467,9 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 			Ciphertext:      "dGVzdC1yZXNwb25zZS1jaXBoZXJ0ZXh0",
 			ResultType:      "bytes",
 		})
+		_, err = userActor.Confirm(ctx, req.State, string(envJSON), nil)
 	case string(db.V2RequestStatusExpired):
-		execErr := rs.ForceExpireRequestForTests(c.Request.Context(), req.State, now.Add(-time.Second))
-		if execErr == nil {
-			_, err = rs.MarkExpired(c.Request.Context(), req.State)
-		} else {
-			err = execErr
-		}
+		err = userActor.TestExpire(ctx, req.State)
 	default:
 		AbortWithErrorJSON(c, NewResponseError(http.StatusBadRequest, "unsupported request status"))
 		return
@@ -440,27 +487,56 @@ func (s *Server) RouteE2ESeedRequest(c *gin.Context) {
 	})
 }
 
-// RouteE2EGetRequest is the handler for /__e2e__/request/:state
-func (s *Server) RouteE2EGetRequest(c *gin.Context) {
+// e2eGetRequest returns a request and its envelopes, looking up the owner from the payload row
+func (s *Server) e2eGetRequest(c *gin.Context) (actors.Request, *db.RequestPayload, bool) {
 	state := c.Param("state")
 
-	// Retrieve the request form the database
-	rec, err := s.db.RequestStore().GetRequest(c.Request.Context(), state)
+	userID, err := s.db.RequestPayloadStore().GetRequestPayloadOwnerForTests(c.Request.Context(), state)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
-		return
+		return actors.Request{}, nil, false
+	}
+	if userID == "" {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request not found"))
+		return actors.Request{}, nil, false
+	}
+
+	rec, err := s.actors.User(userID).Get(c.Request.Context(), state)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return actors.Request{}, nil, false
 	}
 	if rec == nil {
 		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request not found"))
+		return actors.Request{}, nil, false
+	}
+
+	payload, err := s.db.RequestPayloadStore().Get(c.Request.Context(), state, userID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return actors.Request{}, nil, false
+	}
+	if payload == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request not found"))
+		return actors.Request{}, nil, false
+	}
+
+	return *rec, payload, true
+}
+
+// RouteE2EGetRequest is the handler for /__e2e__/request/:state
+func (s *Server) RouteE2EGetRequest(c *gin.Context) {
+	rec, payload, ok := s.e2eGetRequest(c)
+	if !ok {
 		return
 	}
 
 	// Send response
 	c.JSON(http.StatusOK, e2eGetRequestResponse{
-		State:     rec.State,
+		State:     payload.State,
 		Status:    string(rec.Status),
 		Operation: rec.Operation,
-		UserID:    rec.UserID,
+		UserID:    payload.UserID,
 		KeyLabel:  rec.KeyLabel,
 		Algorithm: rec.Algorithm,
 		Requestor: rec.RequestorIP,
@@ -470,31 +546,33 @@ func (s *Server) RouteE2EGetRequest(c *gin.Context) {
 
 // RouteE2EGetRequestResult is the handler for /__e2e__/request/:state/result
 func (s *Server) RouteE2EGetRequestResult(c *gin.Context) {
-	state := c.Param("state")
-
-	// Retrieve the request form the database
-	rec, err := s.db.RequestStore().GetRequest(c.Request.Context(), state)
-	if err != nil {
-		AbortWithErrorJSON(c, err)
+	rec, payload, ok := s.e2eGetRequest(c)
+	if !ok {
 		return
 	}
-	if rec == nil {
-		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "Request not found"))
-		return
+
+	var responseEnvelope *protocolv2.ResponseEnvelope
+	if payload.EncryptedResult != "" {
+		responseEnvelope = &protocolv2.ResponseEnvelope{}
+		err := json.Unmarshal([]byte(payload.EncryptedResult), responseEnvelope)
+		if err != nil {
+			AbortWithErrorJSON(c, err)
+			return
+		}
 	}
 
 	// Send response
 	c.JSON(http.StatusOK, e2eGetRequestResultResponse{
-		State:            rec.State,
+		State:            payload.State,
 		Status:           string(rec.Status),
 		Operation:        rec.Operation,
-		UserID:           rec.UserID,
+		UserID:           payload.UserID,
 		KeyLabel:         rec.KeyLabel,
 		Algorithm:        rec.Algorithm,
 		Requestor:        rec.RequestorIP,
 		Note:             rec.Note,
-		EncryptedRequest: json.RawMessage(rec.EncryptedRequest),
-		ResponseEnvelope: rec.ResponseEnvelope,
+		EncryptedRequest: json.RawMessage(payload.EncryptedRequest),
+		ResponseEnvelope: responseEnvelope,
 	})
 }
 
@@ -517,14 +595,25 @@ func (s *Server) RouteE2ESeedCredential(c *gin.Context) {
 		return
 	}
 
-	// Store the credential in the database
+	// Store the credential in the database, at the user's current epoch
+	user, err := s.db.AuthStore().GetUserByID(c.Request.Context(), req.UserID)
+	if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+	if user == nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusNotFound, "User not found"))
+		return
+	}
+
 	credID := "e2e-cred-extra-" + uuid.NewV4().String()[:8]
 	err = s.db.AuthStore().AddCredential(c.Request.Context(), db.AddCredentialInput{
-		UserID:       req.UserID,
-		CredentialID: credID,
-		DisplayName:  req.DisplayName,
-		PublicKey:    `{}`,
-		SignCount:    0,
+		UserID:          req.UserID,
+		CredentialID:    credID,
+		DisplayName:     req.DisplayName,
+		PublicKey:       `{}`,
+		SignCount:       0,
+		WrappedKeyEpoch: user.WrappedKeyEpoch,
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)

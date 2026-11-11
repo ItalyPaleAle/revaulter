@@ -2,9 +2,6 @@ package db
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"io"
 	"strings"
 	"testing"
 	"time"
@@ -22,13 +19,6 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 			n, err := as.CountUsers(ctx)
 			require.NoError(t, err)
 			require.Equal(t, 0, n)
-
-			ch, err := as.BeginChallenge(ctx, "register", "user-1", createChallenge(t), time.Now().Add(time.Minute), nil)
-			require.NoError(t, err)
-			require.NotEmpty(t, ch.Challenge)
-
-			err = as.ConsumeChallenge(ctx, ch.ID, "register", "", nil)
-			require.NoError(t, err)
 
 			sess, err := as.RegisterUser(ctx, RegisterUserInput{
 				UserID:         "user-1",
@@ -51,11 +41,6 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, gotUser)
 			require.Equal(t, "user-1", gotUser.ID)
-
-			loginCh, err := as.BeginChallenge(ctx, "login", "", createChallenge(t), time.Now().Add(time.Minute), nil)
-			require.NoError(t, err)
-			err = as.ConsumeChallenge(ctx, loginCh.ID, "login", "", nil)
-			require.NoError(t, err)
 
 			err = as.Login(ctx, LoginInput{
 				UserID:       "user-1",
@@ -80,14 +65,59 @@ func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
 	})
 }
 
-func createChallenge(t *testing.T) string {
-	t.Helper()
+func TestAuthStoreLoginCounter(t *testing.T) {
+	runDBTest(t, func(t *testing.T, conn *DB) {
+		err := RunMigrations(t.Context(), conn, nil)
+		require.NoError(t, err)
 
-	rawChallenge := make([]byte, 32)
-	_, err := io.ReadFull(rand.Reader, rawChallenge)
-	require.NoError(t, err)
+		tests := []struct {
+			name        string
+			firstCount  int64
+			secondCount int64
+			wantCount   int64
+			wantError   bool
+		}{
+			{name: "out of order", firstCount: 3, secondCount: 2, wantCount: 3, wantError: true},
+			{name: "duplicate", firstCount: 3, secondCount: 3, wantCount: 3, wantError: true},
+			{name: "increasing", firstCount: 3, secondCount: 4, wantCount: 4},
+			{name: "counterless", firstCount: 0, secondCount: 0, wantCount: 0},
+			{name: "starts counting", firstCount: 0, secondCount: 2, wantCount: 2},
+			{name: "stops counting", firstCount: 3, secondCount: 0, wantCount: 0},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				credentialID := "credential-" + tt.name
+				_, err := ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (struct{}, error) {
+					_, rErr := tx.AuthStore().RegisterUser(ctx, RegisterUserInput{
+						UserID:         tt.name,
+						WebAuthnUserID: "webauthn-" + tt.name,
+						CredentialID:   credentialID,
+						PublicKey:      `{}`,
+						SignCount:      1,
+					})
+					return struct{}{}, rErr
+				})
+				require.NoError(t, err)
 
-	return base64.RawURLEncoding.EncodeToString(rawChallenge)
+				as := conn.AuthStore()
+				err = as.Login(t.Context(), LoginInput{UserID: tt.name, CredentialID: credentialID, SignCount: tt.firstCount})
+				require.NoError(t, err)
+
+				// A login verified against an earlier snapshot must still pass the current counter check at write time
+				err = as.Login(t.Context(), LoginInput{UserID: tt.name, CredentialID: credentialID, SignCount: tt.secondCount})
+				if tt.wantError {
+					require.ErrorIs(t, err, ErrInvalidLogin)
+				} else {
+					require.NoError(t, err)
+				}
+
+				creds, err := as.ListCredentials(t.Context(), tt.name)
+				require.NoError(t, err)
+				require.Len(t, creds, 1)
+				require.Equal(t, tt.wantCount, creds[0].SignCount)
+			})
+		}
+	})
 }
 
 func TestAuthStorePasswordCanaryAndAllowedIPs(t *testing.T) {
@@ -266,253 +296,6 @@ func TestNormalizeAllowedIPsInvalidCIDR(t *testing.T) {
 	require.EqualError(t, err, "invalid CIDR: 10.0.0.0/33")
 }
 
-func TestAuthStoreDeleteExpiredAuthChallenge(t *testing.T) {
-	runDBTest(t, func(t *testing.T, conn *DB) {
-		require.NoError(t, RunMigrations(t.Context(), conn, nil))
-
-		_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
-			as := tx.AuthStore()
-
-			now := time.Now().UTC().Truncate(time.Second)
-			expiredChallenge, err := as.BeginChallenge(ctx, "login", "", "expired-challenge", now.Add(-11*time.Minute), nil)
-			require.NoError(t, err)
-			usedChallenge, err := as.BeginChallenge(ctx, "login", "", "used-challenge", now.Add(5*time.Minute), nil)
-			require.NoError(t, err)
-			freshChallenge, err := as.BeginChallenge(ctx, "login", "", "fresh-challenge", now.Add(5*time.Minute), nil)
-			require.NoError(t, err)
-
-			err = as.ConsumeChallenge(ctx, usedChallenge.ID, "login", "", nil)
-			require.NoError(t, err)
-
-			err = as.DeleteExpiredAuthChallenge(ctx, expiredChallenge.ID, now)
-			require.NoError(t, err)
-			err = as.DeleteExpiredAuthChallenge(ctx, usedChallenge.ID, now)
-			require.NoError(t, err)
-			err = as.DeleteExpiredAuthChallenge(ctx, freshChallenge.ID, now)
-			require.NoError(t, err)
-
-			err = as.ConsumeChallenge(ctx, expiredChallenge.ID, "login", "", nil)
-			require.ErrorIs(t, err, ErrInvalidChallenge)
-
-			err = as.ConsumeChallenge(ctx, usedChallenge.ID, "login", "", nil)
-			require.ErrorIs(t, err, ErrInvalidChallenge)
-
-			err = as.ConsumeChallenge(ctx, freshChallenge.ID, "login", "", nil)
-			require.NoError(t, err)
-
-			return nil, nil
-		})
-	})
-}
-
-func TestAuthStoreConsumeChallengePayload(t *testing.T) {
-	runDBTest(t, func(t *testing.T, conn *DB) {
-		require.NoError(t, RunMigrations(t.Context(), conn, nil))
-
-		_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
-			as := tx.AuthStore()
-
-			type challengePayload struct {
-				UserID string `json:"userId"`
-				Step   int    `json:"step"`
-			}
-
-			expected := challengePayload{
-				UserID: "user-1",
-				Step:   2,
-			}
-			challenge, err := as.BeginChallenge(ctx, "login", "user-1", "payload-challenge", time.Now().Add(time.Minute), expected)
-			require.NoError(t, err)
-
-			var got challengePayload
-			err = as.ConsumeChallenge(ctx, challenge.ID, "login", "", &got)
-			require.NoError(t, err)
-			require.Equal(t, expected, got)
-
-			err = as.ConsumeChallenge(ctx, challenge.ID, "login", "", nil)
-			require.ErrorIs(t, err, ErrInvalidChallenge)
-
-			challengeNoPayload, err := as.BeginChallenge(ctx, "register", "user-2", "no-payload-challenge", time.Now().Add(time.Minute), nil)
-			require.NoError(t, err)
-
-			got = challengePayload{}
-			err = as.ConsumeChallenge(ctx, challengeNoPayload.ID, "register", "", &got)
-			require.NoError(t, err)
-			require.Equal(t, challengePayload{}, got)
-
-			return nil, nil
-		})
-	})
-}
-
-func TestAuthStoreConsumeChallengeUserBinding(t *testing.T) {
-	runDBTest(t, func(t *testing.T, conn *DB) {
-		require.NoError(t, RunMigrations(t.Context(), conn, nil))
-
-		_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
-			as := tx.AuthStore()
-
-			// A challenge bound to user-1
-			ch, err := as.BeginChallenge(ctx, "add-credential", "user-1", "user-bound-challenge", time.Now().Add(time.Minute), nil)
-			require.NoError(t, err)
-
-			// Consuming with the wrong userID must fail and must not mark the row as used
-			err = as.ConsumeChallenge(ctx, ch.ID, "add-credential", "user-2", nil)
-			require.ErrorIs(t, err, ErrInvalidChallenge)
-
-			// The legitimate owner can still consume it
-			err = as.ConsumeChallenge(ctx, ch.ID, "add-credential", "user-1", nil)
-			require.NoError(t, err)
-
-			// And only once — a second consume even by the rightful owner returns ErrInvalidChallenge
-			err = as.ConsumeChallenge(ctx, ch.ID, "add-credential", "user-1", nil)
-			require.ErrorIs(t, err, ErrInvalidChallenge)
-
-			return nil, nil
-		})
-	})
-}
-
-func TestAuthStoreHasPendingChallenge(t *testing.T) {
-	runDBTest(t, func(t *testing.T, conn *DB) {
-		require.NoError(t, RunMigrations(t.Context(), conn, nil))
-
-		_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
-			as := tx.AuthStore()
-
-			now := time.Now().UTC().Truncate(time.Second)
-
-			// Nothing in the table yet, so no pending challenge exists
-			pending, err := as.HasPendingChallenge(ctx, "user-1", "add-credential")
-			require.NoError(t, err)
-			require.False(t, pending)
-
-			// A fresh add-credential challenge for user-1 makes the check return true
-			freshAdd, err := as.BeginChallenge(ctx, "add-credential", "user-1", "fresh-add", now.Add(5*time.Minute), nil)
-			require.NoError(t, err)
-
-			pending, err = as.HasPendingChallenge(ctx, "user-1", "add-credential")
-			require.NoError(t, err)
-			require.True(t, pending)
-
-			// Challenges of a different kind do not count
-			pending, err = as.HasPendingChallenge(ctx, "user-1", "login")
-			require.NoError(t, err)
-			require.False(t, pending)
-
-			// Challenges belonging to a different user do not count
-			pending, err = as.HasPendingChallenge(ctx, "user-other", "add-credential")
-			require.NoError(t, err)
-			require.False(t, pending)
-
-			// Once consumed the challenge is no longer pending
-			err = as.ConsumeChallenge(ctx, freshAdd.ID, "add-credential", "user-1", nil)
-			require.NoError(t, err)
-
-			pending, err = as.HasPendingChallenge(ctx, "user-1", "add-credential")
-			require.NoError(t, err)
-			require.False(t, pending)
-
-			// An expired (but not consumed) challenge is also not pending
-			_, err = as.BeginChallenge(ctx, "add-credential", "user-1", "expired-add", now.Add(-time.Minute), nil)
-			require.NoError(t, err)
-
-			pending, err = as.HasPendingChallenge(ctx, "user-1", "add-credential")
-			require.NoError(t, err)
-			require.False(t, pending)
-
-			return nil, nil
-		})
-	})
-}
-
-func TestAuthStoreDeleteNonreadyUser(t *testing.T) {
-	runDBTest(t, func(t *testing.T, conn *DB) {
-		require.NoError(t, RunMigrations(t.Context(), conn, nil))
-
-		_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
-			as := tx.AuthStore()
-
-			// #nosec G101 -- Hardcoded credentials are test ones
-			nonreadyOldSession, err := as.RegisterUser(ctx, RegisterUserInput{
-				UserID:         "user-nonready-old",
-				DisplayName:    "Old Nonready",
-				WebAuthnUserID: "webauthn-user-nonready-old",
-				CredentialID:   "cred-nonready-old",
-				PublicKey:      `{"kty":"EC"}`,
-				SignCount:      1,
-				SessionTTL:     time.Hour,
-			})
-			require.NoError(t, err)
-
-			// #nosec G101 -- Hardcoded credentials are test ones
-			nonreadyFreshSession, err := as.RegisterUser(ctx, RegisterUserInput{
-				UserID:         "user-nonready-fresh",
-				DisplayName:    "Fresh Nonready",
-				WebAuthnUserID: "webauthn-user-nonready-fresh",
-				CredentialID:   "cred-nonready-fresh",
-				PublicKey:      `{"kty":"EC"}`,
-				SignCount:      1,
-				SessionTTL:     time.Hour,
-			})
-			require.NoError(t, err)
-
-			// #nosec G101 -- Hardcoded credentials are test ones
-			readySession, err := as.RegisterUser(ctx, RegisterUserInput{
-				UserID:         "user-ready",
-				DisplayName:    "Ready User",
-				WebAuthnUserID: "webauthn-user-ready",
-				CredentialID:   "cred-ready",
-				PublicKey:      `{"kty":"EC"}`,
-				SignCount:      1,
-				SessionTTL:     time.Hour,
-			})
-			require.NoError(t, err)
-
-			_, err = tx.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyOldSession.ID, time.Now().Add(-25*time.Hour).Unix())
-			require.NoError(t, err)
-
-			_, err = tx.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, nonreadyFreshSession.ID, time.Now().Add(-23*time.Hour).Unix())
-			require.NoError(t, err)
-
-			_, err = as.FinalizeSignup(ctx, FinalizeSignupInput{
-				UserID:                readySession.ID,
-				WrappedPrimaryKey:     "canary-ready",
-				RequestEncEcdhPubkey:  `{"kty":"EC"}`,
-				RequestEncMlkemPubkey: "mlkem-ready",
-				PubkeyBundleVersion:   2,
-			})
-			require.NoError(t, err)
-
-			_, err = tx.Exec(ctx, `UPDATE v2_users SET created_at = $2 WHERE id = $1`, readySession.ID, time.Now().Add(-25*time.Hour).Unix())
-			require.NoError(t, err)
-
-			err = as.DeleteNonreadyUser(ctx, nonreadyOldSession.ID, time.Now().UTC())
-			require.NoError(t, err)
-			err = as.DeleteNonreadyUser(ctx, nonreadyFreshSession.ID, time.Now().UTC())
-			require.NoError(t, err)
-			err = as.DeleteNonreadyUser(ctx, readySession.ID, time.Now().UTC())
-			require.NoError(t, err)
-
-			user, err := as.GetUserByID(ctx, nonreadyOldSession.ID)
-			require.NoError(t, err)
-			require.Nil(t, user)
-
-			user, err = as.GetUserByID(ctx, nonreadyFreshSession.ID)
-			require.NoError(t, err)
-			require.NotNil(t, user)
-			require.False(t, user.Ready)
-
-			user, err = as.GetUserByID(ctx, readySession.ID)
-			require.NoError(t, err)
-			require.NotNil(t, user)
-			require.True(t, user.Ready)
-
-			return nil, nil
-		})
-	})
-}
-
 func TestAuthStoreUpdateDisplayName(t *testing.T) {
 	runDBTest(t, func(t *testing.T, conn *DB) {
 		require.NoError(t, RunMigrations(t.Context(), conn, nil))
@@ -666,6 +449,7 @@ func TestAuthStoreCredentialWrappedKeyEpochRotation(t *testing.T) {
 				PublicKey:         `{"kty":"EC"}`,
 				SignCount:         1,
 				WrappedPrimaryKey: "wrapped-2-v1",
+				WrappedKeyEpoch:   1,
 			})
 			require.NoError(t, err)
 
@@ -738,11 +522,12 @@ func TestAuthStoreCredentialCRUD(t *testing.T) {
 
 			// Add a second credential
 			err = as.AddCredential(ctx, AddCredentialInput{
-				UserID:       "user-1",
-				CredentialID: "cred-2",
-				DisplayName:  "My Phone",
-				PublicKey:    `{"kty":"EC","crv":"P-256"}`,
-				SignCount:    0,
+				UserID:          "user-1",
+				CredentialID:    "cred-2",
+				DisplayName:     "My Phone",
+				PublicKey:       `{"kty":"EC","crv":"P-256"}`,
+				SignCount:       0,
+				WrappedKeyEpoch: 1,
 			})
 			require.NoError(t, err)
 
@@ -790,5 +575,113 @@ func TestAuthStoreCredentialCRUD(t *testing.T) {
 
 			return nil, nil
 		})
+	})
+}
+
+func TestAuthStoreAddCredentialRequiresEpoch(t *testing.T) {
+	runDBTest(t, func(t *testing.T, conn *DB) {
+		err := RunMigrations(t.Context(), conn, nil)
+		require.NoError(t, err)
+
+		_, _ = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+			as := tx.AuthStore()
+			registerReadyUser(t, ctx, as, "user-1")
+
+			newCredential := func(credentialID string, epoch int64) AddCredentialInput {
+				return AddCredentialInput{
+					UserID:          "user-1",
+					CredentialID:    credentialID,
+					PublicKey:       `{"kty":"EC"}`,
+					WrappedKeyEpoch: epoch,
+				}
+			}
+
+			// The user is at epoch 1
+			err := as.AddCredential(ctx, newCredential("cred-epoch-2", 2))
+			require.ErrorIs(t, err, ErrWrappedKeyEpochChanged)
+
+			_, err = as.AdvanceWrappedKeyEpoch(ctx, "user-1")
+			require.NoError(t, err)
+
+			// A credential created before the epoch advanced is refused
+			err = as.AddCredential(ctx, newCredential("cred-epoch-1", 1))
+			require.ErrorIs(t, err, ErrWrappedKeyEpochChanged)
+
+			err = as.AddCredential(ctx, newCredential("cred-epoch-2", 2))
+			require.NoError(t, err)
+			rec, err := as.GetCredentialByCredentialID(ctx, "cred-epoch-2", "user-1")
+			require.NoError(t, err)
+			require.NotNil(t, rec)
+			require.EqualValues(t, 2, rec.WrappedKeyEpoch)
+
+			err = as.AddCredential(ctx, AddCredentialInput{UserID: "user-missing", CredentialID: "cred-missing", PublicKey: `{}`, WrappedKeyEpoch: 1})
+			require.ErrorIs(t, err, ErrUserNotFound)
+
+			return nil, nil
+		})
+	})
+}
+
+func TestAuthStoreGetUserByIDForUpdateSerializesEpochChanges(t *testing.T) {
+	runDBTest(t, func(t *testing.T, conn *DB) {
+		err := RunMigrations(t.Context(), conn, nil)
+		require.NoError(t, err)
+
+		_, err = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+			registerReadyUser(t, ctx, tx.AuthStore(), "user-1")
+			return nil, nil
+		})
+		require.NoError(t, err)
+
+		// While a passkey is being added with the user locked, a password change that advances the epoch must wait
+		advanced := make(chan error, 1)
+		var advancedEarly bool
+		_, err = ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (any, error) {
+			as := tx.AuthStore()
+			user, rErr := as.GetUserByIDForUpdate(ctx, "user-1")
+			if rErr != nil {
+				return nil, rErr
+			}
+
+			go func() {
+				_, aErr := ExecuteInTransaction(t.Context(), conn, 30*time.Second, func(ctx context.Context, tx *DbTx) (int64, error) {
+					return tx.AuthStore().AdvanceWrappedKeyEpoch(ctx, "user-1")
+				})
+				advanced <- aErr
+			}()
+
+			select {
+			case <-advanced:
+				advancedEarly = true
+			case <-time.After(500 * time.Millisecond):
+				// The password change is still waiting
+			}
+
+			return nil, as.AddCredential(ctx, AddCredentialInput{
+				UserID:          "user-1",
+				CredentialID:    "cred-new",
+				PublicKey:       `{"kty":"EC"}`,
+				WrappedKeyEpoch: user.WrappedKeyEpoch,
+			})
+		})
+		require.NoError(t, err)
+		require.False(t, advancedEarly, "the epoch changed while the user was locked")
+
+		select {
+		case err = <-advanced:
+			require.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("the password change didn't complete after the lock was released")
+		}
+
+		// The new credential keeps the epoch it was created for, so it's reported as stale after the password change
+		as := conn.AuthStore()
+		user, err := as.GetUserByID(t.Context(), "user-1")
+		require.NoError(t, err)
+		require.EqualValues(t, 2, user.WrappedKeyEpoch)
+		rec, err := as.GetCredentialByCredentialID(t.Context(), "cred-new", "user-1")
+		require.NoError(t, err)
+		require.NotNil(t, rec)
+		require.EqualValues(t, 1, rec.WrappedKeyEpoch)
 	})
 }

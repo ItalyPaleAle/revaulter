@@ -11,6 +11,7 @@ import (
 	"github.com/lestrrat-go/jwx/v4/jwa"
 	"github.com/lestrrat-go/jwx/v4/jwt"
 
+	"github.com/italypaleale/revaulter/internal/actors"
 	"github.com/italypaleale/revaulter/internal/config"
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/protocolv2"
@@ -20,6 +21,7 @@ const (
 	sessionClaimUserID      = "userId"
 	sessionClaimDisplayName = "displayName"
 	sessionClaimReady       = "ready"
+	sessionClaimSignupID    = "signupId"
 
 	// sessionClockSkew is the tolerance applied when validating session tokens' timestamps
 	sessionClockSkew = 2 * time.Minute
@@ -30,6 +32,9 @@ type authSessionToken struct {
 	DisplayName string
 	Ready       bool
 	ExpiresAt   time.Time
+	// ID of the signup, for users that haven't finalized their signup yet
+	// These users aren't in the database until then, and the revaulter.signup actor with this ID holds their registration
+	SignupID string
 }
 
 func newAuthSessionToken(user *db.User, ttl time.Duration) (*authSessionToken, error) {
@@ -45,15 +50,33 @@ func newAuthSessionToken(user *db.User, ttl time.Duration) (*authSessionToken, e
 	}, nil
 }
 
+// newSignupSessionToken returns a session token for a user that hasn't finalized their signup yet
+func newSignupSessionToken(signup *actors.Signup, ttl time.Duration) *authSessionToken {
+	if ttl <= 0 {
+		ttl = time.Minute
+	}
+
+	return &authSessionToken{
+		UserID:      signup.UserID,
+		DisplayName: signup.DisplayName,
+		Ready:       false,
+		SignupID:    signup.WebAuthnUserID,
+		ExpiresAt:   time.Now().UTC().Add(ttl),
+	}
+}
+
 func signAuthSessionToken(sess *authSessionToken) (string, error) {
-	tok, err := jwt.NewBuilder().
+	builder := jwt.NewBuilder().
 		Subject(sess.UserID).
 		IssuedAt(time.Now().UTC()).
 		Expiration(sess.ExpiresAt).
 		Claim(sessionClaimUserID, sess.UserID).
 		Claim(sessionClaimDisplayName, sess.DisplayName).
-		Claim(sessionClaimReady, sess.Ready).
-		Build()
+		Claim(sessionClaimReady, sess.Ready)
+	if sess.SignupID != "" {
+		builder = builder.Claim(sessionClaimSignupID, sess.SignupID)
+	}
+	tok, err := builder.Build()
 	if err != nil {
 		return "", err
 	}
@@ -91,6 +114,15 @@ func parseAuthSessionToken(token string) (*authSessionToken, error) {
 		return nil, err
 	}
 
+	// The signup ID is set only for users that haven't finalized their signup yet
+	var signupID string
+	if parsed.Has(sessionClaimSignupID) {
+		signupID, err = jwt.Get[string](parsed, sessionClaimSignupID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	expiresAt, ok := parsed.Expiration()
 	if !ok {
 		return nil, errors.New("session token missing expiration")
@@ -100,6 +132,7 @@ func parseAuthSessionToken(token string) (*authSessionToken, error) {
 		UserID:      userID,
 		DisplayName: displayName,
 		Ready:       ready,
+		SignupID:    signupID,
 		ExpiresAt:   expiresAt,
 	}, nil
 }
@@ -143,6 +176,20 @@ func sessionInfoFromUser(user *db.User, ttl int) *v2AuthSessionInfo {
 		AnchorFingerprint:  computeAnchorFingerprint(user),
 		WrappedKeyEpoch:    user.WrappedKeyEpoch,
 		AllowedIPs:         allowedIPs,
+		TTL:                max(ttl, 0),
+	}
+}
+
+// sessionInfoFromSignup returns the session info for a user that hasn't finalized their signup yet
+// The user has no request key, transport keys or anchor until the signup is finalized
+func sessionInfoFromSignup(signup *actors.Signup, ttl int) *v2AuthSessionInfo {
+	return &v2AuthSessionInfo{
+		UserID:             signup.UserID,
+		DisplayName:        signup.DisplayName,
+		RequestKeyEnabled:  true,
+		RequestOIDCIssuers: []db.RequestOIDCIssuer{},
+		WrappedKeyEpoch:    1,
+		AllowedIPs:         []string{},
 		TTL:                max(ttl, 0),
 	}
 }

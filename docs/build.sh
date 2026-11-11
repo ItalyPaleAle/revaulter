@@ -2,7 +2,7 @@
 
 set -e
 
-GO_VERSION="1.27.3"
+GO_VERSION="1.27.4"
 
 ensure_go() {
     if command -v go >/dev/null 2>&1; then

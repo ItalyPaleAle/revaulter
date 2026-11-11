@@ -22,8 +22,8 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/protocol/webauthncose"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
-	"github.com/italypaleale/go-kit/eventqueue"
 
+	"github.com/italypaleale/revaulter/internal/actors"
 	"github.com/italypaleale/revaulter/internal/config"
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/protocolv2"
@@ -43,13 +43,6 @@ type v2AuthRegisterFinishRequest struct {
 type v2AuthLoginFinishRequest struct {
 	ChallengeID string          `json:"challengeId"`
 	Credential  json.RawMessage `json:"credential"`
-}
-
-type v2RegisterChallengePayload struct {
-	UserID          string                   `json:"userId"`
-	DisplayName     string                   `json:"displayName"`
-	WebAuthnUserID  string                   `json:"webauthnUserId"`
-	WebAuthnSession *webauthnlib.SessionData `json:"webauthnSession,omitempty"`
 }
 
 type v2LoginChallengePayload struct {
@@ -263,27 +256,22 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 		return
 	}
 
-	// Store the challenge in the database
-	// BeginChallenge must be executed in a transaction
-	ch, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (*db.AuthChallenge, error) {
-		return tx.AuthStore().BeginChallenge(ctx, "register", userID, session.Challenge, session.Expires, v2RegisterChallengePayload{
-			UserID:          userID,
-			DisplayName:     req.DisplayName,
-			WebAuthnUserID:  base64.RawURLEncoding.EncodeToString(user.id),
-			WebAuthnSession: session,
-		})
-	})
+	sessionJSON, err := json.Marshal(session)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
+	expiresAt := challengeExpiry(session)
 
-	// Add the challenge to the cleanup queue
-	err = s.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "challenge-delete:" + ch.ID,
-		Kind:    "challenge",
-		ID:      ch.ID,
-		TTL:     ch.ExpiresAt.Add(10 * time.Minute),
+	// Store the signup in its revaulter.signup actor, which holds it until it's finalized
+	// The actor is keyed by the WebAuthn user handle, which the browser sends back as the challenge ID, and which identifies the user at sign-in before the signup is finalized
+	signupID := base64.RawURLEncoding.EncodeToString(user.id)
+	err = s.actors.Signup(signupID).Begin(c.Request.Context(), actors.Signup{
+		UserID:         userID,
+		DisplayName:    req.DisplayName,
+		WebAuthnUserID: signupID,
+		Session:        sessionJSON,
+		ExpiresAt:      expiresAt,
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
@@ -292,13 +280,21 @@ func (s *Server) RouteV2AuthRegisterBegin(c *gin.Context) {
 
 	// Send response
 	c.JSON(http.StatusOK, v2AuthRegisterBeginResponse{
-		ChallengeID: ch.ID,
+		ChallengeID: signupID,
 		Challenge:   session.Challenge,
-		ExpiresAt:   ch.ExpiresAt.Unix(),
+		ExpiresAt:   expiresAt.Unix(),
 		Mode:        "webauthn",
 		Options:     creation,
 		BasePrfSalt: cfg.GetPRFSalt(),
 	})
+}
+
+// challengeExpiry returns when a WebAuthn ceremony expires
+func challengeExpiry(session *webauthnlib.SessionData) time.Time {
+	if session == nil || session.Expires.IsZero() {
+		return time.Now().Add(5 * time.Minute)
+	}
+	return session.Expires
 }
 
 func (s *Server) beginWebAuthnSession(user *v2WebAuthnUser) (creation *protocol.CredentialCreation, session *webauthnlib.SessionData, err error) {
@@ -362,10 +358,8 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 	}
 
 	// Complete the registration
-	// This must be executed in a transaction
-	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(_ context.Context, tx *db.DbTx) (registerFinishRes, error) {
-		return s.registerFinish(c, tx, req)
-	})
+	// The user stays in the revaulter.signup actor until the signup is finalized, and it's removed if that doesn't happen in time
+	res, err := s.registerFinish(c, req)
 	if err != nil {
 		logging.
 			LogFromContext(c.Request.Context()).
@@ -373,25 +367,13 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 				slog.String("client_ip", c.ClientIP()),
 			)
 
-		// The transaction rolled back, so the in-tx success row never landed; record the failure outside the tx
+		// The success row is written only when the registration is stored, so record the failure separately
 		s.auditEvent(c, auditFields{
 			EventType:  db.AuditAuthRegisterFinish,
 			Outcome:    db.AuditOutcomeFailure,
 			AuthMethod: db.AuditAuthMethodNone,
 		})
 
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	// Register the non-ready user for cleanup if it's not completed in 24 hours
-	err = s.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "user-delete:" + res.user.ID,
-		Kind:    "nonready-user",
-		ID:      res.user.ID,
-		TTL:     time.Now().UTC().Add(24*time.Hour + time.Minute),
-	})
-	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
@@ -406,14 +388,14 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 	logging.
 		LogFromContext(c.Request.Context()).
 		InfoContext(c.Request.Context(), "User registered",
-			slog.String("user_id", res.user.ID),
+			slog.String("user_id", res.signup.UserID),
 			slog.String("client_ip", c.ClientIP()),
 		)
 
 	// Respond
 	c.JSON(http.StatusOK, v2AuthRegisterFinishResponse{
 		Registered: true,
-		Session:    sessionInfoFromUser(res.user, int(max(time.Until(res.sess.ExpiresAt), 0).Seconds())),
+		Session:    sessionInfoFromSignup(res.signup, int(max(time.Until(res.sess.ExpiresAt), 0).Seconds())),
 	})
 }
 
@@ -428,25 +410,18 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 		return
 	}
 
-	// BeginChallenge must be executed in a transaction
-	ch, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 20*time.Second, func(ctx context.Context, tx *db.DbTx) (*db.AuthChallenge, error) {
-		return tx.AuthStore().BeginChallenge(ctx, "login", "", session.Challenge, session.Expires, v2LoginChallengePayload{
-			Challenge:       session.Challenge,
-			WebAuthnSession: session,
-		})
+	payload, err := json.Marshal(v2LoginChallengePayload{
+		Challenge:       session.Challenge,
+		WebAuthnSession: session,
 	})
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
 
-	// Enqueue the challenge for cleanup when it expires
-	err = s.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "challenge-delete:" + ch.ID,
-		Kind:    "challenge",
-		ID:      ch.ID,
-		TTL:     ch.ExpiresAt.Add(10 * time.Minute),
-	})
+	// Store the challenge in its revaulter.challenge actor, which deletes it once it expires
+	expiresAt := challengeExpiry(session)
+	challengeID, err := s.actors.BeginChallenge(c.Request.Context(), actors.ChallengeKindLogin, "", expiresAt, payload)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -454,9 +429,9 @@ func (s *Server) RouteV2AuthLoginBegin(c *gin.Context) {
 
 	// Respond
 	c.JSON(http.StatusOK, v2AuthLoginBeginResponse{
-		ChallengeID: ch.ID,
+		ChallengeID: challengeID,
 		Challenge:   session.Challenge,
-		ExpiresAt:   ch.ExpiresAt.Unix(),
+		ExpiresAt:   expiresAt.Unix(),
 		Mode:        "webauthn",
 		Options:     assertion,
 		BasePrfSalt: config.Get().GetPRFSalt(),
@@ -478,16 +453,13 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	}
 
 	// Finish the login
-	// This must be executed in a transaction
-	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (loginFinishRes, error) {
-		return s.loginFinish(c, tx, req)
-	})
+	res, err := s.loginFinish(c, req)
 	if err != nil {
 		logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(), "Login failed",
 			slog.String("client_ip", c.ClientIP()),
 		)
 
-		// The transaction rolled back, so any in-tx success row never landed; record the failure outside the tx
+		// The success row is written only when the login is recorded, so record the failure separately
 		s.auditEvent(c, auditFields{
 			EventType:  db.AuditAuthLoginFinish,
 			Outcome:    db.AuditOutcomeFailure,
@@ -498,17 +470,15 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 		return
 	}
 
-	// Remove the challenge from the cleanup queue
-	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
-	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
 	// Create the response object
+	ttl := int(max(time.Until(res.sess.ExpiresAt), 0).Seconds())
 	resp := v2AuthLoginFinishResponse{
 		Authenticated: true,
-		Session:       sessionInfoFromUser(res.user, int(max(time.Until(res.sess.ExpiresAt), 0).Seconds())),
+	}
+	if res.user != nil {
+		resp.Session = sessionInfoFromUser(res.user, ttl)
+	} else {
+		resp.Session = sessionInfoFromSignup(res.signup, ttl)
 	}
 
 	// Throttle wrapped primary key delivery
@@ -519,8 +489,8 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	if res.cred != nil && res.cred.WrappedPrimaryKey != "" {
 		resp.CredentialWrappedKeyEpoch = res.cred.WrappedKeyEpoch
 		resp.WrappedKeyStale = res.cred.WrappedKeyEpoch > 0 && res.cred.WrappedKeyEpoch < res.user.WrappedKeyEpoch
-		overLimit := s.wrappedKeyLimiter.OnLimit(c.Writer, c.Request, "v2-wrapped-key:"+res.user.ID)
-		if overLimit {
+		allowed, retryAfter := s.wrappedKeyLimiter.Allow(c.Request.Context(), res.user.ID)
+		if !allowed {
 			// A WebAuthn-authenticated client that exceeds the budget has a 429 returned
 			logging.LogFromContext(c.Request.Context()).WarnContext(c.Request.Context(),
 				"Refused wrapped-key delivery: per-user rate limit exceeded",
@@ -528,6 +498,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 				slog.String("client_ip", c.ClientIP()),
 			)
 
+			setRetryAfter(c, retryAfter)
 			AbortWithErrorJSON(c, NewResponseError(http.StatusTooManyRequests, "Too many login attempts; please retry later"))
 			return
 		}
@@ -545,7 +516,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	}
 
 	logging.LogFromContext(c.Request.Context()).InfoContext(c.Request.Context(), logMsg,
-		slog.String("user_id", res.user.ID),
+		slog.String("user_id", res.sess.UserID),
 		slog.String("client_ip", c.ClientIP()),
 	)
 
@@ -615,28 +586,27 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 		return
 	}
 
-	// Rest of the method requires a transaction
-	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (finalizeSetupRes, error) {
-		return s.finalizeSetup(c, tx, finalizeSetupVals{
-			userID:          userID,
-			req:             &req,
-			anchorEs384Pub:  anchorEs384Pub,
-			mldsa87PubBytes: mldsa87PubBytes,
-			bundleSigEs:     bundleSigEs,
-			bundleSigMl:     bundleSigMl,
-			attestSigEs:     attestSigEs,
-			attestSigMl:     attestSigMl,
-			attestPayload:   &attestPayload,
-		})
-	})
-	if err != nil {
-		AbortWithErrorJSON(c, err)
+	// Sessions of users that finalized their signup carry no signup ID
+	signupID := c.GetString(contextKeySignupID)
+	if signupID == "" {
+		AbortWithErrorJSON(c, alreadyFinalizedResponseError)
 		return
 	}
 
-	// Remove the now-ready user from the cleanup queue
-	err = s.deleteQueue.Dequeue("user-delete:" + userID)
-	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
+	// Verify the material and create the user
+	res, err := s.finalizeSetup(c, finalizeSetupVals{
+		userID:          userID,
+		signupID:        signupID,
+		req:             &req,
+		anchorEs384Pub:  anchorEs384Pub,
+		mldsa87PubBytes: mldsa87PubBytes,
+		bundleSigEs:     bundleSigEs,
+		bundleSigMl:     bundleSigMl,
+		attestSigEs:     attestSigEs,
+		attestSigMl:     attestSigMl,
+		attestPayload:   &attestPayload,
+	})
+	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
 	}
@@ -975,9 +945,18 @@ func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, re
 	ctx := c.Request.Context()
 	as := tx.AuthStore()
 
+	// Lock the user until the transaction ends, so adding a passkey can't interleave with the password change
+	lockedUser, err := as.GetUserByIDForUpdate(ctx, userID)
+	if err != nil {
+		return NewResponseError(http.StatusInternalServerError, "Failed to load user")
+	}
+	if lockedUser == nil {
+		return NewResponseError(http.StatusNotFound, "User not found")
+	}
+
 	// Refuse the update while an add-credential WebAuthn ceremony is in flight for this user
 	// The in-flight ceremony will wrap the new credential's primary key with the current password, and letting the password change land in between would leave that new credential wrapped with the old password while the signed-in credential picks up the new one
-	pending, err := as.HasPendingChallenge(ctx, userID, "add-credential")
+	pending, err := s.actors.HasPendingAddCredentialChallenge(ctx, userID)
 	if err != nil {
 		return NewResponseError(http.StatusInternalServerError, "Failed to check pending challenges")
 	}
@@ -1083,22 +1062,8 @@ func (s *Server) RouteV2AuthAddCredentialBegin(c *gin.Context) {
 		return
 	}
 
-	// Rest of the method must run in a transaction
-	res, err := db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (addCredentialBeginRes, error) {
-		return s.addCredentialBegin(c.Request.Context(), tx, userID, &req)
-	})
-	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	// Enqueue the challenge to be cleaned up
-	err = s.deleteQueue.Enqueue(deleteEvent{
-		KeyName: "challenge-delete:" + res.challenge.ID,
-		Kind:    "challenge",
-		ID:      res.challenge.ID,
-		TTL:     res.challenge.ExpiresAt.Add(10 * time.Minute),
-	})
+	// Begin the ceremony
+	res, err := s.addCredentialBegin(c.Request.Context(), userID, &req)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -1106,18 +1071,19 @@ func (s *Server) RouteV2AuthAddCredentialBegin(c *gin.Context) {
 
 	// Send response
 	c.JSON(http.StatusOK, v2AuthAddCredentialBeginResponse{
-		ChallengeID: res.challenge.ID,
+		ChallengeID: res.challengeID,
 		Challenge:   res.session.Challenge,
-		ExpiresAt:   res.challenge.ExpiresAt.Unix(),
+		ExpiresAt:   res.expiresAt.Unix(),
 		Options:     credentialCreationWithoutExclusions(res.creation),
 		BasePrfSalt: config.Get().GetPRFSalt(),
 	})
 }
 
 type addCredentialBeginRes struct {
-	creation  *protocol.CredentialCreation
-	session   *webauthnlib.SessionData
-	challenge *db.AuthChallenge
+	creation    *protocol.CredentialCreation
+	session     *webauthnlib.SessionData
+	challengeID string
+	expiresAt   time.Time
 }
 
 func credentialCreationWithoutExclusions(creation *protocol.CredentialCreation) any {
@@ -1134,8 +1100,8 @@ func credentialCreationWithoutExclusions(creation *protocol.CredentialCreation) 
 	return &copy
 }
 
-func (s *Server) addCredentialBegin(ctx context.Context, tx *db.DbTx, userID string, req *v2AuthAddCredentialBeginRequest) (addCredentialBeginRes, error) {
-	as := tx.AuthStore()
+func (s *Server) addCredentialBegin(ctx context.Context, userID string, req *v2AuthAddCredentialBeginRequest) (addCredentialBeginRes, error) {
+	as := s.db.AuthStore()
 
 	// The session JWT's Ready claim is a snapshot from token mint time
 	// Re-check the stored user to reject accounts disabled or un-readied after the session was issued
@@ -1164,7 +1130,7 @@ func (s *Server) addCredentialBegin(ctx context.Context, tx *db.DbTx, userID str
 		return addCredentialBeginRes{}, err
 	}
 
-	ch, err := as.BeginChallenge(ctx, "add-credential", userID, session.Challenge, session.Expires, v2AddCredentialChallengePayload{
+	payload, err := json.Marshal(v2AddCredentialChallengePayload{
 		UserID:          userID,
 		WebAuthnUserID:  base64.RawURLEncoding.EncodeToString(userRecord.id),
 		DisplayName:     strings.TrimSpace(req.CredentialName),
@@ -1174,10 +1140,18 @@ func (s *Server) addCredentialBegin(ctx context.Context, tx *db.DbTx, userID str
 		return addCredentialBeginRes{}, err
 	}
 
+	// Store the challenge in the revaulter.challenge actor of the user, replacing any previous one
+	expiresAt := challengeExpiry(session)
+	challengeID, err := s.actors.BeginChallenge(ctx, actors.ChallengeKindAddCredential, userID, expiresAt, payload)
+	if err != nil {
+		return addCredentialBeginRes{}, err
+	}
+
 	return addCredentialBeginRes{
-		creation:  creation,
-		session:   session,
-		challenge: ch,
+		creation:    creation,
+		session:     session,
+		challengeID: challengeID,
+		expiresAt:   expiresAt,
 	}, nil
 }
 
@@ -1227,25 +1201,37 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 		return
 	}
 
+	// Consume the challenge, which is bound to the authenticated user, so an attacker who learned a different user's challenge ID cannot consume it
+	// The challenge can be used once only, even if adding the credential fails
+	payloadJSON, err := s.actors.ConsumeChallenge(c.Request.Context(), actors.ChallengeKindAddCredential, req.ChallengeID, userID)
+	if errors.Is(err, actors.ErrInvalidChallenge) {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Challenge is invalid or expired"))
+		return
+	} else if err != nil {
+		AbortWithErrorJSON(c, err)
+		return
+	}
+
+	var payload v2AddCredentialChallengePayload
+	err = json.Unmarshal(payloadJSON, &payload)
+	if err != nil {
+		AbortWithErrorJSON(c, NewResponseError(http.StatusConflict, "Challenge is missing WebAuthn session data"))
+		return
+	}
+
 	// Complete adding the credential
 	// This must be executed in a transaction
 	_, err = db.ExecuteInTransaction(c.Request.Context(), s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (addCredentialFinishRes, error) {
 		return s.addCredentialFinish(c, tx, addCredentialFinishVals{
 			userID:        userID,
 			req:           &req,
+			payload:       &payload,
 			attestSigEs:   attestSigEs,
 			attestSigMl:   attestSigMl,
 			attestPayload: &attestPayload,
 		})
 	})
 	if err != nil {
-		AbortWithErrorJSON(c, err)
-		return
-	}
-
-	// Remove the challenge from the cleanup queue
-	err = s.deleteQueue.Dequeue("challenge-delete:" + req.ChallengeID)
-	if err != nil && !errors.Is(err, eventqueue.ErrProcessorStopped) {
 		AbortWithErrorJSON(c, err)
 		return
 	}
@@ -1264,6 +1250,7 @@ func (s *Server) RouteV2AuthAddCredentialFinish(c *gin.Context) {
 type addCredentialFinishVals struct {
 	userID        string
 	req           *v2AuthAddCredentialFinishRequest
+	payload       *v2AddCredentialChallengePayload
 	attestSigEs   []byte
 	attestSigMl   []byte
 	attestPayload *protocolv2.AttestationPayload
@@ -1273,16 +1260,8 @@ type addCredentialFinishRes struct{}
 func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCredentialFinishVals) (addCredentialFinishRes, error) {
 	as := tx.AuthStore()
 
-	// Bind the consume to the authenticated user's ID at the SQL layer so an attacker who learned a different user's challenge ID cannot consume it
-	// The post-consume payload.UserID equality check below remains as defense in depth
-	var payload v2AddCredentialChallengePayload
-	err := as.ConsumeChallenge(c.Request.Context(), vals.req.ChallengeID, "add-credential", vals.userID, &payload)
-	if errors.Is(err, db.ErrInvalidChallenge) {
-		return addCredentialFinishRes{}, NewResponseError(http.StatusConflict, "Challenge is invalid or expired")
-	} else if err != nil {
-		return addCredentialFinishRes{}, err
-	}
-
+	// The challenge is bound to the authenticated user already, so this check is defense in depth
+	payload := vals.payload
 	if payload.UserID != vals.userID {
 		return addCredentialFinishRes{}, NewResponseError(http.StatusForbidden, "Challenge does not belong to this user")
 	}
@@ -1291,8 +1270,9 @@ func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCreden
 		return addCredentialFinishRes{}, NewResponseError(http.StatusConflict, "Challenge is missing WebAuthn session data")
 	}
 
-	// Load the user
-	storedUser, err := as.GetUserByID(c.Request.Context(), vals.userID)
+	// Load the user, and lock it until the transaction ends
+	// A password change takes the same lock, so it can't change the wrapped key epoch between the checks below and the insert
+	storedUser, err := as.GetUserByIDForUpdate(c.Request.Context(), vals.userID)
 	if err != nil {
 		return addCredentialFinishRes{}, err
 	}
@@ -1393,8 +1373,11 @@ func (s *Server) addCredentialFinish(c *gin.Context, tx *db.DbTx, vals addCreden
 		AttestationPayload:          vals.req.AttestationPayload,
 		AttestationSignatureEs384:   vals.req.AttestationSignatureEs384,
 		AttestationSignatureMldsa87: vals.req.AttestationSignatureMldsa87,
+		WrappedKeyEpoch:             storedUser.WrappedKeyEpoch,
 	})
-	if err != nil {
+	if errors.Is(err, db.ErrWrappedKeyEpochChanged) {
+		return addCredentialFinishRes{}, NewResponseError(http.StatusConflict, "The password changed while the passkey was being added, try again")
+	} else if err != nil {
 		return addCredentialFinishRes{}, err
 	}
 
@@ -1541,40 +1524,45 @@ func secureCookie(c *gin.Context) bool {
 }
 
 type registerFinishRes struct {
-	user *db.User
-	sess *authSessionToken
+	signup *actors.Signup
+	sess   *authSessionToken
 }
 
-func (s *Server) registerFinish(c *gin.Context, tx *db.DbTx, req v2AuthRegisterFinishRequest) (registerFinishRes, error) {
-	as := tx.AuthStore()
+//nolint:errname
+var invalidRegistrationChallengeResponseError = NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
 
-	// Consume the challenge in the database and retrieve the payload
-	// Register has no authenticated user yet, so the consume isn't bound to a userID
-	var payload v2RegisterChallengePayload
-	err := as.ConsumeChallenge(c.Request.Context(), req.ChallengeID, "register", "", &payload)
-	if errors.Is(err, db.ErrInvalidChallenge) {
-		return registerFinishRes{}, NewResponseError(http.StatusConflict, "Registration challenge is invalid or expired")
-	} else if err != nil {
+func (s *Server) registerFinish(c *gin.Context, req v2AuthRegisterFinishRequest) (registerFinishRes, error) {
+	ctx := c.Request.Context()
+
+	// Load the signup, whose ID is the challenge ID returned by register/begin
+	signupClient := s.actors.Signup(req.ChallengeID)
+	signup, err := signupClient.Get(ctx)
+	if err != nil {
 		return registerFinishRes{}, err
 	}
+	if signup == nil || signup.Phase != actors.SignupPhaseBegun {
+		return registerFinishRes{}, invalidRegistrationChallengeResponseError
+	}
 
-	if payload.WebAuthnSession == nil {
+	var session webauthnlib.SessionData
+	err = json.Unmarshal(signup.Session, &session)
+	if err != nil {
 		return registerFinishRes{}, NewResponseError(http.StatusConflict, "Registration challenge is missing WebAuthn session data")
 	}
 
 	// Create the WebAuthnUser object
-	displayName := payload.DisplayName
+	displayName := signup.DisplayName
 	if displayName == "" {
-		displayName = payload.UserID
+		displayName = signup.UserID
 	}
 	waUser := &v2WebAuthnUser{
-		id:          payload.WebAuthnSession.UserID,
-		userID:      payload.UserID,
+		id:          session.UserID,
+		userID:      signup.UserID,
 		displayName: displayName,
 	}
 
 	// Complete the WebAuthn registration
-	cred, credJSON, err := s.finishWebAuthnRegistration(c, waUser, req.Credential, payload.WebAuthnSession)
+	cred, credJSON, err := s.finishWebAuthnRegistration(c, waUser, req.Credential, &session)
 	if err != nil {
 		return registerFinishRes{}, err
 	}
@@ -1583,67 +1571,60 @@ func (s *Server) registerFinish(c *gin.Context, tx *db.DbTx, req v2AuthRegisterF
 		return registerFinishRes{}, err
 	}
 
-	// Register the user in the database
-	user, err := as.RegisterUser(c.Request.Context(), db.RegisterUserInput{
-		UserID:         payload.UserID,
-		DisplayName:    payload.DisplayName,
-		WebAuthnUserID: payload.WebAuthnUserID,
-		CredentialID:   base64.RawURLEncoding.EncodeToString(cred.ID),
-		PublicKey:      string(credJSON),
-		SignCount:      int64(cred.Authenticator.SignCount),
-		SessionTTL:     config.Get().SessionTimeout,
+	// Store the passkey in the signup, together with the audit log entry
+	// The actor accepts it only while the signup is begun, so a registration challenge can be used once only
+	audit := s.auditInputFromContext(c, auditFields{
+		EventType:    db.AuditAuthRegisterFinish,
+		Outcome:      db.AuditOutcomeSuccess,
+		AuthMethod:   db.AuditAuthMethodSession,
+		ActorUserID:  signup.UserID,
+		TargetUserID: signup.UserID,
 	})
-	if errors.Is(err, db.ErrUserAlreadyExists) {
-		return registerFinishRes{}, NewResponseError(http.StatusConflict, "User already exists")
+	signup, err = signupClient.Register(ctx, actors.SignupCredential{
+		ID:        base64.RawURLEncoding.EncodeToString(cred.ID),
+		PublicKey: string(credJSON),
+		SignCount: int64(cred.Authenticator.SignCount),
+	}, &audit)
+	if errors.Is(err, actors.ErrSignupNotFound) {
+		return registerFinishRes{}, invalidRegistrationChallengeResponseError
 	} else if err != nil {
 		return registerFinishRes{}, err
 	}
 
-	// Get a session token
-	sess, err := newAuthSessionToken(user, config.Get().SessionTimeout)
-	if err != nil {
-		return registerFinishRes{}, err
-	}
-
-	// Save the audit log entry
-	err = s.auditEventTx(c, tx, auditFields{
-		EventType:    db.AuditAuthRegisterFinish,
-		Outcome:      db.AuditOutcomeSuccess,
-		AuthMethod:   db.AuditAuthMethodSession,
-		ActorUserID:  user.ID,
-		TargetUserID: user.ID,
-	})
-	if err != nil {
-		return registerFinishRes{}, err
-	}
-
 	return registerFinishRes{
-		user: user,
-		sess: sess,
+		signup: signup,
+		sess:   newSignupSessionToken(signup, config.Get().SessionTimeout),
 	}, nil
 }
 
 type loginFinishRes struct {
+	// User that signed in, or nil if the user hasn't finalized their signup yet
 	user *db.User
-	sess *authSessionToken
-	cred *db.AuthCredentialRecord
+	// Signup of the user that signed in, if the user hasn't finalized it yet
+	signup *actors.Signup
+	sess   *authSessionToken
+	cred   *db.AuthCredentialRecord
 }
 
-func (s *Server) loginFinish(c *gin.Context, tx *db.DbTx, req v2AuthLoginFinishRequest) (loginFinishRes, error) {
-	as := tx.AuthStore()
+//nolint:errname
+var invalidLoginResponseError = NewResponseError(http.StatusUnauthorized, "Invalid login")
+
+func (s *Server) loginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (loginFinishRes, error) {
+	as := s.db.AuthStore()
 	ctx := c.Request.Context()
 
-	// Consume the challenge in the database and retrieve the payload
-	// Login has no authenticated user yet (the credential assertion is what authenticates), so the consume isn't bound to a userID
-	var payload v2LoginChallengePayload
-	err := as.ConsumeChallenge(ctx, req.ChallengeID, "login", "", &payload)
-	if errors.Is(err, db.ErrInvalidChallenge) {
+	// Consume the challenge and retrieve the payload, so the challenge can be used once only
+	// Login has no authenticated user yet (the credential assertion is what authenticates), so the challenge isn't bound to a user
+	payloadJSON, err := s.actors.ConsumeChallenge(ctx, actors.ChallengeKindLogin, req.ChallengeID, "")
+	if errors.Is(err, actors.ErrInvalidChallenge) {
 		return loginFinishRes{}, NewResponseError(http.StatusConflict, "Login challenge is invalid or expired")
 	} else if err != nil {
 		return loginFinishRes{}, err
 	}
 
-	if payload.WebAuthnSession == nil {
+	var payload v2LoginChallengePayload
+	err = json.Unmarshal(payloadJSON, &payload)
+	if err != nil || payload.WebAuthnSession == nil {
 		return loginFinishRes{}, NewResponseError(http.StatusConflict, "Login challenge is missing WebAuthn session data")
 	}
 
@@ -1652,6 +1633,7 @@ func (s *Server) loginFinish(c *gin.Context, tx *db.DbTx, req v2AuthLoginFinishR
 	var (
 		discoveredUser   *v2WebAuthnUser
 		discoveredDBUser *db.User
+		discoveredSignup *actors.Signup
 	)
 	handler := func(rawID []byte, userHandle []byte) (webauthnlib.User, error) {
 		webAuthnUserID := base64.RawURLEncoding.EncodeToString(userHandle)
@@ -1659,8 +1641,27 @@ func (s *Server) loginFinish(c *gin.Context, tx *db.DbTx, req v2AuthLoginFinishR
 		if hErr != nil {
 			return nil, hErr
 		}
-		if user == nil || user.Status != "active" {
-			return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+
+		// Users that haven't finalized their signup are in the revaulter.signup actor, which is keyed by the user handle
+		if user == nil {
+			signup, hErr := s.actors.Signup(webAuthnUserID).Get(ctx)
+			if hErr != nil {
+				return nil, hErr
+			}
+
+			userRecord := webAuthnUserFromSignup(ctx, signup)
+			if userRecord == nil {
+				return nil, invalidLoginResponseError
+			}
+
+			discoveredSignup = signup
+			discoveredUser = userRecord
+
+			return userRecord, nil
+		}
+
+		if user.Status != "active" {
+			return nil, invalidLoginResponseError
 		}
 
 		userRecord, hErr := loadWebAuthnUser(ctx, as, user)
@@ -1668,7 +1669,7 @@ func (s *Server) loginFinish(c *gin.Context, tx *db.DbTx, req v2AuthLoginFinishR
 			return nil, hErr
 		}
 		if userRecord == nil {
-			return nil, NewResponseError(http.StatusUnauthorized, "Invalid login")
+			return nil, invalidLoginResponseError
 		}
 
 		discoveredDBUser = user
@@ -1695,59 +1696,92 @@ func (s *Server) loginFinish(c *gin.Context, tx *db.DbTx, req v2AuthLoginFinishR
 		logWebAuthnError(ctx, "login", err)
 		return loginFinishRes{}, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
 	}
-	if discoveredUser == nil || discoveredDBUser == nil {
-		return loginFinishRes{}, NewResponseError(http.StatusUnauthorized, "Invalid login")
+	if discoveredUser == nil || (discoveredDBUser == nil && discoveredSignup == nil) {
+		return loginFinishRes{}, invalidLoginResponseError
 	}
 
-	// Validate the authenticator sign count
+	// Reject counter anomalies early, before the database or signup actor checks the current counter atomically
 	err = s.validateAuthenticatorSignCount(c, discoveredUser, cred)
 	if err != nil {
 		return loginFinishRes{}, err
 	}
 
-	// Update the sign count in the database
 	credentialID := base64.RawURLEncoding.EncodeToString(cred.ID)
-	err = as.Login(ctx, db.LoginInput{
-		UserID:       discoveredDBUser.ID,
-		CredentialID: credentialID,
-		SignCount:    int64(cred.Authenticator.SignCount),
-		SessionTTL:   config.Get().SessionTimeout,
+	signCount := int64(cred.Authenticator.SignCount)
+
+	if discoveredSignup != nil {
+		return s.loginFinishSignup(c, discoveredSignup, credentialID, signCount)
+	}
+
+	// Update the sign count and write the audit log entry atomically
+	return db.ExecuteInTransaction(ctx, s.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (loginFinishRes, error) {
+		txAs := tx.AuthStore()
+		rErr := txAs.Login(ctx, db.LoginInput{
+			UserID:       discoveredDBUser.ID,
+			CredentialID: credentialID,
+			SignCount:    signCount,
+			SessionTTL:   config.Get().SessionTimeout,
+		})
+		if errors.Is(rErr, db.ErrInvalidLogin) {
+			return loginFinishRes{}, invalidLoginResponseError
+		} else if rErr != nil {
+			return loginFinishRes{}, rErr
+		}
+
+		// Retrieve the credential (which was just updated)
+		credRec, rErr := txAs.GetCredentialForUser(ctx, discoveredDBUser.ID, credentialID)
+		if rErr != nil {
+			return loginFinishRes{}, rErr
+		}
+
+		// Return the session token object
+		sess, rErr := newAuthSessionToken(discoveredDBUser, config.Get().SessionTimeout)
+		if rErr != nil {
+			return loginFinishRes{}, rErr
+		}
+
+		// Save the audit log entry
+		rErr = s.auditEventTx(c, tx, auditFields{
+			EventType:    db.AuditAuthLoginFinish,
+			Outcome:      db.AuditOutcomeSuccess,
+			AuthMethod:   db.AuditAuthMethodSession,
+			ActorUserID:  discoveredDBUser.ID,
+			TargetUserID: discoveredDBUser.ID,
+			CredentialID: credentialID,
+		})
+		if rErr != nil {
+			return loginFinishRes{}, rErr
+		}
+
+		return loginFinishRes{
+			user: discoveredDBUser,
+			sess: sess,
+			cred: credRec,
+		}, nil
 	})
-	if errors.Is(err, db.ErrInvalidLogin) {
-		return loginFinishRes{}, NewResponseError(http.StatusUnauthorized, "Invalid login")
+}
+
+// loginFinishSignup records a sign-in of a user that hasn't finalized their signup yet
+func (s *Server) loginFinishSignup(c *gin.Context, signup *actors.Signup, credentialID string, signCount int64) (loginFinishRes, error) {
+	// Update the sign count in the signup, together with the audit log entry
+	audit := s.auditInputFromContext(c, auditFields{
+		EventType:    db.AuditAuthLoginFinish,
+		Outcome:      db.AuditOutcomeSuccess,
+		AuthMethod:   db.AuditAuthMethodSession,
+		ActorUserID:  signup.UserID,
+		TargetUserID: signup.UserID,
+		CredentialID: credentialID,
+	})
+	signup, err := s.actors.Signup(signup.WebAuthnUserID).Login(c.Request.Context(), credentialID, signCount, &audit)
+	if errors.Is(err, actors.ErrSignupNotFound) || errors.Is(err, db.ErrInvalidLogin) {
+		return loginFinishRes{}, invalidLoginResponseError
 	} else if err != nil {
 		return loginFinishRes{}, err
 	}
 
-	// Retrieve the credential (which was just updated)
-	credRec, err := as.GetCredentialForUser(ctx, discoveredDBUser.ID, credentialID)
-	if err != nil {
-		return loginFinishRes{}, err
-	}
-
-	// Return the session token object
-	sess, err := newAuthSessionToken(discoveredDBUser, config.Get().SessionTimeout)
-	if err != nil {
-		return loginFinishRes{}, err
-	}
-
-	// Save the audit log entry
-	err = s.auditEventTx(c, tx, auditFields{
-		EventType:    db.AuditAuthLoginFinish,
-		Outcome:      db.AuditOutcomeSuccess,
-		AuthMethod:   db.AuditAuthMethodSession,
-		ActorUserID:  discoveredDBUser.ID,
-		TargetUserID: discoveredDBUser.ID,
-		CredentialID: credentialID,
-	})
-	if err != nil {
-		return loginFinishRes{}, err
-	}
-
 	return loginFinishRes{
-		user: discoveredDBUser,
-		sess: sess,
-		cred: credRec,
+		signup: signup,
+		sess:   newSignupSessionToken(signup, config.Get().SessionTimeout),
 	}, nil
 }
 
@@ -1782,6 +1816,7 @@ func requirePRFSupport(cred *webauthnlib.Credential) error {
 
 type finalizeSetupVals struct {
 	userID          string
+	signupID        string
 	req             *v2AuthFinalizeSignupRequest
 	anchorEs384Pub  *ecdsa.PublicKey
 	mldsa87PubBytes []byte
@@ -1796,23 +1831,34 @@ type finalizeSetupRes struct {
 	user *db.User
 }
 
-func (s *Server) finalizeSetup(c *gin.Context, tx *db.DbTx, vals finalizeSetupVals) (finalizeSetupRes, error) {
-	as := tx.AuthStore()
+//nolint:errname
+var alreadyFinalizedResponseError = NewResponseError(http.StatusConflict, "Account is already finalized")
 
-	// Load the user's stored credentials: at finalize-signup time the user must have exactly one credential (created by /register/finish)
-	// Everything the attestation signs must be derivable from that one row
-	creds, err := as.ListCredentials(c.Request.Context(), vals.userID)
+func (s *Server) finalizeSetup(c *gin.Context, vals finalizeSetupVals) (finalizeSetupRes, error) {
+	ctx := c.Request.Context()
+
+	// Load the signup, which holds the passkey created by /register/finish
+	// Everything the attestation signs must be derivable from that passkey
+	signupClient := s.actors.Signup(vals.signupID)
+	signup, err := signupClient.Get(ctx)
 	if err != nil {
 		return finalizeSetupRes{}, err
 	}
-
-	if len(creds) != 1 {
-		return finalizeSetupRes{}, NewResponseErrorf(http.StatusConflict, "expected exactly one credential for user at finalize-signup, got %d", len(creds))
+	if signup == nil || signup.Phase != actors.SignupPhaseRegistered || signup.Credential == nil || signup.UserID != vals.userID {
+		// The signup may have been finalized by a previous call
+		user, gErr := s.db.AuthStore().GetUserByID(ctx, vals.userID)
+		if gErr != nil {
+			return finalizeSetupRes{}, gErr
+		}
+		if user != nil {
+			return finalizeSetupRes{}, alreadyFinalizedResponseError
+		}
+		return finalizeSetupRes{}, NewResponseError(http.StatusNotFound, "User not found")
 	}
 
 	// Get the expected pub key hash
-	expectedCredentialID := creds[0].CredentialID
-	expectedCredentialPublicKeyHash, err := protocolv2.CredentialPublicKeyHashFromStoredCredJSON(creds[0].PublicKey)
+	expectedCredentialID := signup.Credential.ID
+	expectedCredentialPublicKeyHash, err := protocolv2.CredentialPublicKeyHashFromStoredCredJSON(signup.Credential.PublicKey)
 	if err != nil {
 		return finalizeSetupRes{}, NewResponseErrorf(http.StatusInternalServerError, "failed to derive credential public key hash: %v", err)
 	}
@@ -1850,8 +1896,15 @@ func (s *Server) finalizeSetup(c *gin.Context, tx *db.DbTx, vals finalizeSetupVa
 		return finalizeSetupRes{}, NewResponseError(http.StatusBadRequest, "attestationPayload wrappedKeyEpoch must be 1 at signup")
 	}
 
-	// Finalize the signup in the database
-	user, err := as.FinalizeSignup(c.Request.Context(), db.FinalizeSignupInput{
+	// Create the user in the database, with all the material generated at signup and the audit log entry
+	audit := s.auditInputFromContext(c, auditFields{
+		EventType:    db.AuditAuthFinalizeSignup,
+		Outcome:      db.AuditOutcomeSuccess,
+		AuthMethod:   db.AuditAuthMethodSession,
+		ActorUserID:  vals.userID,
+		TargetUserID: vals.userID,
+	})
+	_, err = signupClient.Finalize(ctx, db.FinalizeSignupInput{
 		UserID:                       vals.userID,
 		WrappedPrimaryKey:            vals.req.WrappedPrimaryKey,
 		WrappedAnchorKey:             vals.req.WrappedAnchorKey,
@@ -1865,30 +1918,23 @@ func (s *Server) finalizeSetup(c *gin.Context, tx *db.DbTx, vals finalizeSetupVa
 		AttestationPayload:           vals.req.AttestationPayload,
 		AttestationSignatureEs384:    vals.req.AttestationSignatureEs384,
 		AttestationSignatureMldsa87:  vals.req.AttestationSignatureMldsa87,
-	})
+	}, &audit)
 	switch {
-	case errors.Is(err, db.ErrAlreadyFinalized):
-		return finalizeSetupRes{}, NewResponseError(http.StatusConflict, "Account is already finalized")
-	case errors.Is(err, db.ErrUserNotFound):
+	case errors.Is(err, actors.ErrSignupAlreadyFinalized):
+		return finalizeSetupRes{}, alreadyFinalizedResponseError
+	case errors.Is(err, actors.ErrSignupNotFound):
 		return finalizeSetupRes{}, NewResponseError(http.StatusNotFound, "User not found")
 	case err != nil:
 		return finalizeSetupRes{}, err
 	}
 
-	if user == nil || user.Status != "active" || !user.Ready {
-		return finalizeSetupRes{}, noSessionResponseError
-	}
-
-	// Save the audit log entry
-	err = s.auditEventTx(c, tx, auditFields{
-		EventType:    db.AuditAuthFinalizeSignup,
-		Outcome:      db.AuditOutcomeSuccess,
-		AuthMethod:   db.AuditAuthMethodSession,
-		ActorUserID:  user.ID,
-		TargetUserID: user.ID,
-	})
+	// Load the new user
+	user, err := s.db.AuthStore().GetUserByID(ctx, vals.userID)
 	if err != nil {
 		return finalizeSetupRes{}, err
+	}
+	if user == nil || user.Status != "active" || !user.Ready {
+		return finalizeSetupRes{}, noSessionResponseError
 	}
 
 	return finalizeSetupRes{
@@ -2143,27 +2189,10 @@ func loadWebAuthnUser(ctx context.Context, as *db.AuthStore, user *db.User) (*v2
 
 	creds := make([]webauthnlib.Credential, 0, len(records))
 	for _, rec := range records {
-		var cred webauthnlib.Credential
-		err = json.Unmarshal([]byte(rec.PublicKey), &cred)
-		if err != nil {
-			continue
+		cred, ok := decodeStoredCredential(ctx, user.ID, rec.CredentialID, rec.PublicKey, rec.SignCount)
+		if ok {
+			creds = append(creds, cred)
 		}
-
-		// The DB stores sign_count as int64 to accommodate any authenticator, but the webauthn library exposes it as uint32
-		// Guard against silent wrap-around: a wrap to 0 (or any smaller value) would look like a replay and either lock out the user or conceal a real clone
-		// Reject the credential and log it instead of narrowing
-		if rec.SignCount < 0 || rec.SignCount > math.MaxUint32 {
-			logging.LogFromContext(ctx).WarnContext(ctx,
-				"Credential sign count out of uint32 range; skipping credential",
-				slog.String("user_id", user.ID),
-				slog.String("credential_id", rec.CredentialID),
-				slog.Int64("sign_count", rec.SignCount),
-			)
-			continue
-		}
-
-		cred.Authenticator.SignCount = uint32(rec.SignCount)
-		creds = append(creds, cred)
 	}
 	if len(creds) == 0 {
 		return nil, nil
@@ -2188,6 +2217,61 @@ func loadWebAuthnUser(ctx context.Context, as *db.AuthStore, user *db.User) (*v2
 		displayName: displayName,
 		credentials: creds,
 	}, nil
+}
+
+// webAuthnUserFromSignup returns the WebAuthn user for a signup whose passkey is registered, or nil if the signup can't be used to sign in
+func webAuthnUserFromSignup(ctx context.Context, signup *actors.Signup) *v2WebAuthnUser {
+	if signup == nil || signup.Phase != actors.SignupPhaseRegistered || signup.Credential == nil {
+		return nil
+	}
+
+	cred, ok := decodeStoredCredential(ctx, signup.UserID, signup.Credential.ID, signup.Credential.PublicKey, signup.Credential.SignCount)
+	if !ok {
+		return nil
+	}
+
+	id, err := base64.RawURLEncoding.DecodeString(signup.WebAuthnUserID)
+	if err != nil {
+		return nil
+	}
+
+	displayName := signup.DisplayName
+	if displayName == "" {
+		displayName = signup.UserID
+	}
+
+	return &v2WebAuthnUser{
+		id:          id,
+		userID:      signup.UserID,
+		displayName: displayName,
+		credentials: []webauthnlib.Credential{cred},
+	}
+}
+
+// decodeStoredCredential decodes a WebAuthn credential stored as JSON, with its sign count
+// It returns false if the credential can't be used
+func decodeStoredCredential(ctx context.Context, userID string, credentialID string, publicKey string, signCount int64) (webauthnlib.Credential, bool) {
+	var cred webauthnlib.Credential
+	err := json.Unmarshal([]byte(publicKey), &cred)
+	if err != nil {
+		return cred, false
+	}
+
+	// The DB stores sign_count as int64 to accommodate any authenticator, but the webauthn library exposes it as uint32
+	// Guard against silent wrap-around: a wrap to 0 (or any smaller value) would look like a replay and either lock out the user or conceal a real clone
+	// Reject the credential and log it instead of narrowing
+	if signCount < 0 || signCount > math.MaxUint32 {
+		logging.LogFromContext(ctx).WarnContext(ctx,
+			"Credential sign count out of uint32 range; skipping credential",
+			slog.String("user_id", userID),
+			slog.String("credential_id", credentialID),
+			slog.Int64("sign_count", signCount),
+		)
+		return cred, false
+	}
+
+	cred.Authenticator.SignCount = uint32(signCount)
+	return cred, true
 }
 
 // parseAnchorPubkeys decodes the wire-format hybrid anchor public keys: a canonical-body JWK for the ES384 leg and raw base64url bytes for the ML-DSA-87 leg.
