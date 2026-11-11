@@ -281,7 +281,7 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
 
 {#snippet otherPasskeysNotice()}
     {#if credentials.length > 1}
-        <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-200">
+        <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-200 md:max-w-8/12">
             <p>
                 This applies only to the passkey you signed in with.
                 Your other passkeys keep unlocking with their current password until you sign in with each of them and change it here.
