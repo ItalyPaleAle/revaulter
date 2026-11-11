@@ -48,6 +48,7 @@ const (
 	userMethodSnapshot    = "snapshot"
 	userMethodList        = "list"
 	userMethodGet         = "get"
+	userMethodRepair      = "repair"
 )
 
 // Reasons sent to the long-poll waiting for the result of a request
@@ -147,6 +148,19 @@ func (st userActorState) countPending() int {
 		}
 	}
 	return n
+}
+
+// overdue returns the pending requests that are past their deadline, sorted by state
+func (st userActorState) overdue(now time.Time) []string {
+	var res []string
+	for state, r := range st.Requests {
+		if r.isOverdue(now) {
+			res = append(res, state)
+		}
+	}
+
+	slices.Sort(res)
+	return res
 }
 
 // Request is the metadata of a request, kept in the revaulter.user actor
@@ -282,7 +296,7 @@ type userActor struct {
 	client actor.Client[userActorState]
 
 	// Due time of the cleanup alarm, as set by this activation
-	// It's zero when unknown, in which case the alarm is always set
+	// It's zero when unknown, for example after the actor is activated or after setting the alarm failed, and then the next call sets the alarm again
 	alarmDue time.Time
 }
 
@@ -349,6 +363,12 @@ func (a *userActor) Invoke(ctx context.Context, method string, data actor.Envelo
 
 	case userMethodSnapshot:
 		return a.snapshot(ctx)
+
+	case userMethodRepair:
+		// Loading the state sets the cleanup alarm again, in case it's missing
+		a.alarmDue = time.Time{}
+		_, err := a.loadState(ctx)
+		return nil, err
 	}
 
 	if testUserMethods != nil {
@@ -419,6 +439,7 @@ func (a *userActor) Alarm(ctx context.Context, name string, _ actor.Envelope) er
 
 		// Re-arm instead of returning an error, since Francis deletes an alarm once its retries run out
 		// Replacing the alarm while it runs keeps the new one
+		// If this fails too, Francis retries the run, and after that the next call to the actor, or the daily repair, sets the alarm again
 		return a.setCleanupAlarm(ctx, time.Now().Add(userActorCleanupRetryDelay))
 	}
 
@@ -426,7 +447,25 @@ func (a *userActor) Alarm(ctx context.Context, name string, _ actor.Envelope) er
 }
 
 // loadState returns a copy of the state, which can be changed and then saved
+// If this activation hasn't set the cleanup alarm, for example because the actor was just activated, or because setting it failed, it sets it now
 func (a *userActor) loadState(ctx context.Context) (userActorState, error) {
+	st, err := a.getState(ctx)
+	if err != nil {
+		return userActorState{}, err
+	}
+
+	if a.alarmDue.IsZero() && !st.isEmpty() {
+		err = a.setCleanupAlarm(ctx, st.nextCleanup(config.Get().SessionTimeout))
+		if err != nil {
+			a.log.WarnContext(ctx, "Failed to set cleanup alarm; will retry", slog.Any("error", err))
+		}
+	}
+
+	return st, nil
+}
+
+// getState returns a copy of the state, which can be changed and then saved, without setting the cleanup alarm
+func (a *userActor) getState(ctx context.Context) (userActorState, error) {
 	st, err := a.client.GetState(ctx)
 	if err != nil {
 		return userActorState{}, fmt.Errorf("failed to load state: %w", err)
@@ -436,13 +475,20 @@ func (a *userActor) loadState(ctx context.Context) (userActorState, error) {
 }
 
 // saveState stores the state, then moves the cleanup alarm to the earliest due time
+// Once the state is stored, the change is done, so it returns an error only if storing the state fails
+// If setting the alarm fails, the next call sets it again
 func (a *userActor) saveState(ctx context.Context, st userActorState) error {
 	err := a.client.SetState(ctx, st, nil)
 	if err != nil {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
 
-	return a.setCleanupAlarm(ctx, st.nextCleanup(config.Get().SessionTimeout))
+	err = a.setCleanupAlarm(ctx, st.nextCleanup(config.Get().SessionTimeout))
+	if err != nil {
+		a.log.WarnContext(ctx, "Failed to set cleanup alarm; will retry", slog.Any("error", err))
+	}
+
+	return nil
 }
 
 // setCleanupAlarm sets the cleanup alarm to the given time, unless this activation already set it there
@@ -532,7 +578,23 @@ func (a *userActor) create(ctx context.Context, in CreateRequestInput) (userCrea
 		return userCreateRes{}, nil
 	}
 
+	// Expire the requests past their deadline first, so they don't count towards the limit even if the cleanup alarm hasn't run
+	now := time.Now()
+	expired := st.overdue(now)
+	prevBell, waiters, err := a.expire(ctx, &st, expired, now)
+	if err != nil {
+		return userCreateRes{}, err
+	}
+
 	if st.countPending() >= MaxPendingRequestsPerUser {
+		if len(expired) > 0 {
+			err = a.saveState(ctx, st)
+			if err != nil {
+				return userCreateRes{}, err
+			}
+			a.notify(ctx, waiters, prevBell)
+		}
+
 		return userCreateRes{Error: userActorErrTooManyPending}, nil
 	}
 
@@ -566,7 +628,6 @@ func (a *userActor) create(ctx context.Context, in CreateRequestInput) (userCrea
 		a.host.NudgeAuditStream()
 	}
 
-	now := time.Now()
 	req := in.Request
 	req.Status = stored.status
 	req.Waiter = ""
@@ -575,9 +636,12 @@ func (a *userActor) create(ctx context.Context, in CreateRequestInput) (userCrea
 	}
 	st.Requests[in.State] = &req
 
-	prevBell, err := a.rotateBell(&st, now)
-	if err != nil {
-		return userCreateRes{}, err
+	// Expiring requests already replaced the bell
+	if len(expired) == 0 {
+		prevBell, err = a.rotateBell(&st, now)
+		if err != nil {
+			return userCreateRes{}, err
+		}
 	}
 
 	err = a.saveState(ctx, st)
@@ -585,9 +649,17 @@ func (a *userActor) create(ctx context.Context, in CreateRequestInput) (userCrea
 		return userCreateRes{}, err
 	}
 
-	a.ringBell(ctx, prevBell)
+	a.notify(ctx, waiters, prevBell)
 
 	return userCreateRes{}, nil
+}
+
+// notify wakes the long-polls of requests that changed, then the list streams waiting on the bell
+func (a *userActor) notify(ctx context.Context, waiters map[string]string, bell string) {
+	for state, waiter := range waiters {
+		a.wakeWaiter(ctx, state, waiter, waiterReasonDone)
+	}
+	a.ringBell(ctx, bell)
 }
 
 // confirm completes a pending request with the response envelope
@@ -999,7 +1071,7 @@ func (a *userActor) snapshot(ctx context.Context) (Snapshot, error) {
 
 // cleanup expires the pending requests past their deadline, and removes the finished ones that have been kept long enough
 func (a *userActor) cleanup(ctx context.Context) error {
-	st, err := a.loadState(ctx)
+	st, err := a.getState(ctx)
 	if err != nil {
 		return err
 	}
@@ -1011,15 +1083,7 @@ func (a *userActor) cleanup(ctx context.Context) error {
 	now := time.Now()
 
 	// Expire pending requests past their deadline
-	var toExpire []string
-	for state, r := range st.Requests {
-		if r.isOverdue(now) {
-			toExpire = append(toExpire, state)
-		}
-	}
-
-	slices.Sort(toExpire)
-
+	toExpire := st.overdue(now)
 	prevBell, waiters, err := a.expire(ctx, &st, toExpire, now)
 	if err != nil {
 		return err
@@ -1071,11 +1135,12 @@ func (a *userActor) cleanup(ctx context.Context) error {
 		return err
 	}
 
-	for state, waiter := range waiters {
-		a.wakeWaiter(ctx, state, waiter, waiterReasonDone)
-	}
+	a.notify(ctx, waiters, prevBell)
 
-	a.ringBell(ctx, prevBell)
+	// The alarm that runs now is deleted when it completes, so a failure to set the next one is an error, which makes the caller retry
+	if a.alarmDue.IsZero() {
+		return errors.New("failed to set the next cleanup alarm")
+	}
 
 	return nil
 }

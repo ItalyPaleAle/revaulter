@@ -129,7 +129,7 @@ func (h *Host) newSignupActor(actorID string, service *actor.Service) actor.Acto
 	return &signupActor{
 		host:   h,
 		log:    h.log.With(slog.String("actorType", actorTypeSignup), slog.String("signupId", actorID)),
-		client: actor.NewActorClient[Signup](actorTypeSignup, actorID, service),
+		client: wrapActorClient(actorTypeSignup, actorID, actor.NewActorClient[Signup](actorTypeSignup, actorID, service)),
 	}
 }
 
@@ -235,14 +235,16 @@ func (st Signup) isActive(now time.Time) bool {
 
 // save stores the state and sets the cleanup alarm at its expiry
 func (a *signupActor) save(ctx context.Context, st Signup) error {
-	err := a.client.SetState(ctx, st, nil)
-	if err != nil {
-		return fmt.Errorf("failed to save state: %w", err)
-	}
-
-	err = a.client.SetAlarm(ctx, signupActorCleanupAlarm, actor.AlarmProperties{DueTime: st.ExpiresAt})
+	// Set the alarm first, so a stored signup always has one
+	// If storing the state fails afterwards, the alarm finds nothing to delete, or a signup that's still valid, and sets itself again
+	err := a.client.SetAlarm(ctx, signupActorCleanupAlarm, actor.AlarmProperties{DueTime: st.ExpiresAt})
 	if err != nil {
 		return fmt.Errorf("failed to set cleanup alarm: %w", err)
+	}
+
+	err = a.client.SetState(ctx, st, nil)
+	if err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
 	}
 
 	return nil

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/italypaleale/francis/actor"
+
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
@@ -198,4 +200,36 @@ func (c UserClient) Get(ctx context.Context, state string) (*Request, error) {
 	}
 
 	return &res.Request, nil
+}
+
+// repairUserActors sets the cleanup alarm of every revaulter.user actor that has state again, in case it's missing
+// An actor sets its alarm whenever it's called, so this covers actors that nobody calls after setting their alarm failed
+func (h *Host) repairUserActors(ctx context.Context) (repaired int, err error) {
+	err = h.checkRunning()
+	if err != nil {
+		return 0, err
+	}
+
+	svc := h.host.Service()
+	var after string
+	for {
+		list, err := svc.ListStates(ctx, actorTypeUser, &actor.ListStatesOpts{After: after})
+		if err != nil {
+			return repaired, fmt.Errorf("failed to list user actors: %w", err)
+		}
+
+		for _, st := range list.States {
+			_, err = invoke[struct{}](ctx, h, actorTypeUser, st.ActorID, userMethodRepair, nil)
+			if err != nil {
+				h.log.WarnContext(ctx, "Failed to repair user actor", slog.String("userId", st.ActorID), slog.Any("error", err))
+				continue
+			}
+			repaired++
+		}
+
+		after = list.AfterID()
+		if after == "" {
+			return repaired, nil
+		}
+	}
 }

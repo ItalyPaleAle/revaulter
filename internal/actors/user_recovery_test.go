@@ -1,6 +1,7 @@
 package actors
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -211,4 +212,112 @@ func requestAuditEvents(t *testing.T, h *Host, userID string, eventType db.Event
 	}
 
 	return res
+}
+
+// Once the state is saved, a change is done, even if setting the cleanup alarm fails
+// These tests make setting the alarm fail, and check that changes are kept, and that the alarm is set again later
+func TestUserActorRecoversFromAlarmFailures(t *testing.T) {
+	const userID = "user-actor-alarm-recovery"
+	faults := injectFaults[userActorState](t, actorTypeUser)
+	h := newTestHost(t, newTestDB(t, userID, "user-alarm-repair", "user-alarm-quota"), ":memory:")
+	user := h.User(userID)
+
+	t.Run("collecting returns the result", func(t *testing.T) {
+		// The second request has a later due time, so removing the first one moves the alarm
+		seedTestRequest(t, h, userID, "collect-first", time.Now().Add(time.Minute))
+		seedTestRequest(t, h, userID, "collect-second", time.Now().Add(20*time.Minute))
+		_, err := user.Confirm(t.Context(), "collect-first", `{"ciphertext":"cmVz"}`, nil)
+		require.NoError(t, err)
+
+		faults.failSetAlarm(1)
+		collected, err := user.Collect(t.Context(), "collect-first")
+		require.NoError(t, err)
+		require.True(t, collected.Found)
+		assert.JSONEq(t, `{"ciphertext":"cmVz"}`, collected.EncryptedResult)
+		assert.Zero(t, faults.setAlarm.Load(), "setting the alarm was not attempted")
+
+		collected, err = user.Collect(t.Context(), "collect-first")
+		require.NoError(t, err)
+		assert.False(t, collected.Found)
+	})
+
+	t.Run("the next call sets the alarm again", func(t *testing.T) {
+		const state = "alarm-next-call"
+		faults.failSetAlarm(1)
+		seedTestRequest(t, h, userID, state, time.Now().Add(time.Second))
+		assert.Zero(t, faults.setAlarm.Load(), "setting the alarm was not attempted")
+
+		_, err := user.Snapshot(t.Context())
+		require.NoError(t, err)
+
+		waitForExpiry(t, h, user, userID, state)
+	})
+
+	t.Run("the daily repair sets the alarm again", func(t *testing.T) {
+		const state = "alarm-daily-repair"
+		faults.failSetAlarm(1)
+		seedTestRequest(t, h, "user-alarm-repair", state, time.Now().Add(time.Second))
+		assert.Zero(t, faults.setAlarm.Load(), "setting the alarm was not attempted")
+
+		repaired, err := h.repairUserActors(t.Context())
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, repaired, 1)
+
+		waitForExpiry(t, h, h.User("user-alarm-repair"), "user-alarm-repair", state)
+	})
+
+	t.Run("overdue requests don't count towards the limit", func(t *testing.T) {
+		const quotaUser = "user-alarm-quota"
+		quota := h.User(quotaUser)
+
+		// Fill the quota with requests whose alarms are never set, and let them pass their deadline
+		faults.failSetAlarm(10 * MaxPendingRequestsPerUser)
+		for i := range MaxPendingRequestsPerUser {
+			seedTestRequest(t, h, quotaUser, "quota-"+strconv.Itoa(i), time.Now().Add(time.Second))
+		}
+		time.Sleep(1500 * time.Millisecond)
+		faults.failSetAlarm(0)
+
+		seedTestRequest(t, h, quotaUser, "quota-new", time.Now().Add(10*time.Minute))
+
+		list, err := quota.List(t.Context())
+		require.NoError(t, err)
+		require.Len(t, list, 1)
+		assert.Equal(t, "quota-new", list[0].State)
+		assert.Len(t, auditEvents(t, h, quotaUser, db.AuditRequestExpire), MaxPendingRequestsPerUser)
+	})
+}
+
+func TestSignupAndChallengeSetTheAlarmFirst(t *testing.T) {
+	signupFaults := injectFaults[Signup](t, actorTypeSignup)
+	challengeFaults := injectFaults[challengeActorState](t, actorTypeChallenge)
+	h := newTestHost(t, newTestDB(t), ":memory:")
+
+	signupFaults.failSetAlarm(1)
+	err := h.Signup("signup-alarm-fails").Begin(t.Context(), Signup{
+		UserID:         "user-signup-alarm",
+		WebAuthnUserID: "signup-alarm-fails",
+		ExpiresAt:      time.Now().Add(time.Minute),
+	})
+	require.ErrorContains(t, err, errInjected.Error())
+	assert.Zero(t, countActorStates(t, h, actorTypeSignup), "a signup was stored without its alarm")
+
+	challengeFaults.failSetAlarm(1)
+	_, err = h.BeginChallenge(t.Context(), ChallengeKindLogin, "", time.Now().Add(time.Minute), []byte(`{}`))
+	require.ErrorContains(t, err, errInjected.Error())
+	assert.Zero(t, countActorStates(t, h, actorTypeChallenge), "a challenge was stored without its alarm")
+}
+
+// waitForExpiry waits until the cleanup alarm expires a request, and checks that its expiry is in the audit log
+func waitForExpiry(t *testing.T, h *Host, user UserClient, userID string, state string) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		return len(requestAuditEvents(t, h, userID, db.AuditRequestExpire, state)) == 1
+	}, 15*time.Second, 100*time.Millisecond, "the cleanup alarm didn't expire the request")
+
+	req, err := user.Get(t.Context(), state)
+	require.NoError(t, err)
+	require.NotNil(t, req)
+	assert.Equal(t, db.V2RequestStatusExpired, req.Status)
 }

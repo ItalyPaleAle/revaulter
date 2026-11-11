@@ -161,6 +161,14 @@ func (h *Host) pruneAuditLog(ctx context.Context, now time.Time) {
 		)
 	}
 
+	// Make sure every revaulter.user actor with state has its cleanup alarm, in case setting it failed and nobody called the actor since
+	repaired, err := h.repairUserActors(ctx)
+	if err != nil {
+		h.log.WarnContext(ctx, "Failed to repair user actors", slog.Any("error", err))
+	} else if repaired > 0 {
+		h.log.DebugContext(ctx, "Repaired user actors", slog.Int("repaired", repaired))
+	}
+
 	// Expire the requests that the revaulter.user actors missed, for example after their state was lost, so the audit log records how they ended
 	expired, err := h.expireOverdueRequests(ctx, now.Add(-RequestRemoveGrace))
 	if err != nil {

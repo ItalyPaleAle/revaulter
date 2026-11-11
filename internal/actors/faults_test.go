@@ -23,6 +23,11 @@ func (f *clientFaults) failSetState(n int) {
 	f.setState.Store(int32(n)) //nolint:gosec
 }
 
+// failSetAlarm makes the next n SetAlarm calls fail
+func (f *clientFaults) failSetAlarm(n int) {
+	f.setAlarm.Store(int32(n)) //nolint:gosec
+}
+
 // take consumes one failure from the counter, and returns true if the call must fail
 func take(counter *atomic.Int32) bool {
 	for {

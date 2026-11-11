@@ -96,7 +96,7 @@ func (h *Host) newChallengeActor(actorID string, service *actor.Service) actor.A
 			slog.String("actorType", actorTypeChallenge),
 			slog.String("actorId", actorID),
 		),
-		client: actor.NewActorClient[challengeActorState](actorTypeChallenge, actorID, service),
+		client: wrapActorClient(actorTypeChallenge, actorID, actor.NewActorClient[challengeActorState](actorTypeChallenge, actorID, service)),
 	}
 }
 
@@ -175,14 +175,16 @@ func (a *challengeActor) Alarm(ctx context.Context, name string, _ actor.Envelop
 
 // begin stores a challenge, replacing any previous one, and sets the cleanup alarm at its expiry
 func (a *challengeActor) begin(ctx context.Context, in challengeBeginReq) error {
-	err := a.client.SetState(ctx, in.State, nil)
-	if err != nil {
-		return fmt.Errorf("failed to save state: %w", err)
-	}
-
-	err = a.client.SetAlarm(ctx, challengeActorCleanupAlarm, actor.AlarmProperties{DueTime: in.State.ExpiresAt})
+	// Set the alarm first, so a stored challenge always has one
+	// If storing the state fails afterwards, the alarm finds nothing to delete, or a challenge that's still valid, and sets itself again
+	err := a.client.SetAlarm(ctx, challengeActorCleanupAlarm, actor.AlarmProperties{DueTime: in.State.ExpiresAt})
 	if err != nil {
 		return fmt.Errorf("failed to set cleanup alarm: %w", err)
+	}
+
+	err = a.client.SetState(ctx, in.State, nil)
+	if err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
 	}
 
 	return nil
