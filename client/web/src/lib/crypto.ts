@@ -295,6 +295,17 @@ export async function wrapPrimaryKey(params: {
 /**
  * Parses and validates a wrapped primary key envelope from its base64url-encoded form
  */
+// Upper bounds for the Argon2id cost read from a wrapped key envelope
+// The envelope comes from the server, so these keep a malformed or malicious value from hanging the browser tab
+// They leave plenty of room above the cost new envelopes are created with (m=128 MiB, t=4, p=1)
+const MAX_ARGON2ID_MEMORY_KIB = 1 << 20 // 1 GiB
+const MAX_ARGON2ID_ITERATIONS = 16
+const MAX_ARGON2ID_PARALLELISM = 8
+
+function isIntegerInRange(value: unknown, min: number, max: number): boolean {
+    return Number.isInteger(value) && (value as number) >= min && (value as number) <= max
+}
+
 export function parseWrappedPrimaryKeyEnvelope(wrapped: string): WrappedPrimaryKeyEnvelope {
     const json = new TextDecoder().decode(base64UrlToBytes(wrapped))
     const envelope = JSON.parse(json) as WrappedPrimaryKeyEnvelope
@@ -318,6 +329,18 @@ export function parseWrappedPrimaryKeyEnvelope(wrapped: string): WrappedPrimaryK
             !envelope.argon2id.salt
         ) {
             throw new Error('Invalid wrapped key envelope: password required but argon2id params missing')
+        }
+
+        const { m, t, p } = envelope.argon2id
+        if (!isIntegerInRange(p, 1, MAX_ARGON2ID_PARALLELISM)) {
+            throw new Error('Invalid wrapped key envelope: Argon2id parallelism is out of range')
+        }
+        if (!isIntegerInRange(t, 1, MAX_ARGON2ID_ITERATIONS)) {
+            throw new Error('Invalid wrapped key envelope: Argon2id iterations are out of range')
+        }
+        // Argon2id requires at least 8 KiB of memory per lane
+        if (!isIntegerInRange(m, 8 * p, MAX_ARGON2ID_MEMORY_KIB)) {
+            throw new Error('Invalid wrapped key envelope: Argon2id memory is out of range')
         }
     }
 

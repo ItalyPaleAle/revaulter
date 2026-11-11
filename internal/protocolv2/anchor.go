@@ -377,7 +377,7 @@ func UnmarshalMLDSA87PublicKey(b []byte) (*mldsa.PublicKey, error) {
 }
 
 // AnchorFingerprint returns the lowercase hex-encoded SHA-256 fingerprint of the concatenated anchor public-key pair
-// This is the value humans compare when pinning a server on first contact, and the value mixed into the CLI's request-encryption AAD
+// This is the value humans compare when pinning a server on first contact
 // The classical leg is encoded as its SEC1 uncompressed point bytes (0x04 || X || Y, 97 bytes); both legs have fixed sizes so plain concatenation is unambiguous
 func AnchorFingerprint(es384Pub *ecdsa.PublicKey, mldsa87PubBytes []byte) (string, error) {
 	if es384Pub == nil {

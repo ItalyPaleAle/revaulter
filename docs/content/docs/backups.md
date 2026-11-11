@@ -13,6 +13,17 @@ Back up the database regularly, keep backups outside the same host or volume, an
 
 You should also preserve the **same `secretKey` from your configuration** because restores must use the original value.
 
+## Protecting backups
+
+A backup contains the same data as the database, so protect it as carefully as the database itself:
+
+- It includes every user's request key. Anyone with a request key can submit encrypt, decrypt, and sign requests as that user, although each request still needs the user's approval in the browser.
+- It includes each passkey's wrapped primary key and anchor key. They can't be opened without the user's passkey (and password, if one is set), but they're what an attacker would need for an offline attack.
+
+Backups made with `revaulter backup` aren't encrypted, and their checksum only detects accidental corruption, not deliberate changes.
+
+Store backups encrypted, and limit who can read or write them. A backup tool that encrypts and authenticates its archives, such as restic or Borg, covers both. Don't encrypt Revaulter's backups with Revaulter: if you lose the database, you lose the keys you'd need to decrypt them.
+
 ## Built-in `backup` and `restore` subcommands
 
 The `revaulter` server binary ships with `backup` and `restore` subcommands that produce a backend-agnostic snapshot of the database. The format contains data only and embeds the source schema migration level, so a backup taken from SQLite can be restored into PostgreSQL, or vice versa.

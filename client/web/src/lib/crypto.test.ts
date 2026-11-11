@@ -320,6 +320,38 @@ describe('parseWrappedPrimaryKeyEnvelope', () => {
         const encoded = bytesToBase64Url(new TextEncoder().encode(json))
         expect(() => parseWrappedPrimaryKeyEnvelope(encoded)).toThrow('argon2id params missing')
     })
+
+    function passwordEnvelope(argon2id: { m: number; t: number; p: number }): string {
+        const json = JSON.stringify({
+            v: 1,
+            passwordRequired: true,
+            argon2id: { ...argon2id, salt: 'c2FsdHNhbHRzYWx0c2FsdA' },
+            nonce: 'aaa',
+            ciphertext: 'bbb',
+        })
+        return bytesToBase64Url(new TextEncoder().encode(json))
+    }
+
+    it.each([
+        ['the production cost', { m: 128 << 10, t: 4, p: 1 }],
+        ['the e2e cost', { m: 8, t: 1, p: 1 }],
+        ['the maximum cost', { m: 1 << 20, t: 16, p: 8 }],
+    ])('accepts %s', (_name, argon2id) => {
+        expect(parseWrappedPrimaryKeyEnvelope(passwordEnvelope(argon2id)).argon2id).toMatchObject(argon2id)
+    })
+
+    // The envelope comes from the server, so absurd values must not reach Argon2id and hang the tab
+    it.each([
+        ['memory above 1 GiB', { m: (1 << 20) + 1, t: 4, p: 1 }, 'memory'],
+        ['memory below 8 KiB per lane', { m: 15, t: 1, p: 2 }, 'memory'],
+        ['non-integer memory', { m: 1024.5, t: 4, p: 1 }, 'memory'],
+        ['too many iterations', { m: 1024, t: 17, p: 1 }, 'iterations'],
+        ['zero iterations', { m: 1024, t: 0, p: 1 }, 'iterations'],
+        ['too much parallelism', { m: 1024, t: 4, p: 9 }, 'parallelism'],
+        ['zero parallelism', { m: 1024, t: 4, p: 0 }, 'parallelism'],
+    ])('rejects %s', (_name, argon2id, field) => {
+        expect(() => parseWrappedPrimaryKeyEnvelope(passwordEnvelope(argon2id))).toThrow(`Argon2id ${field}`)
+    })
 })
 
 describe('deriveOperationKeyBytes', () => {

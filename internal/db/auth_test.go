@@ -397,10 +397,14 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 			require.NoError(t, err)
 			require.Empty(t, rec.WrappedPrimaryKey)
 
-			// Oversized value
+			// Oversized values return a sentinel, so the server can tell them apart from database errors
 			err = as.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", strings.Repeat("x", 513), "anchor")
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "too large")
+			require.ErrorIs(t, err, ErrWrappedKeyTooLarge)
+			require.ErrorContains(t, err, "wrappedPrimaryKey")
+
+			err = as.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", "key", strings.Repeat("x", (32<<10)+1))
+			require.ErrorIs(t, err, ErrWrappedKeyTooLarge)
+			require.ErrorContains(t, err, "wrappedAnchorKey")
 
 			// Non-existent credential
 			err = as.UpdateCredentialWrappedKey(ctx, "no-such-cred", "user-1", "key", "anchor")

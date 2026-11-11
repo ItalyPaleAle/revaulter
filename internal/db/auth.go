@@ -134,6 +134,7 @@ var (
 	ErrInvalidIP              = errors.New("invalid IP")
 	ErrInvalidCIDR            = errors.New("invalid CIDR")
 	ErrWrappedKeyEpochChanged = errors.New("wrapped key epoch changed")
+	ErrWrappedKeyTooLarge     = errors.New("wrapped key is too large")
 )
 
 func NewAuthStore(db adapter.Querier, kind BackendKind) (*AuthStore, error) {
@@ -543,10 +544,10 @@ func (s *AuthStore) UpdateDisplayName(ctx context.Context, userID string, displa
 // The credential must belong to the given user
 func (s *AuthStore) UpdateCredentialWrappedKey(ctx context.Context, credentialID string, userID string, wrappedPrimaryKey string, wrappedAnchorKey string) error {
 	if len(wrappedPrimaryKey) > 512 {
-		return errors.New("wrappedPrimaryKey is too large")
+		return fmt.Errorf("wrappedPrimaryKey: %w", ErrWrappedKeyTooLarge)
 	}
 	if len(wrappedAnchorKey) > 32<<10 {
-		return errors.New("wrappedAnchorKey is too large")
+		return fmt.Errorf("wrappedAnchorKey: %w", ErrWrappedKeyTooLarge)
 	}
 
 	// Guard against updates for non-active users (frozen/disabled/removed) by gating both the target row and the epoch subquery on status = 'active'

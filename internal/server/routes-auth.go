@@ -974,10 +974,13 @@ func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, re
 	}
 
 	err = as.UpdateCredentialWrappedKey(ctx, req.CredentialID, userID, req.WrappedPrimaryKey, req.WrappedAnchorKey)
-	if errors.Is(err, db.ErrCredentialNotFound) {
+	switch {
+	case errors.Is(err, db.ErrCredentialNotFound):
 		return NewResponseError(http.StatusNotFound, "Credential not found")
-	} else if err != nil {
+	case errors.Is(err, db.ErrWrappedKeyTooLarge):
 		return NewResponseError(http.StatusBadRequest, err.Error())
+	case err != nil:
+		return fmt.Errorf("failed to update the wrapped key: %w", err)
 	}
 
 	// Save the audit log entry
@@ -1691,10 +1694,11 @@ func (s *Server) loginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (logi
 	}
 
 	// Complete the WebAuthn login
+	// The library's error says why verification failed, which would help an attacker probing with a stolen assertion, so it's only logged
 	cred, err := s.webAuthn.FinishDiscoverableLogin(handler, *payload.WebAuthnSession, waReq)
 	if err != nil {
 		logWebAuthnError(ctx, "login", err)
-		return loginFinishRes{}, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn login verification failed: %v", err)
+		return loginFinishRes{}, NewResponseError(http.StatusUnauthorized, "Passkey verification failed")
 	}
 	if discoveredUser == nil || (discoveredDBUser == nil && discoveredSignup == nil) {
 		return loginFinishRes{}, invalidLoginResponseError
@@ -1799,9 +1803,11 @@ func (s *Server) finishWebAuthnRegistration(c *gin.Context, user *v2WebAuthnUser
 	}
 
 	// Finish the registration
+	// As with login, the library's error is only logged
 	cred, err := s.webAuthn.FinishRegistration(user, *sess, waReq)
 	if err != nil {
-		return nil, nil, NewResponseErrorf(http.StatusUnauthorized, "WebAuthn registration verification failed: %v", err)
+		logWebAuthnError(c.Request.Context(), "registration", err)
+		return nil, nil, NewResponseError(http.StatusUnauthorized, "Passkey registration failed")
 	}
 
 	// Encode to JSON
