@@ -2,7 +2,10 @@ module github.com/italypaleale/revaulter
 
 go 1.27.4
 
-tool github.com/fchimpan/gomod-age
+tool (
+	github.com/fchimpan/gomod-age
+	golang.org/x/vuln/cmd/govulncheck
+)
 
 require (
 	github.com/caarlos0/env/v11 v11.4.2
@@ -171,8 +174,11 @@ require (
 	golang.org/x/arch v0.32.0 // indirect
 	golang.org/x/exp v0.0.0-20261109185158-a52e3aef5920 // indirect
 	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/telemetry v0.0.0-20261010193011-f71dc92da45e // indirect
 	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
+	golang.org/x/tools v0.52.1-0.20261106145633-d407941a339a // indirect
+	golang.org/x/vuln v1.9.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261019180522-ce908d29299b // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b // indirect
 	google.golang.org/grpc v1.84.0 // indirect

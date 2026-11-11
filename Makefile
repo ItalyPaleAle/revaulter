@@ -10,6 +10,11 @@ test-race:
 lint:
 	golangci-lint run -c .golangci.yaml
 
+# Scan for known vulnerabilities in code that is reachable from revaulter
+.PHONY: vulncheck
+vulncheck:
+	go tool govulncheck ./...
+
 .PHONY: gen-config
 gen-config:
 	go run ./tools/gen-config-yaml

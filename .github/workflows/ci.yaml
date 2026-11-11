@@ -12,28 +12,12 @@ permissions:
   contents: read
 
 jobs:
-  ci:
-    name: CI tests
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: revaulter_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+  build:
+    name: Build and frontend tests
+    runs-on: ubuntu-26.04
 
     env:
       CGO_ENABLED: "0"
-      TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/revaulter_test?sslmode=disable
 
     steps:
       - name: Check out code
@@ -65,6 +49,17 @@ jobs:
           pnpm run check
           pnpm run svelte-check
 
+      - name: Run frontend tests
+        working-directory: client/web
+        run: |
+          pnpm run test
+
+      # Built before the production client because it overwrites dist with an E2E-mode build, which the binary embeds
+      - name: Build E2E server binary
+        working-directory: client/web
+        run: |
+          pnpm run e2e:build-server
+
       - name: Build client
         working-directory: client/web
         run: |
@@ -74,57 +69,119 @@ jobs:
         run: |
           make check-config-diff || echo "Please run 'make gen-config'"
 
-      - name: Check DB diff
-        env:
-          TEST_DATABASE_DSN: ${{ env.TEST_POSTGRES_DSN }}
-        run: |
-          make check-db-diff || echo "Please run 'make gen-db'"
-
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version-file: .golangci-lint-version
 
-      - name: Run backend tests (SQLite)
-        run: |
-          make test
+      # The production client is needed by the backend tests, since the server embeds it
+      - name: Upload build output
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-build
+          path: |
+            .bin/revaulter-e2e
+            client/web/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
 
-      - name: Run backend tests (Postgres)
+      # Runs last so a newly published advisory doesn't hide the lint and frontend test results
+      - name: Check for known vulnerabilities
+        run: |
+          make vulncheck
+
+  test:
+    name: Tests (${{ matrix.db }})
+    runs-on: ubuntu-26.04
+    needs: build
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Every browser engine runs against SQLite
+          - db: sqlite
+            database-dsn: ""
+            e2e-browsers: all
+          # The Postgres run covers chromium only
+          - db: postgres
+            database-dsn: postgres://postgres:postgres@localhost:5432/revaulter_test?sslmode=disable
+            e2e-browsers: chromium
+
+    services:
+      postgres:
+        # An empty image skips the service container, so it only starts for the Postgres run
+        image: ${{ matrix.db == 'postgres' && 'postgres:18' || '' }}
         env:
-          TEST_DATABASE_DSN: ${{ env.TEST_POSTGRES_DSN }}
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: revaulter_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      CGO_ENABLED: "0"
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+
+      - name: Setup Node.js and pnpm
+        uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
+        with:
+          package-json-file: 'client/web/package.json'
+          cache: true
+          cache-dependency-path: "client/web/pnpm-lock.yaml"
+
+      - name: Install client dependencies
+        working-directory: client/web
+        run: |
+          pnpm install --frozen-lockfile
+
+      - name: Download build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-build
+
+      # Artifacts do not preserve file permissions
+      - name: Make E2E server binary executable
+        run: |
+          chmod +x .bin/revaulter-e2e
+
+      - name: Check DB diff
+        if: matrix.db == 'postgres'
+        env:
+          TEST_DATABASE_DSN: ${{ matrix.database-dsn }}
+        run: |
+          make check-db-diff || echo "Please run 'make gen-db'"
+
+      - name: Run backend tests
+        env:
+          TEST_DATABASE_DSN: ${{ matrix.database-dsn }}
         run: |
           make test
 
       - name: Install Playwright browsers
         working-directory: client/web
         env:
-          E2E_BROWSERS: all
+          E2E_BROWSERS: ${{ matrix.e2e-browsers }}
         run: |
           pnpm run e2e:install
 
-      - name: Run frontend tests
-        working-directory: client/web
-        run: |
-          pnpm run test
-
-      - name: Build E2E server binary
-        working-directory: client/web
-        run: |
-          pnpm run e2e:build-server
-
-      # Every browser engine runs against SQLite
-      - name: Run E2E tests (SQLite)
+      - name: Run E2E tests
         working-directory: client/web
         env:
-          E2E_BROWSERS: all
-        run: |
-          pnpm exec playwright test
-
-      # The Postgres run covers chromium only
-      - name: Run E2E tests (Postgres)
-        working-directory: client/web
-        env:
-          E2E_DATABASE_DSN: ${{ env.TEST_POSTGRES_DSN }}
-          E2E_BROWSERS: chromium
+          E2E_DATABASE_DSN: ${{ matrix.database-dsn }}
+          E2E_BROWSERS: ${{ matrix.e2e-browsers }}
         run: |
           pnpm exec playwright test
