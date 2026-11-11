@@ -593,6 +593,18 @@ describe('deriveSigningKeyPair', () => {
         ).rejects.toThrow(/Unsupported signing algorithm/)
     })
 
+    // The server and the CLI refer to keys by their lowercase label, so a key derived from any other spelling would never be used to sign
+    it.each(['Prod-Key', 'prod key', ''])('rejects the non-canonical key label %j', async (keyLabel) => {
+        await expect(
+            deriveSigningKeyPair({
+                userId: 'u',
+                keyLabel,
+                algorithm: 'ES256',
+                primaryKey: TEST_PRIMARY_KEY,
+            })
+        ).rejects.toThrow(/not in canonical form/)
+    })
+
     it('returns algorithm-appropriate public JWKs without private material', async () => {
         const es256 = await deriveSigningKeyPair({
             userId: 'u',

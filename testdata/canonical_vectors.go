@@ -73,6 +73,14 @@ type JwkThumbprintVector struct {
 	Thumbprint   string     `json:"thumbprint"`
 }
 
+// KeyLabelVector is a key label and its canonical form
+// Canonical is nil when the label must be rejected
+type KeyLabelVector struct {
+	Name      string  `json:"name"`
+	Input     string  `json:"input"`
+	Canonical *string `json:"canonical"`
+}
+
 // CanonicalVectors holds every byte string that the Go and TypeScript implementations must construct identically
 // The TypeScript suite in client/web/src/lib/canonical-vectors.test.ts reads the same JSON file, so a change on either side that is not mirrored in the other breaks both test suites rather than silently producing signatures the other cannot verify
 type CanonicalVectors struct {
@@ -83,6 +91,7 @@ type CanonicalVectors struct {
 	TransportAad          []TransportAadVector          `json:"transportAad"`
 	RequestEncAad         []RequestEncAadVector         `json:"requestEncAad"`
 	JwkThumbprint         []JwkThumbprintVector         `json:"jwkThumbprint"`
+	KeyLabel              []KeyLabelVector              `json:"keyLabel"`
 }
 
 // LoadCanonicalVectors parses the embedded shared test vectors

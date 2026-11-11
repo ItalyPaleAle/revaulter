@@ -34,6 +34,7 @@ import {
     unwrapAnchorKey,
     wrapAnchorKey,
 } from '$lib/crypto-anchor'
+import { KEY_LABEL_RULES, normalizeKeyLabel } from '$lib/key-label'
 import { ResponseNotOkError } from '$lib/request'
 import { base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import {
@@ -747,9 +748,15 @@ async function doLoadSigningKeys() {
     }
 }
 
-async function doDeriveSigningKey(keyLabel: string, algorithm: string): Promise<DerivedSigningKey> {
+async function doDeriveSigningKey(label: string, algorithm: string): Promise<DerivedSigningKey> {
     if (!session || !primaryKey) {
         throw new Error('Missing local key material')
+    }
+
+    // Derive from the canonical label, which is the one the server stores and the CLI sends in sign requests
+    const keyLabel = normalizeKeyLabel(label)
+    if (!keyLabel) {
+        throw new Error(KEY_LABEL_RULES)
     }
 
     const { publicJwk } = await deriveSigningKeyPair({
@@ -778,6 +785,15 @@ async function doDeriveSigningKey(keyLabel: string, algorithm: string): Promise<
         }
     }
     await doLoadSigningKeys()
+
+    // Versions before the label was canonicalized in the browser derived keys from the label as typed, while the server stored it in lowercase
+    // A stored row with a different ID holds one of those keys, which sign requests never use
+    const stored = signingKeys.find((k) => k.algorithm === algorithm && k.keyLabel === keyLabel)
+    if (stored && stored.id !== id) {
+        throw new Error(
+            `The stored ${algorithm} key "${keyLabel}" doesn't match the key derived from this label. It was probably created by an older version of Revaulter from a label with uppercase letters. Delete it, then derive the key again.`
+        )
+    }
 
     return { keyLabel, algorithm, jwk: publicJwk, pem, sshPublicKey, id }
 }

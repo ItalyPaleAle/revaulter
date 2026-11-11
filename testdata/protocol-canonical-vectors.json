@@ -1,7 +1,7 @@
 {
     "$comment": [
         "Shared test vectors for every byte string that the Go and TypeScript implementations must construct identically.",
-        "These cover the canonical bodies and domain-separated messages that anchor signatures are computed over, the AEAD additional authenticated data, and RFC 7638 JWK thumbprints.",
+        "These cover the canonical bodies and domain-separated messages that anchor signatures are computed over, the AEAD additional authenticated data, RFC 7638 JWK thumbprints, and the canonical form of key labels, which every key derivation is bound to.",
         "A mismatch between the two implementations means signatures produced by the browser will not verify in Go (or vice versa), so both test suites read this file and assert against it:",
         "  - Go:         internal/protocolv2/canonical_vectors_test.go and internal/clientcore/canonical_vectors_test.go",
         "  - TypeScript: client/web/src/lib/canonical-vectors.test.ts",
@@ -120,6 +120,68 @@
             },
             "canonicalJwk": "{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\"}",
             "thumbprint": "P7IdLIpiTZiFaIoOSqbX3JrSyps3hvZ4Y2SieP96XIY"
+        }
+    ],
+    "keyLabel": [
+        {
+            "name": "lowercase label is unchanged",
+            "input": "prod-key",
+            "canonical": "prod-key"
+        },
+        {
+            "name": "uppercase letters are lowercased",
+            "input": "Prod-Key",
+            "canonical": "prod-key"
+        },
+        {
+            "name": "every allowed symbol",
+            "input": "A.b+C_d-9",
+            "canonical": "a.b+c_d-9"
+        },
+        {
+            "name": "maximum length",
+            "input": "ABCDEFGHIJKLMNOPQRSTUVWX",
+            "canonical": "abcdefghijklmnopqrstuvwx"
+        },
+        {
+            "name": "empty label is rejected",
+            "input": "",
+            "canonical": null
+        },
+        {
+            "name": "label over the maximum length is rejected",
+            "input": "abcdefghijklmnopqrstuvwxy",
+            "canonical": null
+        },
+        {
+            "name": "space is rejected",
+            "input": "prod key",
+            "canonical": null
+        },
+        {
+            "name": "newline is rejected",
+            "input": "prod\nkey",
+            "canonical": null
+        },
+        {
+            "name": "equals sign is rejected",
+            "input": "prod=key",
+            "canonical": null
+        },
+        {
+            "name": "slash is rejected",
+            "input": "prod/key",
+            "canonical": null
+        },
+        {
+            "name": "non-ASCII letter is rejected",
+            "input": "prüd",
+            "canonical": null
+        },
+        {
+            "name": "non-ASCII letter that lowercases to ASCII is rejected",
+            "input": "K",
+            "canonical": null
         }
     ]
 }

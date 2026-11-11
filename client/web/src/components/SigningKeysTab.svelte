@@ -5,6 +5,7 @@ import Button from '$components/Button.svelte'
 import Icon from '$components/Icon.svelte'
 import TextField from '$components/TextField.svelte'
 
+import { MAX_KEY_LABEL_LENGTH } from '$lib/key-label'
 import type { DerivedSigningKey, V2PublishedSigningKey } from '$lib/v2-types'
 
 type SigningKeyDownloadKind = 'jwk' | 'pem' | 'ssh'
@@ -239,6 +240,7 @@ function isDerivedPublished(): boolean {
         <div class="text-sm font-medium text-neutral-900 dark:text-neutral-50">Derive a signing key</div>
         <p class="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
             Same key label and algorithm always produce the same key.
+            Labels are case-insensitive, up to {MAX_KEY_LABEL_LENGTH} characters, and can contain letters, digits, and <code>_ . + -</code>.
         </p>
 
         <div class="mt-3 grid gap-3 md:grid-cols-2">

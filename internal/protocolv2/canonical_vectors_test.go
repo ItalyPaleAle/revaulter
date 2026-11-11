@@ -95,6 +95,21 @@ func TestCanonicalVectorsMatchGoImplementation(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("keyLabel", func(t *testing.T) {
+		require.NotEmpty(t, v.KeyLabel)
+		for _, tc := range v.KeyLabel {
+			t.Run(tc.Name, func(t *testing.T) {
+				got, ok := protocolv2.NormalizeAndValidateKeyLabel(tc.Input)
+				if tc.Canonical == nil {
+					require.False(t, ok, "label %q must be rejected", tc.Input)
+					return
+				}
+				require.True(t, ok, "label %q must be accepted", tc.Input)
+				require.Equal(t, *tc.Canonical, got)
+			})
+		}
+	})
 }
 
 func TestCanonicalVectorsPrefixesAreStable(t *testing.T) {

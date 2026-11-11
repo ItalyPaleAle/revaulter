@@ -7,6 +7,7 @@ import { p256 } from '@noble/curves/nist.js'
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js'
 import { deriveEcdhSharedSecret, ecP256ScalarToPublicJwk, generateTransportKeyPairJwk } from '$lib/crypto-ecdh'
 import { normalizeAeadAlgorithm } from '$lib/crypto-symmetric'
+import { assertCanonicalKeyLabel } from '$lib/key-label'
 import { asBuf, base64UrlToBytes, bytesToBase64Url } from '$lib/utils'
 import type {
     Argon2idCost,
@@ -520,6 +521,9 @@ export async function deriveSigningKeyPair(params: {
     if (!supportedAlgorithms.includes(params.algorithm)) {
         throw new Error(`Unsupported signing algorithm: ${params.algorithm}`)
     }
+
+    // The server and the CLI always refer to keys by their canonical label, so deriving from any other spelling would produce a key nothing else uses
+    assertCanonicalKeyLabel(params.keyLabel)
 
     const ikm = await crypto.subtle.importKey('raw', asBuf(params.primaryKey), 'HKDF', false, ['deriveBits'])
     const info = new TextEncoder().encode(

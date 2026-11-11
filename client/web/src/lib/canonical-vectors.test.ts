@@ -14,6 +14,7 @@ import {
     signingKeyPublicationPayloadCanonicalBody,
 } from '$lib/crypto-anchor'
 import { buildRequestEncAAD, buildTransportAAD } from '$lib/crypto-symmetric'
+import { normalizeKeyLabel } from '$lib/key-label'
 import type { V2Operation, V2SigningJwk } from '$lib/v2-types'
 
 /**
@@ -99,6 +100,18 @@ describe('shared canonical vectors', () => {
         for (const tc of vectors.jwkThumbprint) {
             it(tc.name, async () => {
                 expect(await computeSigningKeyThumbprint(tc.jwk as V2SigningJwk)).toBe(tc.thumbprint)
+            })
+        }
+    })
+
+    describe('keyLabel', () => {
+        it('has vectors', () => {
+            expect(vectors.keyLabel.length).toBeGreaterThan(0)
+        })
+
+        for (const tc of vectors.keyLabel) {
+            it(tc.name, () => {
+                expect(normalizeKeyLabel(tc.input)).toBe(tc.canonical)
             })
         }
     })

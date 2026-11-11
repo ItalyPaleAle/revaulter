@@ -80,7 +80,7 @@ The request payload is encrypted end-to-end by the CLI before submission. The se
 
 | Field | Required | Description |
 | ------- | ---------- | ------------- |
-| `keyLabel` | Yes | Logical key label for key derivation (max 128 chars) |
+| `keyLabel` | Yes | Logical key label for key derivation: 1-24 characters, letters, digits, and `_ . + -` (case-insensitive) |
 | `algorithm` | Yes | Algorithm identifier (max 64 chars). Encrypt/decrypt accept `A256GCM` (alias `aes-256-gcm`) and `C20P` (alias `chacha20-poly1305`); sign accepts `ES256` |
 | `timeout` | No | Request timeout as seconds or Go duration (default: server `requestTimeout`, max: 24h) |
 | `note` | No | Human-readable note displayed in the web UI (max 40 chars, alphanumeric and `. / _ -`) |
@@ -899,7 +899,7 @@ Returns `404 Not Found` when the ID doesn't match a row belonging to the authent
 Create a new signing key for the current user. The `published` flag in the request body controls whether the key is served by the public fetch endpoints below. The server validates that:
 
 - `algorithm` is supported (currently only `ES256`)
-- `keyLabel` is non-empty and at most 128 chars
+- `keyLabel` is 1-24 characters long and contains only letters, digits, and `_ . + -`; it is stored in lowercase
 - `jwk` is a valid EC P-256 public JWK (wrong `kty`, wrong `crv`, missing `x`/`y`, presence of `d`, or off-curve points are rejected)
 - `pem` parses as a valid PKIX `SubjectPublicKeyInfo`
 - The JWK and PEM describe the same public point (mismatch → 400)
