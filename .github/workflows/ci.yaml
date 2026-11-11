@@ -34,10 +34,6 @@ jobs:
           cache: true
           cache-dependency-path: "client/web/pnpm-lock.yaml"
 
-      - name: Check Go dependency minimum age
-        run: |
-          go tool gomod-age
-
       - name: Install client dependencies
         working-directory: client/web
         run: |
@@ -69,11 +65,6 @@ jobs:
         run: |
           make check-config-diff || echo "Please run 'make gen-config'"
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version-file: .golangci-lint-version
-
       # The production client is needed by the backend tests, since the server embeds it
       - name: Upload build output
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -86,7 +77,37 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      # Runs last so a newly published advisory doesn't hide the lint and frontend test results
+  # Runs in parallel with the build and tests
+  go-checks:
+    name: Go dependency and lint checks
+    runs-on: ubuntu-26.04
+
+    env:
+      CGO_ENABLED: "0"
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+
+      # The server embeds the web client, so its Go packages only load if the client directory has a file in it
+      - name: Create placeholder web client
+        run: |
+          mkdir -p client/web/dist
+          touch client/web/dist/index.html
+
+      - name: Check Go dependency minimum age
+        run: |
+          go tool gomod-age
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version-file: .golangci-lint-version
+
       - name: Check for known vulnerabilities
         run: |
           make vulncheck
