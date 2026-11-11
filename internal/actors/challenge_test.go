@@ -16,6 +16,15 @@ func TestChallengeActorID(t *testing.T) {
 		assert.Equal(t, "login:abc", id)
 	})
 
+	t.Run("device login challenges are keyed by their ID", func(t *testing.T) {
+		id, err := challengeActorID(ChallengeKindDeviceLogin, "abc", "")
+		require.NoError(t, err)
+		assert.Equal(t, "device-login:abc", id)
+
+		_, err = challengeActorID(ChallengeKindDeviceLogin, "a/b", "")
+		require.ErrorIs(t, err, ErrInvalidChallenge)
+	})
+
 	t.Run("add-credential challenges are keyed by the user", func(t *testing.T) {
 		id, err := challengeActorID(ChallengeKindAddCredential, "abc", "user-1")
 		require.NoError(t, err)
@@ -54,6 +63,18 @@ func TestChallengeActor(t *testing.T) {
 
 		_, err = h.ConsumeChallenge(t.Context(), ChallengeKindLogin, challengeID, "")
 		require.ErrorIs(t, err, ErrInvalidChallenge)
+	})
+
+	t.Run("device login challenge can't be used for a passkey sign-in", func(t *testing.T) {
+		challengeID, err := h.BeginChallenge(t.Context(), ChallengeKindDeviceLogin, "", time.Now().Add(time.Minute), []byte(`{"challenge":"d1"}`))
+		require.NoError(t, err)
+
+		_, err = h.ConsumeChallenge(t.Context(), ChallengeKindLogin, challengeID, "")
+		require.ErrorIs(t, err, ErrInvalidChallenge)
+
+		payload, err := h.ConsumeChallenge(t.Context(), ChallengeKindDeviceLogin, challengeID, "")
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"challenge":"d1"}`, string(payload))
 	})
 
 	t.Run("unknown and invalid challenges", func(t *testing.T) {

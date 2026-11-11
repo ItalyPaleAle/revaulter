@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	// actorTypeChallenge is the actor type that holds WebAuthn challenges for sign-ins and for adding passkeys
+	// actorTypeChallenge is the actor type that holds the challenges for sign-ins with a passkey or a device and for adding passkeys
 	actorTypeChallenge = "revaulter.challenge"
 	// challengeActorCleanupAlarm is the name of the alarm that deletes a challenge once it expires
 	challengeActorCleanupAlarm = "cleanup"
@@ -30,13 +30,16 @@ const (
 	challengeMethodPending = "pending"
 )
 
-// ChallengeKind is the kind of WebAuthn ceremony a challenge is for
+// ChallengeKind is the kind of ceremony a challenge is for
 type ChallengeKind string
 
 const (
-	// ChallengeKindLogin is a sign-in
+	// ChallengeKindLogin is a sign-in with a passkey
 	// Each sign-in has its own challenge
 	ChallengeKindLogin ChallengeKind = "login"
+	// ChallengeKindDeviceLogin is a sign-in with a native app's device credential
+	// Each sign-in has its own challenge
+	ChallengeKindDeviceLogin ChallengeKind = "device-login"
 	// ChallengeKindAddCredential is the registration of a new passkey for a signed-in user
 	// A user has at most one pending, so beginning a new one replaces the previous one
 	// #nosec G101 -- This is the name of a ceremony, not a credential
@@ -225,7 +228,7 @@ func (a *challengeActor) consume(ctx context.Context, in challengeConsumeReq) (c
 // Sign-in challenges are keyed by their own ID, and add-credential challenges by the user they're bound to
 func challengeActorID(kind ChallengeKind, challengeID string, userID string) (string, error) {
 	switch kind {
-	case ChallengeKindLogin:
+	case ChallengeKindLogin, ChallengeKindDeviceLogin:
 		if challengeID == "" || len(challengeID) > maxChallengeIDLength || strings.ContainsRune(challengeID, '/') {
 			return "", ErrInvalidChallenge
 		}
@@ -242,7 +245,7 @@ func challengeActorID(kind ChallengeKind, challengeID string, userID string) (st
 	}
 }
 
-// BeginChallenge stores a new WebAuthn challenge with its payload, encoded as JSON, and returns its ID
+// BeginChallenge stores a new challenge with its payload, encoded as JSON, and returns its ID
 // userID binds the challenge to a user, and it's required for add-credential challenges
 func (h *Host) BeginChallenge(ctx context.Context, kind ChallengeKind, userID string, expiresAt time.Time, payload []byte) (string, error) {
 	if expiresAt.IsZero() {

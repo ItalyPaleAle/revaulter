@@ -328,6 +328,8 @@ func (s *Server) initAppServer(log *slog.Logger) (err error) {
 	v2AuthGroup.POST("/register/finish", s.RouteV2AuthRegisterFinish)
 	v2AuthGroup.POST("/login/begin", s.RouteV2AuthLoginBegin)
 	v2AuthGroup.POST("/login/finish", s.RouteV2AuthLoginFinish)
+	v2AuthGroup.POST("/device/login/begin", s.RouteV2AuthDeviceLoginBegin)
+	v2AuthGroup.POST("/device/login/finish", s.RouteV2AuthDeviceLoginFinish)
 	v2AuthGroup.GET("/session", sessionReadyMw, s.RouteV2AuthSession)
 	v2AuthGroup.POST("/finalize-signup", sessionMw, s.RouteV2AuthFinalizeSignup)
 	v2AuthGroup.POST("/allowed-ips", sessionReadyMw, s.RouteV2AuthAllowedIPs)
