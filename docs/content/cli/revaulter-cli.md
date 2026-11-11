@@ -60,7 +60,7 @@ revaulter-cli encrypt [flags]
 ```
 
 | Flag | Short | Required | Description |
-| ------ | ------- | ---------- | ------------- |
+| --- | --- | --- | --- |
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
 | `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration), or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
@@ -124,7 +124,7 @@ revaulter-cli decrypt [flags]
 ```
 
 | Flag | Short | Required | Description |
-| ------ | ------- | ---------- | ------------- |
+| --- | --- | --- | --- |
 | `--server` | `-s` | Yes | Address of the Revaulter server (e.g. `https://revaulter.example.com`) |
 | `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration), or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
@@ -201,7 +201,7 @@ revaulter-cli sign [flags]
 ```
 
 | Flag | Short | Required | Description |
-| ------ | ------- | ---------- | ------------- |
+| --- | --- | --- | --- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
 | `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key, or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
@@ -301,7 +301,7 @@ Run this once when first connecting to a server. In interactive use the CLI disp
 The default trust store path is `<user-config-dir>/revaulter-cli/trust.json` (e.g. `~/.config/revaulter-cli/trust.json` on Linux). Override it with the `TRUST_STORE_PATH` environment variable or the `--trust-store` flag.
 
 | Flag | Short | Required | Description |
-| ------ | ------- | ---------- | ------------- |
+| --- | --- | --- | --- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
 | `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key used to authenticate with the server, or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
@@ -348,7 +348,7 @@ Starts a Unix-socket SSH agent. SSH clients with `SSH_AUTH_SOCK` pointed at the 
 For a full setup walkthrough (including installing the public key in `authorized_keys`), see [Authenticate to SSH servers](/examples/authenticate-to-ssh-servers/).
 
 | Flag | Short | Required | Description |
-| ------ | ------- | ---------- | ------------- |
+| --- | --- | --- | --- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
 | `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key, or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
@@ -401,9 +401,10 @@ revaulter-cli check --server https://revaulter.example.com
 ```
 
 | Flag | Short | Required | Description |
-| ------ | ------- | ---------- | ------------- |
+| --- | --- | --- | --- |
 | `--server` | `-s` | Yes | Address of the Revaulter server |
 | `--timeout` | `-t` | No | Overall timeout for the check (e.g. `60s`, `2m`); defaults to 60s |
+| `--min-version` | | No | Fail if the server runs a release older than this version (e.g. `x.y.z`). Without it, the CLI only warns when the server is older than the CLI itself |
 | `--insecure` | | No | Skip TLS certificate validation |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
 | `--verbose` | `-V` | No | Show debug-level logs |

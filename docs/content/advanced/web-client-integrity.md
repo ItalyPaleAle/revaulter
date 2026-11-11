@@ -39,10 +39,23 @@ A failing run reports the specific file(s) that differ from the signed manifest 
    - the signing cert chains to Fulcio's root CA
    - its subject matches this repo's release workflow on a tag or another ref baked into the CLI build (e.g. a `main` branch for edge builds)
    - its Rekor transparency-log entry is genuine
-4. Asserts the manifest's version and commit match the server's `/info` response (downgrade protection)
+4. Asserts the manifest's version and commit match the server's `/info` response
 5. `GET`s every file listed in the manifest from the server, hashes it, compares to the manifest. Any mismatch causes an exit with non-zero status code, printing out the offending paths.
+6. Compares the server's version with the CLI's own version, and with `--min-version` if you set it (see [Older releases](#older-releases))
 
 If any of those steps fails, you have evidence that either the server binary has been swapped, the assets have been replaced after install, or a proxy is rewriting responses in-flight.
+
+## Older releases
+
+A signature only proves that a release is genuine, not that it's the latest one. A compromised server can pass the check by serving an older release that was genuinely signed, for example one with a known vulnerability.
+
+To help catch this, `revaulter-cli check` prints a warning when the server runs an older release than the CLI itself.
+
+To make the check fail instead, pass the oldest version you're willing to accept:
+
+```bash
+revaulter-cli check --server https://revaulter.example.com --min-version 2.9.0
+```
 
 ## Trust model
 
@@ -51,7 +64,7 @@ Cosign keyless has no persistent per-release signing key. Each signing operation
 What the CLI embeds is therefore not a signing key, but Sigstore's stable infrastructure trust roots:
 
 | Embedded material | What it verifies |
-|---|---|
+| --- | --- |
 | Fulcio root CA | That the ephemeral signing cert was issued by Fulcio to a caller presenting a GitHub OIDC token |
 | Rekor public key | That the log entry's Signed Entry Timestamp (SET) is genuinely from Rekor |
 | Certificate Transparency log keys | That Fulcio's cert issuance was CT-logged (detects Fulcio misbehavior) |
@@ -68,7 +81,7 @@ A signature from any other workflow, repo, or branch is rejected.
 ## When a manifest is and isn't signed
 
 | Build trigger | Manifest behavior |
-|---|---|
+| --- | --- |
 | Tag push (`v*`) | **Always** signed. |
 | Configured release-branch push whose head commit carries a `Sign-Web-Client` trailer in its commit message | Signed. |
 | Configured release-branch push without that trailer | **Not** signed — server reports `hasIntegrity: false`. |
@@ -101,9 +114,10 @@ docker run --rm ghcr.io/italypaleale/revaulter-cli:2 check \
 ## Flags
 
 | Flag | Short | Required | Description |
-|------|-------|----------|-------------|
+| --- | --- | --- | --- |
 | `--server` | `-s` | Yes | Address of the Revaulter server to check |
 | `--timeout` | `-t` | No | Overall timeout for the check (e.g. `60s`, `2m`); defaults to 60s |
+| `--min-version` | | No | Fail if the server runs a release older than this version (e.g. `x.y.z`) |
 | `--insecure` | | No | Skip TLS certificate validation (not recommended) |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when the server is on plain HTTP |
 | `--verbose` | `-V` | No | Show debug-level logs, including per-file OK messages |
@@ -116,6 +130,7 @@ docker run --rm ghcr.io/italypaleale/revaulter-cli:2 check \
   - Signature identity mismatch — the signing workflow is not this repo's release workflow.
   - File hash mismatch — the listed paths differ from what the signed manifest records. This is the signal of interest.
   - Manifest version/commit don't match `/info` — possible downgrade or binary swap.
+  - With `--min-version` set, the server runs an older release or a build that isn't a release.
 
 ## When to run it
 
