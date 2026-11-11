@@ -168,6 +168,19 @@ jobs:
         run: |
           ./build.sh
 
+      # Lists the production dependencies of the web client, which scripts/build-binaries.sh merges into the SBOM of the server binary that embeds it
+      # The spec version must match the one cyclonedx-gomod writes, or the merge fails
+      - name: Generate web client SBOM
+        working-directory: client/web
+        run: |
+          pnpm sbom \
+            --prod \
+            --sbom-format cyclonedx \
+            --sbom-spec-version 1.6 \
+            --sbom-type application \
+            --out "${RUNNER_TEMP}/web-client.cdx.json"
+          echo "WEB_CLIENT_SBOM=${RUNNER_TEMP}/web-client.cdx.json" >> "$GITHUB_ENV"
+
       # Integrity manifest: signs the web client dist/ contents with cosign keyless
       # Always runs on tag releases; on configured release-branch pushes, only when the head commit
       # carries a `Sign-Web-Client: yes` trailer (parsed via `git interpret-trailers`)

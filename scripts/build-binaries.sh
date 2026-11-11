@@ -3,7 +3,7 @@
 # Builds every Revaulter binary for a single release target, then packages them into an archive.
 #
 # Usage:
-#   BUILD_ID=<id> [BUILD_VERSION=<version>] [BUILD_LDFLAGS=<flags>] [CYCLONEDX_GOMOD=<path>] scripts/build-binaries.sh <target>
+#   BUILD_ID=<id> [BUILD_VERSION=<version>] [BUILD_LDFLAGS=<flags>] [CYCLONEDX_GOMOD=<path>] [WEB_CLIENT_SBOM=<path>] scripts/build-binaries.sh <target>
 #
 # Targets:
 #   linux-amd64  linux-arm64  linux-386  linux-armv7
@@ -14,11 +14,20 @@
 # Binaries are staged in .bin/revaulter-<BUILD_ID>-<target>, and the archive is written to .out
 # Windows targets produce a .zip, every other target a .tar.gz
 # When CYCLONEDX_GOMOD is the path to cyclonedx-gomod, a CycloneDX SBOM for each binary is also written to .out, as revaulter-<BUILD_ID>-<target>-<binary>.cdx.json
+# When WEB_CLIENT_SBOM is the path to the CycloneDX SBOM of the web client, it's merged into the SBOM of the revaulter server binary, which embeds the web client
 
 set -euo pipefail
 
 # Resolved before anything changes the working directory
 script_path="${BASH_SOURCE[0]}"
+web_client_sbom=""
+if [[ -n "${WEB_CLIENT_SBOM:-}" ]]; then
+  if [[ ! -f "${WEB_CLIENT_SBOM}" ]]; then
+    echo "Error: WEB_CLIENT_SBOM is set to '${WEB_CLIENT_SBOM}', which is not a file" >&2
+    exit 1
+  fi
+  web_client_sbom="$(cd "$(dirname "${WEB_CLIENT_SBOM}")" && pwd)/$(basename "${WEB_CLIENT_SBOM}")"
+fi
 
 # Release binaries are statically linked
 export CGO_ENABLED=0
@@ -31,7 +40,7 @@ BINARIES=(
 )
 
 usage() {
-  sed -n '3,16p' "${script_path}" | sed 's|^# \?||'
+  sed -n '3,17p' "${script_path}" | sed 's|^# \?||'
 }
 
 if [[ $# -ne 1 ]]; then
@@ -97,8 +106,13 @@ done
 # One SBOM per binary, generated from the module list that Go embeds in it, so it matches exactly what was compiled for this target
 # cyclonedx-gomod reads the build settings from the binary, but takes the GOOS and GOARCH in package URLs from `go env`, so they must be set to match the build
 if [[ -n "${CYCLONEDX_GOMOD:-}" ]]; then
+  if [[ -z "${web_client_sbom}" ]]; then
+    echo "Warning: WEB_CLIENT_SBOM is not set, so the SBOM for revaulter${ext} won't list the dependencies of the web client it embeds" >&2
+  fi
+
   for entry in "${BINARIES[@]}"; do
     binary="${entry%%:*}"
+    sbom=".out/${name}-${binary}.cdx.json"
 
     echo "Generating SBOM for ${binary}${ext}"
     GOOS="${goos}" GOARCH="${goarch}" GOARM="${goarm}" \
@@ -106,8 +120,19 @@ if [[ -n "${CYCLONEDX_GOMOD:-}" ]]; then
         -json \
         -std \
         -version "${BUILD_VERSION:-${BUILD_ID}}" \
-        -output ".out/${name}-${binary}.cdx.json" \
+        -output "${sbom}" \
         "${stage}/${binary}${ext}"
+
+    # The server binary embeds the web client, so its SBOM lists the web client's dependencies too
+    if [[ "${binary}" == "revaulter" && -n "${web_client_sbom}" ]]; then
+      echo "Merging the web client SBOM into the SBOM for ${binary}${ext}"
+      jq \
+        --slurpfile client "${web_client_sbom}" \
+        --arg version "${BUILD_VERSION:-${BUILD_ID}}" \
+        -f scripts/merge-web-client-sbom.jq \
+        "${sbom}" > "${sbom}.tmp"
+      mv "${sbom}.tmp" "${sbom}"
+    fi
   done
 fi
 

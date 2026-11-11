@@ -20,7 +20,7 @@ gh attestation verify revaulter-<version>-<platform>.tar.gz \
 
 Pass `--bundle attestations.json` to verify against the downloaded bundle instead of querying GitHub's attestations API.
 
-Each binary also has a [CycloneDX](https://cyclonedx.org) SBOM listing the dependencies compiled into it, named `revaulter-<version>-<platform>-<binary>.cdx.json`. The SBOMs are covered by `checksums.txt` and the attestations too.
+Each binary also has a [CycloneDX](https://cyclonedx.org) SBOM listing the dependencies compiled into it, named `revaulter-<version>-<platform>-<binary>.cdx.json`. The server's SBOM also lists the npm packages of the web client it embeds. The SBOMs are covered by `checksums.txt` and the attestations too.
 
 ### Docker
 
