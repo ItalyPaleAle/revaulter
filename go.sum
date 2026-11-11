@@ -264,8 +264,8 @@ github.com/in-toto/in-toto-golang v0.11.0 h1:nfidMYBFx+E0lnmX5KUnN2Pdm8zdNKal1ay
 github.com/in-toto/in-toto-golang v0.11.0/go.mod h1:u3PjTnwFKjp5a1YCcw8SJg0G+tMeKfVoWsWeFMDCMtw=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
-github.com/italypaleale/francis v0.2.1 h1:e/tzpXyrpu6pvdByaBbWyVg9SjCrvoOJr3wlDTApsfU=
-github.com/italypaleale/francis v0.2.1/go.mod h1:QD4oF449kJIa4kHycnRF9RMYyGW4A7CNUts/h69d+A4=
+github.com/italypaleale/francis v0.2.2 h1:SYpLYADFmn1iG/RfWOjgjgJO+afExBJpWAaKOFa+e+I=
+github.com/italypaleale/francis v0.2.2/go.mod h1:PpRtC4Qmh+q01I/L8vQUQ0WqQosaBufLkeAJdB5kxvU=
 github.com/italypaleale/go-kit v1.7.3 h1:Fo/+Ao/DQ3rj+KT3doKUqVmkw2iayBsT6mgpdLYa8tM=
 github.com/italypaleale/go-kit v1.7.3/go.mod h1:Ag+fHsNgafwiRuLML83/n48n/5uzqss+cPtwFcoqmDU=
 github.com/italypaleale/go-sql-utils v0.3.13 h1:1JlXW+pd5uL7GBPpo5vgZ/PRoCS5X5U+/FKC8g4fmJg=

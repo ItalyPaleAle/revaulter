@@ -10,7 +10,7 @@ require (
 	github.com/gin-contrib/location/v2 v2.0.4
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-webauthn/webauthn v0.18.2
-	github.com/italypaleale/francis v0.2.1
+	github.com/italypaleale/francis v0.2.2
 	github.com/italypaleale/go-kit v1.7.3
 	github.com/italypaleale/go-sql-utils v0.3.13
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
