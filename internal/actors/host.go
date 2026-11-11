@@ -163,6 +163,12 @@ func (h *Host) register() error {
 		return fmt.Errorf("failed to register actor type '%s': %w", actorTypeChallenge, err)
 	}
 
+	// Register the revaulter.pairing actor
+	err = h.host.RegisterActor(actorTypePairing, h.newPairingActor, local.WithIdleTimeout(pairingActorIdleTimeout))
+	if err != nil {
+		return fmt.Errorf("failed to register actor type '%s': %w", actorTypePairing, err)
+	}
+
 	// Register the revaulter.signup actor
 	err = h.host.RegisterActor(actorTypeSignup, h.newSignupActor)
 	if err != nil {

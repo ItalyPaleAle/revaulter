@@ -964,6 +964,15 @@ func (s *Server) updateWrappedKey(c *gin.Context, tx *db.DbTx, userID string, re
 		return NewResponseError(http.StatusConflict, "Cannot change password while a passkey registration is in progress")
 	}
 
+	// Pairing builds the new device's wrapper with the current password, so a password change must not land in the middle of it either
+	pairing, err := s.actors.Pairing(userID).IsOpen(ctx)
+	if err != nil {
+		return NewResponseError(http.StatusInternalServerError, "Failed to check pending pairing sessions")
+	}
+	if pairing {
+		return NewResponseError(http.StatusConflict, "Cannot change password while a device is being paired")
+	}
+
 	if req.AdvanceEpoch {
 		_, err = as.AdvanceWrappedKeyEpoch(ctx, userID)
 		if errors.Is(err, db.ErrUserNotFound) {

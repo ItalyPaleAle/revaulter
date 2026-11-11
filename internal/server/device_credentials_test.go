@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/italypaleale/revaulter/internal/actors"
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/protocolv2"
 )
@@ -55,6 +56,12 @@ func doV2JSON(t *testing.T, client *http.Client, method string, path string, bod
 	var out map[string]any
 	_ = json.NewDecoder(res.Body).Decode(&out)
 	return res.StatusCode, out
+}
+
+func withCookie(cookie *http.Cookie) func(req *http.Request) {
+	return func(req *http.Request) {
+		req.AddCookie(cookie)
+	}
 }
 
 func withBearer(token string) func(req *http.Request) {
@@ -182,4 +189,33 @@ func TestLoadWebAuthnUserSkipsDeviceCredentials(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, userRecord)
 	require.Len(t, userRecord.WebAuthnCredentials(), 1)
+}
+
+func TestServerV2UpdateWrappedKeyRefusedWhilePairing(t *testing.T) {
+	setTestConfig(t, "v2-wrapped-key-pairing.db")
+	srv := newTestServer(t, nil, nil, nil)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+
+	sessionCookie, _ := seedV2SessionCookie(t, srv, "user-alice", "Alice")
+	validAnchor := testValidWrappedAnchorEnvelope(t)
+	body := map[string]any{"credentialId": "cred-user-alice", "wrappedPrimaryKey": "new-key-blob", "wrappedAnchorKey": validAnchor, "advanceEpoch": true}
+
+	pairing := srv.actors.Pairing("user-alice")
+	sessionID, err := actors.NewPairingSessionID()
+	require.NoError(t, err)
+	_, err = pairing.Create(t.Context(), sessionID, "https://vault.example.com", protocolv2.PairingTTL, nil)
+	require.NoError(t, err)
+
+	status, out := doV2JSON(t, client, http.MethodPost, "/v2/auth/update-wrapped-key", body, withCookie(sessionCookie))
+	require.Equal(t, http.StatusConflict, status)
+	require.Contains(t, out["error"], "device is being paired")
+
+	// Once the pairing session ends, the password change goes through
+	_, err = pairing.Cancel(t.Context(), sessionID, nil)
+	require.NoError(t, err)
+
+	status, out = doV2JSON(t, client, http.MethodPost, "/v2/auth/update-wrapped-key", body, withCookie(sessionCookie))
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, true, out["ok"])
 }

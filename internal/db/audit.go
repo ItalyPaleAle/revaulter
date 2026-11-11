@@ -38,6 +38,10 @@ const (
 	AuditAuthCredentialRename   EventType = "auth.credential_rename"     //nolint:gosec // event_type constant, not a credential value
 	AuditAuthCredentialDelete   EventType = "auth.credential_delete"     //nolint:gosec // event_type constant, not a credential value
 	AuditAuthDeviceLoginFinish  EventType = "auth.device_login_finish"
+	AuditAuthPairingCreate      EventType = "auth.pairing_create"
+	AuditAuthPairingHello       EventType = "auth.pairing_hello"
+	AuditAuthPairingComplete    EventType = "auth.pairing_complete"
+	AuditAuthPairingCancel      EventType = "auth.pairing_cancel"
 	AuditRequestCreate          EventType = "request.create"
 	AuditRequestConfirm         EventType = "request.confirm"
 	AuditRequestCancel          EventType = "request.cancel"
@@ -94,6 +98,10 @@ func (e EventType) Valid() bool {
 		AuditAuthCredentialRename,
 		AuditAuthCredentialDelete,
 		AuditAuthDeviceLoginFinish,
+		AuditAuthPairingCreate,
+		AuditAuthPairingHello,
+		AuditAuthPairingComplete,
+		AuditAuthPairingCancel,
 		AuditRequestCreate,
 		AuditRequestConfirm,
 		AuditRequestCancel,
@@ -128,6 +136,10 @@ func AllEventTypes() []string {
 		string(AuditAuthCredentialRename),
 		string(AuditAuthCredentialDelete),
 		string(AuditAuthDeviceLoginFinish),
+		string(AuditAuthPairingCreate),
+		string(AuditAuthPairingHello),
+		string(AuditAuthPairingComplete),
+		string(AuditAuthPairingCancel),
 		string(AuditRequestCreate),
 		string(AuditRequestConfirm),
 		string(AuditRequestCancel),

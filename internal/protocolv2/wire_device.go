@@ -41,12 +41,14 @@ type DeviceLoginFinishResponse struct {
 
 // Pairing session statuses
 // A session moves forward only: created, then hello, then nonce, then completed; it can be canceled at any point before completion
+// PairingStatusExpired is never stored: the server reports it for a session that reached its expiry before completing
 const (
 	PairingStatusCreated   = "created"
 	PairingStatusHello     = "hello"
 	PairingStatusNonce     = "nonce"
 	PairingStatusCompleted = "completed"
 	PairingStatusCanceled  = "canceled"
+	PairingStatusExpired   = "expired"
 )
 
 // PairingCreateRequest is the body of POST /v2/auth/pairing/create, sent by the existing client
@@ -62,7 +64,9 @@ type PairingCreateResponse struct {
 }
 
 // PairingHelloRequest is the body of POST /v2/auth/pairing/hello, sent by the new device
+// UserID and SessionID come from the pairing payload: a user has one pairing session at a time, and its ID is the device's capability for it
 type PairingHelloRequest struct {
+	UserID    string       `json:"userId"`
 	SessionID string       `json:"sessionId"`
 	Hello     PairingHello `json:"hello"`
 }
@@ -83,7 +87,14 @@ type PairingNonceRequest struct {
 	NonceMAC  string `json:"nonceMac"`
 }
 
-// PairingDeviceStatusResponse is returned by GET /v2/auth/pairing/:id/device to the new device
+// PairingDeviceStatusRequest is the body of POST /v2/auth/pairing/device-status, sent by the new device
+// It's a POST so the session ID, which is the device's capability, stays out of URLs and access logs
+type PairingDeviceStatusRequest struct {
+	UserID    string `json:"userId"`
+	SessionID string `json:"sessionId"`
+}
+
+// PairingDeviceStatusResponse is returned by POST /v2/auth/pairing/device-status to the new device
 // Nonce and NonceMAC are set once the existing client has sent them
 type PairingDeviceStatusResponse struct {
 	Status    string `json:"status"`
