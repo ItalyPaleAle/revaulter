@@ -3,19 +3,21 @@ title: "Cryptography Architecture"
 weight: 30
 ---
 
-This document describes the cryptography used by Revaulter v2 as it exists today in the browser client, CLI protocol, and server-side storage model.
-It focuses on how WebAuthn PRF, WebCrypto, optional passwords, the primary key, and request/response envelopes fit together.
+This document describes the cryptography Revaulter v2 uses in the browser client, the CLI protocol, and the server's storage model.
+It focuses on how WebAuthn PRF, WebCrypto, optional passwords, the primary key, and request and response envelopes fit together.
 
-Revaulter is designed so the server relays and stores encrypted material, but the browser performs the sensitive cryptographic operations.
-The server never derives the user's primary key, never performs the requested application encryption or decryption itself, and never sees clear-text payloads.
+Revaulter is designed so the server relays and stores encrypted material, while the browser performs the sensitive cryptographic operations.
+The server never derives the user's primary key, never performs the requested encryption or decryption itself, and never sees plaintext payloads.
 
 ## High-level model
 
-Revaulter has three distinct key layers:
+Revaulter has three key layers:
 
 1. `prfSecret`: a 32-byte secret returned by the authenticator through the WebAuthn PRF extension during login
 2. `primaryKey`: a random 32-byte root key generated in the browser and stored on the server only in wrapped form
-3. Derived keys: deterministic keys derived from the `primaryKey` for request decryption, response transport encryption, and application operations
+3. Derived keys: deterministic keys derived from the `primaryKey` for request decryption, application encryption and decryption, and signing
+
+Each account also has a random [anchor key pair](#anchor-key), which is wrapped alongside the `primaryKey` and signs the account's public keys.
 
 ```mermaid
 flowchart TD
@@ -26,49 +28,51 @@ flowchart TD
     S[Wrapped primary key<br/>stored on server] --> D
     D --> E[Primary key<br/>32 random bytes]
     E --> F[Static request decryption keys<br/>P-256 ECDH and ML-KEM-768]
-    E --> G[Per-operation AES keys]
+    E --> G[Per-operation encryption keys]
+    E --> I[Signing keys<br/>ES256, Ed25519, Ed25519ph]
     E --> H[Other credential wrappers<br/>same root key, different wrapping blobs]
+    W[Wrapped anchor key<br/>stored on server] --> DA[AES-256-GCM unwrap]
+    B --> DA
+    DA --> K[Anchor key pair<br/>ES384 and ML-DSA-87]
 ```
 
 ## Browser-side crypto and WebCrypto usage
 
-The browser uses WebCrypto for the following operations:
+The browser uses WebCrypto for:
 
 - Generating the random 256-bit `primaryKey`
-- HKDF-SHA-256 derivation for wrapping keys, transport keys, and operation keys
-- AES-256-GCM wrap and unwrap of the `primaryKey`
-- AES-256-GCM encrypt and decrypt for the requested application operation
-- P-256 ECDH key generation, import, export, and shared-secret derivation for response transport
+- HKDF-SHA-256 derivation for wrapping keys, request and transport encryption keys, operation keys, and signing keys
+- AES-256-GCM wrap and unwrap of the `primaryKey` and the anchor key
+- AES-256-GCM for request and response envelopes, and for application encrypt and decrypt operations
+- ECDSA P-384 (ES384) key generation and signing for the anchor key
 
-Outside WebCrypto, the browser currently uses:
+Outside WebCrypto, the browser uses:
 
 - WebAuthn with the PRF extension to get `prfSecret`
 - [`@awasm/noble`](https://github.com/paulmillr/awasm-noble) for Argon2id (password stretching) and ChaCha20-Poly1305 (application encrypt/decrypt operations)
-- [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum) for ML-KEM-768 encapsulation and decapsulation in the hybrid transport path
-- [`@noble/curves`](https://github.com/paulmillr/noble-curves) for ECDSA P-256 signing over a prehashed 32-byte SHA-256 digest
+- [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum) for ML-KEM-768 in the hybrid request and response encryption, and ML-DSA-87 for the anchor key
+- [`@noble/curves`](https://github.com/paulmillr/noble-curves) for P-256 ECDH, and for signing with ES256, Ed25519 and Ed25519ph
 
-The split matters:
+Why the split:
 
-- WebCrypto covers AES-GCM, HKDF, and ECDH with the browser's native cryptographic implementation
-- ChaCha20-Poly1305 is provided by `@awasm/noble` because it is not exposed by WebCrypto
-- ECDSA P-256 signing uses `@noble/curves` so the browser can sign a pre-hashed 32-byte SHA-256 digest directly, without WebCrypto re-hashing it (matches standard ES256 verification semantics)
-- Argon2id and ML-KEM are provided by WASM libraries (`@awasm/noble` for Argon2id, `@noble/post-quantum` for ML-KEM-768) because they are not exposed by WebCrypto
+- WebCrypto covers AES-GCM, HKDF, and ES384 with the browser's native implementation
+- WebCrypto doesn't offer ChaCha20-Poly1305, Argon2id, ML-KEM, or ML-DSA, so those come from `@awasm/noble` and `@noble/post-quantum`
+- WebCrypto always hashes its input before signing, so ECDSA P-256 signing uses `@noble/curves` to sign the 32-byte SHA-256 digest as is, which matches standard ES256 verification
 
 ## WebCrypto security notes
 
-Revaulter uses browser-based cryptography, so the security of the application depends in part on the integrity of the browser execution environment.
+Because the cryptography runs in the browser, Revaulter's security depends partly on the integrity of the browser environment.
 
-Important constraints:
+Constraints:
 
 - WebCrypto must run in a secure context, which in practice means `https://` or `http://localhost`
-- The app implements a Content Security Policy to reduce script injection risk and to harden the browser environment around the crypto code (if you run your own proxy in front of Revaulter, make sure to preserve the CSP headers)
-- Even with CSP and secure-context requirements, browser-based crypto always carries residual risk because the code handling secrets executes in a general-purpose client runtime
+- The app sets a Content Security Policy to reduce the risk of script injection around the crypto code. If you run your own proxy in front of Revaulter, make sure it preserves the CSP headers
 
-Despite all possible mitigations, there is still a residual risk inherent with the use of browser-based cryptography:
+Even with these mitigations, some risk remains, because the code that handles secrets runs in a general-purpose client runtime:
 
-- A malicious script that executes in the page context could potentially access plaintext inputs, the in-memory `primaryKey`, or operation results before they are re-encrypted (the primary key is only maintained in-memory and not stored in local/session storage or in a cookie to reduce this risk)
-- Browser extensions, compromised dependencies, browser implementation bugs, or client-device compromise can weaken the security assumptions around in-browser cryptography
-- Revaulter reduces server-side exposure, but it does not eliminate the inherent trust placed in the browser and endpoint device
+- A malicious script running in the page could read plaintext inputs, the in-memory `primaryKey`, or operation results before they're re-encrypted. To limit this, the primary key is kept only in memory, never in local storage, session storage, or cookies
+- Browser extensions, compromised dependencies, browser bugs, or a compromised device can weaken the security of in-browser cryptography
+- Revaulter reduces server-side exposure, but you still have to trust the browser and the device it runs on
 
 ## Primary key lifecycle
 
@@ -78,9 +82,9 @@ It is generated once in the browser during setup and reused across passkeys by r
 Properties:
 
 - Size: 32 bytes
-- Generation: browser-side random generation through WebCrypto
+- Generation: random, in the browser, through WebCrypto
 - Storage: only as a wrapped blob on the server
-- Exposure: kept in-memory in the browser after successful login or password unlock
+- Exposure: held in browser memory after a successful sign-in or password unlock
 
 ```mermaid
 sequenceDiagram
@@ -88,7 +92,7 @@ sequenceDiagram
     participant A as Authenticator
     participant S as Server
 
-    B->>A: WebAuthn create or get with PRF
+    B->>A: WebAuthn assertion with PRF
     A-->>B: prfSecret
     Note over B: Generate random primaryKey
     Note over B: Derive wrappingKey from prfSecret and optional password
@@ -99,7 +103,7 @@ sequenceDiagram
 
 ## Wrapping key derivation
 
-The wrapping key is what encrypts and authenticates the `primaryKey` for storage.
+The wrapping key is what encrypts and authenticates the `primaryKey` and the anchor key for storage.
 It is derived from two factors:
 
 - Required factor: `prfSecret` from WebAuthn PRF
@@ -107,7 +111,7 @@ It is derived from two factors:
 
 ### Without a password
 
-When the user has no password configured, the wrapping key is derived directly from the PRF output with HKDF-SHA-256:
+The wrapping key is derived directly from the PRF output with HKDF-SHA-256:
 
 ```text
 wrappingKey = HKDF-SHA-256(
@@ -120,7 +124,7 @@ wrappingKey = HKDF-SHA-256(
 
 ### With a password
 
-When a password is configured, the password is first stretched with Argon2id and the stretched output becomes the HKDF salt:
+The password is first stretched with Argon2id, and the result becomes the HKDF salt:
 
 ```text
 stretched = Argon2id(
@@ -142,10 +146,10 @@ wrappingKey = HKDF-SHA-256(
 
 Why this construction:
 
-- The PRF output gives a high-entropy authenticator-bound secret
+- The PRF output is a high-entropy secret that only the authenticator can produce
 - The password adds a second factor without becoming the direct encryption key
-- Argon2id raises the cost of offline password guessing if an attacker ever obtains both a wrapped key blob and the corresponding PRF secret, protecting against a compromise of the WebAuthn authenticator (passkey)
-- The `userId` in HKDF `info` domain-separates wrapping keys across accounts
+- Argon2id makes offline password guessing expensive for an attacker who obtains both a wrapped key blob and its PRF secret, for example by compromising the passkey
+- Including the `userId` in the HKDF `info` keeps wrapping keys for different accounts independent
 
 ## Wrapped primary key format
 
@@ -158,8 +162,7 @@ Parameters:
 - Plaintext: 32-byte `primaryKey`
 - AAD: `revaulter/v2/wrapped-primary-key\nuserId={userId}\nv=1`
 
-The stored blob is a base64url-encoded JSON envelope:
-
+The stored blob is a base64url-encoded JSON envelope.
 When there's a password:
 
 ```json
@@ -177,7 +180,7 @@ When there's a password:
 }
 ```
 
-Without passwordsç
+Without a password:
 
 ```json
 {
@@ -188,12 +191,12 @@ Without passwordsç
 }
 ```
 
-Successful AES-GCM unwrap is the password check and the passkey check upon sign in.
+At sign-in, a successful AES-GCM unwrap is both the passkey check and the password check.
 
 ## Deriving keys from the primary key
 
-Once the browser has the unwrapped `primaryKey`, all further account-level crypto keys are derived from it with HKDF-SHA-256.
-The current implementation uses an empty HKDF salt and purpose-specific `info` strings.
+After unwrapping the `primaryKey`, the browser derives every other account-level key from it with HKDF-SHA-256.
+Each derivation uses an empty HKDF salt and a purpose-specific `info` string.
 
 ### Request decryption ECDH key pair
 
@@ -203,10 +206,10 @@ Process:
 
 1. HKDF derives 384 bits with `info = revaulter/v2/requestEncKey\nuserId={userId}\nv=1`
 2. The 384-bit output is reduced to a valid P-256 scalar using the FIPS 186-5 candidate-reduction method
-3. The scalar is imported as a P-256 ECDH private key
-4. The corresponding public key is exported and stored on the server during signup finalization
+3. The scalar is used directly as the P-256 ECDH private key, through `@noble/curves`
+4. The corresponding public key is stored on the server during signup finalization
 
-The extra 384-bit derivation length is deliberate. It keeps modular reduction bias negligible when mapping HKDF output into the P-256 scalar field.
+Deriving 384 bits instead of 256 is deliberate: it keeps the modular reduction bias negligible when mapping the HKDF output into the P-256 scalar field.
 
 ### Request decryption ML-KEM key pair
 
@@ -222,36 +225,54 @@ These two static public keys let the CLI encrypt request payloads end-to-end to 
 
 ### Operation keys
 
-For each actual requested encryption or decryption operation, the browser derives a 256-bit operation key from the `primaryKey` using:
+For each encrypt or decrypt request, the browser derives a 256-bit operation key from the `primaryKey` with:
 
 ```text
 info = "algorithm={algorithm}\nkeyLabel={keyLabel}\nuserId={userId}\nv=1"
 ```
 
-This means the same account root key can deterministically produce distinct operation keys for different labels and algorithms.
+Each combination of label and algorithm gets its own deterministic operation key from the same root key.
 
-The browser accepts both JOSE-style (`A256GCM`, `C20P`) and long-form (`aes-256-gcm`, `chacha20-poly1305`) algorithm names, case-insensitive on both sides. The server applies the same set in `IsSupportedEncryptionAlgorithm`.
+The browser and the server both accept JOSE-style (`A256GCM`, `C20P`) and long-form (`aes-256-gcm`, `chacha20-poly1305`) algorithm names, case-insensitively.
 
-Before being bound into HKDF info, the algorithm string is canonicalized to its long-form name (`aes-256-gcm` or `chacha20-poly1305`). Encrypt and decrypt may therefore use any accepted spelling — both forms derive the same operation key. AAD strings (transport AAD and request-encryption AAD) are still bound verbatim, so the CLI and browser must use matching spellings within a single request.
+Before the algorithm name goes into the HKDF `info`, it's converted to its long form (`aes-256-gcm` or `chacha20-poly1305`).
+So encrypt and decrypt can use different accepted spellings and still derive the same operation key.
+The AAD strings (transport AAD and request-encryption AAD) still use the name exactly as given, so the CLI and the browser must use the same spelling within a single request.
 
-AES-256-GCM is provided by WebCrypto; ChaCha20-Poly1305 is provided by `@awasm/noble`.
+AES-256-GCM comes from WebCrypto, while ChaCha20-Poly1305 is provided by `@awasm/noble`.
 
 ### Signing keys
 
-For the `sign` operation, the browser derives a deterministic ECDSA P-256 private scalar from the `primaryKey`:
+For the `sign` operation, the browser derives a deterministic signing key from the `primaryKey`.
+Revaulter supports ES256 (ECDSA P-256), Ed25519, and Ed25519ph.
 
-1. HKDF derives 384 bits with `info = "revaulter/v2/signingKey\nalgorithm={algorithm}\nkeyLabel={keyLabel}\nuserId={userId}\nv=1"`
-2. The 384-bit output is reduced to a valid P-256 scalar using the FIPS 186-5 Appendix A.2.1 candidate-reduction method
-3. The scalar is used directly with `@noble/curves` to sign the 32-byte SHA-256 digest with `prehash: false`, so the signature is over the supplied digest with no additional hashing
+All three use the same HKDF `info` format, which includes the algorithm, so each algorithm gets a different key for the same label:
 
-Because this info string is distinct from `revaulter/v2/requestEncKey`, `revaulter/v2/requestEncMlkemSeed`, and the symmetric operation info format, signing keys are domain-separated from every other key family — deriving the same scalar as any other key family is computationally infeasible.
+```text
+info = "revaulter/v2/signingKey\nalgorithm={algorithm}\nkeyLabel={keyLabel}\nuserId={userId}\nv=1"
+```
+
+For ES256:
+
+1. HKDF derives 384 bits
+2. The output is reduced to a valid P-256 scalar using the FIPS 186-5 Appendix A.2.1 candidate-reduction method
+3. `@noble/curves` signs the 32-byte SHA-256 digest with that scalar, with no additional hashing
+
+For Ed25519 and Ed25519ph:
+
+1. HKDF derives 256 bits, which become the Ed25519 private key seed
+2. Ed25519 signs the message itself
+3. Ed25519ph signs the 64-byte SHA-512 digest of the message, as defined in RFC 8032, without hashing it again
+
+This `info` string differs from `revaulter/v2/requestEncKey`, `revaulter/v2/requestEncMlkemSeed`, and the operation-key format, so signing keys are independent of every other kind of key.
+Deriving the same scalar as another kind of key is computationally infeasible.
 
 Key stability:
 
 - The signing key is a pure function of `primaryKey`, `userId`, `keyLabel`, and `algorithm`
 - Password changes and credential changes only re-wrap the `primaryKey`; they do not change it
-- Therefore, published signing public keys remain stable across password rotation and passkey management
-- The browser does not cache derived signing keys on disk; they are re-derived from the in-memory `primaryKey` as needed
+- Because of that, published signing public keys stay the same across password changes and passkey changes
+- The browser does not cache derived signing keys on disk: they are re-derived from the in-memory `primaryKey` as needed
 
 ```mermaid
 flowchart TD
@@ -261,21 +282,52 @@ flowchart TD
     PK --> HK4[HKDF info: signingKey + algorithm + keyLabel + userId]
     HK1 --> ECDH[Static P-256 request key pair]
     HK2 --> MLKEM[Static ML-KEM-768 request key pair]
-    HK3 --> OP[Per-operation AES-256 key]
-    HK4 --> SIG[Deterministic ECDSA P-256 signing key]
+    HK3 --> OP[Per-operation encryption key]
+    HK4 --> SIG[Deterministic signing key<br/>ES256, Ed25519, Ed25519ph]
 ```
 
 ### Publication of signing public keys
 
 Signing public keys can optionally be published on the server so external verifiers can fetch them by a stable key ID.
 
-- The key ID is the RFC 7638 JWK thumbprint of the EC public key: base64url-encoded SHA-256 over the canonical JSON `{"crv":"P-256","kty":"EC","x":"…","y":"…"}`
-- There is no soft-delete or revocation list. Consumers should treat a "not found" (i.e. 404 status code) on a known key ID as revocation
+- The key ID is the RFC 7638 JWK thumbprint of the public key: the base64url-encoded SHA-256 of the canonical JSON `{"crv":"P-256","kty":"EC","x":"…","y":"…"}` for ES256 keys, or `{"crv":"Ed25519","kty":"OKP","x":"…"}` for Ed25519 and Ed25519ph keys
+- When the web client publishes a key, it also stores a publication proof signed by the [anchor](#anchor-key), so verifiers who pinned the anchor can check that the key belongs to the account
+- There's no soft delete or revocation list: verifiers should treat a 404 for a known key ID as a revocation
 - Public endpoints are unauthenticated and take only the opaque key ID; there is no listing or enumeration endpoint
+
+## Anchor key
+
+Each account has an anchor key pair, which acts as the account's long-lived identity.
+It's a hybrid pair: an ECDSA P-384 (ES384) key and an ML-DSA-87 key.
+Every anchor signature consists of one signature from each key, and both must verify.
+
+The browser generates both keys at random during signup, so they aren't derived from the `primaryKey`.
+For ML-DSA-87, the browser keeps the 32-byte seed and regenerates the key pair from it when signing.
+
+The anchor's private keys are wrapped with the same wrapping key as the `primaryKey`, in a separate AES-256-GCM blob with AAD `revaulter/v2/wrapped-anchor\nuserId={userId}\nv=1`.
+As with the `primaryKey`, each credential stores its own wrapped copy.
+The server stores the anchor public keys.
+
+The anchor signs:
+
+- The public key bundle: the account's static request public keys (ECDH and ML-KEM), together with the anchor public keys
+- An attestation for each passkey, covering the credential ID and a hash of the credential's public key
+- Signing key publications, which tie a published signing key ID to the account
+
+Each signed message starts with a fixed prefix (`revaulter/v2/pubkey-bundle\n`, `revaulter/v2/cred-attest\n`, or `revaulter/v2/signing-key-publication\n`), so a signature made for one purpose can't be used for another.
+
+The server verifies each of these signatures when it receives it.  
+Clients such as `revaulter-cli`, `revaulter-edit`, and the Go library pin the anchor the first time they connect to a server.  
+Before encrypting each request, they check that the public key bundle is signed by the pinned anchor, so a server can't swap in request keys of its own.
+
+The anchor fingerprint that users compare when pinning is the hex-encoded SHA-256 of the ES384 public key (as an uncompressed point) followed by the ML-DSA-87 public key.
 
 ## Signup flow
 
-Signup is split so the server first creates the user and credential record, then the browser finishes local cryptographic setup and uploads the wrapped key and static public keys.
+Signup happens in two phases.
+After the passkey is registered, the server keeps the account as a pending signup, and creates the user and credential records only when the browser has finished its local cryptographic setup and calls `finalize-signup`.
+
+Registration doesn't evaluate the PRF, so right after registering the passkey the browser signs in with it to get `prfSecret`.
 
 ```mermaid
 sequenceDiagram
@@ -284,23 +336,30 @@ sequenceDiagram
     participant A as Authenticator
 
     B->>S: /v2/auth/register/begin
-    S-->>B: challenge and PRF salt inputs
-    B->>A: WebAuthn registration with PRF support
-    A-->>B: new credential and prfSecret
+    S-->>B: challenge and creation options
+    B->>A: WebAuthn registration
+    A-->>B: new credential, with PRF support reported
     B->>S: /v2/auth/register/finish
-    S-->>B: authenticated session
-    Note over B: generate primaryKey
+    Note over S: pending signup, not in the database yet
+    B->>S: /v2/auth/login/begin
+    S-->>B: challenge and PRF salt
+    B->>A: WebAuthn assertion with PRF
+    A-->>B: assertion and prfSecret
+    B->>S: /v2/auth/login/finish
+    S-->>B: session for the pending signup
+    Note over B: generate random primaryKey and anchor key pair
     Note over B: derive wrappingKey from prfSecret and optional password
-    Note over B: wrap primaryKey
+    Note over B: wrap primaryKey and anchor key
     Note over B: derive static request ECDH and ML-KEM key pairs
-    B->>S: /v2/auth/finalize-signup with wrappedPrimaryKey and public keys
+    Note over B: sign the public key bundle and the credential attestation with the anchor
+    B->>S: /v2/auth/finalize-signup
+    Note over S: verify the signatures, then create the user and credential records
 ```
 
-At this stage the server stores:
+After finalization the server stores:
 
-- User record with request routing metadata and user-level `wrappedKeyEpoch`
-- Credential record with that credential's `wrappedPrimaryKey`
-- Static request decryption public keys
+- A user record with request routing metadata, the user-level `wrappedKeyEpoch`, the static request public keys, the anchor public keys, and the signed public key bundle
+- A credential record with that credential's `wrappedPrimaryKey`, `wrappedAnchorKey`, and attestation
 
 ## Login and unlock flow
 
@@ -346,34 +405,34 @@ sequenceDiagram
     Note over B: AES-GCM unwrap -> primaryKey
 ```
 
-Notable behavior:
+Notes:
 
-- Password bytes are used exactly as entered
-- Unlock failure (generally indicating an incorrect password) is detected only by AES-GCM authentication failure during unwrap
+- The password is used exactly as entered, with no trimming or normalization
+- A wrong password, like any other unlock failure, shows up only as an AES-GCM authentication failure during unwrap
 
 ## Changing or removing the password
 
 Changing the password does not change the `primaryKey`.
-It only changes how that same `primaryKey` is wrapped for the currently authenticated credential.
+It only changes how that same `primaryKey` is wrapped for the credential you signed in with.
 
-Current implementation steps:
+Steps:
 
-1. The browser must already have `prfSecret`, the unwrapped `primaryKey`, and the active credential ID in memory
-2. The browser increments the user-level `wrappedKeyEpoch`
-3. The browser derives a new wrapping key using the current passkey's `prfSecret` and the new password, or no password if removing it
-4. The browser wraps the same `primaryKey` into a new envelope with a fresh nonce and, when applicable, a fresh Argon2id salt
-5. The browser uploads the new wrapped blob only for the currently authenticated credential
+1. The browser must already have `prfSecret`, the unwrapped `primaryKey` and anchor key, and the active credential ID in memory
+2. The browser derives a new wrapping key from the passkey's `prfSecret` and the new password, or no password if removing it
+3. The browser wraps the same `primaryKey` and anchor key with the new wrapping key, using fresh nonces and, when applicable, a fresh Argon2id salt
+4. The browser uploads the new wrapped blobs, only for the credential you signed in with
+5. The server stores them and advances the user-level `wrappedKeyEpoch`
 
 ```mermaid
 sequenceDiagram
     participant B as Browser
     participant S as Server
 
-    Note over B: primaryKey already unlocked in memory
-    B->>S: advance wrappedKeyEpoch
-    Note over B: derive new wrappingKey from current prfSecret and new password state
-    Note over B: wrap same primaryKey with fresh nonce and optional fresh Argon2id salt
-    B->>S: /v2/auth/update-wrapped-key for current credential only
+    Note over B: primaryKey and anchor key already unlocked in memory
+    Note over B: derive new wrappingKey from prfSecret and the new password state
+    Note over B: wrap the same primaryKey and anchor key with fresh nonces and an optional fresh Argon2id salt
+    B->>S: /v2/auth/update-wrapped-key for the current credential, advancing the epoch
+    Note over S: store the new wrappers and advance wrappedKeyEpoch
     S-->>B: ok
 ```
 
@@ -385,75 +444,88 @@ This is a re-wrap, not a re-key:
 
 ## Multi-passkey behavior and wrapped-key epochs
 
-Each credential stores its own wrapped copy of the same `primaryKey`.
-That is necessary because each passkey yields a different `prfSecret`, so each credential needs its own wrapper.
+Each credential stores its own wrapped copy of the same `primaryKey`.  
+That is necessary because each passkey yields a different `prfSecret`, so each credential needs its own wrapper.  
+The optional password also goes into each wrapper's key, so the password is effectively set per passkey.
 
-The user record also stores a user-level `wrappedKeyEpoch`.
-That epoch is used to detect that some credentials still have stale wrappers.
+Behavior when the password is set, changed, or removed:
 
-Behavior after a password change:
+- Only the wrapper of the credential used to make the change is updated
+- Other credentials keep their existing wrapper, so they keep unlocking with the password they had before, or with no password
+- To update another credential, sign in with it, unlock it with its current password, and change the password again from that session
+- A credential added while signed in is wrapped with the password of the session it was added from
 
-- The credential used to perform the password change is updated immediately
-- Other credentials keep their older wrapped blob until they log in again
-- On login, the server tells the browser whether the credential's wrapped-key epoch is stale
-- The browser can still unlock using the old wrapper
-- After successful unlock, the browser immediately re-wraps the same `primaryKey` for that credential and uploads a fresh wrapper at the current epoch
+> ⚠️ **Warning:** Changing the password doesn't revoke the old password on other passkeys. Anyone who has one of those passkeys and knows its old password can still unlock the primary key. If a password may have leaked, change it while signed in with each passkey, and delete any passkey you can't update.
+
+The user record stores a `wrappedKeyEpoch` that advances on every password change, and each credential records the epoch of its wrapper.  
+When a credential's epoch is older than the user's, the server reports it as stale, meaning the most recent password change was made with a different credential.  
+It doesn't re-wrap stale credentials automatically: unlocking a stale wrapper requires its old password, so re-wrapping it at that point wouldn't apply the new one.
 
 ```mermaid
 flowchart TD
-    A[Password changed on credential A] --> B[User wrappedKeyEpoch increments]
-    B --> C[Credential A gets new wrappedPrimaryKey now]
-    B --> D[Credential B still stores old wrappedPrimaryKey]
-    D --> E[Credential B logs in later]
-    E --> F[Browser unlocks with old wrapper]
-    F --> G[Browser detects stale epoch]
-    G --> H[Browser re-wraps same primaryKey for credential B]
+    A[Password changed while signed in with credential A] --> B[User wrappedKeyEpoch increments]
+    B --> C[Credential A gets a new wrapper with the new password]
+    B --> D[Credential B keeps its wrapper with the old password and is reported as stale]
+    D --> E[User signs in with credential B and unlocks it with the old password]
+    E --> F[User changes the password again from that session]
+    F --> G[Credential B gets a new wrapper with the new password]
 ```
 
-This design avoids global re-encryption work while still converging every credential to the current password state over time.
+This means you don't need every passkey at hand to change the password, at the cost of the old password staying valid on passkeys that haven't been updated.
 
 ## Request encryption path
 
-When the CLI submits an encrypt, decrypt, or sign request, it does not send the sensitive request body in plaintext to the server.
-Instead it encrypts the request to the browser's static request keys derived from the `primaryKey`.
+When the CLI submits an encrypt, decrypt, or sign request, it doesn't send the sensitive part of the request to the server in plaintext.
+Instead, it encrypts it to the browser's static request keys, which are derived from the `primaryKey`.
 
-High-level shape:
+At a high level:
 
 1. Browser derives static request private keys from `primaryKey`
 2. CLI uses the corresponding server-stored public keys to build an end-to-end encrypted request payload
 3. Server stores and relays that ciphertext
 4. Browser decrypts the request locally after the user approves it
 
-The request AAD format is deterministic and currently follows:
+To encrypt a request, the CLI generates an ephemeral P-256 key pair and runs ECDH against the account's static ECDH public key.  
+It also encapsulates to the account's static ML-KEM-768 public key.  
+The two shared secrets are concatenated and expanded with HKDF-SHA-256 (`info = "revaulter/v2/request-enc"`) into an AES-256-GCM key.
+
+The request AAD is deterministic:
 
 ```text
 aad = "algorithm={algorithm}\nkeyLabel={keyLabel}\noperation={encrypt|decrypt|sign}\nv=1"
 ```
 
-That binds the encrypted request to the intended algorithm and key label.
+Decryption fails if the algorithm, key label, or operation doesn't match the ones the request was encrypted for.
 
-For `sign`, the inner payload carries only the 32-byte SHA-256 digest of the message (base64url). The CLI always pre-hashes client-side, so the browser and server only ever see the digest, never the original message.
+For `sign`, the inner payload carries the bytes to sign, encoded as base64url:
+
+- ES256: the 32-byte SHA-256 digest of the message
+- Ed25519ph: the 64-byte SHA-512 digest of the message
+- Ed25519: the message itself, up to the maximum request payload size
+
+For ES256 and Ed25519ph the CLI hashes the message itself, so the browser only sees the digest.
+In every case, the server only sees the encrypted payload.
 
 ## Response transport encryption path
 
 The browser sends the result back to the CLI through a separate transport envelope.
-This path is hybrid:
+This path uses:
 
-- Key agreement using hybrid P-256 ECDH + ML-KEM-768
-- Key derivation using HKDF-SHA-256
+- Hybrid key agreement with P-256 ECDH and ML-KEM-768
+- Key derivation with HKDF-SHA-256
 - Encryption with AES-256-GCM
 
 The browser generates a fresh ephemeral P-256 key pair for each response.
 It also encapsulates to the CLI's ML-KEM public key.
 The ECDH shared secret and ML-KEM shared secret are concatenated and expanded with HKDF into an AES-256-GCM key.
 
-Current HKDF `info` for transport is:
+The transport HKDF `info` is:
 
 ```text
 info = "revaulter/v2/transport/{state}"
 ```
 
-The transport AAD is deterministic and currently serialized as:
+The transport AAD is deterministic:
 
 ```text
 aad = "algorithm={algorithm}\noperation={encrypt|decrypt|sign}\nstate={state}\nv=1"
@@ -469,8 +541,8 @@ sequenceDiagram
     S-->>B: Pending request notification and ciphertext
     Note over B: derive static request private keys from primaryKey
     Note over B: decrypt request payload locally
-    Note over B: derive operation key from primaryKey
-    Note over B: perform AES-GCM encrypt or decrypt operation
+    Note over B: derive operation or signing key from primaryKey
+    Note over B: perform the requested encrypt, decrypt, or sign operation
     Note over B: generate ephemeral P-256 key pair
     Note over B: encapsulate to CLI ML-KEM key
     Note over B: HKDF(ECDH secret || ML-KEM secret) -> transport AES key
@@ -480,27 +552,30 @@ sequenceDiagram
     Note over CLI: decrypt envelope locally
 ```
 
-This hybrid transport gives the response envelope both conventional ECDH confidentiality and a post-quantum KEM component.
+Because both shared secrets feed the key derivation, an attacker has to break both P-256 ECDH and ML-KEM-768 to read a response.
 
 ## Algorithms in use
 
 | Purpose | Algorithm |
-|---------|-----------|
-| Authenticator-bound secret | WebAuthn PRF |
+| --- | --- |
+| Secret from the authenticator | WebAuthn PRF |
 | Password stretching | Argon2id (`m=128 MiB`, `t=4`, `p=1`, `hashLen=32`) |
 | Key derivation | HKDF-SHA-256 |
 | Wrapped primary key encryption | AES-256-GCM |
-| Application encrypt/decrypt operation | AES-256-GCM (via WebCrypto) or ChaCha20-Poly1305 (via `@awasm/noble`); accepted as JOSE-style (`A256GCM`, `C20P`) or long-form (`aes-256-gcm`, `chacha20-poly1305`) names — case-insensitive. The response transport AEAD remains AES-256-GCM only |
-| Application sign operation | ECDSA P-256 (`ES256`) via `@noble/curves`, signed over the supplied 32-byte SHA-256 digest (prehashed; no re-hashing) |
+| Application encrypt/decrypt operation | AES-256-GCM (via WebCrypto) or ChaCha20-Poly1305 (via `@awasm/noble`), named JOSE-style (`A256GCM`, `C20P`) or long-form (`aes-256-gcm`, `chacha20-poly1305`), case-insensitive |
+| Application sign operation | ES256 (ECDSA P-256), Ed25519, or Ed25519ph, via `@noble/curves` |
 | Published signing key ID | RFC 7638 JWK thumbprint (SHA-256, base64url) |
-| Static request key agreement | ECDH P-256 |
-| Response transport KEM | ML-KEM-768 |
+| Anchor signatures | ES384 (ECDSA P-384, via WebCrypto) and ML-DSA-87 (via `@noble/post-quantum`), both required |
+| Request key agreement | Hybrid ECDH P-256 and ML-KEM-768 |
+| Request payload AEAD | AES-256-GCM |
+| Response transport key agreement | Hybrid ECDH P-256 and ML-KEM-768 |
 | Response transport AEAD | AES-256-GCM |
 
 ## Security properties and consequences
 
 - The server cannot perform user cryptographic operations because it never has the unwrapped `primaryKey`
+- The server can't substitute its own request keys for an account's, because clients check that the public key bundle is signed by the anchor they pinned
 - A passkey change or password change normally requires only re-wrapping, not re-encrypting application data
 - A successful unwrap authenticates the wrapper contents, the passkey-derived PRF input, and the optional password in one step
-- Distinct HKDF `info` strings domain-separate wrapping keys, static request keys, transport keys, and operation keys
-- User ID and request metadata are bound into AAD or HKDF context to prevent cross-context key reuse
+- Wrapping keys, static request keys, transport keys, and operation keys each use their own HKDF `info` string, so they are independent of each other
+- The user ID and request metadata are part of the AAD or the HKDF `info`, so keys and ciphertexts can't be reused across contexts
