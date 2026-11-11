@@ -1,6 +1,7 @@
 package actors
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -51,11 +52,14 @@ func TestPruneAuditLog(t *testing.T) {
 	h := newTestHost(t, newTestDB(t, userID), ":memory:")
 
 	auditID := insertTestAuditEvent(t, h, userID)
-	_, _, err := h.db.RequestPayloadStore().Insert(t.Context(), db.RequestPayload{
-		State:            "prune-state",
-		UserID:           userID,
-		ExpiresAt:        time.Now(),
-		EncryptedRequest: `{}`,
+	_, err := db.ExecuteInTransaction(t.Context(), h.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (any, error) {
+		_, _, txErr := tx.RequestPayloadStore().Insert(ctx, db.RequestPayload{
+			State:            "prune-state",
+			UserID:           userID,
+			ExpiresAt:        time.Now(),
+			EncryptedRequest: `{}`,
+		})
+		return nil, txErr
 	})
 	require.NoError(t, err)
 

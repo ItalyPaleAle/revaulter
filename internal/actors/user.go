@@ -747,7 +747,9 @@ func (a *userActor) finishStored(ctx context.Context, state string, status db.V2
 	stored, err := db.ExecuteInTransaction(ctx, a.host.db, userActorDBTimeout, func(ctx context.Context, tx *db.DbTx) (storedRequest, error) {
 		current, applied, rErr := tx.RequestPayloadStore().Finish(ctx, state, a.userID, status, encryptedResult)
 		if errors.Is(rErr, db.ErrRequestPayloadNotFound) && status != db.V2RequestStatusCompleted {
-			current, applied, rErr = status, true, nil
+			current = status
+			applied = true
+			rErr = nil
 		}
 		if rErr != nil {
 			return storedRequest{}, rErr
@@ -858,7 +860,9 @@ func (a *userActor) expire(ctx context.Context, st *userActorState, states []str
 		for i, state := range states {
 			current, applied, rErr := tx.RequestPayloadStore().Finish(ctx, state, a.userID, db.V2RequestStatusExpired, "")
 			if errors.Is(rErr, db.ErrRequestPayloadNotFound) {
-				current, applied, rErr = db.V2RequestStatusExpired, true, nil
+				current = db.V2RequestStatusExpired
+				applied = true
+				rErr = nil
 			}
 			if rErr != nil {
 				return nil, rErr

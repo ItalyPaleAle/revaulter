@@ -107,7 +107,13 @@ func (tx *DbTx) RequestPayloadStore() *RequestPayloadStore {
 // Insert stores the request envelope of a new request, which is pending
 // If the request is stored already, for example by an earlier attempt that failed later, it changes nothing, and returns false with the request's status
 // It returns ErrRequestPayloadConflict if the state is used by another user's request
+// It must be called in a transaction, which also writes the audit event for a new request
 func (s *RequestPayloadStore) Insert(ctx context.Context, in RequestPayload) (status V2RequestStatus, created bool, err error) {
+	if !s.db.IsTransaction() {
+		// Indicates a development-time error
+		panic("Insert must be invoked in a transaction")
+	}
+
 	affected, err := s.db.Exec(ctx,
 		`INSERT INTO v2_request_payloads (state, user_id, expires_at, encrypted_request, encrypted_result, status)
 			VALUES ($1, $2, $3, $4, $5, $6)
@@ -163,7 +169,13 @@ func (s *RequestPayloadStore) Get(ctx context.Context, state string, userID stri
 // Finish moves a pending request owned by userID to a final status, and stores the response envelope of a completed request
 // Only a pending request changes, so a request is finished once: if it's finished already, it returns false with the status it has
 // It returns ErrRequestPayloadNotFound if there's no row for the request and its owner
+// It must be called in a transaction, which also writes the audit event when the request changes
 func (s *RequestPayloadStore) Finish(ctx context.Context, state string, userID string, status V2RequestStatus, encryptedResult string) (current V2RequestStatus, applied bool, err error) {
+	if !s.db.IsTransaction() {
+		// Indicates a development-time error
+		panic("Finish must be invoked in a transaction")
+	}
+
 	if !status.IsTerminal() {
 		return "", false, fmt.Errorf("status '%s' is not final", status)
 	}
@@ -223,8 +235,13 @@ func (s *RequestPayloadStore) Delete(ctx context.Context, userID string, states 
 
 // ExpireOverdue moves the pending requests whose deadline is before the given time to the expired status, and returns them
 // The revaulter.user actors expire their requests on time, so this only catches requests they missed, for example after their state was lost
-// It must be called in a transaction that also records the expiry of each request in the audit log
+// It must be called in a transaction, which also records the expiry of each request in the audit log
 func (s *RequestPayloadStore) ExpireOverdue(ctx context.Context, before time.Time) ([]RequestPayload, error) {
+	if !s.db.IsTransaction() {
+		// Indicates a development-time error
+		panic("ExpireOverdue must be invoked in a transaction")
+	}
+
 	rows, err := s.db.Query(ctx,
 		`UPDATE v2_request_payloads SET status = $1
 			WHERE status = $2 AND expires_at < $3

@@ -21,6 +21,13 @@ import (
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
+const (
+	// createRequestAttempts is how many times the handler calls the user's actor to store a new request
+	createRequestAttempts = 3
+	// createRequestRetryDelay is how long the handler waits before calling the actor again, growing with each attempt
+	createRequestRetryDelay = 200 * time.Millisecond
+)
+
 // v2RequestSigningPubkeyResponse is the response for GET /v2/request/signing-pubkeys
 type v2RequestSigningPubkeyResponse struct {
 	ID                          string          `json:"id"`
@@ -116,7 +123,7 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			RequestState: state,
 			Metadata:     requestCreateAuditMetadata(operation, body.Algorithm, body.KeyLabel, body.Note, getRequestJWTClaimsFromCtx(c)),
 		})
-		err = s.actors.User(user.ID).Create(c.Request.Context(), actors.CreateRequestInput{
+		err = createRequest(c.Request.Context(), s.actors.User(user.ID), actors.CreateRequestInput{
 			State: state,
 			Request: actors.Request{
 				Operation:       operation,
@@ -159,6 +166,28 @@ func (s *Server) RouteV2RequestCreate(operation string) gin.HandlerFunc {
 			ResultToken: resultToken,
 		})
 	}
+}
+
+// createRequest stores a new request in the user's actor, and calls it again with the same input if the call fails
+// If an earlier attempt stored the request in the database but failed to save it in the actor, calling it again with the same input saves it in the actor
+func createRequest(ctx context.Context, userActor actors.UserClient, in actors.CreateRequestInput) error {
+	var err error
+	for attempt := range createRequestAttempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return err
+			case <-time.After(time.Duration(attempt) * createRequestRetryDelay):
+			}
+		}
+
+		err = userActor.Create(ctx, in)
+		if err == nil || errors.Is(err, actors.ErrTooManyPendingRequests) {
+			return err
+		}
+	}
+
+	return err
 }
 
 // RouteV2RequestPubkey is the handler for /v2/request/pubkey

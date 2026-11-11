@@ -13,13 +13,6 @@ import (
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
-const (
-	// createAttempts is how many times Create calls the actor before giving up
-	createAttempts = 3
-	// createRetryDelay is how long Create waits before its first retry, growing with each attempt
-	createRetryDelay = 200 * time.Millisecond
-)
-
 // longPollRecheckInterval is how often a long-poll checks its request while it waits, in case it misses the signal that wakes it
 // It's a variable so tests can shorten it
 var longPollRecheckInterval = 30 * time.Second
@@ -48,26 +41,9 @@ func (h *Host) User(userID string) UserClient {
 
 // Create stores a new pending request, with its envelope and audit event, and notifies the user's list streams
 // It returns ErrTooManyPendingRequests if the user has too many pending requests
-// Creating a request that already exists is a no-op, so a failed call is retried with the same input a few times
+// Creating a request that already exists is a no-op, so a call can be retried safely with the same input
 func (c UserClient) Create(ctx context.Context, in CreateRequestInput) error {
-	var (
-		res userCreateRes
-		err error
-	)
-	for attempt := range createAttempts {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return err
-			case <-time.After(time.Duration(attempt) * createRetryDelay):
-			}
-		}
-
-		res, err = invoke[userCreateRes](ctx, c.host, actorTypeUser, c.userID, userMethodCreate, in)
-		if err == nil {
-			break
-		}
-	}
+	res, err := invoke[userCreateRes](ctx, c.host, actorTypeUser, c.userID, userMethodCreate, in)
 	if err != nil {
 		return err
 	}

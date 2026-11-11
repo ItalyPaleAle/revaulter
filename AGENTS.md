@@ -20,6 +20,22 @@ val, ok := something.(string)
 if ok { ... }
 ```
 
+Never assign several variables in one statement. Assign each variable on its own line.
+This does not apply to functions that return more than one value.
+
+```go
+// Wrong
+current, applied, err = status, true, nil
+
+// Right
+current = status
+applied = true
+err = nil
+
+// Right
+current, applied, err := something()
+```
+
 In tests, never invoke functions inside assertions that check errors, such as `require.Error`, `require.NoError`, `require.ErrorIs`, `assert.ErrorContains`, and similar.
 Always assign the result to an `err` variable on a separate line first, then pass the variable to the assertion.
 This does not apply to assertions that do not check errors.
