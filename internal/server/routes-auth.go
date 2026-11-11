@@ -2187,6 +2187,12 @@ func loadWebAuthnUser(ctx context.Context, as *db.AuthStore, user *db.User) (*v2
 
 	creds := make([]webauthnlib.Credential, 0, len(records))
 	for _, rec := range records {
+		// Only passkeys are WebAuthn credentials
+		// A device's public-key JSON would otherwise decode into an empty go-webauthn credential without an error
+		if rec.CredentialType != protocolv2.CredentialTypePasskey {
+			continue
+		}
+
 		cred, ok := decodeStoredCredential(ctx, user.ID, rec.CredentialID, rec.PublicKey, rec.SignCount)
 		if ok {
 			creds = append(creds, cred)

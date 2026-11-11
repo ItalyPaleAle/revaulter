@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/italypaleale/revaulter/internal/protocolv2"
 )
 
 func TestAuthStoreRegisterUserAndLogin(t *testing.T) {
@@ -398,7 +400,7 @@ func TestAuthStoreUpdateCredentialWrappedKey(t *testing.T) {
 			require.Empty(t, rec.WrappedPrimaryKey)
 
 			// Oversized values return a sentinel, so the server can tell them apart from database errors
-			err = as.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", strings.Repeat("x", 513), "anchor")
+			err = as.UpdateCredentialWrappedKey(ctx, "cred-1", "user-1", strings.Repeat("x", protocolv2.MaxWrappedPrimaryKeyLength+1), "anchor")
 			require.ErrorIs(t, err, ErrWrappedKeyTooLarge)
 			require.ErrorContains(t, err, "wrappedPrimaryKey")
 
