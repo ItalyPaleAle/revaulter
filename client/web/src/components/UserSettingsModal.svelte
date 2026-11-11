@@ -279,6 +279,20 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
 ]
 </script>
 
+{#snippet otherPasskeysNotice()}
+    {#if credentials.length > 1}
+        <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-200">
+            <p>
+                This applies only to the passkey you signed in with.
+                Your other passkeys keep unlocking with their current password until you sign in with each of them and change it here.
+            </p>
+            <p class="mt-2">
+                If you're changing your password because it may have leaked, do this with every passkey, and delete any passkey you can't sign in with.
+            </p>
+        </div>
+    {/if}
+{/snippet}
+
 <div class="fixed inset-0 z-40 bg-neutral-950/50 backdrop-blur-sm"></div>
 <section class="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
     <div
@@ -422,6 +436,7 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                             <p class="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
                                 Your primary key will be re-wrapped with the new password.
                             </p>
+                            {@render otherPasskeysNotice()}
                         </div>
 
                         <div class="max-w-sm space-y-3">
@@ -462,7 +477,8 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                         <div class="border-t border-neutral-200 pt-6 dark:border-neutral-800">
                             <div class="text-sm font-medium text-neutral-900 dark:text-neutral-50">Remove password</div>
                             <p class="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-                                Your primary key will be protected only by your passkey's PRF output.
+                                This passkey will unlock without a password, so your primary key will be protected only by the passkey's PRF output.
+                                {#if credentials.length > 1}Your other passkeys aren't affected.{/if}
                             </p>
                             <div class="mt-3">
                                 {#if confirmingRemovePassword}
@@ -491,6 +507,7 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                             <p class="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
                                 No password is currently set. Adding a password provides an extra layer of protection for your primary key.
                             </p>
+                            {@render otherPasskeysNotice()}
                         </div>
 
                         <div class="max-w-sm space-y-3">
@@ -566,6 +583,11 @@ const tabs: { id: SettingsTab; label: string; icon: string }[] = [
                                             <div class="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
                                                 Created {formatTimestamp(cred.createdAt)} · Last used {formatTimestamp(cred.lastUsedAt)}
                                             </div>
+                                            {#if cred.wrappedKeyStale}
+                                                <div class="mt-0.5 text-xs text-amber-700 dark:text-amber-300">
+                                                    Not updated by your last password change: this passkey still uses the password it had before
+                                                </div>
+                                            {/if}
                                         {/if}
                                     </div>
                                     {#if renamingCredentialId !== cred.id}

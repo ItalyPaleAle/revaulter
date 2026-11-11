@@ -11,6 +11,7 @@ interface Props {
     authBusy: boolean
     authError: string | null
     loginWrappedPrimaryKey: string | null
+    loginWrappedKeyStale: boolean
     onFinishPasswordLogin: () => Promise<void>
     onLogin: () => Promise<void>
     onOpenSignup: () => void
@@ -27,6 +28,7 @@ let {
     authBusy,
     authError,
     loginWrappedPrimaryKey,
+    loginWrappedKeyStale,
     onFinishPasswordLogin,
     onLogin,
     onOpenSignup,
@@ -125,6 +127,11 @@ $effect(() => {
                             }}
                             required
                         />
+                        {#if loginWrappedKeyStale}
+                            <p class="text-sm text-neutral-500 dark:text-neutral-400">
+                                Your password was last changed while signed in with a different passkey. This passkey still uses the password it had before that change.
+                            </p>
+                        {/if}
                     </div>
 
                     <Button

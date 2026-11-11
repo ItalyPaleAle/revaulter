@@ -96,7 +96,6 @@ let passwordInput = $state('')
 let loginWrappedPrimaryKey = $state<string | null>(null)
 // The credential ID (base64url) of the currently signed-in passkey
 let sessionCredentialId = $state<string | null>(null)
-let sessionCredentialWrappedKeyEpoch = $state<number>(1)
 let loginWrappedKeyStale = $state(false)
 // The plaintext password is kept in memory while the session is active adding passkeys and the changing password can wrap new keys without re-prompting
 let sessionPassword = $state<string | null>(null)
@@ -212,7 +211,6 @@ function clearLocalAuthState() {
     pendingCredentialPublicKeyHash = null
     loginWrappedPrimaryKey = null
     sessionCredentialId = null
-    sessionCredentialWrappedKeyEpoch = 1
     loginWrappedKeyStale = false
     sessionPassword = null
     allowedIpsText = ''
@@ -294,7 +292,6 @@ async function beginPasskeyLoginStep(): Promise<'authenticated' | 'password-requ
     session = toSessionResponse(finish.session)
     setPrfSecret(assertion.prfSecret)
     sessionCredentialId = assertion.id
-    sessionCredentialWrappedKeyEpoch = finish.credentialWrappedKeyEpoch ?? finish.session.wrappedKeyEpoch
     loginWrappedPrimaryKey = finish.wrappedPrimaryKey ?? null
     loginWrappedAnchorKey = finish.wrappedAnchorKey ?? null
     loginWrappedKeyStale = finish.wrappedKeyStale
@@ -1036,6 +1033,9 @@ async function doChangePassword(password: string) {
         return
     }
 
+    // Captured before the change so the success message can tell setting a first password apart from changing it
+    const hadPassword = hasPassword
+
     settingsBusy = true
     settingsError = null
     settingsSuccess = null
@@ -1074,9 +1074,18 @@ async function doChangePassword(password: string) {
 
         // Keep the new password in memory so subsequent add-passkey calls wrap with it (or clear it when removed)
         sessionPassword = password || null
-        settingsSuccess = password
-            ? 'Password updated for this passkey. Other passkeys will ask to refresh on next use.'
-            : 'Password removed for this passkey. Other passkeys will refresh on next use.'
+        // Other passkeys keep their own wrapped key, so they still unlock exactly as they did before this change
+        const hasOtherPasskeys = credentials.length > 1
+        if (!password) {
+            settingsSuccess = hasOtherPasskeys
+                ? 'Password removed for this passkey only. Your other passkeys still unlock the way they did before.'
+                : 'Password removed.'
+        } else {
+            const action = hadPassword ? 'changed' : 'set'
+            settingsSuccess = hasOtherPasskeys
+                ? `Password ${action} for this passkey only. Your other passkeys still unlock with the password they had before.`
+                : `Password ${action}.`
+        }
     } catch (err) {
         settingsError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -1238,6 +1247,7 @@ function sortedItems() {
             authBusy={authBusy}
             authError={authError}
             loginWrappedPrimaryKey={loginWrappedPrimaryKey}
+            loginWrappedKeyStale={loginWrappedKeyStale}
             onFinishPasswordLogin={doFinishPasswordLogin}
             onLogin={doLogin}
             onOpenSignup={openSignup}
