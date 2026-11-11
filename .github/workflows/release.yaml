@@ -215,6 +215,16 @@ jobs:
             --bundle internal/server/integrity/manifest.sigstore.json \
             internal/server/integrity/manifest.txt
 
+      # Used by scripts/build-binaries.sh to write a CycloneDX SBOM for each release binary to .out, before the checksum and attestation steps, so both cover them too
+      - name: Install cyclonedx-gomod
+        env:
+          # Pinned to an exact release that is at least a week old
+          # `go install pkg@version` ignores this repo's go.mod and verifies the downloaded modules against sum.golang.org
+          CYCLONEDX_GOMOD_VERSION: "v1.12.0"
+        run: |
+          GOBIN="${RUNNER_TEMP}/bin" go install "github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@${CYCLONEDX_GOMOD_VERSION}"
+          echo "CYCLONEDX_GOMOD=${RUNNER_TEMP}/bin/cyclonedx-gomod" >> "$GITHUB_ENV"
+
       - name: Build binaries
         env:
           CGO_ENABLED: "0"
@@ -254,7 +264,7 @@ jobs:
         working-directory: .out
         run: |
           shopt -s nullglob
-          files=(revaulter-*.tar.gz revaulter-*.zip)
+          files=(revaulter-*.tar.gz revaulter-*.zip revaulter-*.cdx.json)
           if [[ ${#files[@]} -eq 0 ]]; then
             echo "::error::No release archives found in .out"
             exit 1
@@ -298,7 +308,7 @@ jobs:
           file: Dockerfile-edit
           push: true
 
-      # A single attestation covering every file attached to the release: the archives plus checksums.txt
+      # A single attestation covering every file attached to the release: the archives, their SBOMs, and checksums.txt
       - name: Attestation for release archives
         id: attest-archives
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # 4.2.1

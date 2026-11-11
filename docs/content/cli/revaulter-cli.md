@@ -20,6 +20,8 @@ gh attestation verify revaulter-<version>-<arch>.tar.gz \
 
 Pass `--bundle attestations.jsonl` to verify against the downloaded bundle rather than querying GitHub's attestations API.
 
+Each binary also has a [CycloneDX](https://cyclonedx.org) SBOM listing the dependencies compiled into it, named `revaulter-<version>-<arch>-<binary>.cdx.json`. SBOMs are covered by `checksums.txt` and the attestations too.
+
 ### Docker
 
 Mount a volume at `/data` to keep the trust store between runs. Pin the server's anchor once, with `-it` so the CLI can ask for confirmation:

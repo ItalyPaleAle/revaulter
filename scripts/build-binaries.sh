@@ -3,7 +3,7 @@
 # Builds every Revaulter binary for a single release target, then packages them into an archive.
 #
 # Usage:
-#   BUILD_ID=<id> [BUILD_LDFLAGS=<flags>] scripts/build-binaries.sh <target>
+#   BUILD_ID=<id> [BUILD_VERSION=<version>] [BUILD_LDFLAGS=<flags>] [CYCLONEDX_GOMOD=<path>] scripts/build-binaries.sh <target>
 #
 # Targets:
 #   linux-amd64  linux-arm64  linux-386  linux-armv7
@@ -13,6 +13,7 @@
 #
 # Binaries are staged in .bin/revaulter-<BUILD_ID>-<target>, and the archive is written to .out
 # Windows targets produce a .zip, every other target a .tar.gz
+# When CYCLONEDX_GOMOD is the path to cyclonedx-gomod, a CycloneDX SBOM for each binary is also written to .out, as revaulter-<BUILD_ID>-<target>-<binary>.cdx.json
 
 set -euo pipefail
 
@@ -30,7 +31,7 @@ BINARIES=(
 )
 
 usage() {
-  sed -n '3,15p' "${script_path}" | sed 's|^# \?||'
+  sed -n '3,16p' "${script_path}" | sed 's|^# \?||'
 }
 
 if [[ $# -ne 1 ]]; then
@@ -92,6 +93,23 @@ for entry in "${BINARIES[@]}"; do
       -trimpath \
       "${pkg}"
 done
+
+# One SBOM per binary, generated from the module list that Go embeds in it, so it matches exactly what was compiled for this target
+# cyclonedx-gomod reads the build settings from the binary, but takes the GOOS and GOARCH in package URLs from `go env`, so they must be set to match the build
+if [[ -n "${CYCLONEDX_GOMOD:-}" ]]; then
+  for entry in "${BINARIES[@]}"; do
+    binary="${entry%%:*}"
+
+    echo "Generating SBOM for ${binary}${ext}"
+    GOOS="${goos}" GOARCH="${goarch}" GOARM="${goarm}" \
+      "${CYCLONEDX_GOMOD}" bin \
+        -json \
+        -std \
+        -version "${BUILD_VERSION:-${BUILD_ID}}" \
+        -output ".out/${name}-${binary}.cdx.json" \
+        "${stage}/${binary}${ext}"
+  done
+fi
 
 cp LICENSE.md "${stage}"
 cp -r README.md "${stage}"
