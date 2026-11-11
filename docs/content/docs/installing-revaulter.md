@@ -66,7 +66,6 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 | `sessionTimeout` | `REVAULTER_SESSIONTIMEOUT` | `5m` | Session duration before re-authentication is required (max: `1h`) |
 | `requestTimeout` | `REVAULTER_REQUESTTIMEOUT` | `5m` | Default timeout for requests (can be overridden per-request; max: `24h`) |
 | `trustedProxies` | `REVAULTER_TRUSTEDPROXIES` | | Comma-separated list of IPs/CIDRs to trust for `X-Forwarded-*` headers |
-| `forceSecureCookies` | `REVAULTER_FORCESECURECOOKIES` | `false` | Force the `Secure` flag on cookies (set to `true` when behind a TLS-terminating reverse proxy) |
 | `trustedRequestIdHeader` | `REVAULTER_TRUSTEDREQUESTIDHEADER` | | Header to trust as request ID (e.g. `X-Request-ID`, `CF-Ray`) |
 | `logHealthChecks` | `REVAULTER_LOGHEALTHCHECKS` | `false` | Include `/healthz` requests in the request logs |
 | `logLevel` | `REVAULTER_LOGLEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
@@ -147,7 +146,6 @@ When [running multiple replicas](/docs/multiple-replicas/), `sessionSigningKey` 
 Revaulter requires HTTPS for WebAuthn to work (browsers enforce a secure context). You have two options:
 
 1. **Reverse proxy** (recommended): Terminate TLS at a reverse proxy (Caddy, Traefik, Nginx, etc.) and forward plain HTTP to Revaulter.
-   - Set `forceSecureCookies: true` in this case.
 2. **Direct TLS**: Provide certificates via `tlsPath` (a directory containing `tls-cert.pem` and `tls-key.pem`) or via `tlsCertPEM`/`tlsKeyPEM`. Revaulter watches the `tlsPath` directory and auto-reloads certificates.
 
 ## Docker Compose example

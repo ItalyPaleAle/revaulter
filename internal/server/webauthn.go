@@ -88,3 +88,26 @@ func dedupeOrigins(origins []string) []string {
 	}
 	return filtered
 }
+
+// cookieSecurityForOrigins decides whether session cookies must always be Secure, based on the configured WebAuthn origins
+// alwaysSecure is true when no origin uses http://, because browsers can then only use the web client over HTTPS
+// An http:// origin is only usable on localhost (WebAuthn doesn't work on non-HTTPS pages outside of localhost), so it signals local development, where cookies follow the scheme of each request instead
+// mixed is true when both https:// and http:// origins are configured
+// Origins with other schemes, such as Android app origins, don't load the web client and are ignored
+func cookieSecurityForOrigins(origins []string) (alwaysSecure bool, mixed bool) {
+	var hasHTTPS, hasHTTP bool
+	for _, origin := range origins {
+		u, err := url.Parse(origin)
+		if err != nil {
+			continue
+		}
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			hasHTTPS = true
+		case "http":
+			hasHTTP = true
+		}
+	}
+
+	return hasHTTPS && !hasHTTP, hasHTTPS && hasHTTP
+}

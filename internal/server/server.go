@@ -79,6 +79,9 @@ type Server struct {
 	// and reduces abuse of the password-gated unwrap flow
 	wrappedKeyLimiter *actors.RateLimiter
 
+	// When true, session cookies are always Secure because every configured WebAuthn origin uses HTTPS
+	cookiesAlwaysSecure bool
+
 	// Servers
 	appSrv *http.Server
 
@@ -157,6 +160,13 @@ func (s *Server) init(log *slog.Logger, traceExporter sdkTrace.SpanExporter) (er
 	s.webAuthn, err = s.initWebAuthn()
 	if err != nil {
 		return fmt.Errorf("failed to initialize WebAuthn config: %w", err)
+	}
+
+	// Decide on cookie security from the same origins that WebAuthn ceremonies are checked against
+	var mixedOrigins bool
+	s.cookiesAlwaysSecure, mixedOrigins = cookieSecurityForOrigins(s.webAuthn.Config.RPOrigins)
+	if mixedOrigins {
+		log.Warn("The configured WebAuthn origins include both https:// and http:// origins, so session cookies are marked Secure only for requests that arrive over HTTPS or with an 'X-Forwarded-Proto: https' header - remove the http:// origins in production")
 	}
 
 	// Throttle wrapped primary key delivery per user

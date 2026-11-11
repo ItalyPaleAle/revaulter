@@ -379,7 +379,7 @@ func (s *Server) RouteV2AuthRegisterFinish(c *gin.Context) {
 	}
 
 	// Set the session cookie
-	err = setSessionCookie(c, res.sess)
+	err = s.setSessionCookie(c, res.sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -509,7 +509,7 @@ func (s *Server) RouteV2AuthLoginFinish(c *gin.Context) {
 	}
 
 	// Set the session cookie only after the rate-limit gate has passed
-	err = setSessionCookie(c, res.sess)
+	err = s.setSessionCookie(c, res.sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -619,7 +619,7 @@ func (s *Server) RouteV2AuthFinalizeSignup(c *gin.Context) {
 	}
 
 	// Set the updated session cookie
-	err = setSessionCookie(c, sess)
+	err = s.setSessionCookie(c, sess)
 	if err != nil {
 		AbortWithErrorJSON(c, err)
 		return
@@ -827,7 +827,7 @@ func (s *Server) RouteV2AuthLogout(c *gin.Context) {
 
 	// Clear both possible cookie names so a scheme change between login and logout (e.g. a proxy switching https→http) cannot leave a stray session cookie behind
 	// __Host- is only legal on Secure cookies, so we must emit each with the secure flag that matches its prefix
-	isSecure := secureCookie(c)
+	isSecure := s.secureCookie(c)
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(sessionCookieNameSecure, "", -1, "/", "", true, true)
 	c.SetCookie(sessionCookieNameInsecure, "", -1, "/v2", "", isSecure, true)
@@ -1521,9 +1521,16 @@ func (s *Server) RouteV2AuthDeleteCredential(c *gin.Context) {
 	})
 }
 
-func secureCookie(c *gin.Context) bool {
-	url := location.Get(c)
-	return url.Scheme == "https" || config.Get().ForceSecureCookies
+// secureCookie reports whether cookies set for this request must have the Secure flag
+// When every configured WebAuthn origin uses HTTPS, browsers can only reach the web client over HTTPS, so cookies are always Secure whatever a proxy reports
+// Otherwise an http:// origin is configured, which browsers only allow on localhost, so this falls back to the scheme of the request
+func (s *Server) secureCookie(c *gin.Context) bool {
+	if s.cookiesAlwaysSecure {
+		return true
+	}
+
+	reqURL := location.Get(c)
+	return reqURL != nil && reqURL.Scheme == "https"
 }
 
 type registerFinishRes struct {

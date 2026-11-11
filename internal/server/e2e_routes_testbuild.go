@@ -383,7 +383,7 @@ func (s *Server) e2eSendSession(c *gin.Context, sess *authSessionToken) {
 
 	cookieName := sessionCookieNameInsecure
 	cookiePath := "/"
-	if config.Get().ForceSecureCookies {
+	if s.cookiesAlwaysSecure {
 		cookieName = sessionCookieNameSecure
 		cookiePath = "/"
 	}

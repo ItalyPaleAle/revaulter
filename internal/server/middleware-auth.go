@@ -32,8 +32,8 @@ const (
 // sessionCookieFor returns the appropriate cookie name and path for the connection
 // __Host- prefix enforces Secure, no Domain, Path=/ — prevents cookie tossing from subdomains
 // On insecure connections (incl. development), fall back to the unprefixed name
-func sessionCookieFor(c *gin.Context) (name, path string) {
-	if secureCookie(c) {
+func (s *Server) sessionCookieFor(c *gin.Context) (name, path string) {
+	if s.secureCookie(c) {
 		return sessionCookieNameSecure, "/"
 	}
 
@@ -45,7 +45,7 @@ func (s *Server) MiddlewareSession(requireReady bool) gin.HandlerFunc {
 		// Try bearer token first, then fall back to cookie
 		token := getBearerToken(c)
 		if token == "" {
-			cookieName, _ := sessionCookieFor(c)
+			cookieName, _ := s.sessionCookieFor(c)
 			var err error
 			token, err = c.Cookie(cookieName)
 			if err != nil || token == "" {

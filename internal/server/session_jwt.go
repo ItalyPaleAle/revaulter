@@ -137,7 +137,7 @@ func parseAuthSessionToken(token string) (*authSessionToken, error) {
 	}, nil
 }
 
-func setSessionCookie(c *gin.Context, sess *authSessionToken) error {
+func (s *Server) setSessionCookie(c *gin.Context, sess *authSessionToken) error {
 	if sess == nil {
 		return errors.New("session is nil")
 	}
@@ -148,9 +148,9 @@ func setSessionCookie(c *gin.Context, sess *authSessionToken) error {
 		return err
 	}
 
-	cookieName, cookiePath := sessionCookieFor(c)
+	cookieName, cookiePath := s.sessionCookieFor(c)
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(cookieName, token, int(ttl.Seconds()), cookiePath, "", secureCookie(c), true)
+	c.SetCookie(cookieName, token, int(ttl.Seconds()), cookiePath, "", s.secureCookie(c), true)
 
 	return nil
 }
