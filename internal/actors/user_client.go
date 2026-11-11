@@ -7,9 +7,15 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/italypaleale/francis/actor"
+
 	"github.com/italypaleale/revaulter/internal/db"
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
+
+// longPollRecheckInterval is how often a long-poll checks its request while it waits, in case it misses the signal that wakes it
+// It's a variable so tests can shorten it
+var longPollRecheckInterval = 30 * time.Second
 
 var (
 	// ErrRequestNotModifiable is returned when a request doesn't exist, isn't pending, or can't be changed anymore
@@ -35,7 +41,7 @@ func (h *Host) User(userID string) UserClient {
 
 // Create stores a new pending request, with its envelope and audit event, and notifies the user's list streams
 // It returns ErrTooManyPendingRequests if the user has too many pending requests
-// Creating a request that already exists is a no-op, so a call can be retried safely
+// Creating a request that already exists is a no-op, so a call can be retried safely with the same input
 func (c UserClient) Create(ctx context.Context, in CreateRequestInput) error {
 	res, err := invoke[userCreateRes](ctx, c.host, actorTypeUser, c.userID, userMethodCreate, in)
 	if err != nil {
@@ -91,6 +97,7 @@ func (c UserClient) Subscribe(ctx context.Context, state string) (Subscription, 
 
 // WaitForResult waits until the request of a long-poll registered with Subscribe changes, or a newer long-poll evicts this one
 // It returns true if the long-poll was evicted
+// It also checks the request every longPollRecheckInterval, so it returns even if the signal that wakes it is lost
 // If it returns an error, for example because ctx was canceled, the waiter has been removed
 func (c UserClient) WaitForResult(ctx context.Context, state string, waiter string) (evicted bool, err error) {
 	err = c.host.checkRunning()
@@ -98,25 +105,39 @@ func (c UserClient) WaitForResult(ctx context.Context, state string, waiter stri
 		return false, err
 	}
 
-	env, err := c.host.waiters.Wait(ctx, waiterSignalID(state, waiter))
-	if err != nil {
-		// Remove the waiter, using a separate context because ctx may be canceled
-		unsubCtx, unsubCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer unsubCancel()
-		_, unsubErr := invoke[struct{}](unsubCtx, c.host, actorTypeUser, c.userID, userMethodUnsubscribe, userStateReq{
-			State:  state,
-			Waiter: waiter,
-		})
-		if unsubErr != nil {
-			logging.LogFromContext(ctx).WarnContext(ctx, "Failed to remove long-poll waiter",
-				slog.String("state", state),
-				slog.Any("error", unsubErr),
-			)
+	signalID := waiterSignalID(state, waiter)
+	for {
+		waitCtx, waitCancel := context.WithTimeout(ctx, longPollRecheckInterval)
+		env, err := c.host.waiters.Wait(waitCtx, signalID)
+		waitCancel()
+		if err == nil {
+			return decodeWake(env)
 		}
 
-		return false, err
-	}
+		if ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) {
+			c.unsubscribe(ctx, state, waiter)
+			return false, err
+		}
 
+		// No signal arrived in time, which also happens if it was lost, so check the request
+		res, err := invoke[requestCheck](ctx, c.host, actorTypeUser, c.userID, userMethodCheck, userStateReq{State: state})
+		switch {
+		case err != nil:
+			// Keep waiting, and check again later
+			logging.LogFromContext(ctx).WarnContext(ctx, "Failed to check request while waiting for its result",
+				slog.String("state", state),
+				slog.Any("error", err),
+			)
+		case !res.Found || res.Status != db.V2RequestStatusPending:
+			return false, nil
+		case res.Waiter != waiter:
+			return true, nil
+		}
+	}
+}
+
+// decodeWake returns true if the signal that woke a long-poll says it was evicted
+func decodeWake(env actor.Envelope) (evicted bool, err error) {
 	// The actor removes the waiter before waking it
 	var wake waiterWake
 	if env != nil {
@@ -127,6 +148,24 @@ func (c UserClient) WaitForResult(ctx context.Context, state string, waiter stri
 	}
 
 	return wake.Reason == waiterReasonEvicted, nil
+}
+
+// unsubscribe removes the waiter of a long-poll that stopped waiting
+func (c UserClient) unsubscribe(ctx context.Context, state string, waiter string) {
+	// Use a separate context because ctx may be canceled
+	unsubCtx, unsubCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer unsubCancel()
+
+	_, err := invoke[struct{}](unsubCtx, c.host, actorTypeUser, c.userID, userMethodUnsubscribe, userStateReq{
+		State:  state,
+		Waiter: waiter,
+	})
+	if err != nil {
+		logging.LogFromContext(ctx).WarnContext(ctx, "Failed to remove long-poll waiter",
+			slog.String("state", state),
+			slog.Any("error", err),
+		)
+	}
 }
 
 // Collect returns the result of a finished request and removes it
@@ -174,4 +213,39 @@ func (c UserClient) Get(ctx context.Context, state string) (*Request, error) {
 	}
 
 	return &res.Request, nil
+}
+
+// repairUserActors sets the cleanup alarm of every revaulter.user actor that has state again, in case it's missing
+// An actor sets its alarm whenever it's called, so this covers actors that nobody calls after setting their alarm failed
+func (h *Host) repairUserActors(ctx context.Context) (repaired int, err error) {
+	err = h.checkRunning()
+	if err != nil {
+		return 0, err
+	}
+
+	svc := h.host.Service()
+	var after string
+	for {
+		list, err := svc.ListStates(ctx, actorTypeUser, &actor.ListStatesOpts{After: after})
+		if err != nil {
+			return repaired, fmt.Errorf("failed to list user actors: %w", err)
+		}
+
+		for _, st := range list.States {
+			_, err = invoke[struct{}](ctx, h, actorTypeUser, st.ActorID, userMethodRepair, nil)
+			if err != nil {
+				h.log.WarnContext(ctx, "Failed to repair user actor",
+					slog.String("userId", st.ActorID),
+					slog.Any("error", err),
+				)
+				continue
+			}
+			repaired++
+		}
+
+		after = list.AfterID()
+		if after == "" {
+			return repaired, nil
+		}
+	}
 }

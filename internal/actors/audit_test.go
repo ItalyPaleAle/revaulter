@@ -1,6 +1,7 @@
 package actors
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -51,11 +52,14 @@ func TestPruneAuditLog(t *testing.T) {
 	h := newTestHost(t, newTestDB(t, userID), ":memory:")
 
 	auditID := insertTestAuditEvent(t, h, userID)
-	err := h.db.RequestPayloadStore().Insert(t.Context(), db.RequestPayload{
-		State:            "prune-state",
-		UserID:           userID,
-		ExpiresAt:        time.Now(),
-		EncryptedRequest: `{}`,
+	_, err := db.ExecuteInTransaction(t.Context(), h.db, 30*time.Second, func(ctx context.Context, tx *db.DbTx) (any, error) {
+		_, _, txErr := tx.RequestPayloadStore().Insert(ctx, db.RequestPayload{
+			State:            "prune-state",
+			UserID:           userID,
+			ExpiresAt:        time.Now(),
+			EncryptedRequest: `{}`,
+		})
+		return nil, txErr
 	})
 	require.NoError(t, err)
 
@@ -67,11 +71,16 @@ func TestPruneAuditLog(t *testing.T) {
 	assert.NotNil(t, payload)
 
 	// Past the retention period, both the event and the envelope are removed
+	// The request was never expired by its actor, so its expiry is recorded before the envelope is removed
 	h.pruneAuditLog(t.Context(), time.Now().Add(AuditRetention+time.Hour))
 	events := auditEvents(t, h, userID, db.AuditAuthLogout)
 	for _, e := range events {
 		assert.NotEqual(t, auditID, e.ID)
 	}
+	expired := auditEvents(t, h, userID, db.AuditRequestExpire)
+	require.Len(t, expired, 1)
+	require.NotNil(t, expired[0].RequestState)
+	assert.Equal(t, "prune-state", *expired[0].RequestState)
 	payload, err = h.db.RequestPayloadStore().Get(t.Context(), "prune-state", userID)
 	require.NoError(t, err)
 	assert.Nil(t, payload)

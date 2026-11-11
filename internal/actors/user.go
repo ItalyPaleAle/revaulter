@@ -48,6 +48,8 @@ const (
 	userMethodSnapshot    = "snapshot"
 	userMethodList        = "list"
 	userMethodGet         = "get"
+	userMethodRepair      = "repair"
+	userMethodCheck       = "check"
 )
 
 // Reasons sent to the long-poll waiting for the result of a request
@@ -147,6 +149,19 @@ func (st userActorState) countPending() int {
 		}
 	}
 	return n
+}
+
+// overdue returns the pending requests that are past their deadline, sorted by state
+func (st userActorState) overdue(now time.Time) []string {
+	var res []string
+	for state, r := range st.Requests {
+		if r.isOverdue(now) {
+			res = append(res, state)
+		}
+	}
+
+	slices.Sort(res)
+	return res
 }
 
 // Request is the metadata of a request, kept in the revaulter.user actor
@@ -253,6 +268,14 @@ type CollectedResult struct {
 	EncryptedResult string
 }
 
+// requestCheck is the status of a request, for a long-poll that checks it while waiting
+type requestCheck struct {
+	Found  bool
+	Status db.V2RequestStatus
+	// Token of the long-poll that currently waits for the result, if any
+	Waiter string
+}
+
 type userGetRes struct {
 	Found   bool
 	Request Request
@@ -282,7 +305,7 @@ type userActor struct {
 	client actor.Client[userActorState]
 
 	// Due time of the cleanup alarm, as set by this activation
-	// It's zero when unknown, in which case the alarm is always set
+	// It's zero when unknown, for example after the actor is activated or after setting the alarm failed, and then the next call sets the alarm again
 	alarmDue time.Time
 }
 
@@ -292,7 +315,7 @@ func (h *Host) newUserActor(actorID string, service *actor.Service) actor.Actor 
 		userID: actorID,
 		host:   h,
 		log:    h.log.With(slog.String("actorType", actorTypeUser), slog.String("userId", actorID)),
-		client: actor.NewActorClient[userActorState](actorTypeUser, actorID, service),
+		client: wrapActorClient(actorTypeUser, actorID, actor.NewActorClient[userActorState](actorTypeUser, actorID, service)),
 	}
 }
 
@@ -349,6 +372,20 @@ func (a *userActor) Invoke(ctx context.Context, method string, data actor.Envelo
 
 	case userMethodSnapshot:
 		return a.snapshot(ctx)
+
+	case userMethodCheck:
+		var in userStateReq
+		err := decodeActorEnvelope(data, &in)
+		if err != nil {
+			return nil, err
+		}
+		return a.check(ctx, in)
+
+	case userMethodRepair:
+		// Loading the state sets the cleanup alarm again, in case it's missing
+		a.alarmDue = time.Time{}
+		_, err := a.loadState(ctx)
+		return nil, err
 	}
 
 	if testUserMethods != nil {
@@ -419,6 +456,7 @@ func (a *userActor) Alarm(ctx context.Context, name string, _ actor.Envelope) er
 
 		// Re-arm instead of returning an error, since Francis deletes an alarm once its retries run out
 		// Replacing the alarm while it runs keeps the new one
+		// If this fails too, Francis retries the run, and after that the next call to the actor, or the daily repair, sets the alarm again
 		return a.setCleanupAlarm(ctx, time.Now().Add(userActorCleanupRetryDelay))
 	}
 
@@ -426,7 +464,25 @@ func (a *userActor) Alarm(ctx context.Context, name string, _ actor.Envelope) er
 }
 
 // loadState returns a copy of the state, which can be changed and then saved
+// If this activation hasn't set the cleanup alarm, for example because the actor was just activated, or because setting it failed, it sets it now
 func (a *userActor) loadState(ctx context.Context) (userActorState, error) {
+	st, err := a.getState(ctx)
+	if err != nil {
+		return userActorState{}, err
+	}
+
+	if a.alarmDue.IsZero() && !st.isEmpty() {
+		err = a.setCleanupAlarm(ctx, st.nextCleanup(config.Get().SessionTimeout))
+		if err != nil {
+			a.log.WarnContext(ctx, "Failed to set cleanup alarm; will retry", slog.Any("error", err))
+		}
+	}
+
+	return st, nil
+}
+
+// getState returns a copy of the state, which can be changed and then saved, without setting the cleanup alarm
+func (a *userActor) getState(ctx context.Context) (userActorState, error) {
 	st, err := a.client.GetState(ctx)
 	if err != nil {
 		return userActorState{}, fmt.Errorf("failed to load state: %w", err)
@@ -436,13 +492,20 @@ func (a *userActor) loadState(ctx context.Context) (userActorState, error) {
 }
 
 // saveState stores the state, then moves the cleanup alarm to the earliest due time
+// Once the state is stored, the change is done, so it returns an error only if storing the state fails
+// If setting the alarm fails, the next call sets it again
 func (a *userActor) saveState(ctx context.Context, st userActorState) error {
 	err := a.client.SetState(ctx, st, nil)
 	if err != nil {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
 
-	return a.setCleanupAlarm(ctx, st.nextCleanup(config.Get().SessionTimeout))
+	err = a.setCleanupAlarm(ctx, st.nextCleanup(config.Get().SessionTimeout))
+	if err != nil {
+		a.log.WarnContext(ctx, "Failed to set cleanup alarm; will retry", slog.Any("error", err))
+	}
+
+	return nil
 }
 
 // setCleanupAlarm sets the cleanup alarm to the given time, unless this activation already set it there
@@ -514,7 +577,7 @@ func (a *userActor) wakeWaiter(ctx context.Context, state string, waiter string,
 
 	err := a.host.waiters.Complete(ctx, waiterSignalID(state, waiter), waiterWake{Reason: reason})
 	if err != nil && !errors.Is(err, signal.ErrAlreadyCompleted) {
-		// The caller will see the change the next time it polls
+		// The long-poll finds out when it checks the request again
 		a.log.WarnContext(ctx, "Failed to wake long-poll", slog.String("state", state), slog.Any("error", err))
 	}
 }
@@ -532,59 +595,75 @@ func (a *userActor) create(ctx context.Context, in CreateRequestInput) (userCrea
 		return userCreateRes{}, nil
 	}
 
+	// Expire the requests past their deadline first, so they don't count towards the limit even if the cleanup alarm hasn't run
+	now := time.Now()
+	expired := st.overdue(now)
+	prevBell, waiters, err := a.expire(ctx, &st, expired, now)
+	if err != nil {
+		return userCreateRes{}, err
+	}
+
 	if st.countPending() >= MaxPendingRequestsPerUser {
+		if len(expired) > 0 {
+			err = a.saveState(ctx, st)
+			if err != nil {
+				return userCreateRes{}, err
+			}
+
+			a.notify(ctx, waiters, prevBell)
+		}
+
 		return userCreateRes{Error: userActorErrTooManyPending}, nil
 	}
 
-	// Store the envelope and the audit event first
-	// If saving the state fails afterwards, the audit log has an event for a request that doesn't exist, rather than a request that's missing from the audit log
-	if in.Audit != nil {
-		_, err = db.ExecuteInTransaction(ctx, a.host.db, userActorDBTimeout, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
-			rErr := tx.RequestPayloadStore().Insert(ctx, db.RequestPayload{
-				State:            in.State,
-				UserID:           a.userID,
-				ExpiresAt:        in.Request.ExpiresAt,
-				EncryptedRequest: in.EncryptedRequest,
-			})
-			if rErr != nil {
-				return struct{}{}, rErr
-			}
-
-			_, rErr = tx.AuditStore().Insert(ctx, *in.Audit)
-			if rErr != nil {
-				return struct{}{}, rErr
-			}
-
-			return struct{}{}, nil
-		})
-	} else {
-		err = a.host.db.RequestPayloadStore().Insert(ctx, db.RequestPayload{
+	// Store the envelope and the audit event in the same transaction, before the state
+	// If an earlier attempt stored them, but failed to save the state, the request is taken from the database, with its status, and the audit event isn't written again
+	stored, err := db.ExecuteInTransaction(ctx, a.host.db, userActorDBTimeout, func(ctx context.Context, tx *db.DbTx) (storedRequest, error) {
+		status, created, rErr := tx.RequestPayloadStore().Insert(ctx, db.RequestPayload{
 			State:            in.State,
 			UserID:           a.userID,
 			ExpiresAt:        in.Request.ExpiresAt,
 			EncryptedRequest: in.EncryptedRequest,
 		})
-	}
+		if rErr != nil {
+			return storedRequest{}, rErr
+		}
+
+		recorded := created && in.Audit != nil
+		if recorded {
+			_, rErr = tx.AuditStore().Insert(ctx, *in.Audit)
+			if rErr != nil {
+				return storedRequest{}, rErr
+			}
+		}
+
+		return storedRequest{
+			status:   status,
+			recorded: recorded,
+		}, nil
+	})
 	if err != nil {
 		return userCreateRes{}, err
 	}
 
-	if in.Audit != nil {
+	if stored.recorded {
 		a.host.NudgeAuditStream()
 	}
 
-	now := time.Now()
 	req := in.Request
-	req.Status = db.V2RequestStatusPending
+	req.Status = stored.status
 	req.Waiter = ""
 	if st.Requests == nil {
 		st.Requests = map[string]*Request{}
 	}
 	st.Requests[in.State] = &req
 
-	prevBell, err := a.rotateBell(&st, now)
-	if err != nil {
-		return userCreateRes{}, err
+	// Expiring requests already replaced the bell
+	if len(expired) == 0 {
+		prevBell, err = a.rotateBell(&st, now)
+		if err != nil {
+			return userCreateRes{}, err
+		}
 	}
 
 	err = a.saveState(ctx, st)
@@ -592,9 +671,18 @@ func (a *userActor) create(ctx context.Context, in CreateRequestInput) (userCrea
 		return userCreateRes{}, err
 	}
 
-	a.ringBell(ctx, prevBell)
+	a.notify(ctx, waiters, prevBell)
 
 	return userCreateRes{}, nil
+}
+
+// notify wakes the long-polls of requests that changed, then the list streams waiting on the bell
+func (a *userActor) notify(ctx context.Context, waiters map[string]string, bell string) {
+	for state, waiter := range waiters {
+		a.wakeWaiter(ctx, state, waiter, waiterReasonDone)
+	}
+
+	a.ringBell(ctx, bell)
 }
 
 // confirm completes a pending request with the response envelope
@@ -610,24 +698,8 @@ func (a *userActor) confirm(ctx context.Context, in userChangeReq) (userChangeRe
 		return userChangeRes{Error: userActorErrNotModifiable}, nil
 	}
 
-	// Store the response envelope and the audit event first
-	if in.Audit != nil {
-		_, err = db.ExecuteInTransaction(ctx, a.host.db, userActorDBTimeout, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
-			rErr := tx.RequestPayloadStore().SetResult(ctx, in.State, a.userID, in.EncryptedResult)
-			if rErr != nil {
-				return struct{}{}, rErr
-			}
-
-			_, rErr = tx.AuditStore().Insert(ctx, a.requestAuditEvent(*in.Audit, in.State, r))
-			if rErr != nil {
-				return struct{}{}, rErr
-			}
-
-			return struct{}{}, nil
-		})
-	} else {
-		err = a.host.db.RequestPayloadStore().SetResult(ctx, in.State, a.userID, in.EncryptedResult)
-	}
+	// Record the status, the response envelope and the audit event in the same transaction, before the state
+	stored, err := a.finishStored(ctx, in.State, db.V2RequestStatusCompleted, in.EncryptedResult, in.Audit, r)
 	if errors.Is(err, db.ErrRequestPayloadNotFound) {
 		// The envelope is gone, so the request can't be completed
 		return userChangeRes{Error: userActorErrNotModifiable}, nil
@@ -635,11 +707,7 @@ func (a *userActor) confirm(ctx context.Context, in userChangeReq) (userChangeRe
 		return userChangeRes{}, err
 	}
 
-	if in.Audit != nil {
-		a.host.NudgeAuditStream()
-	}
-
-	return a.finish(ctx, st, in.State, db.V2RequestStatusCompleted, now)
+	return a.finishWith(ctx, st, in.State, stored.status, db.V2RequestStatusCompleted, now)
 }
 
 // cancel cancels a pending request
@@ -655,31 +723,110 @@ func (a *userActor) cancel(ctx context.Context, in userChangeReq) (userChangeRes
 		return userChangeRes{Error: userActorErrNotModifiable}, nil
 	}
 
-	if in.Audit != nil {
-		_, err = a.host.db.AuditStore().Insert(ctx, a.requestAuditEvent(*in.Audit, in.State, r))
-		if err != nil {
-			return userChangeRes{}, fmt.Errorf("failed to write audit event: %w", err)
+	// Record the status and the audit event in the same transaction, before the state
+	stored, err := a.finishStored(ctx, in.State, db.V2RequestStatusCanceled, "", in.Audit, r)
+	if err != nil {
+		return userChangeRes{}, err
+	}
+
+	return a.finishWith(ctx, st, in.State, stored.status, db.V2RequestStatusCanceled, time.Now())
+}
+
+// storedRequest is the outcome of recording a request's status in the main database
+type storedRequest struct {
+	// Status of the request in the database
+	status db.V2RequestStatus
+	// True if this call recorded the change, and wrote its audit event
+	recorded bool
+}
+
+// finishStored moves a pending request to a final status in the main database, together with its audit event, which is optional
+// If the request is finished there already, for example by an earlier attempt that failed to save the state, it writes nothing and returns the stored status
+// A request with no row can't be completed, and it returns ErrRequestPayloadNotFound for that, but it can still be canceled or expired
+func (a *userActor) finishStored(ctx context.Context, state string, status db.V2RequestStatus, encryptedResult string, audit *db.AuditEventInput, r *Request) (storedRequest, error) {
+	stored, err := db.ExecuteInTransaction(ctx, a.host.db, userActorDBTimeout, func(ctx context.Context, tx *db.DbTx) (storedRequest, error) {
+		current, applied, rErr := tx.RequestPayloadStore().Finish(ctx, state, a.userID, status, encryptedResult)
+		if errors.Is(rErr, db.ErrRequestPayloadNotFound) && status != db.V2RequestStatusCompleted {
+			current = status
+			applied = true
+			rErr = nil
+		}
+		if rErr != nil {
+			return storedRequest{}, rErr
 		}
 
+		recorded := applied && audit != nil
+		if recorded {
+			_, rErr = tx.AuditStore().Insert(ctx, a.requestAuditEvent(*audit, state, r))
+			if rErr != nil {
+				return storedRequest{}, fmt.Errorf("failed to write audit event: %w", rErr)
+			}
+		}
+
+		return storedRequest{
+			status:   current,
+			recorded: recorded,
+		}, nil
+	})
+	if err != nil {
+		return storedRequest{}, err
+	}
+
+	if stored.recorded {
 		a.host.NudgeAuditStream()
 	}
 
-	return a.finish(ctx, st, in.State, db.V2RequestStatusCanceled, time.Now())
+	return stored, nil
+}
+
+// finishWith moves a pending request to the status stored in the main database, then reports whether that's the status the caller asked for
+// When the stored status is a different one, an earlier call finished the request differently, and the caller gets ErrRequestNotModifiable
+func (a *userActor) finishWith(ctx context.Context, st userActorState, state string, stored db.V2RequestStatus, wanted db.V2RequestStatus, now time.Time) (userChangeRes, error) {
+	res, err := a.finish(ctx, &st, state, stored, now)
+	if err != nil {
+		return userChangeRes{}, err
+	}
+
+	if stored != wanted {
+		return userChangeRes{Error: userActorErrNotModifiable}, nil
+	}
+
+	return res, nil
+}
+
+// syncRequest moves a request that's pending in the state to the final status stored in the main database, if it has one
+// A change is recorded in the database first, so the request can be finished there while still pending here, for example if saving the state failed
+func (a *userActor) syncRequest(ctx context.Context, st *userActorState, state string) error {
+	r := st.Requests[state]
+	if r == nil || r.Status != db.V2RequestStatusPending {
+		return nil
+	}
+
+	p, err := a.host.db.RequestPayloadStore().Get(ctx, state, a.userID)
+	if err != nil {
+		return err
+	}
+	if p == nil || !p.Status.IsTerminal() {
+		return nil
+	}
+
+	_, err = a.finish(ctx, st, state, p.Status, time.Now())
+	return err
 }
 
 // finish moves a pending request to a final state, then wakes its long-poll and the list streams
-func (a *userActor) finish(ctx context.Context, st userActorState, state string, status db.V2RequestStatus, now time.Time) (userChangeRes, error) {
+func (a *userActor) finish(ctx context.Context, st *userActorState, state string, status db.V2RequestStatus, now time.Time) (userChangeRes, error) {
 	r := st.Requests[state]
 	r.Status = status
 	waiter := r.Waiter
 	r.Waiter = ""
 
-	prevBell, err := a.rotateBell(&st, now)
+	prevBell, err := a.rotateBell(st, now)
 	if err != nil {
 		return userChangeRes{}, err
 	}
 
-	err = a.saveState(ctx, st)
+	err = a.saveState(ctx, *st)
 	if err != nil {
 		return userChangeRes{}, err
 	}
@@ -698,33 +845,57 @@ func (a *userActor) requestAuditEvent(in db.AuditEventInput, state string, r *Re
 	return in
 }
 
-// expire moves the given pending requests to the expired state, recording each expiry in the audit log
+// expire moves the given pending requests to the expired state, recording each expiry in the audit log, or to the final status stored in the main database if they have one
 // The caller must save the state, then ring the returned bell and wake the returned waiters
 func (a *userActor) expire(ctx context.Context, st *userActorState, states []string, now time.Time) (prevBell string, waiters map[string]string, err error) {
 	if len(states) == 0 {
 		return "", nil, nil
 	}
 
-	// Expiry is performed by the system, and the request's owner is both the actor and the target
-	events := make([]db.AuditEventInput, len(states))
-	for i, state := range states {
-		events[i] = db.AuditEventInput{
-			EventType:    db.AuditRequestExpire,
-			Outcome:      db.AuditOutcomeSuccess,
-			AuthMethod:   db.AuditAuthMethodSystem,
-			ActorUserID:  &a.userID,
-			TargetUserID: &a.userID,
-			RequestState: &states[i],
-			Metadata:     st.Requests[state].auditMetadata(),
-		}
-	}
+	// Record the expiry of each request and its audit event in the same transaction, before the state
+	// A request that's finished in the database already, for example by a confirmation that failed to save the state, keeps that status, and gets no expiry event
+	statuses, err := db.ExecuteInTransaction(ctx, a.host.db, userActorDBTimeout, func(ctx context.Context, tx *db.DbTx) (map[string]db.V2RequestStatus, error) {
+		res := make(map[string]db.V2RequestStatus, len(states))
+		events := make([]db.AuditEventInput, 0, len(states))
+		for i, state := range states {
+			current, applied, rErr := tx.RequestPayloadStore().Finish(ctx, state, a.userID, db.V2RequestStatusExpired, "")
+			if errors.Is(rErr, db.ErrRequestPayloadNotFound) {
+				current = db.V2RequestStatusExpired
+				applied = true
+				rErr = nil
+			}
+			if rErr != nil {
+				return nil, rErr
+			}
+			res[state] = current
 
-	// Write the audit events before changing the state
-	_, err = db.ExecuteInTransaction(ctx, a.host.db, userActorDBTimeout, func(ctx context.Context, tx *db.DbTx) (struct{}, error) {
-		return struct{}{}, tx.AuditStore().InsertMany(ctx, events)
+			if !applied {
+				continue
+			}
+
+			// Expiry is performed by the system, and the request's owner is both the actor and the target
+			events = append(events, db.AuditEventInput{
+				EventType:    db.AuditRequestExpire,
+				Outcome:      db.AuditOutcomeSuccess,
+				AuthMethod:   db.AuditAuthMethodSystem,
+				ActorUserID:  &a.userID,
+				TargetUserID: &a.userID,
+				RequestState: &states[i],
+				Metadata:     st.Requests[state].auditMetadata(),
+			})
+		}
+
+		if len(events) > 0 {
+			rErr := tx.AuditStore().InsertMany(ctx, events)
+			if rErr != nil {
+				return nil, rErr
+			}
+		}
+
+		return res, nil
 	})
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to write audit events for request expiry: %w", err)
+		return "", nil, fmt.Errorf("failed to record request expiry: %w", err)
 	}
 
 	a.host.NudgeAuditStream()
@@ -732,7 +903,7 @@ func (a *userActor) expire(ctx context.Context, st *userActorState, states []str
 	waiters = make(map[string]string, len(states))
 	for _, state := range states {
 		r := st.Requests[state]
-		r.Status = db.V2RequestStatusExpired
+		r.Status = statuses[state]
 		if r.Waiter != "" {
 			waiters[state] = r.Waiter
 			r.Waiter = ""
@@ -785,7 +956,12 @@ func (a *userActor) subscribe(ctx context.Context, in userStateReq) (Subscriptio
 		return Subscription{}, nil
 	}
 
-	// If the request is past its deadline, expire it now so the caller gets a final answer right away
+	// If the request is finished in the main database, or past its deadline, finish it now so the caller gets a final answer right away
+	err = a.syncRequest(ctx, &st, in.State)
+	if err != nil {
+		return Subscription{}, err
+	}
+
 	err = a.expireOne(ctx, &st, in.State, time.Now())
 	if err != nil {
 		return Subscription{}, err
@@ -819,6 +995,35 @@ func (a *userActor) subscribe(ctx context.Context, in userStateReq) (Subscriptio
 	}, nil
 }
 
+// check returns the status of a request, and the waiter of its current long-poll
+// Like subscribe, it finishes a request that's finished in the main database or past its deadline, but it doesn't register a waiter
+func (a *userActor) check(ctx context.Context, in userStateReq) (requestCheck, error) {
+	st, err := a.loadState(ctx)
+	if err != nil {
+		return requestCheck{}, err
+	}
+
+	r := st.Requests[in.State]
+	if r == nil {
+		return requestCheck{}, nil
+	}
+
+	err = a.syncRequest(ctx, &st, in.State)
+	if err != nil {
+		return requestCheck{}, err
+	}
+	err = a.expireOne(ctx, &st, in.State, time.Now())
+	if err != nil {
+		return requestCheck{}, err
+	}
+
+	return requestCheck{
+		Found:  true,
+		Status: r.Status,
+		Waiter: r.Waiter,
+	}, nil
+}
+
 // unsubscribe removes a long-poll's waiter, if it's still the current one
 func (a *userActor) unsubscribe(ctx context.Context, in userStateReq) error {
 	st, err := a.loadState(ctx)
@@ -849,6 +1054,10 @@ func (a *userActor) collect(ctx context.Context, in userStateReq) (CollectedResu
 		return CollectedResult{}, nil
 	}
 
+	err = a.syncRequest(ctx, &st, in.State)
+	if err != nil {
+		return CollectedResult{}, err
+	}
 	err = a.expireOne(ctx, &st, in.State, time.Now())
 	if err != nil {
 		return CollectedResult{}, err
@@ -923,7 +1132,7 @@ func (a *userActor) snapshot(ctx context.Context) (Snapshot, error) {
 
 // cleanup expires the pending requests past their deadline, and removes the finished ones that have been kept long enough
 func (a *userActor) cleanup(ctx context.Context) error {
-	st, err := a.loadState(ctx)
+	st, err := a.getState(ctx)
 	if err != nil {
 		return err
 	}
@@ -935,15 +1144,7 @@ func (a *userActor) cleanup(ctx context.Context) error {
 	now := time.Now()
 
 	// Expire pending requests past their deadline
-	var toExpire []string
-	for state, r := range st.Requests {
-		if r.isOverdue(now) {
-			toExpire = append(toExpire, state)
-		}
-	}
-
-	slices.Sort(toExpire)
-
+	toExpire := st.overdue(now)
 	prevBell, waiters, err := a.expire(ctx, &st, toExpire, now)
 	if err != nil {
 		return err
@@ -995,11 +1196,12 @@ func (a *userActor) cleanup(ctx context.Context) error {
 		return err
 	}
 
-	for state, waiter := range waiters {
-		a.wakeWaiter(ctx, state, waiter, waiterReasonDone)
-	}
+	a.notify(ctx, waiters, prevBell)
 
-	a.ringBell(ctx, prevBell)
+	// The alarm that runs now is deleted when it completes, so a failure to set the next one is an error, which makes the caller retry
+	if a.alarmDue.IsZero() {
+		return errors.New("failed to set the next cleanup alarm")
+	}
 
 	return nil
 }
