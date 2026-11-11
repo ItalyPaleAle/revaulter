@@ -311,7 +311,7 @@ The server stores the anchor public keys.
 The anchor signs:
 
 - The public key bundle: the account's static request public keys (ECDH and ML-KEM), together with the anchor public keys
-- An attestation for each passkey, covering the credential ID and a hash of the credential's public key
+- An attestation for each passkey and device, covering the credential ID and a hash of the credential's public key
 - Signing key publications, which tie a published signing key ID to the account
 
 Each signed message starts with a fixed prefix (`revaulter/v2/pubkey-bundle\n`, `revaulter/v2/cred-attest\n`, or `revaulter/v2/signing-key-publication\n`), so a signature made for one purpose can't be used for another.
@@ -473,6 +473,156 @@ flowchart TD
 
 This means you don't need every passkey at hand to change the password, at the cost of the old password staying valid on passkeys that haven't been updated.
 
+## Device credentials
+
+Native apps can't use passkeys, because Apple only lets an app use passkeys for domains it declares in advance, and every Revaulter server has its own domain.
+Instead, each app install gets a device credential: four keys created in the Secure Enclave, which can't be exported.
+
+| Key | Algorithm | Used to |
+| --- | --- | --- |
+| `signP256` | ECDSA P-256 | Sign in |
+| `signMldsa65` | ML-DSA-65 | Sign in |
+| `kaP256` | ECDH P-256 | Unwrap the device's copy of the `primaryKey` |
+| `kemMlkem768` | ML-KEM-768 | Unwrap the device's copy of the `primaryKey` |
+
+Like a passkey, a device has its own wrapped copies of the `primaryKey` and the anchor key, and the optional password applies to it in the same way.
+Devices are added only by [pairing](#pairing), and an account must always keep at least one passkey.
+
+The anchor attestation of a device covers this hash of its public keys:
+
+```text
+credentialPublicKeyHash = base64url(SHA-256(
+  "revaulter/v2/device-public-keys\n" ||
+  "signP256={signP256}\nkaP256={kaP256}\nsignMldsa65={signMldsa65}\nkemMlkem768={kemMlkem768}\nv=1"
+))
+```
+
+### Device wrapper
+
+The Secure Enclave can't compute a PRF like a passkey does.
+Instead, the wrapper uses a hybrid key encapsulation: wrapping needs only the device's public keys, and unwrapping needs both private keys, which never leave the Secure Enclave.
+
+```text
+eph            = new P-256 key pair, for each wrap
+ssEcdh         = ECDH(eph, kaP256)
+(kemCt, ssKem) = ML-KEM-768.Encapsulate(kemMlkem768)
+
+deviceSecret = HKDF-SHA-256(
+  IKM  = ssEcdh || ssKem
+  salt = empty
+  info = "revaulter/v2/deviceUnlock\n"
+       + "credentialId={credentialId}\n"
+       + "ephPub={base64url(eph public key)}\n"
+       + "kemCtHash={base64url(SHA-256(kemCt))}\n"
+       + "userId={userId}\nv=1"
+  len  = 32 bytes
+)
+```
+
+`deviceSecret` takes the place of `prfSecret` in the [wrapping key derivation](#wrapping-key-derivation).
+The envelope adds the values the device needs to unwrap it:
+
+```json
+{
+  "v": 1,
+  "kind": "device",
+  "passwordRequired": false,
+  "ephPub": "<base64url, 65 bytes>",
+  "kemCt": "<base64url, 1088 bytes>",
+  "nonce": "<base64url, 12 bytes>",
+  "ciphertext": "<base64url, 48 bytes>"
+}
+```
+
+- An attacker needs both shared secrets: breaking P-256 reveals only `ssEcdh`, and breaking ML-KEM only `ssKem`
+- The HKDF `info` binds the credential ID, the ephemeral key, and the ciphertext, so a wrapper can't be moved to another credential
+- Because wrapping needs only public keys, a password change can re-wrap every device right away, with the `updates` list of `POST /v2/auth/update-wrapped-key`
+- A client must only wrap a key for device keys covered by a valid anchor attestation, or by the pairing MAC during pairing; otherwise the server could swap in keys of its own
+
+### Device login
+
+A device signs in by signing a 32-byte challenge from the server with both of its signing keys:
+
+```text
+message = "revaulter/v2/device-login\n"
+        + "challenge={base64url(challenge)}\n"
+        + "credentialId={credentialId}\n"
+        + "userId={userId}\nv=1"
+```
+
+The P-256 signature is raw `r || s` over SHA-256 of the message, and the ML-DSA-65 signature uses an empty context.
+The challenge can be used once and expires after 60 seconds.
+The server accepts the login only if both signatures verify.
+
+## Pairing
+
+A new device can't unwrap anything until a client that is already signed in wraps a key for it.
+Pairing connects the two through the server, authenticated with a secret that only travels in the payload the existing client shows:
+
+```text
+payload = "revaulter-pair:" + base64url(
+  "server={server}\nuserId={userId}\nsessionId={sessionId}\nsecret={secret}\nanchorFingerprint={fingerprint}\nv=1"
+)
+
+macKey = HKDF-SHA-256(IKM = secret, salt = empty, info = "revaulter/v2/pair/mac\nsessionId={sessionId}\nv=1", len = 32)
+```
+
+`secret` is 32 random bytes and never reaches the server.
+The new device pins the anchor fingerprint from the payload, instead of trusting the server the first time it connects.
+
+```mermaid
+sequenceDiagram
+    participant E as Existing client
+    participant S as Server
+    participant D as New device
+
+    E->>S: start a pairing session
+    E-->>D: payload, as a QR code, link, or text
+    Note over D: pin the anchor, create the four keys
+    D->>S: hello with public keys, signatures, and MAC
+    S-->>E: hello
+    Note over E: check the MAC and signatures
+    E->>S: nonce and its MAC
+    S-->>D: nonce
+    Note over E,D: both show the same 6-digit code, and the user compares them
+    Note over E: wrap the primaryKey and anchor key for the device, and sign its attestation
+    E->>S: complete
+    D->>S: device login
+```
+
+The hello's two signatures and its MAC cover the same transcript, which ties the device's keys to this payload:
+
+```text
+transcript = "revaulter/v2/pair/hello\n"
+           + "server={server}\nuserId={userId}\nsessionId={sessionId}\nanchorFingerprint={fingerprint}\n"
+           + "credentialId={credentialId}\ndeviceName={deviceName}\n"
+           + "signP256={signP256}\nkaP256={kaP256}\nsignMldsa65={signMldsa65}\nkemMlkem768={kemMlkem768}\nv=1"
+
+helloMac = HMAC-SHA-256(macKey, transcript)
+```
+
+The server checks the signatures, and the existing client checks both the signatures and the MAC.
+The existing client then picks a random 32-byte nonce, and both sides compute the code from it:
+
+```text
+nonceBody = "helloMac={base64url(helloMac)}\nnonce={base64url(nonce)}\nv=1"
+nonceMac  = HMAC-SHA-256(macKey, "revaulter/v2/pair/nonce\n" || nonceBody)
+code      = first 4 bytes of HMAC-SHA-256(macKey, "revaulter/v2/pair/code\n" || nonceBody), big-endian, mod 10^6
+```
+
+The nonce is chosen only after the hello is fixed, so someone who photographed the payload can't pick device keys that produce a matching code.
+
+Once the user confirms the codes match, the existing client wraps the `primaryKey` and the anchor key for the device, and signs an attestation for it with the anchor:
+
+```text
+"revaulter/v2/cred-attest\n"
++ "userId={userId}\ncredentialId={credentialId}\ncredentialType=device\n"
++ "credentialPublicKeyHash={credentialPublicKeyHash}\nwrappedKeyEpoch={epoch}\ncreatedAt={unix seconds}\nv=2"
+```
+
+The server checks the attestation against the anchor and the hello before it adds the device.
+The server never sees the payload secret, the code, the password, or any unwrapped key.
+
 ## Request encryption path
 
 When the CLI submits an encrypt, decrypt, or sign request, it doesn't send the sensitive part of the request to the server in plaintext.
@@ -570,6 +720,9 @@ Because both shared secrets feed the key derivation, an attacker has to break bo
 | Request payload AEAD | AES-256-GCM |
 | Response transport key agreement | Hybrid ECDH P-256 and ML-KEM-768 |
 | Response transport AEAD | AES-256-GCM |
+| Device unwrap secret | Hybrid ECDH P-256 and ML-KEM-768, in the Secure Enclave |
+| Device login | ECDSA P-256 and ML-DSA-65, in the Secure Enclave, both required |
+| Pairing messages | HMAC-SHA-256, with a key derived from the payload secret |
 
 ## Security properties and consequences
 
@@ -579,3 +732,5 @@ Because both shared secrets feed the key derivation, an attacker has to break bo
 - A successful unwrap authenticates the wrapper contents, the passkey-derived PRF input, and the optional password in one step
 - Wrapping keys, static request keys, transport keys, and operation keys each use their own HKDF `info` string, so they are independent of each other
 - The user ID and request metadata are part of the AAD or the HKDF `info`, so keys and ciphertexts can't be reused across contexts
+- Unwrapping a device's key needs both the classical and the post-quantum shared secret, and a device login needs both signatures
+- The server can't add a device on its own, because clients only wrap keys for device keys covered by the pairing MAC or an anchor attestation
