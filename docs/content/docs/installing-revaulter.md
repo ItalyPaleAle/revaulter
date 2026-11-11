@@ -10,10 +10,10 @@ Revaulter is distributed as a container image and runs as a single-container ser
 - A container runtime (Docker, Podman, etc.)
 - A database: **SQLite** or **PostgreSQL**
 - HTTPS access for the web UI
-- Optional: a webhook endpoint for notifications (Discord, Slack, or any HTTP endpoint)
+- Optional: a webhook endpoint for notifications (including Discord, Slack, ntfy, Telegram, Teams, or any HTTP endpoint)
 
-> HTTPS is required for Revaulter because it uses WebCrypto.
-> You can either configure Revaulter to start a HTTPS server (which requires providing TLS certificates to Revaulter directly) or use a reverse proxy that performs TLS termination, such as Caddy, Traefik, Nginx, etc.
+> HTTPS is required because browsers only allow passkeys and WebCrypto on secure pages.  
+> You can either have Revaulter serve HTTPS itself, with your TLS certificates, or use a reverse proxy that terminates TLS, such as Caddy, Traefik, or Nginx. See [TLS](#tls).
 
 ## Container images
 
@@ -23,16 +23,18 @@ Revaulter is distributed as a container image and runs as a single-container ser
 | `ghcr.io/italypaleale/revaulter-cli:2` | Revaulter CLI |
 | `ghcr.io/italypaleale/revaulter-edit:2` | Revaulter local file encryption utility |
 
-All images are available for `amd64` and `arm64`.
+Images are available for `amd64`, `arm64` and `arm/v7`.
 
 ## Configuration
 
-Revaulter is configured via a YAML file and/or environment variables. Inside the container, it looks for `config.yaml` at:
+Revaulter reads its configuration from a YAML file, from environment variables, or both. It loads the first `config.yaml` it finds in:
 
 1. The path set in the `REVAULTER_CONFIG` environment variable
-2. `/etc/revaulter/config.yaml`
-3. `$HOME/.revaulter/config.yaml`
-4. The same directory as the binary
+2. The current working directory
+3. `$HOME/.revaulter/`
+4. `/etc/revaulter/`
+
+In a container, mount the file at `/etc/revaulter/config.yaml`.
 
 ### Required configuration
 
@@ -40,12 +42,12 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 | ---- | ---- | ---- |
 | `databaseDSN` | `REVAULTER_DATABASEDSN` | Database connection string (see [Database](#database) below) |
 | `secretKey` | `REVAULTER_SECRETKEY` | Instance-wide secret for key derivation (see [Secret key](#secret-key) below) |
+| `baseUrl` | `REVAULTER_BASEURL` | Public URL where users access the web UI, such as `https://revaulter.example.com`. Passkeys are registered for this address, and notifications link to it |
 
 ### Recommended configuration
 
 | Key | Env var | Default | Description |
 | ---- | ---- | ---- | ---- |
-| `baseUrl` | `REVAULTER_BASEURL` | `https://localhost:<port>` | Public URL where users access the web UI. Used for webhook links and WebAuthn origin validation. |
 | `sessionSigningKey` | `REVAULTER_SESSIONSIGNINGKEY` | Random at startup | Secret used to sign session tokens. Set this in production so sessions survive restarts. |
 | `tlsPath` | `REVAULTER_TLSPATH` | Config file directory | Directory containing `tls-cert.pem` and `tls-key.pem`. Revaulter watches for changes and auto-reloads. |
 | `tlsCertPEM` | `REVAULTER_TLSCERTPEM` | | PEM-encoded TLS certificate (alternative to `tlsPath`) |
@@ -64,8 +66,8 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 | `disableSignup` | `REVAULTER_DISABLESIGNUP` | `false` | Disable creation of new user accounts |
 | `oidcAllowPrivateAddresses` | `REVAULTER_OIDCALLOWPRIVATEADDRESSES` | `false` | Allow fetching the discovery documents and JWKS of [trusted OIDC issuers](/docs/oidc-authentication/) from private, loopback, and link-local addresses, which are refused by default. Enable it only if your issuers are on a private network, and you trust every user who can configure issuers |
 | `sessionTimeout` | `REVAULTER_SESSIONTIMEOUT` | `5m` | Session duration before re-authentication is required (max: `1h`) |
-| `requestTimeout` | `REVAULTER_REQUESTTIMEOUT` | `5m` | Default timeout for requests (can be overridden per-request; max: `24h`) |
-| `trustedProxies` | `REVAULTER_TRUSTEDPROXIES` | | Comma-separated list of IPs/CIDRs to trust for `X-Forwarded-*` headers |
+| `requestTimeout` | `REVAULTER_REQUESTTIMEOUT` | `5m` | Default timeout for requests. Each request can set its own timeout, up to `24h` |
+| `trustedProxies` | `REVAULTER_TRUSTEDPROXIES` | | List of IPs or CIDRs of proxies whose `X-Forwarded-*` headers are trusted (comma-separated in the env var) |
 | `trustedRequestIdHeader` | `REVAULTER_TRUSTEDREQUESTIDHEADER` | | Header to trust as request ID (e.g. `X-Request-ID`, `CF-Ray`) |
 | `logHealthChecks` | `REVAULTER_LOGHEALTHCHECKS` | `false` | Include `/healthz` requests in the request logs |
 | `logLevel` | `REVAULTER_LOGLEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
@@ -76,13 +78,13 @@ Revaulter is configured via a YAML file and/or environment variables. Inside the
 
 ### Optional WebAuthn configuration
 
-These settings are necessary in some scenarios only. Revaulter derives sensible defaults from `baseUrl`.
+These settings are necessary in some scenarios only. By default, Revaulter derives them from `baseUrl`.
 
 | Key | Env var | Default | Description |
 | ---- | ---- | ---- | ---- |
 | `webauthnRpId` | `REVAULTER_WEBAUTHNRPID` | Derived from `baseUrl` | WebAuthn Relying Party ID |
 | `webauthnRpName` | `REVAULTER_WEBAUTHNRPNAME` | `Revaulter` | WebAuthn Relying Party display name |
-| `webauthnOrigins` | `REVAULTER_WEBAUTHNORIGINS` | `baseUrl` | Allowed WebAuthn origins |
+| `webauthnOrigins` | `REVAULTER_WEBAUTHNORIGINS` | | Additional origins allowed to use passkeys. `baseUrl` is always allowed |
 
 ## Database
 
@@ -106,10 +108,10 @@ postgres://revaulter:password@db.example.com:5432/revaulter
 
 ### Short-lived data
 
-Revaulter keeps short-lived data (including pending requests) in an embedded [Francis](https://gofrancis.dev) actor host. Francis stores its data separately from the main database:
+Revaulter keeps short-lived data, including pending requests, in an embedded [Francis](https://gofrancis.dev) actor host, which stores it separately from the main database:
 
 | Main database | Francis data storage |
-| ---- | ---- |
+| --- | --- |
 | PostgreSQL | A `francis` schema in the same database, created automatically |
 | SQLite, e.g. `/data/revaulter.db` | A file in the same folder, e.g. `/data/revaulter.francis.db` |
 
@@ -125,7 +127,8 @@ Generate a secret key:
 openssl rand -base64 32
 ```
 
-> ⚠️ **Warning:** Rotating `secretKey` bricks every existing account on the instance. The secret key is used to derive the WebAuthn PRF salt that every user's in-browser key derivation is bound to. Treat this value as **immutable** for the lifetime of the instance. If you must rotate it, every user will need to re-register from scratch.
+> ⚠️ **Warning:** Changing `secretKey` makes every existing account on the instance unusable. The secret key is used to derive the WebAuthn PRF salt, which every user's keys depend on.  
+> Treat this value as **immutable** for the lifetime of the instance. If you must change it, every user will need to register again from scratch.
 
 > 📝 **Note:** `secretKey` is **not** used to encrypt anything stored in the database. All request payloads and responses are end-to-end encrypted in the browser; the server only stores opaque envelopes.
 
@@ -137,16 +140,16 @@ Generate a session signing key:
 openssl rand -base64 32
 ```
 
-Set `sessionSigningKey` in production so session tokens remain valid across restarts. If this value is omitted, Revaulter generates a random signing key at startup; existing sessions are invalidated whenever the process restarts.
+Set `sessionSigningKey` in production so session tokens remain valid across restarts. If it's not set, Revaulter generates a random signing key at startup, and existing sessions end whenever the process restarts.
 
 When [running multiple replicas](/docs/multiple-replicas/), `sessionSigningKey` is required, and it must be the same on all of them.
 
 ## TLS
 
-Revaulter requires HTTPS for WebAuthn to work (browsers enforce a secure context). You have two options:
+Passkeys only work over HTTPS. You have two options:
 
-1. **Reverse proxy** (recommended): Terminate TLS at a reverse proxy (Caddy, Traefik, Nginx, etc.) and forward plain HTTP to Revaulter.
-2. **Direct TLS**: Provide certificates via `tlsPath` (a directory containing `tls-cert.pem` and `tls-key.pem`) or via `tlsCertPEM`/`tlsKeyPEM`. Revaulter watches the `tlsPath` directory and auto-reloads certificates.
+1. **Reverse proxy** (recommended): terminate TLS at a reverse proxy, such as Caddy, Traefik, or Nginx, and forward plain HTTP to Revaulter. Set `trustedProxies` to the proxy's address, so Revaulter sees the clients' real IP addresses, which it uses for IP restrictions, rate limiting, and the audit log.
+2. **Direct TLS**: provide certificates with `tlsPath` (a directory containing `tls-cert.pem` and `tls-key.pem`), or with `tlsCertPEM` and `tlsKeyPEM`. Revaulter watches the `tlsPath` directory and reloads certificates automatically when they change.
 
 ## Docker Compose example
 
@@ -164,6 +167,8 @@ services:
 volumes:
   revaulter-data:
 ```
+
+The container runs as a non-root user (UID 65532). If you mount a host directory at `/data` instead of a volume, make that user its owner, for example with `sudo chown 65532:65532 ./data`. On hosts with SELinux enforcing, also add `:Z` to the mount.
 
 With a `config.yaml`:
 
@@ -224,7 +229,7 @@ Description=Revaulter
 After=network-online.target
 
 [Container]
-Image=ghcr.io/italypaleale/revaulter:latest
+Image=ghcr.io/italypaleale/revaulter:2
 PublishPort=8080:8080
 Secret=revaulter-config,target=/etc/revaulter/config.yaml
 Volume=revaulter-data.volume:/data
@@ -270,7 +275,7 @@ After starting Revaulter:
 1. Open the web UI at your configured `baseUrl`.
 2. Create an account: registration uses WebAuthn, so you'll need a passkey-capable authenticator with PRF support.
    > Finish creating the account within 24 hours of registering the passkey, or you'll need to start over.
-3. After registration, the UI shows your **request key**: this is the per-user key that CLI requests are routed by.
-4. Optionally configure allowed IP addresses for your account from the settings page.
+3. After registration, the UI shows your **request key**, which the CLI uses to send you requests. You can also find it under **Settings → Request auth**.
+4. Optionally, restrict the IP addresses that can use your account under **Settings → Firewall**.
 
-> Account self-registration can be disabled by setting `disableSignup: true` after initial setup.
+> After creating your accounts, you can turn off self-registration by setting `disableSignup: true`.

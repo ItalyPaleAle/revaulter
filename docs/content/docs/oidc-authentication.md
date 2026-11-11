@@ -5,7 +5,8 @@ weight: 27
 
 By default, the CLI authenticates the requests it sends you with a static request key. That key never expires, so wherever it's stored (a CI secret, a file on a server) it's a long-lived credential that someone could steal.
 
-If your requests come from a platform that issues OpenID Connect (OIDC) tokens to its workloads, such as GitHub Actions, GitLab CI, Service Account Tokens on Kubernetes, Workload Identity tokens on cloud providers like Azure or Vercel, you can use those tokens instead. They are signed by the platform, identify the exact workload that requested them, and expire within minutes, so there's no long-lived secret to protect.
+If your requests come from a platform that issues OpenID Connect (OIDC) tokens to its workloads, you can use those tokens instead. Examples include GitHub Actions, GitLab CI, Kubernetes service account tokens, and workload identity tokens on cloud providers like Azure or Vercel.  
+The tokens are signed by the platform, identify the exact workload that requested them, and expire within minutes, so there's no long-lived secret to protect.
 
 Approving a request still requires your passkey: OIDC tokens only replace the request key, which decides who can _ask_ you for approval.
 
@@ -18,7 +19,7 @@ Each user chooses which authentication methods to enable in the web UI, under **
 
 When a request carries a JWT, the server:
 
-1. Reads the user ID from the `X-Revaulter-User` header (the CLI's `--user-id` flag), and checks that the user has enabled OIDC tokens.
+1. Reads the user ID from the `X-Revaulter-User` header (the CLI's `--user-id` flag) and checks that the user has enabled OIDC tokens.
 2. Looks for a trusted issuer of that user whose issuer matches the token's `iss` claim exactly, whose audience is in the token's `aud` claim, and whose subject pattern matches the token's `sub` claim.
 3. Verifies the token's signature with the issuer's public keys, which it fetches from the issuer's JWKS. The JWKS URL is found with OpenID Connect discovery, unless you set it explicitly.
 4. Checks that the token has an `exp` claim and hasn't expired, and that its `nbf` and `iat` claims, when present, aren't in the future. A clock skew of up to one minute is tolerated.
@@ -32,18 +33,18 @@ The response to the new request includes a _result token_, which the CLI uses to
     - **Issuer**: the value of the tokens' `iss` claim, such as `https://token.actions.githubusercontent.com`
     - **Audience**: the value your workload requests for the tokens' `aud` claim. It defaults to the address of your Revaulter server, which is the convention most platforms follow
     - **Subject**: a pattern for the tokens' `sub` claim. `*` matches any sequence of characters, including `/` and `:`
-    - **JWKS URL**: set it if you need to pass an explicit endpoint, otherwise it is automatically detected using OpenID Connect discovery
+    - **JWKS URL**: leave it empty to find it with OpenID Connect discovery, or set it to use a specific endpoint
 3. Copy your **User ID** from the same page, and pass it to the CLI with `--user-id` (or, with `revaulter-edit`, the `REVAULTER_USER_ID` environment variable).
 
 You can trust up to 25 issuers. Add one entry for each workload that should be able to send you requests.
 
-The Revaulter server needs outbound HTTPS access to each issuer, to fetch its discovery document and JWKS. Keys are cached, and refreshed in the background and whenever a token is signed with a key the server hasn't seen yet.
+The Revaulter server needs outbound HTTPS access to each issuer, to fetch its discovery document and JWKS. Keys are cached, and refreshed in the background and whenever a token is signed with a key the server doesn't know yet.
 
 By default, the server only connects to issuers on public addresses, since users choose the URLs it fetches. If your issuer is on a private network, such as a Kubernetes cluster's internal API server, set the [`oidcAllowPrivateAddresses`](/docs/installing-revaulter/) option.
 
 ## Choosing the subject
 
-The subject is what restricts _which_ workloads can send you requests.
+The subject restricts _which_ workloads can send you requests.
 
 Some examples for **GitHub Actions**, whose issuer is `https://token.actions.githubusercontent.com`:
 

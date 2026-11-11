@@ -7,17 +7,17 @@ weight: 12
 
 ## Installing
 
-`revaulter-edit` ships in the same [release archives](https://github.com/ItalyPaleAle/revaulter/releases) as `revaulter-cli`, for Linux, macOS, and Windows.
+`revaulter-edit` ships in the same [release archives](https://github.com/ItalyPaleAle/revaulter/releases) as `revaulter-cli`, for Linux, macOS, Windows, and FreeBSD.
 
-There is also a container image, `ghcr.io/italypaleale/revaulter-edit:2`: see [using Docker](#using-docker) below.
+There's also a container image: `ghcr.io/italypaleale/revaulter-edit:2`. See [Using Docker](#using-docker) below.
 
 ## How it works
 
 Each file is encrypted locally with its own random 256-bit key and saved in [JWE](https://datatracker.ietf.org/doc/html/rfc7516) format.
 
-That key is never stored in cleartext on-disk. It is wrapped by Revaulter (using the same `encrypt` operation the CLI exposes) and the wrapped key (along with the other required info to unwrap it: the key label and algorithm), is stored in the JWE protected header. Opening the file submits a `decrypt` request to Revaulter and once you approve it in the browser, the file's contents are decrypted locally.
+That key is never stored on disk in cleartext. Revaulter wraps it with the same `encrypt` operation the CLI uses, and the JWE-protected header stores the wrapped key along with the key label and algorithm needed to unwrap it. Opening the file sends a `decrypt` request to Revaulter, and once you approve it in the browser, the file's contents are decrypted locally.
 
-The contents of the file never leave your machine, so `revaulter-edit` can be used to encrypt larger files too.
+Only the wrapped key is sent to Revaulter. The file's contents never leave your machine, so `revaulter-edit` works with larger files too.
 
 > Each encrypted file is encoded as JWE and includes this info in the protected header:
 >
@@ -39,7 +39,7 @@ The contents of the file never leave your machine, so `revaulter-edit` can be us
 
 ## Commands
 
-`revaulter-edit` has three sub-commands, and they all take the path of a local file.
+`revaulter-edit` has three subcommands, and they all take the path of a local file.
 
 `edit` is the default: running `revaulter-edit FILE` is the same as `revaulter-edit edit FILE`.
 
@@ -53,11 +53,11 @@ revaulter-edit [edit] [flags] FILE
 
 If the file does not exist, a new random key is generated and wrapped with Revaulter, and the file is created the first time the editor saves.
 
-The decrypted contents only ever live in a temporary file that only your user can read, which is overwritten and deleted when the editor exits.
+The decrypted contents are written only to a temporary file that only your user can read, which is overwritten and deleted when the editor exits.
 
-The editor is taken from `--editor` then the environmental variables `$VISUAL` and `$EDITOR`.
+The editor is taken from `--editor`, then from the `$VISUAL` and `$EDITOR` environment variables.
 
-Editors that open the file in an existing window and return right away, such as `code` (Visual Studio Code) and `subl` (Sublime Text), are launched with the `--wait` flag automatically, so the session lasts for as long as the file is open. Pass `--no-auto-wait` to omit it.
+Editors that open the file in an existing window and return right away, such as `code` (Visual Studio Code) and `subl` (Sublime Text), are launched with the `--wait` flag automatically, so the session lasts as long as the file is open. Pass `--no-auto-wait` to omit it.
 
 ### `cat`
 
@@ -75,19 +75,19 @@ Reads the new contents of the file from stdin, encrypts them, and writes them ba
 revaulter-edit write [flags] FILE
 ```
 
-This is the counterpart of `cat`, for encrypting a file without opening an editor. It encrypts a file that already exists in cleartext:
+This is the counterpart of `cat`, for writing a file without opening an editor. Use it to encrypt a file that already exists in cleartext:
 
 ```bash
 revaulter-edit write secrets.txt.enc < secrets.txt
 ```
 
-It updates one from a script:
+To update one from a script:
 
 ```bash
 echo "my-secret-pw" | revaulter-edit write password.enc
 ```
 
-And it edits one with an editor `revaulter-edit` cannot launch itself, for example from inside a container:
+Or to edit one with an editor that `revaulter-edit` can't launch itself, for example from inside a container:
 
 ```bash
 revaulter-edit cat secrets.txt > /tmp/secrets
@@ -95,15 +95,15 @@ revaulter-edit cat secrets.txt > /tmp/secrets
 revaulter-edit write secrets.txt < /tmp/secrets
 ```
 
-If the file already exists, its own key is unwrapped and reused, so only the contents change. If it does not, a new random key is generated and wrapped, exactly as `edit` does.
+If the file already exists, its key is unwrapped and reused, so only the contents change. If it doesn't, a new random key is generated and wrapped, as with `edit`.
 
-Note that reading and writing are two separate operations, so the round trip above needs two approvals.
+Reading and writing are two separate operations, so the round trip above needs two approvals.
 
-Replacing the contents of a file with nothing is refused unless `--allow-empty` is passed, so a pipe that produced no output does not quietly empty the file.
+`write` refuses to replace the contents of a file with nothing unless you pass `--allow-empty`, so a pipe that produced no output doesn't silently empty the file.
 
 ## Flags
 
-Both sub-commands accept the same flags.
+All subcommands accept these flags, except where noted.
 
 | Flag | Short | Required | Description |
 | ------ | ------- | ---------- | ------------- |
@@ -113,8 +113,8 @@ Both sub-commands accept the same flags.
 | `--user-id` | | Only with OIDC tokens | ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT from a trusted OIDC issuer. Can also be passed as env var `REVAULTER_USER_ID` |
 | `--key-label` | `-l` | For new files | Logical key label used to wrap the file's encryption key. Can also be passed as env var `REVAULTER_KEY_LABEL`. Files that already exist carry their own label, which always wins |
 | `--algorithm` | `-a` | No | Algorithm used to wrap the file's encryption key: `A256GCM` (default) or `C20P` |
-| `--editor` | | No | Editor to launch. Can also be passed as env var `VISUAL` or `EDITOR` |
-| `--no-auto-wait` | | No | Do not add the `--wait` flag to editors that need it, such as `code` and `subl` |
+| `--editor` | | No | For `edit` only: editor to launch. Defaults to the `VISUAL` or `EDITOR` env var |
+| `--no-auto-wait` | | No | For `edit` only: do not add the `--wait` flag to editors that need it, such as `code` and `subl` |
 | `--allow-empty` | | No | For `write` only: allow replacing the contents of the file with nothing |
 | `--timeout` | `-t` | No | Timeout for the approval request, as a Go duration (e.g. `5m`) |
 | `--note` | `-n` | No | Message displayed alongside the request. Defaults to the name of the file |
@@ -164,7 +164,7 @@ revaulter-edit --editor code ~/notes/recovery-codes.txt
 
 ## Using Docker
 
-The container image carries no editor, so it is built around `cat` and `write`: those cover reading a file, encrypting one, and updating one from a script.
+The container image has no editor, so it's built around `cat` and `write`, which cover reading a file, encrypting one, and updating one from a script.
 
 To edit inside the container, supply an editor with `--editor` or `EDITOR`. It has to be statically linked, since the image has no shared libraries and no terminfo database. A `busybox-static` from the host works:
 
@@ -175,7 +175,7 @@ To edit inside the container, supply an editor with `--editor` or `EDITOR`. It h
 Two volumes matter:
 
 - The directory holding the files to work on, so the container can read and write them.
-- A volume for the trust store, at `/data`. Anchor pins live there, and without it every run is a first contact: each command would prompt to pin the anchor again, and would fail outright when there is no terminal to prompt on.
+- A volume for the trust store, at `/data`. Anchor pins are saved there. Without it, every run is a first contact: each command asks to pin the anchor again, and fails when there's no terminal to ask on.
 
 Pin the server's anchor once, into a volume that later runs reuse:
 
@@ -187,7 +187,7 @@ docker run --rm -it \
   --request-key "$REQUEST_KEY"
 ```
 
-Then read and write files, which need no terminal and so work in scripts:
+Then read and write files. These commands need no terminal, so they work in scripts:
 
 ```bash
 docker run --rm \
@@ -201,7 +201,7 @@ docker run --rm -i \
   ghcr.io/italypaleale/revaulter-edit:2 write /work/secrets.txt < secrets.txt
 ```
 
-Editing a file on the host, with the contents never written there in cleartext by anything but your own editor, is the same two commands:
+To edit a file on the host, use the same two commands. Only your own editor writes the contents to the host in cleartext:
 
 ```bash
 docker run --rm -v revaulter-trust:/data -v "$PWD:/work" \
@@ -213,10 +213,10 @@ docker run --rm -i -v revaulter-trust:/data -v "$PWD:/work" \
   ghcr.io/italypaleale/revaulter-edit:2 write /work/secrets.txt < /tmp/secrets
 ```
 
-The container runs as a non-root user (UID 65532), so the mounted files and the trust store volume must be readable, and writable, by that user.
+The container runs as a non-root user (UID 65532), so that user must be able to read and write the mounted files and the trust store volume.
 
 ## Notes and limitations
 
 - Each save re-encrypts the whole file with a fresh nonce, but reuses the same content encryption key. Only opening the file requires approval, so a long editing session costs a single approval.
 - `cat` fails if the file does not exist: only `edit` and `write` create files.
-- The file records the server it was encrypted with. Pointing `--server` at a different server warns and then fails to unwrap the key, since the key label belongs to the original user's keys.
+- The file records the server it was encrypted with. If `--server` points at a different server, `revaulter-edit` warns and then fails to unwrap the key, because only the original user's keys can unwrap it.

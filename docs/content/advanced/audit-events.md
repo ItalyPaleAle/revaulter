@@ -3,18 +3,18 @@ title: "Audit events"
 weight: 42
 ---
 
-Revaulter records security-relevant actions to a durable, append-only `v2_audit_events` table. The table sits alongside the operational application log (emitted to stdout): ordinary debug messages still go to the log stream, while audit rows are the long-lived history of *who did what*.
+Revaulter records security-relevant actions to a durable, append-only `v2_audit_events` table. This is separate from the application log (written to stdout): ordinary log messages still go to the log stream, while audit rows are the long-term history of *who did what*.
 
-There is currently no admin UI or REST API for reading audit events for all users, and operators must query the table directly with SQL. A read endpoint may ship in a future release.
+Each user can see their own events in the web UI, under **Settings → Audit log**. There's no admin UI or REST API for reading the events of all users yet, so operators must query the table directly with SQL, or [stream the events to a SIEM](#streaming-to-a-siem).
 
 ## What gets recorded
 
-Each row captures one logical action: a confirmed request, a rotated request key, a deleted passkey, etc. Failed and denied attempts are recorded too where the signal is interesting (e.g. a failed login).
+Each row records one action, such as a confirmed request, a regenerated request key, or a deleted passkey. Some failed and denied attempts are recorded too, such as failed logins.
 
 Events are written through one of two paths:
 
-- **In-transaction**: for security-critical state changes the audit row commits in the same transaction as the mutation. If the audit insert fails, the user action also rolls back. This guarantees that a "request confirmed" row exists if and only if the request was actually marked confirmed.
-- **Best-effort**: for purely observational events (logout cookie clear, background expiry, login *failures*) the audit row is written outside the mutation. A failed audit insert is logged as a warning and does not affect the user-facing response.
+- **In the same transaction**: for security-critical changes, the audit row is written in the same transaction as the change. If writing the audit row fails, the change is rolled back too. This guarantees that a "request confirmed" row exists if and only if the request was actually confirmed.
+- **Best-effort**: for events that are only observational in nature (logouts, expired requests, login *failures*), the audit row is written separately. If writing it fails, Revaulter logs a warning, and the user's action isn't affected.
 
 ## Schema
 
@@ -22,7 +22,7 @@ Events are written through one of two paths:
 | --- | --- | --- | --- |
 | `id` | TEXT (SQLite) / UUID (Postgres) | no | Time-sortable primary key (UUIDv7 format) |
 | `created_at` | INTEGER (Unix seconds) | no | When the audit row was written |
-| `event_type` | TEXT | no | `<area>.<verb>` — see list below |
+| `event_type` | TEXT | no | `<area>.<verb>`: see the list below |
 | `outcome` | TEXT | no | `success` \| `failure` \| `denied` |
 | `auth_method` | TEXT | no | `session` \| `request_key` \| `request_oidc` (a JWT from a trusted OIDC issuer) \| `system` \| `none` (set on rows from handlers that run before any authentication is established, e.g. `auth.login_finish` failures) |
 | `actor_user_id` | TEXT | yes | The user who performed the action, NULL for unauthenticated failures and pure system events |
@@ -34,28 +34,28 @@ Events are written through one of two paths:
 | `client_ip` | TEXT | yes | NULL for system events |
 | `user_agent` | TEXT | yes | Capped at 512 chars |
 | `metadata` | TEXT (SQLite) / JSONB (Postgres) | no | Free-form JSON, capped at 4 KiB, default `{}` |
-| `seq` | INTEGER (SQLite only) | no | Internal: the shipping key for [streaming to a SIEM](#streaming-to-a-siem). Private property assigned by the database, not included in backups |
-| `xact_id` | XID8 (Postgres only) | no | Internal: the shipping key for [streaming to a SIEM](#streaming-to-a-siem). Private property assigned by the database, not included in backups |
+| `seq` | INTEGER (SQLite only) | no | Internal: tracks progress when [streaming to a SIEM](#streaming-to-a-siem). Assigned by the database and not included in backups |
+| `xact_id` | XID8 (Postgres only) | no | Internal: tracks progress when [streaming to a SIEM](#streaming-to-a-siem). Assigned by the database and not included in backups |
 
 ## Event types
 
-Naming convention is `<area>.<verb>` with both halves in `snake_case`. The full list is fixed at the application layer. Inserts with any other value are rejected.
+Event types are named `<area>.<verb>`, with both parts in `snake_case`. Revaulter records only the event types listed here, and rejects any other value.
 
 ### Auth
 
 | event_type | When it fires |
 | --- | --- |
 | `auth.register_finish` | Account creation completes |
-| `auth.finalize_signup` | First-credential setup completes — anchor pubkeys, wrapped keys, request enc keys are written |
-| `auth.login_finish` | A login attempt finishes — `outcome=success` for accepted credentials, `outcome=failure` for rejected ones |
-| `auth.logout` | User invokes logout. The session JWT is not invalidated server-side — this records the cookie-clear |
-| `auth.request_key_regenerate` | User rotates the CLI request key |
+| `auth.finalize_signup` | Setup of the first passkey completes, and the user's anchor public keys, wrapped keys, and request encryption keys are stored |
+| `auth.login_finish` | A login attempt finishes: `outcome=success` for accepted credentials, `outcome=failure` for rejected ones |
+| `auth.logout` | User logs out. The server doesn't revoke the session token, so this records that the session cookie was cleared |
+| `auth.request_key_regenerate` | User regenerates the CLI request key |
 | `auth.request_auth_methods_change` | User enables or disables the static request key or OIDC tokens. Metadata: `{requestKeyEnabled, requestOidcEnabled}` |
 | `auth.request_oidc_issuer_add` | User adds a trusted OIDC issuer. Metadata: `{issuerId, issuer, audience, subject, discovery}`, with long values truncated |
 | `auth.request_oidc_issuer_delete` | User removes a trusted OIDC issuer. Metadata: same as `auth.request_oidc_issuer_add` |
-| `auth.allowed_ips_change` | Allowed-IP list updated. Metadata: `{old_count, new_count}` |
+| `auth.allowed_ips_change` | User updates the list of allowed IPs. Metadata: `{old_count, new_count}` |
 | `auth.display_name_change` | User updates their display name |
-| `auth.wrapped_key_update` | The wrapped primary/anchor key changes. Metadata: `{advance_epoch}` (true when the change is a password rotation) |
+| `auth.wrapped_key_update` | The wrapped primary key and anchor key change. Metadata: `{advance_epoch}` (true when the change is a password change) |
 | `auth.credential_add_finish` | New passkey registered |
 | `auth.credential_rename` | Passkey renamed |
 | `auth.credential_delete` | Passkey deleted |
@@ -64,26 +64,26 @@ Naming convention is `<area>.<verb>` with both halves in `snake_case`. The full 
 
 | event_type | When it fires |
 | --- | --- |
-| `request.create` | CLI/API submits a new encrypt/decrypt/sign request. Metadata: `{operation, algorithm, keyLabel, note?, jwtIssuer?, jwtSubject?, jwtId?}` |
+| `request.create` | The CLI or API submits a new encrypt, decrypt, or sign request. Metadata: `{operation, algorithm, keyLabel, note?, jwtIssuer?, jwtSubject?, jwtId?}` |
 | `request.confirm` | User approves a pending request. Metadata: `{operation, algorithm, keyLabel, note?}` |
 | `request.cancel` | User cancels a pending request. Metadata: `{operation, algorithm, keyLabel, note?}` |
-| `request.expire` | TTL elapses and the background goroutine marks the request expired. `auth_method=system`. Metadata: `{operation, algorithm, keyLabel, note?}` |
+| `request.expire` | A pending request expires before it's approved or canceled. `auth_method=system`. Metadata: `{operation, algorithm, keyLabel, note?}` |
 
-The `note` field is only included when the original request carried a non-empty user-facing note. The `jwt*` fields are only included on `request.create` when the request was authenticated with an OIDC token: they hold the token's verified `iss`, `sub`, and `jti` claims, so the audit log shows which workload asked.
+The `note` field is included only when the request had a note. The `jwt*` fields are included only on `request.create`, when the request was authenticated with an OIDC token: they hold the token's verified `iss`, `sub`, and `jti` claims, so the audit log shows which workload sent the request.
 
 ### Signing keys
 
 | event_type | When it fires |
 | --- | --- |
-| `signing_key.create` | User explicitly creates/uploads a signing key. Metadata: `{algorithm, keyLabel, published, hasProof}` |
-| `signing_key.publish` | Existing row flipped to `published=true` |
-| `signing_key.unpublish` | Existing row flipped back to `published=false` |
-| `signing_key.delete` | Row deleted |
-| `signing_key.auto_store` | Server stored a derived public key after a successful sign request (no explicit user action) |
+| `signing_key.create` | User creates a signing key. Metadata: `{algorithm, keyLabel, published, hasProof}` |
+| `signing_key.publish` | User publishes an existing signing key |
+| `signing_key.unpublish` | User unpublishes a signing key |
+| `signing_key.delete` | User deletes a signing key |
+| `signing_key.auto_store` | Server stored the public key of a signing key after a successful sign request, with no explicit user action |
 
 ## What is *never* recorded
 
-Audit events must never carry sensitive material. The metadata payloads above are designed accordingly. Specifically, audit rows do not store:
+Audit events never contain sensitive material. Specifically, audit rows don't store:
 
 - Request keys (`rvk_…`) or session tokens
 - Wrapped primary keys, wrapped anchor keys, or any encrypted blob
@@ -93,17 +93,15 @@ Audit events must never carry sensitive material. The metadata payloads above ar
 - Allowed-IP lists in full (only their count)
 - ML-DSA / ES384 signatures of any kind
 
-The schema-level cap of 4 KiB on `metadata` is a defence-in-depth limit, not a license to spend it on payloads.
-
 ## Retention
 
-Rows older than **30 days** are pruned automatically by a background task that runs when Revaulter starts and then every 24 hours.
+Rows older than **30 days** are deleted automatically by a background task that runs when Revaulter starts, and then every 24 hours.
 
-When [streaming to a SIEM](#streaming-to-a-siem) is enabled, the prune is held back to whatever the stream has already shipped, so a collector outage cannot cost you events. That hold has a ceiling of **90 days**, after which rows are pruned even if they have not been delivered. The `revaulter_audit_stream_lag_seconds` metric surfaces a backlog long before that ceiling is reached.
+When [streaming to a SIEM](#streaming-to-a-siem) is enabled, rows that haven't been sent yet aren't deleted, so a collector outage doesn't lose events. Rows are kept for at most **90 days**, after which they're deleted even if they weren't delivered. The `revaulter_audit_stream_lag_seconds` metric shows a backlog long before that.
 
 ## Sample queries
 
-All queries below assume SQLite syntax. Postgres equivalents differ only in time arithmetic.
+These queries use SQLite syntax. For Postgres, only the date calculations differ.
 
 **All events for a user in the last 24 hours**
 
@@ -125,7 +123,7 @@ WHERE outcome IN ('failure', 'denied')
 ORDER BY created_at DESC;
 ```
 
-**Every signing-key change ever**
+**All signing key changes**
 
 ```sql
 SELECT created_at, event_type, actor_user_id, signing_key_id, metadata
@@ -146,7 +144,7 @@ ORDER BY created_at DESC;
 
 ## Streaming to a SIEM
 
-Revaulter can stream every audit event to an external HTTP collector (such as Splunk HEC, Elastic, Vector, Fluent Bit, Cribl, Panther, or a plain webhook receiver) as it is written. The feature is enabled by setting `auditStreamUrl`.
+Revaulter can send every audit event to an external HTTP collector as it's written, such as Splunk HEC, Elastic, Vector, Fluent Bit, Cribl, Panther, or a plain webhook receiver. To enable this, set `auditStreamUrl`.
 
 ```yaml
 auditStreamUrl: "https://splunk.internal:8088/services/collector/raw"
@@ -158,10 +156,10 @@ auditStreamFlushInterval: "10s"      # 1s–5m
 auditStreamEventTypes: []            # empty = all, "request.*" wildcards allowed
 ```
 
-Delivery is at-least-once and **your collector must deduplicate on the event `id`.**
-The `id` is a UUIDv7 and is stable across redeliveries, which makes it the right dedupe key. A collector that does not deduplicate will double-count events.
+Events can be delivered more than once, so **your collector must deduplicate on the event `id`.**
+The `id` is a UUIDv7 that stays the same when an event is sent again. A collector that doesn't deduplicate will count some events twice.
 
-> Only events created after the feature is enabled are streamed and pre-existing rows are never sent.
+> Only events created after you enable streaming are sent. Earlier rows are never sent.
 
 ### Wire formats
 
@@ -183,18 +181,18 @@ Both `ndjson` and `json` formats carry the same event object:
   "clientIp": "203.0.113.41",
   "userAgent": "Mozilla/5.0 …",
   "attributes": { "requestState": "3f7a…" },
-  "metadata": { "operation": "decrypt", "algorithm": "ES384", "keyLabel": "prod-backup" }
+  "metadata": { "operation": "decrypt", "algorithm": "A256GCM", "keyLabel": "prod-backup" }
 }
 ```
 
 - Nullable columns are omitted, never emitted as `null`
-- `attributes` carries the correlation columns (`requestState`, `signingKeyId`, `credentialId`) that are set only on the event types they apply to. Entries with no value are dropped, and the object is omitted entirely when none apply
-- `metadata` is the event's own payload, always present, always a JSON object `{}` when empty. It is passed through as-is and never merged with `attributes`.
-- `time` is RFC3339 in UTC. `created_at` is stored as Unix seconds, so it has second precision. Sort and deduplicate on `id`, not on `time`
-- `schemaVersion`, `source` and `instanceId` are repeated on every event, so a single NDJSON line stays fully attributable after a collector splits the batch apart
+- `attributes` holds the correlation columns (`requestState`, `signingKeyId`, `credentialId`), which are set only on the event types they apply to. Entries with no value are dropped, and the object is omitted when none apply
+- `metadata` is the event's own data. It's always present (as an empty object `{}` when there's nothing to include) and it's never merged with `attributes`
+- `time` is RFC 3339 in UTC, with second precision. Sort and deduplicate on `id`, not on `time`
+- `schemaVersion`, `source`, and `instanceId` are repeated on every event, so each NDJSON line still identifies its source after a collector splits the batch
 - The internal shipping key (`seq` / `xact_id`) is never emitted
 
-`ndjson` (the default) sends `Content-Type: application/x-ndjson` with one compact object per line, newline-terminated including the last line. It is what Splunk HEC `/raw`, Elastic, Vector, Loki and Fluent Bit all ingest natively.
+`ndjson` (the default) sends `Content-Type: application/x-ndjson`, with one compact object per line, and a newline after each line, including the last one. Splunk HEC `/raw`, Elastic, Vector, Loki, and Fluent Bit all accept it natively.
 
 `json` sends `Content-Type: application/json` with a single envelope, for endpoints that want one well-formed JSON document per request:
 
@@ -222,17 +220,17 @@ Both `ndjson` and `json` formats carry the same event object:
 | `X-Revaulter-Batch-Count` | Number of events in the body |
 | `Authorization` | `auditStreamKey`, verbatim |
 
-`auditStreamKey` is sent with no scheme prefix added, matching how `webhookKey` behaves, so `Splunk abc123`, `Bearer …` and `ApiKey …` all work as written. Set `auditStreamAuthHeader` when your collector expects the credential in a different header.
+`auditStreamKey` is sent exactly as written, like `webhookKey`, so include the scheme yourself: `Splunk abc123`, `Bearer …`, and `ApiKey …` all work. Set `auditStreamAuthHeader` when your collector expects the credential in a different header.
 
 ### Private addresses
 
-`auditStreamUrl` may point at a private or otherwise internal address, which is what most collectors are. Redirects are never followed, so a redirect to a link-local metadata endpoint cannot be used to reach one.
+`auditStreamUrl` can point at a private or internal address, as most collectors are. Redirects are never followed, so a redirect can't be used to reach other internal addresses, such as a cloud metadata endpoint.
 
 ### Filtering
 
-`auditStreamEventTypes` restricts the feed. Each entry is either an exact event type (`request.confirm`) or an area wildcard (`request.*`). An empty list streams everything. An entry that does not name an event type Revaulter emits fails at startup rather than silently emptying the feed.
+`auditStreamEventTypes` limits which events are sent. Each entry is either an exact event type (`request.confirm`) or an area wildcard (`request.*`). An empty list sends everything. If an entry doesn't match any event type Revaulter records, Revaulter fails to start, instead of silently sending nothing.
 
-Filtering happens after the events are read, and a filtered-out event still advances the cursor: the cursor tracks what has been *considered*, not what has been sent, so a narrow filter does not hold the retention prune back.
+Events that the filter excludes count as processed, so a narrow filter doesn't stop old rows from being deleted.
 
 ### Metrics
 
@@ -243,4 +241,4 @@ Filtering happens after the events are read, and a filtered-out event still adva
 | `revaulter_audit_stream_lag_seconds` | gauge | — |
 | `revaulter_audit_stream_backlog` | gauge | — |
 
-`revaulter_audit_stream_lag_seconds` is the one to alert on: it covers collector outages, misconfiguration and a stalled shipper in a single signal.
+Alert on `revaulter_audit_stream_lag_seconds`: it catches collector outages, misconfiguration, and a stalled stream in a single metric.

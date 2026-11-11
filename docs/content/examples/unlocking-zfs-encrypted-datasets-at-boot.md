@@ -3,7 +3,7 @@ title: "Unlocking ZFS-encrypted datasets at boot"
 weight: 33
 ---
 
-You can use Revaulter to protect the raw key for a ZFS encrypted dataset. The server stores only a wrapped JSON envelope on disk, and when the machine boots, a systemd unit asks a passkey holder to approve the unwrap and pipes the plaintext key directly into `zfs load-key`.
+You can use Revaulter to protect the raw key of an encrypted ZFS dataset. The ZFS host stores only a wrapped JSON envelope on disk. When the machine boots, a systemd unit asks a passkey holder to approve the unwrap, and pipes the plaintext key directly into `zfs load-key`.
 
 This example assumes you already have a running Revaulter server, the CLI installed on the ZFS host, and a ZFS pool named `tank`.
 
@@ -46,7 +46,7 @@ ZPOOL_NAME="tank"
 # Path where the wrapped key for the dataset is stored
 JSON_KEY_FILE="/etc/revaulter/keys/$DATASET_NAME.json"
 
-# Key label: this is arbitrary and lets you keep distinct sub-keys for different purposes
+# Key label: this is arbitrary, and lets you keep separate keys for different purposes
 # Here we name it "zfs-<server hostname>"
 REVAULTER_KEY_LABEL="zfs-$(hostname)"
 

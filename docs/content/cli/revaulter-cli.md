@@ -9,18 +9,18 @@ The Revaulter CLI (`revaulter-cli`) is the primary way to submit encrypt, decryp
 
 ### Pre-compiled binary (recommended)
 
-Download the latest release from [GitHub Releases](https://github.com/ItalyPaleAle/revaulter/releases). Binaries are available for Linux (`amd64`, `arm64`), macOS (`amd64`, `arm64`), and Windows.
+Download the latest release from [GitHub Releases](https://github.com/ItalyPaleAle/revaulter/releases). Binaries are available for Linux, macOS, Windows, and FreeBSD.
 
 Each release also includes a `checksums.txt` with the SHA-256 of every archive and an `attestations.json` holding the [build provenance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations) for each asset. To check an archive before extracting it:
 
 ```bash
-gh attestation verify revaulter-<version>-<arch>.tar.gz \
+gh attestation verify revaulter-<version>-<platform>.tar.gz \
   --repo ItalyPaleAle/revaulter
 ```
 
-Pass `--bundle attestations.json` to verify against the downloaded bundle rather than querying GitHub's attestations API.
+Pass `--bundle attestations.json` to verify against the downloaded bundle instead of querying GitHub's attestations API.
 
-Finally, each binary also has a [CycloneDX](https://cyclonedx.org) SBOM listing the dependencies compiled into it, named `revaulter-<version>-<arch>-<binary>.cdx.json`. SBOMs are covered by `checksums.txt` and the attestations as well.
+Each binary also has a [CycloneDX](https://cyclonedx.org) SBOM listing the dependencies compiled into it, named `revaulter-<version>-<platform>-<binary>.cdx.json`. The SBOMs are covered by `checksums.txt` and the attestations too.
 
 ### Docker
 
@@ -47,7 +47,7 @@ docker run --rm \
   --value SGVsbG8
 ```
 
-Commands that read a file or write their output to one also need the directory mounted, for example `-v "$PWD:/work"`. The container runs as a non-root user (UID 65532), so those files must be readable, and writable, by that user.
+Commands that read a file or write their output to one also need the directory mounted, for example `-v "$PWD:/work"`. The container runs as a non-root user (UID 65532), so that user must be able to read and write those files.
 
 ## Commands
 
@@ -65,16 +65,16 @@ revaulter-cli encrypt [flags]
 | `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration), or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
 | `--user-id` | | Only with OIDC tokens | ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT from a trusted OIDC issuer. See [Authenticating with an OIDC token](#authenticating-with-an-oidc-token) |
-| `--key-label` | `-l` | Yes | Logical key label used for key derivation |
+| `--key-label` | `-l` | Yes | Name of the key to use: 1 to 24 letters, digits, and `_ . + -` (case-insensitive) |
 | `--algorithm` | `-a` | Yes | AEAD algorithm identifier: `A256GCM` (alias `aes-256-gcm`) or `C20P` (alias `chacha20-poly1305`) |
-| `--message` | `-m` | One of `--message`, `--input`, or `--json` is required | The message to encrypt as a raw UTF-8 string. |
+| `--message` | `-m` | One of `--message`, `--input`, or `--json` is required | The message to encrypt, as a UTF-8 string |
 | `--input` | `-i` | One of `--message`, `--input`, or `--json` is required | Path to a file whose bytes will be encrypted; use `-` to read from stdin |
 | `--json` | | One of `--message`, `--input`, or `--json` is required | Path to a JSON file (or `-` to read from stdin) of shape `{"value":"<base64url>","additionalData":"<base64url>"}` (`additionaldata` is optional) |
-| `--aad` | | No | Additional authenticated data (base64-encoded). Not allowed with `--json` |
+| `--aad` | | No | Additional authenticated data, base64-encoded. Not allowed with `--json` |
 | `--timeout` | `-t` | No | Timeout for the operation (number of seconds or Go duration, e.g. `5m`, `300`) |
-| `--note` | `-n` | No | Message displayed alongside the request (up to 40 chars, alphanumeric and `. / _ -` only) |
+| `--note` | `-n` | No | Message displayed alongside the request: up to 80 letters, digits, spaces, and `. / _ -` |
 | `--output` | `-o` | No | Write the result to a file instead of stdout |
-| `--format` | | No | Output format: `json` (only). Encrypt always emits the JSON envelope on stdout |
+| `--format` | | No | Output format: only `json` is supported |
 | `--insecure` | | No | Skip TLS certificate validation |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
 | `--verbose` | `-V` | No | Show debug-level logs |
@@ -129,17 +129,17 @@ revaulter-cli decrypt [flags]
 | `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key (shown in the web UI after registration), or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
 | `--user-id` | | Only with OIDC tokens | ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT from a trusted OIDC issuer. See [Authenticating with an OIDC token](#authenticating-with-an-oidc-token) |
-| `--key-label` | `-l` | Yes | Logical key label used for key derivation |
-| `--algorithm` | `-a` | Yes | AEAD algorithm identifier: `A256GCM` (alias `aes-256-gcm`) or `C20P` (alias `chacha20-poly1305`). Must match what was used at encryption time |
+| `--key-label` | `-l` | When not using `--json` | Name of the key used to encrypt the value |
+| `--algorithm` | `-a` | When not using `--json` | AEAD algorithm identifier used to encrypt the value: `A256GCM` (alias `aes-256-gcm`) or `C20P` (alias `chacha20-poly1305`) |
 | `--value` | `-m` | One of `--value` or `--json` is required | The ciphertext to decrypt, base64-encoded |
-| `--tag` | `-g` | Required when not using `--json` | Authentication tag, base64-encoded |
-| `--nonce` | | Required when not using `--json` | Nonce/IV, base64-encoded |
-| `--aad` | | No | Additional authenticated data, base64-encoded (only allowed not using `--json`) |
-| `--json` | `-j` | One of `--value` or `--json` is required | Path to a JSON file (or `-` to read from stdin) in the shape produced by `encrypt` (`{"value":"<base64url>","nonce":"<base64url>","tag":"<base64url>","additionalData":"<base64url>"}`). Mutually exclusive with `--value`, `--tag`, `--nonce`, and `--aad` |
+| `--tag` | `-g` | When not using `--json` | Authentication tag, base64-encoded |
+| `--nonce` | | When not using `--json` | Nonce/IV, base64-encoded |
+| `--aad` | | No | Additional authenticated data, base64-encoded. Not allowed with `--json` |
+| `--json` | `-j` | One of `--value` or `--json` is required | Path to a JSON file (or `-` to read from stdin) with the output of `encrypt`, which includes the key label and algorithm. Mutually exclusive with `--key-label`, `--algorithm`, `--value`, `--tag`, `--nonce`, and `--aad` |
 | `--timeout` | `-t` | No | Timeout for the operation (number of seconds or Go duration, e.g. `5m`, `300`) |
-| `--note` | `-n` | No | Message displayed alongside the request (up to 40 chars, alphanumeric and `. / _ -` only) |
+| `--note` | `-n` | No | Message displayed alongside the request: up to 80 letters, digits, spaces, and `. / _ -` |
 | `--output` | `-o` | No | Write the result to a file instead of stdout |
-| `--format` | | No | Output format: `json` (default — JSON envelope) or `raw` (write the decrypted plaintext as raw bytes) |
+| `--format` | | No | Output format: `json` (default) for a JSON envelope, or `raw` to write the decrypted plaintext as raw bytes |
 | `--insecure` | | No | Skip TLS certificate validation |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
 | `--verbose` | `-V` | No | Show debug-level logs |
@@ -157,20 +157,18 @@ revaulter-cli decrypt \
   --tag <base64-tag>
 ```
 
-**Example (JSON input — pipes encrypt's output back in):**
+**Example (JSON input, piping the output of `encrypt`):**
 
 ```bash
 revaulter-cli encrypt --message "secret" ... \
   | revaulter-cli decrypt \
     --server https://revaulter.example.com \
     --request-key AbCdEf0123456789GhIj \
-    --key-label boot-disk \
-    --algorithm A256GCM \
     --json - \
     --format raw
 ```
 
-**Write result to a file ("raw" format):**
+**Example (write the plaintext to a file):**
 
 ```bash
 revaulter-cli decrypt \
@@ -193,7 +191,7 @@ Submit a signing request for approval.
 The CLI derives the bytes sent to the browser from the selected signing algorithm:
 
 - `ES256`: the CLI hashes the input with SHA-256 and sends the 32-byte digest
-- `Ed25519`: the CLI sends the raw message bytes (note the max message size of 100KB)
+- `Ed25519`: the CLI sends the raw message bytes, up to 100 KB
 - `Ed25519ph`: the CLI hashes the input with SHA-512 and sends the 64-byte digest
 
 ```bash
@@ -206,14 +204,14 @@ revaulter-cli sign [flags]
 | `--request-key` | `-k` | One of `--request-key` or `--request-key-file` is required | Per-user request key, or a JWT from a trusted OIDC issuer. Mutually exclusive with `--request-key-file` |
 | `--request-key-file` | | One of `--request-key` or `--request-key-file` is required | Path to a file containing the per-user request key. See [Reading the request key from a file](#reading-the-request-key-from-a-file) |
 | `--user-id` | | Only with OIDC tokens | ID of the user the request is for, as shown in the web UI. Required when the request key is a JWT from a trusted OIDC issuer. See [Authenticating with an OIDC token](#authenticating-with-an-oidc-token) |
-| `--key-label` | `-l` | Yes | Logical key label used for signing-key derivation |
+| `--key-label` | `-l` | Yes | Name of the signing key: 1 to 24 letters, digits, and `_ . + -` (case-insensitive) |
 | `--algorithm` | `-a` | Yes | Signing algorithm identifier: `ES256`, `Ed25519`, or `Ed25519ph` |
-| `--input` | `-i` | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. With ES256 and Ed25519ph, the CLI hashes the file's contents locally. |
+| `--input` | `-i` | One of `--input` or `--digest` is required | Path to the message file to sign; use `-` for stdin. With ES256 and Ed25519ph, the CLI hashes the file locally, so it can be of any size. With Ed25519, the file is limited to 100 KB |
 | `--digest` | `-d` | One of `--input` or `--digest` is required | A pre-computed digest, encoded as hex or base64url. Supported only for `ES256` (32-byte SHA-256) and `Ed25519ph` (64-byte SHA-512). Mutually exclusive with `--format jws` |
-| `--format` | | No | Output format: `json` (default — JSON envelope with base64url signature), `jws` (compact JWS string), or `raw` (the raw 64-byte signature). `jws` requires `--input` and is supported only for `ES256` and `Ed25519` |
+| `--format` | | No | Output format: `json` (default) for a JSON envelope with the base64url signature, `jws` for a compact JWS, or `raw` for the 64-byte signature. `jws` requires `--input` and supports only `ES256` and `Ed25519` |
 | `--jws-header` | | No | JSON fragment merged into the default protected header when building a JWS from `--input`. The `alg` field is always forced to `ES256` or `EdDSA`, depending on `--algorithm` |
 | `--timeout` | `-t` | No | Timeout for the operation |
-| `--note` | `-n` | No | Message displayed alongside the request |
+| `--note` | `-n` | No | Message displayed alongside the request: up to 80 letters, digits, spaces, and `. / _ -` |
 | `--output` | `-o` | No | Write the result to a file instead of stdout |
 | `--insecure` | | No | Skip TLS certificate validation |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
@@ -243,7 +241,7 @@ echo "hello" | revaulter-cli sign \
   --input -
 ```
 
-Sign a pre-computed SHA-256 digest (useful when integrating with other tooling that already hashes):
+Sign a pre-computed SHA-256 digest, for tools that already hash the data:
 
 ```bash
 revaulter-cli sign \
@@ -267,7 +265,7 @@ revaulter-cli sign \
   --jws-header '{"kid":"release-signing-2026"}'
 ```
 
-Write just the raw 64-byte `r || s` signature to a file (useful for pipelines that verify with a separate tool):
+Write only the raw 64-byte `r || s` signature to a file, for pipelines that verify with a separate tool:
 
 ```bash
 revaulter-cli sign \
@@ -280,7 +278,7 @@ revaulter-cli sign \
   --output manifest.sig
 ```
 
-> ECDSA signatures are non-deterministic by design (a fresh random `k` per signature, per FIPS 186-5). Signing the same input twice produces two different but equally valid signatures — this is expected.
+> ECDSA signatures are non-deterministic: each one uses a fresh random `k` (per FIPS 186-5). Signing the same input twice produces two different signatures, and both are valid.
 >
 > `Ed25519` signatures are deterministic for a fixed key and message.
 
@@ -296,7 +294,7 @@ revaulter-cli trust [flags]
 
 The CLI fetches the server's hybrid anchor bundle (ES384 + ML-DSA-87), verifies its signatures, and pins the anchor fingerprint. Subsequent commands (`encrypt`, `decrypt`, `sign`, `ssh-agent`) verify the pinned anchor and refuse to proceed if it changes unexpectedly. If the anchor is already pinned and matches, the command verifies it and exits successfully.
 
-Run this once when first connecting to a server. In interactive use the CLI displays the fingerprint and prompts for confirmation. For non-interactive use, pass `--yes` to automatically accept the key (you will not be able to verify the key, however)
+Run this once when first connecting to a server. In interactive use, the CLI shows the fingerprint and asks for confirmation. For non-interactive use, pass `--yes` to accept the key without checking the fingerprint.
 
 The default trust store path is `<user-config-dir>/revaulter-cli/trust.json` (e.g. `~/.config/revaulter-cli/trust.json` on Linux). Override it with the `TRUST_STORE_PATH` environment variable or the `--trust-store` flag.
 
@@ -312,7 +310,7 @@ The default trust store path is `<user-config-dir>/revaulter-cli/trust.json` (e.
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
 | `--verbose` | `-V` | No | Show debug-level logs |
 
-**Example (interactive — prompts for confirmation):**
+**Example (interactive, asks for confirmation):**
 
 ```bash
 revaulter-cli trust \
@@ -320,7 +318,7 @@ revaulter-cli trust \
   --request-key AbCdEf0123456789GhIj
 ```
 
-**Example (non-interactive — pin without prompting):**
+**Example (non-interactive, pins without asking):**
 
 ```bash
 revaulter-cli trust \
@@ -341,9 +339,9 @@ Run a local SSH agent that routes signing requests through Revaulter. Available 
 revaulter-cli ssh-agent [flags]
 ```
 
-Starts a Unix-socket SSH agent. SSH clients with `SSH_AUTH_SOCK` pointed at the socket route each signing request through Revaulter, where the key holder approves it in the browser with a passkey. The private signing key is never exported: only public keys are stored on the server, and only signatures are returned to the agent. The signing public key for the chosen `--key-label` must already exist and be published: create and publish it from the web UI under **Settings → Signing keys**.
+The agent listens on a Unix socket. SSH clients with `SSH_AUTH_SOCK` pointing at the socket send each signing request through Revaulter, where the key holder approves it in the browser with a passkey. The private key never leaves the browser: the server stores only public keys, and the agent receives only signatures. The signing key for `--key-label` must already be published: create and publish it in the web UI under **Settings → Signing keys**.
 
-> Note: Pin the server anchor with `revaulter-cli trust` before running the agent, especially in non-interactive environments.
+> Pin the server anchor with `revaulter-cli trust` before running the agent, especially in non-interactive environments.
 
 For a full setup walkthrough (including installing the public key in `authorized_keys`), see [Authenticate to SSH servers](/examples/authenticate-to-ssh-servers/).
 
@@ -394,7 +392,7 @@ The agent stops on `Ctrl-C` or `SIGTERM` and removes its socket on exit.
 
 ### `check`
 
-Verify that a Revaulter server is serving unmodified web client assets, signed by this repo's release workflow. See [Verifying the web client's integrity](/advanced/web-client-integrity/) for a deeper explanation of the trust model and when to run this.
+Verify that a Revaulter server serves unmodified web client assets, as signed by Revaulter's release workflow. See [Verifying the web client's integrity](/advanced/web-client-integrity/) for the trust model and when to run this.
 
 ```bash
 revaulter-cli check --server https://revaulter.example.com
@@ -405,6 +403,7 @@ revaulter-cli check --server https://revaulter.example.com
 | `--server` | `-s` | Yes | Address of the Revaulter server |
 | `--timeout` | `-t` | No | Overall timeout for the check (e.g. `60s`, `2m`); defaults to 60s |
 | `--min-version` | | No | Fail if the server runs a release older than this version (e.g. `x.y.z`). Without it, the CLI only warns when the server is older than the CLI itself |
+| `--no-rekor-fallback` | | No | Don't query the Rekor transparency log when the signature bundle can't be verified on its own |
 | `--insecure` | | No | Skip TLS certificate validation |
 | `--no-h2c` | | No | Do not attempt HTTP/2 Cleartext when not using TLS |
 | `--verbose` | `-V` | No | Show debug-level logs |
@@ -425,14 +424,12 @@ Every command that connects to a server accepts the request key either inline wi
 
 ```bash
 install -m 600 /dev/null /etc/revaulter/request-key
-printf '%s' 'AbCdEf0123456789GhIj' > /etc/revaulter/request-key
+echo -n 'AbCdEf0123456789GhIj' > /etc/revaulter/request-key
 
 revaulter-cli decrypt \
   --server https://revaulter.example.com \
   --request-key-file /etc/revaulter/request-key \
-  --key-label wrappingkey1 \
-  --algorithm A256GCM \
-  --input encrypted-key.json
+  --json encrypted-key.json
 ```
 
 ## Authenticating with an OIDC token
@@ -472,18 +469,13 @@ The server never has access to the plaintext request or response data.
 
 ## Output
 
-By default, the CLI writes a JSON envelope (`--format json`) to stdout after decrypting the response:
+By default, the CLI writes a JSON envelope to stdout, or to the file in `--output`. All binary values in it are base64url-encoded.
 
-```json
-{
-  "value": "<base64>"
-}
-```
-
-- For `decrypt`: `--format raw` writes the decrypted plaintext as raw bytes — useful for piping into other commands or writing binary data to a file with `--output`.
-- For `sign`: `--format` also accepts `jws` (compact JWS) and `raw` (the 64-byte `r || s` signature).
+- `encrypt` writes the ciphertext with its `nonce` and `tag`, plus the `algorithm` and `keyLabel` used. Pass this JSON to `decrypt --json` as-is.
+- `decrypt` writes the plaintext in `value`. `--format raw` writes the plaintext bytes instead, for piping into other commands or saving binary data.
+- `sign` writes the `signature`, with the `keyLabel`, `algorithm`, and `signingKeyId` (the JWK thumbprint of the signing key). `--format jws` writes a compact JWS, and `--format raw` writes the 64-byte signature.
 
 ## Exit codes
 
-- **0** — the operation completed successfully
-- **non-zero** — the request was denied, canceled, expired, or an error occurred (details are printed to stderr)
+- **0**: the operation completed successfully
+- **Non-zero**: the request was denied, canceled, or expired, or an error occurred (details are printed to stderr)

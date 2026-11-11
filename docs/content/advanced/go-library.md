@@ -3,7 +3,7 @@ title: "Using Revaulter as a Go library"
 weight: 44
 ---
 
-Everything `revaulter-cli` does over is also available as a Go package, so applications can submit encrypt, decrypt, sign, and verify requests without shelling out to the CLI.
+Everything `revaulter-cli` does is also available as a Go package, so applications can encrypt, decrypt, sign, and verify without running the CLI.
 
 ```bash
 go get github.com/italypaleale/revaulter/pkg/revaulter
@@ -39,7 +39,7 @@ client, err := revaulter.New(revaulter.Options{
 
 The client only uses the token to submit requests and fetch public keys: it retrieves each result with a per-request result token issued by the server, so an approval can take longer than the token's lifetime.
 
-`OIDCToken` holds a single token. For a long-lived `Client`, set `OIDCTokenProvider` instead, which the client calls it every time it needs the credential. The provided function should cache the token until it's about to expire:
+`OIDCToken` holds a single token. For a long-lived `Client`, set `OIDCTokenProvider` instead, which the client calls every time it needs the token. The function should cache the token until it's about to expire:
 
 ```go
 client, err := revaulter.New(revaulter.Options{
@@ -61,9 +61,9 @@ defer cancel()
 
 ## Anchor pinning
 
-Each user owns a hybrid (ES384 + ML-DSA-87) anchor key pair that signs the public keys the server advertises. Clients pin the anchor on first contact (the same Trust On First Use model as SSH host keys) and refuse to proceed if it ever changes. Pins live in the trust store shared with `revaulter-cli`, so a server pinned with `revaulter-cli trust` is already trusted by the library.
+Each user has a hybrid (ES384 + ML-DSA-87) anchor key pair that signs the public keys the server advertises. Clients pin the anchor on first contact (the same Trust On First Use model as SSH host keys) and refuse to proceed if it ever changes. Pins are saved in the trust store shared with `revaulter-cli`, so a server pinned with `revaulter-cli trust` is already trusted by the library.
 
-Because pinning an anchor is a security decision, keys must explicitly pinned. Applications that can ask interactive user input should implement the callback:
+Because pinning an anchor is a security decision, the library never pins one on its own. Applications that can ask the user for input should implement the `ConfirmAnchor` callback:
 
 ```go
 client, err := revaulter.New(revaulter.Options{
@@ -107,11 +107,11 @@ if err != nil {
 fmt.Println(string(dec.Plaintext))
 ```
 
-Payloads are limited to `revaulter.MaxPayloadSize` (100 KB), because they are sent to the browser to be processed. Larger data should be encrypted locally with a key that Revaulter wraps, which is what [`revaulter-edit`](/cli/revaulter-edit) does for files.
+Payloads are limited to `revaulter.MaxPayloadSize` (100 KB), because they're sent to the browser to be processed. Encrypt larger data locally with a key that Revaulter wraps, which is what [`revaulter-edit`](/cli/revaulter-edit) does for files.
 
 ## Signing and verifying
 
-`Sign` hashes the message as the algorithm requires before sending it, so for `ES256` and `Ed25519ph` only the digest leaves the machine:
+`Sign` hashes the message as the algorithm requires before sending it, so for `ES256` and `Ed25519ph` only the digest leaves the machine. (`Ed25519` sends the message itself, so it's limited to `revaulter.MaxPayloadSize`)
 
 ```go
 res, err := client.Sign(ctx, revaulter.SignRequest{
@@ -137,7 +137,7 @@ if errors.Is(err, revaulter.ErrInvalidSignature) {
 }
 ```
 
-Signing keys must be published from the Revaulter web interface: publishing attaches an anchor-signed proof, which the library verifies against the pinned anchor before returning the key. To verify many signatures, fetch the key once and reuse it:
+Signing keys must be published from the Revaulter web interface. Publishing attaches a proof signed by the anchor, which the library checks against the pinned anchor before returning the key. To verify many signatures, fetch the key once and reuse it:
 
 ```go
 key, err := client.SigningPublicKey(ctx, "release", revaulter.AlgorithmES256)
@@ -148,4 +148,4 @@ if err != nil {
 err = key.Verify(revaulter.VerifyRequest{Message: manifest, Signature: signature})
 ```
 
-`key.PublicKey` is a standard `*ecdsa.PublicKey` or `ed25519.PublicKey`, so it can also be handed to any other library.
+`key.PublicKey` is a standard `*ecdsa.PublicKey` or `ed25519.PublicKey`, so you can also pass it to other libraries.

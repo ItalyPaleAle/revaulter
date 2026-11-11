@@ -3,7 +3,9 @@ title: "REST API Reference"
 weight: 41
 ---
 
-This document describes all Revaulter REST API endpoints. For most use cases, the [Revaulter CLI](/docs/revaulter-cli/) handles the protocol automatically. Use the REST API directly only when building custom integrations.
+This page describes all Revaulter REST API endpoints.
+
+For most use cases, the [Revaulter CLI](/cli/revaulter-cli/) or the [Go library](/advanced/go-library/) handle the protocol for you. Use the REST API directly only when building custom integrations.
 
 All request and response bodies use `application/json` unless noted otherwise. Base64-encoded fields accept both standard and URL-safe base64 (with or without padding).
 
@@ -21,16 +23,39 @@ Health check endpoint.
 
 ### `GET /info`
 
-Returns API version information.
+Returns information about the server.
 
-**Response:**
+**Response:** `200 OK`
 
 ```json
 {
   "product": "revaulter",
-  "apiVersion": 2
+  "apiVersion": 2,
+  "version": "2.9.0",
+  "commit": "abc1234",
+  "buildDate": "2026-11-01T12:00:00Z",
+  "hasIntegrity": true
 }
 ```
+
+`hasIntegrity` is `true` when the build includes a signed manifest of the web client. See [Verifying the web client's integrity](/advanced/web-client-integrity/).
+
+---
+
+### `GET /info/integrity`
+
+Returns the signed manifest of the web client's files and its cosign bundle, which `revaulter-cli check` verifies.
+
+**Response:** `200 OK`
+
+```json
+{
+  "manifest": "<manifest text>",
+  "bundle": { "...cosign bundle..." }
+}
+```
+
+Returns `404 Not Found` for builds without a signed manifest.
 
 ---
 
@@ -79,11 +104,11 @@ The request payload is encrypted end-to-end by the CLI before submission. The se
 ```
 
 | Field | Required | Description |
-| ------- | ---------- | ------------- |
+| --- | --- | --- |
 | `keyLabel` | Yes | Logical key label for key derivation: 1-24 characters, letters, digits, and `_ . + -` (case-insensitive) |
-| `algorithm` | Yes | Algorithm identifier (max 64 chars). Encrypt/decrypt accept `A256GCM` (alias `aes-256-gcm`) and `C20P` (alias `chacha20-poly1305`); sign accepts `ES256` |
+| `algorithm` | Yes | Algorithm identifier (max 64 chars). Encrypt and decrypt accept `A256GCM` (alias `aes-256-gcm`) and `C20P` (alias `chacha20-poly1305`). Sign accepts `ES256`, `Ed25519`, and `Ed25519ph` |
 | `timeout` | No | Request timeout as seconds or Go duration (default: server `requestTimeout`, max: 24h) |
-| `note` | No | Human-readable note displayed in the web UI (max 40 chars, alphanumeric and `. / _ -`) |
+| `note` | No | Note displayed in the web UI: up to 80 letters, digits, spaces, and `. / _ -` |
 | `requestEncAlg` | Yes | Must be `ecdh-p256+mlkem768+a256gcm` |
 | `cliEphemeralPublicKey` | Yes | Ephemeral P-256 public key as JWK (public fields only) |
 | `mlkemCiphertext` | Yes | ML-KEM-768 ciphertext (base64url) |
@@ -104,7 +129,7 @@ The request payload is encrypted end-to-end by the CLI before submission. The se
 
 ### Inner payload
 
-The `encryptedPayload` field carries a JSON object that has been encrypted end-to-end with the user's static keys; the server cannot read it. The browser decrypts and validates it after the user approves.
+The `encryptedPayload` field carries a JSON object encrypted end-to-end to the user's public keys, so the server can't read it. The browser decrypts and validates it after the user approves.
 
 The shape varies per operation. All `value`/`nonce`/`tag`/`additionalData` fields are base64url-encoded.
 
@@ -136,17 +161,20 @@ The shape varies per operation. All `value`/`nonce`/`tag`/`additionalData` field
 
 **Sign-specific behavior:**
 
-- `algorithm` must be `ES256` (ECDSA P-256 + SHA-256 per RFC 7518)
-- Callers must pre-hash the message with SHA-256 and place only the 32-byte digest in the inner payload (base64url under the `value` field). The server and the browser never see the raw message
+- `algorithm` must be `ES256`, `Ed25519`, or `Ed25519ph`
+- `value` carries the bytes to sign (base64url), which depend on the algorithm:
+  - `ES256`: the 32-byte SHA-256 digest of the message
+  - `Ed25519`: the message itself, up to 100 KB
+  - `Ed25519ph`: the 64-byte SHA-512 digest of the message
 - `nonce`, `tag`, and `additionalData` must be empty
-- ECDSA is non-deterministic by design: signing the same digest twice produces different but equally valid signatures
-- The approved response carries a detached signature; see `GET /v2/request/result/:state` below
+- ECDSA signatures are randomized: signing the same digest twice produces different signatures, and both are valid
+- The approved response carries a detached signature. See `GET /v2/request/result/:state` below
 
 ---
 
 ### `GET /v2/request/pubkey`
 
-Get the user's static public encryption keys, along with the hybrid anchor public keys and the pubkey bundle signatures. The CLI uses the encryption keys to encrypt request payloads end-to-end, pins the anchor keys (TOFU), and verifies both bundle signatures to detect server-side pubkey substitution.
+Get the user's public encryption keys, along with the hybrid anchor public keys and the signatures over them. The CLI uses the encryption keys to encrypt request payloads end-to-end, pins the anchor keys (TOFU), and verifies both signatures, to detect a server that substitutes its own keys.
 
 **Response:** `200 OK`
 
@@ -169,17 +197,50 @@ Get the user's static public encryption keys, along with the hybrid anchor publi
 }
 ```
 
-`pubkeyBundleVersion` tells the verifier which canonical payload the bundle signatures cover: `1` (legacy, the payload binds `wrappedKeyEpoch`) or `2` (the payload binds an explicit `v` line). The bundle is signed once at signup and is never re-signed.
+`pubkeyBundleVersion` tells the verifier which canonical payload the signatures cover: `1` (legacy, the payload includes `wrappedKeyEpoch`) or `2` (the payload includes an explicit `v` line instead). The bundle is signed once at signup and never signed again.
 
-`wrappedKeyEpoch` is retained for older CLIs that verify version-1 bundles: it is the epoch bound into v1 signatures, which is always `1`. It does not track the user's live wrapped-key epoch, which advances on password changes.
+`wrappedKeyEpoch` is kept for older CLIs that verify version-1 bundles: it's the epoch included in version-1 signatures, which is always `1`. It doesn't track the user's current wrapped key epoch, which increases on password changes.
 
 Returns `412 Precondition Failed` if the user has not completed signup (no encryption keys configured).
 
 ---
 
+### `GET /v2/request/signing-pubkey`
+
+Get the public key of one of the user's signing keys, with its publication proof when the key is published.
+
+**Query parameters:**
+
+| Parameter | Required | Description |
+| --- | --- | --- |
+| `label` | Yes | Key label |
+| `algorithm` | No | `ES256` (default), `Ed25519`, or `Ed25519ph` |
+
+**Response:** `200 OK`
+
+```json
+{
+  "id": "<key-id>",
+  "algorithm": "ES256",
+  "keyLabel": "release-signing",
+  "jwk": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
+  "publicationPayload": "<canonical body>",
+  "publicationSignatureEs384": "<base64url>",
+  "publicationSignatureMldsa87": "<base64url>"
+}
+```
+
+The `publication*` fields are omitted when the key has no publication proof. Clients should verify the proof against the user's pinned anchor before trusting the key.
+
+Returns `404 Not Found` if the user has no signing key with that label and algorithm.
+
+---
+
 ### `GET /v2/request/result/:state`
 
-Long-poll for the result of a previously submitted request. The server holds the connection until the request is completed, canceled, or the client disconnects.
+Long-poll for the result of a previously submitted request. The server holds the connection until the request is completed, canceled, or expires, or until the client disconnects. If another client starts polling the same request, the server answers the earlier one with the pending response.
+
+A final result can be retrieved only once: after that, the server returns `404 Not Found`.
 
 This endpoint accepts the `resultToken` returned when the request was created, in the `Authorization: ResultToken <resultToken>` header. It also accepts the same credentials as the other request endpoints.
 
@@ -222,13 +283,15 @@ After AES-GCM decryption of the envelope, the plaintext JSON for a `sign` operat
   "operation": "sign",
   "algorithm": "ES256",
   "keyLabel": "release-signing",
-  "signature": "<base64url>"
+  "signature": "<base64url>",
+  "signingKeyId": "<key-id>"
 }
 ```
 
-- `signature` is the detached ECDSA P-256 signature in raw `r || s` form (64 bytes for `ES256`) as produced by WebCrypto — *not* ASN.1 DER
-- `algorithm` and `keyLabel` echo the request so the CLI can verify they match before accepting the signature
-- Clients that need DER-encoded signatures (e.g., OpenSSL) or compact JWS output must convert on the client side; the CLI supports both via `--format jws` (see the [CLI docs](/docs/revaulter-cli/))
+- `signature` is the 64-byte detached signature. For `ES256`, it's in raw `r || s` form, *not* ASN.1 DER
+- `algorithm` and `keyLabel` echo the request, so the client can check that they match before accepting the signature
+- `signingKeyId` is the ID of the key that produced the signature (its RFC 7638 JWK thumbprint)
+- Clients that need DER-encoded signatures (e.g., for OpenSSL) must convert them themselves. The CLI can produce a compact JWS with `--format jws` (see the [CLI docs](/cli/revaulter-cli/))
 
 **Failed/canceled/expired response:** `409 Conflict`
 
@@ -243,7 +306,7 @@ After AES-GCM decryption of the envelope, the plaintext JSON for a `sign` operat
 
 ## API endpoints (`/v2/api`)
 
-These endpoints are used by the web UI to list, view, and approve or reject requests. All endpoints require an authenticated session (session cookie or bearer token).
+These endpoints are used by the web UI to list, view, and approve or cancel requests, and to manage signing keys. All endpoints require an authenticated session (session cookie or bearer token).
 
 ### `GET /v2/api/list`
 
@@ -268,7 +331,7 @@ List pending requests for the authenticated user.
 ]
 ```
 
-**Streaming mode:** Set the `Accept` header to `application/x-ndjson` to receive a server-sent NDJSON stream. The server sends the initial list followed by real-time updates as requests arrive, are approved, or expire.
+**Streaming mode:** Set the `Accept` header to `application/x-ndjson` to receive an NDJSON stream. The server sends the initial list, followed by updates as requests arrive, are approved, or expire.
 
 ---
 
@@ -467,17 +530,19 @@ Complete login with the WebAuthn assertion response.
     "requestKeyEnabled": true,
     "requestOidcEnabled": false,
     "requestOidcIssuers": [],
+    "anchorFingerprint": "<fingerprint>",
     "wrappedKeyEpoch": 1,
     "allowedIps": [],
     "ttl": 300
   },
   "wrappedPrimaryKey": "<base64url>",
+  "wrappedAnchorKey": "<base64url>",
   "credentialWrappedKeyEpoch": 1,
   "wrappedKeyStale": false
 }
 ```
 
-When `wrappedKeyStale` is `true`, the credential's wrapped key is at an older epoch than the user's current epoch. The client should re-wrap the primary key and upload it via `POST /v2/auth/update-wrapped-key`.
+When `wrappedKeyStale` is `true`, the password was changed while signed in with a different passkey, so this passkey's wrapped key still uses the old password. See [Cryptography architecture](/docs/crypto-architecture/).
 
 ### Session management
 
@@ -505,6 +570,7 @@ Get the current session information. Requires an authenticated session.
       "createdAt": 1713200000
     }
   ],
+  "anchorFingerprint": "<fingerprint>",
   "wrappedKeyEpoch": 1,
   "allowedIps": [],
   "ttl": 280
@@ -527,7 +593,7 @@ End the current session.
 
 #### `POST /v2/auth/finalize-signup`
 
-Upload the user's wrapped primary key and static public encryption keys after registration. Called by the browser after deriving keys from the WebAuthn PRF output.
+Upload the user's wrapped keys, public encryption keys, and anchor public keys after registration. The browser calls this after creating the keys and wrapping them with the WebAuthn PRF output.
 
 **Request body:**
 
@@ -553,7 +619,7 @@ Upload the user's wrapped primary key and static public encryption keys after re
 }
 ```
 
-`pubkeyBundleVersion` selects the canonical payload the bundle signatures cover: `1` (legacy - binds `wrappedKeyEpoch`, which is always `1` at signup) or `2` (binds an explicit `v` line instead). Current clients always sign version `2`. When omitted, `1` is assumed for compatibility with older clients.
+`pubkeyBundleVersion` selects the canonical payload the signatures cover: `1` (legacy, includes `wrappedKeyEpoch`, which is always `1` at signup) or `2` (includes an explicit `v` line instead). Current clients always sign version `2`. When omitted, `1` is assumed for compatibility with older clients.
 
 **Response:** `200 OK`
 
@@ -567,7 +633,7 @@ Upload the user's wrapped primary key and static public encryption keys after re
 
 #### `POST /v2/auth/allowed-ips`
 
-Set the IP allowlist for request submission. Requests from IPs not in this list are rejected.
+Set the list of IP addresses and ranges allowed to submit requests for this user. Requests from other addresses are rejected. An empty list allows all addresses.
 
 **Request body:**
 
@@ -639,7 +705,7 @@ Add a trusted OIDC issuer. Each user can have up to 25.
 ```
 
 | Field | Required | Description |
-| ------- | ---------- | ------------- |
+| --- | --- | --- |
 | `displayName` | No | Name shown in the web UI (max 100 chars) |
 | `issuer` | Yes | Value of the token's `iss` claim, matched exactly (max 512 chars) |
 | `audience` | Yes | Value that must appear in the token's `aud` claim (max 512 chars) |
@@ -712,16 +778,20 @@ Update the user's display name.
 
 #### `POST /v2/auth/update-wrapped-key`
 
-Update the wrapped primary key for a specific credential. Used after a password change or when a credential's wrapped key epoch is stale.
+Update the wrapped primary key and wrapped anchor key for a credential, for example after setting, changing, or removing the password.
 
 **Request body:**
 
 ```json
 {
   "credentialId": "<base64url>",
-  "wrappedPrimaryKey": "<base64url>"
+  "wrappedPrimaryKey": "<base64url>",
+  "wrappedAnchorKey": "<base64url>",
+  "advanceEpoch": true
 }
 ```
+
+Set `advanceEpoch` to `true` when the password changes, so the user's other passkeys are marked as stale.
 
 **Response:** `200 OK`
 
@@ -787,9 +857,15 @@ Complete adding a new credential.
   "challengeId": "<uuid>",
   "credential": { "...WebAuthn credential response..." },
   "credentialName": "Backup YubiKey",
-  "wrappedPrimaryKey": "<base64url>"
+  "wrappedPrimaryKey": "<base64url>",
+  "wrappedAnchorKey": "<base64url>",
+  "attestationPayload": "<canonical body>",
+  "attestationSignatureEs384": "<base64url>",
+  "attestationSignatureMldsa87": "<base64url>"
 }
 ```
+
+The attestation, signed by the user's anchor key, proves that the user approved the new passkey.
 
 **Response:** `200 OK`
 
@@ -844,19 +920,21 @@ Delete a credential. The user must have at least one remaining credential.
 
 ## Signing key publication
 
-Signing public keys can be fetched by third-party verifiers using a stable key ID. The ID is the RFC 7638 JWK thumbprint of the EC public key, base64url-encoded: `base64url(SHA-256(canonical-JWK))` where the canonical JWK is the lex-ordered JSON `{"crv":"P-256","kty":"EC","x":"…","y":"…"}`.
+Third-party verifiers can fetch signing public keys by a stable key ID. The ID is the RFC 7638 JWK thumbprint of the public key, base64url-encoded: `base64url(SHA-256(canonical-JWK))`, where the canonical JWK is the JSON object with its members in lexicographic order: `{"crv":"P-256","kty":"EC","x":"…","y":"…"}` for `ES256` keys, and `{"crv":"Ed25519","kty":"OKP","x":"…"}` for `Ed25519` and `Ed25519ph` keys.
 
-A stored row carries both the JWK and the PEM (PKIX) forms along with a `published` flag. Only published rows are served from the unauthenticated fetch endpoints below; unpublished rows still exist (they may have been auto-stored as part of a sign operation) but are hidden from public lookups.
+The server stores each key in both JWK and PEM (PKIX) form, with a `published` flag. Only published keys are served by the public endpoints below. Unpublished keys, including the ones stored automatically after a sign operation, are hidden from public lookups.
 
-A row is uniquely identified by `(user, algorithm, keyLabel)`: creating a new key under a label that already has a row is rejected with `409 Conflict`; the caller must first `DELETE` the existing row to free the slot.
+Publishing a key requires a publication proof: a payload describing the key, signed by the user's anchor keys (ES384 and ML-DSA-87). The web UI creates it when you publish a key. Verifiers can check the proof against the user's anchor, so a compromised server can't publish a key of its own.
 
-Revocation is expressed either by setting `published=false` (reversible) or by `DELETE`ing the row (permanent); consumers should treat a 404 on a known key ID as revocation.
+Each user can have one key per `(algorithm, keyLabel)` pair. Creating a key under a label and algorithm that already have one is rejected with `409 Conflict`: delete the existing key first.
+
+To revoke a key, unpublish it (reversible) or delete it (permanent). Consumers should treat a `404` for a known key ID as revocation.
 
 ### Authenticated endpoints
 
 #### `GET /v2/api/signing-keys`
 
-List the authenticated user's signing keys. JWK and PEM are omitted from the list to keep it lean; fetch them by ID via the endpoints below.
+List the authenticated user's signing keys. The list doesn't include the JWK and PEM: fetch them by ID with the endpoint below.
 
 **Response:** `200 OK`
 
@@ -867,6 +945,7 @@ List the authenticated user's signing keys. JWK and PEM are omitted from the lis
     "algorithm": "ES256",
     "keyLabel": "release-signing",
     "published": true,
+    "hasProof": true,
     "createdAt": "2026-04-17T12:00:00Z",
     "updatedAt": "2026-04-17T12:00:00Z"
   }
@@ -875,7 +954,7 @@ List the authenticated user's signing keys. JWK and PEM are omitted from the lis
 
 #### `GET /v2/api/signing-keys/:id`
 
-Return a single signing key owned by the current user, including the stored JWK and PEM.
+Return a single signing key owned by the current user, including the stored JWK and PEM, and the publication proof if there is one.
 
 **Response:** `200 OK`
 
@@ -885,6 +964,7 @@ Return a single signing key owned by the current user, including the stored JWK 
   "algorithm": "ES256",
   "keyLabel": "release-signing",
   "published": false,
+  "hasProof": false,
   "createdAt": "2026-04-17T12:00:00Z",
   "updatedAt": "2026-04-17T12:00:00Z",
   "jwk": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
@@ -892,17 +972,18 @@ Return a single signing key owned by the current user, including the stored JWK 
 }
 ```
 
-Returns `404 Not Found` when the ID doesn't match a row belonging to the authenticated user, so a guessed ID can't probe another user's keys.
+Returns `404 Not Found` when the ID doesn't match a key belonging to the authenticated user, so a guessed ID can't probe another user's keys.
 
 #### `POST /v2/api/signing-keys`
 
-Create a new signing key for the current user. The `published` flag in the request body controls whether the key is served by the public fetch endpoints below. The server validates that:
+Create a new signing key for the current user. The `published` flag in the request body controls whether the key is served by the public endpoints below. The server checks that:
 
-- `algorithm` is supported (currently only `ES256`)
-- `keyLabel` is 1-24 characters long and contains only letters, digits, and `_ . + -`; it is stored in lowercase
-- `jwk` is a valid EC P-256 public JWK (wrong `kty`, wrong `crv`, missing `x`/`y`, presence of `d`, or off-curve points are rejected)
+- `algorithm` is `ES256`, `Ed25519`, or `Ed25519ph`
+- `keyLabel` is 1-24 characters long and contains only letters, digits, and `_ . + -`. It's stored in lowercase
+- `jwk` is a valid public JWK for the algorithm: an EC P-256 key for `ES256`, or an OKP Ed25519 key for the others. JWKs with private key material (`d`), or with an invalid point, are rejected
 - `pem` parses as a valid PKIX `SubjectPublicKeyInfo`
-- The JWK and PEM describe the same public point (mismatch → 400)
+- The JWK and PEM describe the same public key (otherwise, the response is `400 Bad Request`)
+- When `published` is `true`, the publication proof is present and valid
 
 **Request body:**
 
@@ -912,9 +993,14 @@ Create a new signing key for the current user. The `published` flag in the reque
   "keyLabel": "release-signing",
   "jwk": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
   "pem": "-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----\n",
-  "published": true
+  "published": true,
+  "publicationPayload": "<canonical body>",
+  "publicationSignatureEs384": "<base64url>",
+  "publicationSignatureMldsa87": "<base64url>"
 }
 ```
+
+The `publication*` fields are required when `published` is `true`, and optional otherwise.
 
 **Response:** `201 Created`
 
@@ -924,22 +1010,25 @@ Create a new signing key for the current user. The `published` flag in the reque
   "algorithm": "ES256",
   "keyLabel": "release-signing",
   "published": true,
+  "hasProof": true,
   "createdAt": "2026-04-17T12:00:00Z",
   "updatedAt": "2026-04-17T12:00:00Z"
 }
 ```
 
-The endpoint is insert-only: if a row already exists for the same `(user, algorithm, keyLabel)` (either previously created or auto-stored during a sign operation) the request is rejected with `409 Conflict` and no existing data is overwritten. To store different key material under the same label, `DELETE` the existing row first. To merely flip the `published` flag on an existing row, use `POST /v2/api/signing-keys/:id`.
+This endpoint never overwrites a key: if the user already has a key with the same algorithm and label, created earlier or stored automatically after a sign operation, the request is rejected with `409 Conflict`. To store a different key under the same label, delete the existing one first. To publish or unpublish an existing key, use `POST /v2/api/signing-keys/:id`.
 
 #### `POST /v2/api/signing-keys/:id`
 
-Updates an existing signing key owned by the current user, flipping the `published` flag. Use this to unpublish (`published: false`) a previously published key, or to publish an auto-stored key that was created during a sign operation.
+Publish or unpublish a signing key owned by the current user. For example, use it to unpublish a key, or to publish a key that was stored automatically after a sign operation.
 
 **Request body:**
 
 ```json
 { "published": false }
 ```
+
+To publish a key that doesn't have a publication proof yet, include `publicationPayload`, `publicationSignatureEs384`, and `publicationSignatureMldsa87`, as for `POST /v2/api/signing-keys`.
 
 **Response:** `200 OK`
 
@@ -949,16 +1038,17 @@ Updates an existing signing key owned by the current user, flipping the `publish
   "algorithm": "ES256",
   "keyLabel": "release-signing",
   "published": false,
+  "hasProof": true,
   "createdAt": "2026-04-17T12:00:00Z",
   "updatedAt": "2026-04-17T12:00:00Z"
 }
 ```
 
-Returns `404 Not Found` when the ID doesn't match a row belonging to the authenticated user, so a guessed ID can't probe another user's keys.
+Returns `404 Not Found` when the ID doesn't match a key belonging to the authenticated user, so a guessed ID can't probe another user's keys.
 
 #### `DELETE /v2/api/signing-keys/:id`
 
-Hard-delete a signing key row owned by the current user. The row is removed from the database; the ID becomes unresolvable and the `(algorithm, keyLabel)` slot is freed for a subsequent `POST /v2/api/signing-keys`.
+Permanently delete a signing key owned by the current user. Its ID stops resolving, and you can create a new key with the same algorithm and label.
 
 **Response:** `200 OK`
 
@@ -966,11 +1056,11 @@ Hard-delete a signing key row owned by the current user. The row is removed from
 { "deleted": true }
 ```
 
-Returns `404 Not Found` when the ID doesn't match a row belonging to the authenticated user, so a guessed ID can't probe another user's keys. A second `DELETE` on the same ID also returns `404`.
+Returns `404 Not Found` when the ID doesn't match a key belonging to the authenticated user, so a guessed ID can't probe another user's keys. Deleting the same ID again also returns `404`.
 
 ### Public (unauthenticated) endpoints
 
-These endpoints take only the opaque key ID. There is no listing or enumeration endpoint, clients must know the key ID out of band.
+These endpoints take only the key ID. There's no endpoint to list keys, so clients must get the key ID some other way.
 
 Both endpoints are rate-limited and return `Cache-Control: public, max-age=600`. Unknown IDs return `404 Not Found`.
 
@@ -978,7 +1068,7 @@ Both endpoints are rate-limited and return `Cache-Control: public, max-age=600`.
 
 **Alias: `GET /v2/signing-keys/:id.json`**
 
-Returns the stored JWK verbatim inside a metadata envelope.
+Returns the stored JWK, with the key's metadata, its publication proof, and the user's anchor public keys.
 
 **Response:** `200 OK`
 
@@ -988,7 +1078,12 @@ Returns the stored JWK verbatim inside a metadata envelope.
   "algorithm": "ES256",
   "keyLabel": "release-signing",
   "createdAt": "2026-04-17T12:00:00Z",
-  "jwk": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" }
+  "jwk": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
+  "publicationPayload": "<canonical body>",
+  "publicationSignatureEs384": "<base64url>",
+  "publicationSignatureMldsa87": "<base64url>",
+  "anchorEs384PublicKey": "<canonical JWK body>",
+  "anchorMldsa87PublicKey": "<base64url>"
 }
 ```
 
@@ -1000,11 +1095,12 @@ Returns the stored PEM with `Content-Type: application/x-pem-file`. This is the 
 
 ### Verification
 
-An external verifier receives a message, a detached `ES256` signature (raw `r || s`, 64 bytes), and the signer's published key ID or PEM. Verification:
+An external verifier receives a message, a detached signature (64 bytes), and the signer's published key ID or PEM. To verify an `ES256` signature (raw `r || s`):
 
-1. Compute `digest = SHA-256(message)`
-2. Convert the raw `r || s` signature to the format your library expects (ASN.1 DER for OpenSSL; raw is already compatible with WebCrypto's `verify` API)
-3. Import the PEM (or JWK) public key
-4. Call the standard `ECDSA-P256-SHA256 verify(digest, signature, publicKey)`
+1. Import the PEM (or JWK) public key
+2. Convert the raw `r || s` signature to the format your library expects (ASN.1 DER for OpenSSL, while WebCrypto's `verify` API accepts the raw form)
+3. Verify the signature over the message with ECDSA P-256 and SHA-256
 
-> Note: ECDSA is non-deterministic by design. Signing the same digest twice yields two different but equally valid signatures; do not rely on signature equality as a fingerprint.
+`Ed25519` signatures are verified over the message with any standard Ed25519 library. `Ed25519ph` signatures are verified with Ed25519ph (RFC 8032), over the message's SHA-512 digest.
+
+> ECDSA signatures are non-deterministic: signing the same digest twice produces two different signatures, and both are valid. Don't compare signatures to check whether two messages are the same.

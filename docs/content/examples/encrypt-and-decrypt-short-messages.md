@@ -3,11 +3,10 @@ title: "Encrypt and decrypt short messages"
 weight: 31
 ---
 
-Use Revaulter to encrypt and decrypt short sensitive values with passkey approval. This works well for secrets that are small enough to send to the browser for local cryptographic processing, including database connection strings, TLS private keys, API tokens, repository passwords, and wrapped keys for other systems.
+Use Revaulter to encrypt and decrypt short sensitive values, with passkey approval. This works well for secrets small enough to send to the browser, which performs the operation locally: database connection strings, TLS private keys, API tokens, repository passwords, and keys for other systems.
 
-The **payload limit is 100 KB**: Revaulter sends the encrypted request to the browser, where the passkey holder authenticates and the browser performs the operation locally.
-
-For larger files or messages, use Revaulter to wrap a file-encryption key instead; see [Encrypting large files with age and Revaulter](/examples/encrypting-large-files-with-age-and-revaulter).
+The **payload limit is 100 KB**.  
+For larger files or messages, use Revaulter to wrap a file encryption key instead. See [Encrypting large files with age and Revaulter](/examples/encrypting-large-files-with-age-and-revaulter).
 
 ## Encrypt a message
 
@@ -16,7 +15,7 @@ Pipe the message into Revaulter and submit an encrypt request:
 ```bash
 REQUEST_KEY="AbCdEf0123456789GhIj"
 
-echo -n 'my secret message'
+echo -n 'my secret message' \
   | revaulter-cli encrypt \
     --server https://revaulter.example.com \
     --request-key "$REQUEST_KEY" \
@@ -26,11 +25,11 @@ echo -n 'my secret message'
   > message.wrapped.json
 ```
 
-Approve the request in the Revaulter web UI. The CLI returns a JSON envelope containing the ciphertext, nonce, and tag. Store that envelope wherever the wrapped secret needs to live.
+Approve the request in the Revaulter web UI. The CLI writes a JSON envelope with the ciphertext, nonce, and tag. Store that envelope wherever the encrypted secret needs to live.
 
 ## Decrypt a message
 
-Pass the JSON envelope back to `revaulter-cli decrypt`:
+Pass the JSON envelope to `revaulter-cli decrypt`. It includes the key label and algorithm, so you don't need to pass them again:
 
 ```bash
 revaulter-cli decrypt \
@@ -40,4 +39,4 @@ revaulter-cli decrypt \
   --format raw
 ```
 
-The passkey holder approves the request in the browser, and the CLI writes the decrypted plaintext locally.
+The passkey holder approves the request in the browser, and the CLI writes the decrypted plaintext to stdout.

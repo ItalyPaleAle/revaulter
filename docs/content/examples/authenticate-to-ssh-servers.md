@@ -3,7 +3,7 @@ title: "Authenticate to SSH servers"
 weight: 40
 ---
 
-Revaulter can run as an SSH agent. SSH clients ask the local agent to sign authentication challenges, and the agent routes each signature request through Revaulter so the key holder approves it in the browser with their passkey.
+`revaulter-cli` can run as an SSH agent. SSH clients ask the local agent to sign authentication challenges, and the agent sends each one to Revaulter as a sign request, so the key holder approves it in the browser with their passkey.
 
 The private signing key never exists on the SSH client or server: the SSH server only needs the public key in `authorized_keys`.
 
@@ -22,11 +22,11 @@ Create the signing key before using the SSH agent:
 
 ## 2. Trust the server anchor
 
-Run `revaulter trust` once from a terminal. This pins the server's anchor keys locally so the CLI and SSH agent can detect unexpected server key changes later.
+Run `revaulter-cli trust` once from a terminal. This pins the server's anchor keys locally, so the CLI and SSH agent can detect unexpected key changes later.
 
 ```sh
-# For non-interactive setups (like in scripts, add the `--yes` flag)
-revaulter trust \
+# For non-interactive setups, such as scripts, add the `--yes` flag
+revaulter-cli trust \
   --server https://revaulter.example.com \
   --request-key "$REVAULTER_REQUEST_KEY"
 ```
@@ -34,17 +34,17 @@ revaulter trust \
 ## 3. Start the SSH agent
 
 Start the agent with the same key label you created in the UI.
-The default SSH-agent algorithm is `ES256`, but `Ed25519` is also supported:
+The default algorithm is `ES256`, but `Ed25519` is also supported:
 
 ```sh
-revaulter ssh-agent \
+revaulter-cli ssh-agent \
   --server https://revaulter.example.com \
   --request-key "$REVAULTER_REQUEST_KEY" \
   --key-label ssh-main \
   --algorithm ES256
 ```
 
-The agent prints an `SSH_AUTH_SOCK` export line. Run that line in the shell where you will use `ssh`:
+The agent prints an `SSH_AUTH_SOCK` export line. Run that line in the shell where you'll use `ssh`:
 
 ```sh
 export SSH_AUTH_SOCK='/path/printed/by/revaulter.sock'
@@ -53,7 +53,7 @@ export SSH_AUTH_SOCK='/path/printed/by/revaulter.sock'
 You can also choose a socket path yourself:
 
 ```sh
-revaulter ssh-agent \
+revaulter-cli ssh-agent \
   --server https://revaulter.example.com \
   --request-key "$REVAULTER_REQUEST_KEY" \
   --key-label ssh-main \
@@ -74,13 +74,13 @@ Copy the printed public key line into the target account's `~/.ssh/authorized_ke
 
 ## 5. Connect using the Revaulter agent
 
-After the public key is installed on the server, connect as per usual from a shell that has `SSH_AUTH_SOCK` set:
+After the public key is installed on the server, connect as usual from a shell that has `SSH_AUTH_SOCK` set:
 
 ```sh
 ssh user@prod.example.com
 ```
 
-You can also force OpenSSH to use the Revaulter socket for this connection:
+You can also make OpenSSH use the Revaulter socket for a single connection:
 
 ```sh
 # If your OpenSSH version does not support `IdentityFile=none`, use `IdentityFile=/dev/null` instead:

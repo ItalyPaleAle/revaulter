@@ -3,20 +3,20 @@ title: "Fetching a public key to verify a signature"
 weight: 39
 ---
 
-Revaulter exposes the public half of every published signing key on an unauthenticated, cacheable endpoint. Verifiers fetch it once, pin it locally, and from then on can verify signatures fully offline.
+Revaulter serves the public key of every published signing key on a public, cacheable endpoint. Verifiers fetch it once and save it locally, and from then on can verify signatures offline.
 
 ## The endpoint
 
-For a published key with id `<KEY_ID>`:
+For a published key with ID `<KEY_ID>`:
 
 - `GET /v2/signing-keys/<KEY_ID>.jwk` (or `.json`): the JWK plus an anchor-signed publication proof
 - `GET /v2/signing-keys/<KEY_ID>.pem` (or `.pub`): the public key as a PEM SubjectPublicKeyInfo
 
-Both endpoints are public and un-authenticated.
+Both endpoints are public and don't require authentication.
 
 ## One-time pinning
 
-Trust-on-first-use pins the key locally. After this, verification doesn't need to trust Revaulter at runtime.
+Save the key locally the first time you fetch it (trust on first use). After that, verification doesn't depend on Revaulter.
 
 ```bash
 KEY_ID="<key-id-from-publisher>"
@@ -30,7 +30,7 @@ curl -fsSL "https://revaulter.example.com/v2/signing-keys/$KEY_ID.pem" \
   > release-signing.pem
 ```
 
-Inspect the key once, then commit the file to your repo (or distribute it via your usual configuration management). From this point on, none of the verification examples below talks to Revaulter.
+Check the key once, then commit the file to your repository, or distribute it with your usual configuration management. None of the verification examples below contact Revaulter.
 
 ## Verifying a JWS or JWT
 
@@ -38,7 +38,7 @@ Any JOSE library works against the JWK form. See the [release-manifest JWS secti
 
 ## Verifying a raw `r || s` signature
 
-`sign --format raw` emits a 64-byte signature. Most ECDSA libraries accept it directly:
+For `ES256`, `sign --format raw` writes a 64-byte `r || s` signature. Some libraries accept this form directly, such as Go's `crypto/ecdsa` and WebCrypto. Others, such as Python's `cryptography` and OpenSSL, need it converted to ASN.1 DER first:
 
 {{< tabs >}}
 {{< tab title="Python" >}}
@@ -132,10 +132,12 @@ openssl dgst -sha256 \
 {{< /tab >}}
 {{< /tabs >}}
 
+For `Ed25519`, the 64-byte signature is already in the standard format, so any Ed25519 library can verify it with the public key.
+
 ## Optional: full anchor-signed verification
 
 The `.jwk`/`.json` response also carries `publicationPayload`, two anchor signatures, and the user's anchor public keys.
 
-Verifying both anchor signatures over the canonical payload proves the same maintainer who registered with Revaulter authorized the publication of this key. Pinning the *anchor* (instead of the published JWK directly) lets the same trust survive signing-key rotations: the anchor is the user's long-lived identity root; the signing key is just a leaf.
+Verifying both anchor signatures over the canonical payload proves that the maintainer's own Revaulter account published this key, and not a compromised server. Pinning the *anchor*, instead of the published JWK, means your trust carries over when the maintainer adds new signing keys: the anchor is the user's long-term identity, and each signing key is signed by it.
 
-This deeper verification matters for high-stakes deployments (auditable supply-chain metadata, multi-tenant servers); for a single-team setup, pinning the JWK once is usually enough.
+This extra verification matters for high-stakes deployments, such as auditable supply-chain metadata or shared servers. For a single team, pinning the JWK once is usually enough.

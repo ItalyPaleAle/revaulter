@@ -23,12 +23,12 @@ Encryption keys and signing keys don't belong in environment variables or on dis
 
 ## Key features
 
-- **Passkey-derived keys** — encryption keys are derived from WebAuthn passkeys (with PRF) directly in the browser; the server never has access to them
-- **End-to-end encryption** — all cryptographic operations happen in the user's browser using WebCrypto, the server stores only opaque, encrypted envelopes
-- **Self-hosted** — runs on your infrastructure, you own your data and keys
-- **Webhook notifications** — get notified on Discord, Slack, or any webhook endpoint when a request is waiting
-- **Lightweight** — single binary, requires only a database (SQLite or PostgreSQL)
-- **Strong cryptography** — includes support for hybrid, quantum-resistant asymmetric cryptography
+- **Passkey-derived keys:** encryption keys are derived from WebAuthn passkeys (with PRF) directly in the browser, and the server never has access to them
+- **End-to-end encryption:** all cryptographic operations happen in the user's browser, and the server stores only opaque, encrypted envelopes
+- **Self-hosted:** runs on your infrastructure, so you own your data and keys
+- **Notifications:** get notified on Discord, Slack, ntfy, Teams, Telegram, or any webhook endpoint when a request is waiting
+- **Lightweight:** a single binary that needs only a database (SQLite or PostgreSQL)
+- **Strong cryptography:** includes hybrid, quantum-resistant asymmetric cryptography
 
 ## Quick start
 
@@ -51,10 +51,13 @@ Create a minimal `config.yaml`:
 
 ```yaml
 webhookUrl: "https://discord.com/api/webhooks/..."
+webhookFormat: "discord"
 databaseDSN: "/data/revaulter.db"
 secretKey: "<generate with: openssl rand -base64 32>"
 baseUrl: "https://revaulter.example.com"
 ```
+
+Revaulter runs as a non-root user (UID 65532), so create the `data` directory and give it to that user first: `mkdir -p data && sudo chown 65532:65532 data`.
 
 Then start the server, open the web UI, and create your first account.
 
@@ -64,12 +67,12 @@ All documentation lives on the [website](https://revaulter.italypaleale.me).
 
 Quick links:
 
-- [What is Revaulter](https://revaulter.italypaleale.me/docs/what-is-revaulter/) — how it works, security model, webhooks
-- [Installing Revaulter](https://revaulter.italypaleale.me/docs/installing-revaulter/) — Docker setup, configuration reference, Docker Compose and Podman examples
-- [Using the CLI](https://revaulter.italypaleale.me/docs/revaulter-cli/) — commands, flags, and examples
-- [Editing encrypted files](https://revaulter.italypaleale.me/cli/revaulter-edit/) — `revaulter-edit`, for reading and editing local encrypted files
-- [Using Revaulter as a Go library](https://revaulter.italypaleale.me/advanced/go-library/) — submit requests from your own applications
-- [Cryptography architecture](https://revaulter.italypaleale.me/docs/crypto-architecture/) — key layers, wrapping, derivation, transport encryption
+- [What is Revaulter](https://revaulter.italypaleale.me/docs/what-is-revaulter/): how it works, security model, webhooks
+- [Installing Revaulter](https://revaulter.italypaleale.me/docs/installing-revaulter/): Docker setup, configuration reference, Docker Compose and Podman examples
+- [Using the CLI](https://revaulter.italypaleale.me/cli/revaulter-cli/): commands, flags, and examples
+- [Editing encrypted files](https://revaulter.italypaleale.me/cli/revaulter-edit/): `revaulter-edit`, for reading and editing local encrypted files
+- [Using Revaulter as a Go library](https://revaulter.italypaleale.me/advanced/go-library/): submit requests from your own applications
+- [Cryptography architecture](https://revaulter.italypaleale.me/docs/crypto-architecture/): key layers, wrapping, derivation, transport encryption
 
 ## License
 

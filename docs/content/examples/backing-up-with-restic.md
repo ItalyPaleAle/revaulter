@@ -3,7 +3,7 @@ title: "Backing up with restic"
 weight: 35
 ---
 
-[restic](https://restic.net) uses a single password to derive its repository encryption key. Storing that password unattended on the backup host largely defeats the point of having backups: anyone who pops the host gets the repository. Wrapping the password with Revaulter means the backup script gets the password only after a passkey holder approves.
+[restic](https://restic.net) uses a single password to derive its repository encryption key. Storing that password on the backup host defeats much of the purpose of encrypting backups: anyone who compromises the host gets the repository. Wrapping the password with Revaulter means the backup script gets the password only after a passkey holder approves.
 
 ## Setup
 
@@ -51,8 +51,6 @@ set -euo pipefail
 revaulter-cli decrypt \
   --server https://revaulter.example.com \
   --request-key AbCdEf0123456789GhIj \
-  --key-label restic-pw \
-  --algorithm A256GCM \
   --json /etc/restic/pw-wrapped.json \
   --format raw \
   --note "restic backup" \
@@ -70,10 +68,10 @@ restic \
   backup /var/data
 ```
 
-restic invokes the script, the script blocks waiting for approval, the maintainer approves on their phone, and restic gets the password and runs the backup.
+restic runs the script, which waits for approval. Once the maintainer approves on their phone, restic gets the password and runs the backup.
 
 ## Why this pattern works
 
-- **The host can't restore on its own**: a compromised backup host cannot decrypt the repository even if the wrapped blob and the request key both leak.
+- **The host can't restore on its own**: a compromised backup host can't decrypt the repository, even if the wrapped password and the request key both leak.
 - **One file to deploy**: the wrapped JSON is the only secret on the host, and it's useless without Revaulter.
 - **Live audit trail**: every restore (or recurring backup) requires interactive approval, so unusual activity is visible in real time.

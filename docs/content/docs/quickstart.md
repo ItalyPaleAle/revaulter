@@ -3,7 +3,7 @@ title: "Quickstart"
 weight: 23
 ---
 
-Launch your Revaulter server in minutes with the quickstart.
+Run your own Revaulter server in a few minutes.
 
 ## Docker Compose
 
@@ -30,7 +30,18 @@ secretKey: "<generate with: openssl rand -base64 32>"
 baseUrl: "https://revaulter.example.com"
 ```
 
-To send notifications when requests are waiting, add `webhookUrl` and optionally `webhookFormat`.
+To send notifications when requests are waiting, add `webhookUrl` and `webhookFormat`.
+
+Revaulter runs as a non-root user (UID 65532), which must be able to write to the `data` directory. Create it before starting the container:
+
+```bash
+mkdir -p data
+sudo chown 65532:65532 data
+```
+
+On hosts with SELinux enforcing, such as Fedora or RHEL, also add `:Z` to the volume: `./data:/data:Z`.
+
+Revaulter must be reachable at `baseUrl` over HTTPS, because passkeys don't work on plain HTTP pages (excluding from localhost). Put it behind a reverse proxy that terminates TLS, or see [TLS](/docs/installing-revaulter/#tls) for other options.
 
 Then start the server with `docker compose up`, open the web UI, and create your first account.
 

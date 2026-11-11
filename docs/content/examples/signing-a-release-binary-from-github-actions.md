@@ -3,11 +3,11 @@ title: "Signing a release binary from GitHub Actions"
 weight: 37
 ---
 
-You can wire `revaulter-cli sign` into a GitHub Actions release workflow to sign release binaries (or archives, container manifests…) without exposing the signing key to the runner. The signing key lives in the maintainer's passkey, and the workflow blocks until the maintainer approves on their phone.
+You can add `revaulter-cli sign` to a GitHub Actions release workflow to sign release binaries (or archives, container manifests, and more) without exposing the signing key to the runner. The signing key is derived from the maintainer's passkey, and the workflow waits until the maintainer approves on their phone.
 
 ## Setup
 
-1. Sign in to the Revaulter web UI, open the signing keys section, and publish an ES256 signing key under a label like `release-signing`. Note the published key ID: verifiers fetch the public half from `https://revaulter.example.com/v2/signing-keys/<KEY_ID>.pem`.  
+1. Sign in to the Revaulter web UI, open **Settings → Signing keys**, and publish an ES256 signing key with a label like `release-signing`. Note the key ID: verifiers fetch the public key from `https://revaulter.example.com/v2/signing-keys/<KEY_ID>.pem`.  
   See [Fetching a public key to verify a signature](/examples/fetching-a-public-key-to-verify-a-signature/) for the verifier flow.
 2. In the Revaulter web UI, open **Settings → Request auth**, enable **OIDC tokens**, and add a trusted issuer. The workflow authenticates with the OIDC token GitHub Actions issues to each job, so there's no request key to store in the repository. See [Authenticating with OIDC tokens](/docs/oidc-authentication/) for details.
     - **Issuer**: `https://token.actions.githubusercontent.com`
@@ -99,12 +99,12 @@ The CLI hashes the binary with SHA-256, sends only the 32-byte digest end-to-end
 
 ## Verifying
 
-Anyone who has pinned the public key (see [Fetching a public key to verify a signature](/examples/fetching-a-public-key-to-verify-a-signature/)) can verify the binary without contacting Revaulter. The signature is 64 bytes of raw `r || s` (no DER, no JWS wrapper), so verification is a one-liner with most ECDSA libraries.
+Anyone who has pinned the public key (see [Fetching a public key to verify a signature](/examples/fetching-a-public-key-to-verify-a-signature/)) can verify the binary without contacting Revaulter. The signature is 64 bytes of raw `r || s`, with no DER encoding or JWS wrapper.
 
 ## Why this pattern works
 
 - **The signing key is never on the runner**: there's no key file, no secret variable to leak, and no service account to compromise.
 - **No long-lived credentials**: the OIDC token identifies this repository and environment, and expires within minutes.
 - **Every release requires a live human**: a hostile push can't ship a signed binary without passkey approval.
-- **Self-contained sidecar**: the `.sig` file is just 64 bytes, can be attached to any release page or CDN.
-- **Standard primitive**: ES256 + raw `r || s` is the same shape Cosign and most ECDSA tooling produce, so existing verification tools work.
+- **Self-contained sidecar**: the `.sig` file is only 64 bytes, and you can attach it to any release page or host it on a CDN.
+- **Standard primitive**: ES256 is a standard algorithm, so existing verification tools work. Some need the signature converted to DER first, as shown in the verification examples.
