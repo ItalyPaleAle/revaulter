@@ -178,26 +178,29 @@ describe('credentialPublicKeyHash', () => {
 })
 
 describe('serializePublicKeyCredential', () => {
-    it('uses native core fields but normalizes the browser extension result', () => {
+    // Native toJSON includes the PRF output, so the serializer must replace its extension results rather than trust them
+    it('uses native core fields but drops the PRF output from the native extension result', () => {
         const serialized = {
             id: 'credential',
             rawId: 'Y3JlZGVudGlhbA',
             type: 'public-key',
-            clientExtensionResults: { prf: { results: { first: [251, 255, 0] } } },
+            clientExtensionResults: { prf: { enabled: true, results: { first: '-_8A' } } },
         }
         const credential = {
             toJSON: () => serialized,
             getClientExtensionResults: () => ({
-                prf: { results: { first: bytes(0xfb, 0xff, 0x00) } },
+                prf: { enabled: true, results: { first: bytes(0xfb, 0xff, 0x00) } },
             }),
         } as unknown as PublicKeyCredential
 
-        expect(serializePublicKeyCredential(credential)).toEqual({
+        const result = serializePublicKeyCredential(credential)
+        expect(result).toEqual({
             id: 'credential',
             rawId: 'Y3JlZGVudGlhbA',
             type: 'public-key',
-            clientExtensionResults: { prf: { results: { first: '-_8A' } } },
+            clientExtensionResults: { prf: { enabled: true } },
         })
+        expect(JSON.stringify(result)).not.toContain('-_8A')
     })
 
     it('manually serializes an attestation when the native serializer is unavailable', () => {
@@ -228,7 +231,7 @@ describe('serializePublicKeyCredential', () => {
             id: 'assertion-id',
             rawId: 'AQID',
             type: 'public-key',
-            clientExtensionResults: { prf: { enabled: true, results: { first: 'CQgH' } } },
+            clientExtensionResults: { prf: { enabled: true } },
             response: {
                 authenticatorData: 'BAU',
                 clientDataJSON: 'Bgc',
@@ -262,20 +265,26 @@ describe('serializePublicKeyCredential', () => {
 })
 
 describe('serializeWebAuthnExtensionResults', () => {
-    it('encodes nested PRF ArrayBuffer outputs as base64url', () => {
-        expect(
-            serializeWebAuthnExtensionResults({
-                prf: {
-                    enabled: true,
-                    results: { first: bytes(0xfb, 0xff, 0x00), second: bytes(1, 2, 3) },
-                },
-            })
-        ).toEqual({
+    it('drops PRF results but keeps the rest of the PRF output', () => {
+        const input = {
             prf: {
                 enabled: true,
-                results: { first: '-_8A', second: 'AQID' },
+                results: { first: bytes(0xfb, 0xff, 0x00), second: bytes(1, 2, 3) },
             },
-        })
+        }
+
+        expect(serializeWebAuthnExtensionResults(input)).toEqual({ prf: { enabled: true } })
+
+        // The browser's own extension output object must not be mutated
+        expect(input.prf.results.first).toBeInstanceOf(ArrayBuffer)
+    })
+
+    it.each([
+        ['number arrays', { first: [251, 255, 0] }],
+        ['base64url strings', { first: '-_8A' }],
+        ['an object', {}],
+    ])('drops PRF results encoded as %s', (_name, results) => {
+        expect(serializeWebAuthnExtensionResults({ prf: { results } })).toEqual({ prf: {} })
     })
 
     it('encodes an ArrayBuffer created in another realm', () => {
@@ -297,16 +306,17 @@ describe('serializeWebAuthnExtensionResults', () => {
         ).toEqual({ typed: '-_8A', view: '-_8A' })
     })
 
-    it('encodes only valid byte arrays at PRF result paths', () => {
-        const invalid = [0, 256, 1.5, '2']
+    it('preserves arrays and other extension outputs', () => {
         expect(
             serializeWebAuthnExtensionResults({
-                prf: { results: { first: [251, 255, 0], second: invalid } },
+                appid: false,
                 uvm: [[1, 2, 3]],
+                future: { list: [bytes(0xfb, 0xff, 0x00)] },
             })
         ).toEqual({
-            prf: { results: { first: '-_8A', second: invalid } },
+            appid: false,
             uvm: [[1, 2, 3]],
+            future: { list: ['-_8A'] },
         })
     })
 
@@ -475,10 +485,15 @@ describe('webauthnLoginWithPrf', () => {
 
         expect(result.id).toBe('assertion-id')
         expect(Array.from(result.prfSecret ?? [])).toEqual([9, 8, 7])
+
+        // The PRF secret is returned to the caller but must not appear anywhere in the payload posted to the server
+        const raw = result.raw as { credential: { clientExtensionResults: unknown } }
+        expect(raw.credential.clientExtensionResults).toEqual({ prf: { enabled: true } })
+        expect(JSON.stringify(result.raw)).not.toContain('CQgH')
+
         expect(result.raw).toMatchObject({
             credential: {
                 id: 'assertion-id',
-                clientExtensionResults: { prf: { enabled: true, results: { first: 'CQgH' } } },
                 response: {
                     authenticatorData: 'BAU',
                     clientDataJSON: 'Bgc',

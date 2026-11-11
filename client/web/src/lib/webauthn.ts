@@ -47,13 +47,30 @@ function cloneAndDecodeWebAuthnOptions<T>(input: T, skipBinaryDecoding = false):
     return input
 }
 
+// serializeWebAuthnExtensionResults converts client extension outputs to the JSON shape sent to the server
+// PRF results are removed because they are the secret that wraps the user's primary key, so they must never leave the browser
 export function serializeWebAuthnExtensionResults(input: unknown): unknown {
-    return serializeWebAuthnExtensionValue(input, [])
+    return serializeWebAuthnExtensionValue(withoutPrfResults(input))
+}
+
+// withoutPrfResults returns a shallow copy of the extension outputs without prf.results
+function withoutPrfResults(input: unknown): unknown {
+    if (!isPlainRecord(input) || !isPlainRecord(input.prf) || !('results' in input.prf)) {
+        return input
+    }
+
+    const { results: _results, ...prf } = input.prf
+    return { ...input, prf }
+}
+
+// isPlainRecord reports whether the value is an object that is neither null nor an array
+function isPlainRecord(input: unknown): input is Record<string, unknown> {
+    return input !== null && typeof input === 'object' && !Array.isArray(input)
 }
 
 // serializeWebAuthnExtensionValue recursively serializes one WebAuthn extension value
 // Browsers expose extension output with inconsistent binary representations so each representation is handled explicitly
-function serializeWebAuthnExtensionValue(input: unknown, path: string[]): unknown {
+function serializeWebAuthnExtensionValue(input: unknown): unknown {
     // Use the intrinsic tag because ArrayBuffers created in another window do not pass the local instanceof check
     if (Object.prototype.toString.call(input) === '[object ArrayBuffer]') {
         return bytesToBase64Url(new Uint8Array(input as ArrayBuffer))
@@ -67,26 +84,15 @@ function serializeWebAuthnExtensionValue(input: unknown, path: string[]): unknow
         return bytesToBase64Url(bytes)
     }
 
-    // Some browsers turn PRF buffers into ordinary number arrays while building the credential JSON
+    // Preserve arrays and continue recursively in case they contain nested binary values
     if (Array.isArray(input)) {
-        // Restrict this compatibility conversion to PRF result fields so legitimate arrays from other extensions keep their shape
-        const isPrfResult =
-            path.length === 3 &&
-            path[0] === 'prf' &&
-            path[1] === 'results' &&
-            (path[2] === 'first' || path[2] === 'second')
-        if (isPrfResult && input.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)) {
-            return bytesToBase64Url(Uint8Array.from(input as number[]))
-        }
-
-        // Preserve non-binary arrays and continue recursively in case they contain nested binary values
-        return input.map((value, index) => serializeWebAuthnExtensionValue(value, [...path, String(index)]))
+        return input.map((value) => serializeWebAuthnExtensionValue(value))
     }
 
     // Extension output is an open-ended dictionary so recurse instead of enumerating known extension names
     if (input !== null && typeof input === 'object') {
         return Object.fromEntries(
-            Object.entries(input).map(([key, value]) => [key, serializeWebAuthnExtensionValue(value, [...path, key])])
+            Object.entries(input).map(([key, value]) => [key, serializeWebAuthnExtensionValue(value)])
         )
     }
 
@@ -107,7 +113,7 @@ export function serializePublicKeyCredential(cred: PublicKeyCredential) {
         if (serialized !== null && typeof serialized === 'object') {
             return {
                 ...(serialized as unknown as Record<string, unknown>),
-                // Replace the native extension JSON because some browsers leave PRF output as number arrays or binary objects
+                // Replace the native extension JSON because it includes the PRF output, and some browsers leave other binary outputs unencoded
                 clientExtensionResults: serializedExtensionResults,
             }
         }

@@ -85,7 +85,7 @@ for (const algorithmName of ALGORITHMS) {
                 await page.getByRole('button', { name: 'Continue with passkey' }).click()
 
                 const body = (await loginRequest).postDataJSON()
-                expect(typeof body.credential.clientExtensionResults.prf.results.first).toBe('string')
+                expect(body.credential.clientExtensionResults.prf).toEqual({ enabled: true })
                 await expect(page.getByRole('heading', { name: 'Pending approvals' })).toBeVisible()
             } finally {
                 await passkey.dispose()

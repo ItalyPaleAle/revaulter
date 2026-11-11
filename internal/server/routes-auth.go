@@ -1678,10 +1678,10 @@ func (s *Server) loginFinish(c *gin.Context, req v2AuthLoginFinishRequest) (logi
 		return userRecord, nil
 	}
 
-	// Normalize the PRF results to support passkeys created with an older version of webauthn
-	credential, err := normalizeWebAuthnPRFResults(req.Credential)
+	// Discard the PRF output that older clients may still send, so it never reaches the WebAuthn library
+	credential, err := stripWebAuthnPRFResults(req.Credential)
 	if err != nil {
-		return loginFinishRes{}, NewResponseError(http.StatusBadRequest, "Invalid WebAuthn PRF result")
+		return loginFinishRes{}, NewResponseError(http.StatusBadRequest, "Invalid WebAuthn credential")
 	}
 
 	// The WebAuthn requires a *http.Request object formatted with a very specific body
@@ -1786,8 +1786,14 @@ func (s *Server) loginFinishSignup(c *gin.Context, signup *actors.Signup, creden
 }
 
 func (s *Server) finishWebAuthnRegistration(c *gin.Context, user *v2WebAuthnUser, msg json.RawMessage, sess *webauthnlib.SessionData) (*webauthnlib.Credential, []byte, error) {
+	// Registration does not evaluate the PRF, but discard any PRF output defensively, as on login
+	credential, err := stripWebAuthnPRFResults(msg)
+	if err != nil {
+		return nil, nil, NewResponseError(http.StatusBadRequest, "Invalid WebAuthn credential")
+	}
+
 	// The WebAuthn library needs a specially-requested HTTP request, so we create one with the credential in the body
-	waReq, err := newJSONHTTPRequest(c, msg)
+	waReq, err := newJSONHTTPRequest(c, credential)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2056,79 +2062,58 @@ func logWebAuthnError(ctx context.Context, ceremony string, err error) {
 	logging.LogFromContext(ctx).WarnContext(ctx, "WebAuthn ceremony failed", attrs...)
 }
 
-// normalizeWebAuthnPRFResults converts browser-produced PRF byte arrays to base64url strings
-func normalizeWebAuthnPRFResults(credential json.RawMessage) (json.RawMessage, error) {
-	var value map[string]any
-	err := json.Unmarshal(credential, &value)
+// stripWebAuthnPRFResults removes clientExtensionResults.prf.results from a browser credential
+// The PRF output is the secret that wraps the user's primary key, so the server must not process it even when an older client still sends it
+// go-webauthn only reads prf.enabled from the extension outputs, so removing the results does not affect verification
+// Members that are not removed are passed through unchanged
+func stripWebAuthnPRFResults(credential json.RawMessage) (json.RawMessage, error) {
+	var root map[string]json.RawMessage
+	err := json.Unmarshal(credential, &root)
+	if err != nil {
+		return nil, fmt.Errorf("credential must be a JSON object: %w", err)
+	}
+
+	// A missing member at any level means there is no PRF output to remove
+	// A JSON null decodes to a nil map, which behaves the same as a missing member
+	rawExtensions, ok := root["clientExtensionResults"]
+	if !ok {
+		return credential, nil
+	}
+
+	var extensions map[string]json.RawMessage
+	err = json.Unmarshal(rawExtensions, &extensions)
+	if err != nil {
+		return nil, fmt.Errorf("clientExtensionResults must be an object: %w", err)
+	}
+
+	rawPRF, ok := extensions["prf"]
+	if !ok {
+		return credential, nil
+	}
+
+	var prf map[string]json.RawMessage
+	err = json.Unmarshal(rawPRF, &prf)
+	if err != nil {
+		return nil, fmt.Errorf("clientExtensionResults.prf must be an object: %w", err)
+	}
+
+	_, ok = prf["results"]
+	if !ok {
+		return credential, nil
+	}
+
+	delete(prf, "results")
+
+	extensions["prf"], err = json.Marshal(prf)
+	if err != nil {
+		return nil, err
+	}
+	root["clientExtensionResults"], err = json.Marshal(extensions)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, path := range []string{
-		"clientExtensionResults.prf.results.first",
-		"clientExtensionResults.prf.results.second",
-	} {
-		err = normalizeWebAuthnByteArrayAtPath(value, path)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return json.Marshal(value)
-}
-
-// normalizeWebAuthnByteArrayAtPath encodes a byte array at a nested JSON path while preserving base64url strings
-func normalizeWebAuthnByteArrayAtPath(value map[string]any, path string) error {
-	parts := strings.Split(path, ".")
-	current := value
-
-	// PRF extension output is optional so a missing object means there is nothing to normalize
-	for _, part := range parts[:len(parts)-1] {
-		next, ok := current[part]
-		if !ok {
-			return nil
-		}
-
-		// Reject malformed intermediate values because silently ignoring them would defer an unclear parse error to the WebAuthn library
-		current, ok = next.(map[string]any)
-		if !ok {
-			return fmt.Errorf("%s must be an object", strings.Join(parts[:len(parts)-1], "."))
-		}
-	}
-
-	last := parts[len(parts)-1]
-	field, ok := current[last]
-	if !ok {
-		// Authenticators may omit either PRF result when no value was produced
-		return nil
-	}
-
-	// Standards-compliant clients already send base64url strings so preserve them without encoding them again
-	_, ok = field.(string)
-	if ok {
-		return nil
-	}
-
-	// Older client code can serialize browser byte buffers as JSON number arrays instead of base64url strings
-	values, ok := field.([]any)
-	if !ok {
-		return fmt.Errorf("%s must be a base64url string or byte array", path)
-	}
-
-	bytesValue := make([]byte, len(values))
-	for i, value := range values {
-		// JSON numbers decode as float64 so require an integer in the byte range before narrowing to byte
-		number, numberOK := value.(float64)
-		if !numberOK || number < 0 || number > 255 || number != math.Trunc(number) {
-			return fmt.Errorf("%s contains an invalid byte at index %d", path, i)
-		}
-		bytesValue[i] = byte(number)
-	}
-
-	// Convert the legacy array to the representation expected by the upgraded WebAuthn parser
-	current[last] = base64.RawURLEncoding.EncodeToString(bytesValue)
-
-	return nil
+	return json.Marshal(root)
 }
 
 // newJSONHTTPRequest returns a new http.Request with a JSON body

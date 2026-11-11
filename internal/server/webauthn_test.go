@@ -88,33 +88,58 @@ func TestLogWebAuthnErrorIncludesConciseStructuredDiagnostic(t *testing.T) {
 	assert.NotContains(t, logOutput, "sensitive debug details")
 }
 
-func TestNormalizeWebAuthnPRFResultsEncodesBrowserByteArrays(t *testing.T) {
-	credential := json.RawMessage(`{"id":"credential","clientExtensionResults":{"prf":{"results":{"first":[251,255,0],"second":"AQID"}}}}`)
+func TestStripWebAuthnPRFResults(t *testing.T) {
+	t.Run("removes PRF results and keeps every other member", func(t *testing.T) {
+		credential := json.RawMessage(`{"id":"credential","response":{"signature":"AQID"},"clientExtensionResults":{"appid":false,"prf":{"enabled":true,"results":{"first":"c2VjcmV0","second":"b3RoZXI"}}}}`)
 
-	normalized, err := normalizeWebAuthnPRFResults(credential)
-	require.NoError(t, err)
+		stripped, err := stripWebAuthnPRFResults(credential)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"id":"credential","response":{"signature":"AQID"},"clientExtensionResults":{"appid":false,"prf":{"enabled":true}}}`, string(stripped))
+		assert.NotContains(t, string(stripped), "c2VjcmV0")
+		assert.NotContains(t, string(stripped), "b3RoZXI")
+	})
 
-	var value struct {
-		ClientExtensionResults struct {
-			PRF struct {
-				Results struct {
-					First  string `json:"first"`
-					Second string `json:"second"`
-				} `json:"results"`
-			} `json:"prf"`
-		} `json:"clientExtensionResults"`
+	// Older clients encoded the PRF output in several shapes, and all of them must be removed without being parsed
+	for name, results := range map[string]string{
+		"byte array":         `{"first":[251,255,0]}`,
+		"empty object":       `{"first":{}}`,
+		"invalid byte array": `{"first":[256]}`,
+		"null":               `null`,
+	} {
+		t.Run("removes PRF results encoded as "+name, func(t *testing.T) {
+			credential := json.RawMessage(`{"clientExtensionResults":{"prf":{"results":` + results + `}}}`)
+
+			stripped, err := stripWebAuthnPRFResults(credential)
+			require.NoError(t, err)
+			assert.JSONEq(t, `{"clientExtensionResults":{"prf":{}}}`, string(stripped))
+		})
 	}
-	err = json.Unmarshal(normalized, &value)
-	require.NoError(t, err)
-	assert.Equal(t, "-_8A", value.ClientExtensionResults.PRF.Results.First)
-	assert.Equal(t, "AQID", value.ClientExtensionResults.PRF.Results.Second)
-}
 
-func TestNormalizeWebAuthnPRFResultsRejectsInvalidBytes(t *testing.T) {
-	credential := json.RawMessage(`{"clientExtensionResults":{"prf":{"results":{"first":[256]}}}}`)
+	for name, credential := range map[string]string{
+		"no extension results":   `{"id":"credential"}`,
+		"null extension results": `{"id":"credential","clientExtensionResults":null}`,
+		"no PRF output":          `{"id":"credential","clientExtensionResults":{"appid":false}}`,
+		"null PRF output":        `{"id":"credential","clientExtensionResults":{"prf":null}}`,
+		"no PRF results":         `{"id":"credential","clientExtensionResults":{"prf":{"enabled":true}}}`,
+	} {
+		t.Run("returns a credential with "+name+" unchanged", func(t *testing.T) {
+			stripped, err := stripWebAuthnPRFResults(json.RawMessage(credential))
+			require.NoError(t, err)
+			assert.Equal(t, credential, string(stripped))
+		})
+	}
 
-	_, err := normalizeWebAuthnPRFResults(credential)
-	require.ErrorContains(t, err, "invalid byte")
+	for name, credential := range map[string]string{
+		"a top-level value that is not an object": `"credential"`,
+		"invalid JSON": `{"id":`,
+		"extension results that are not an object": `{"clientExtensionResults":"prf"}`,
+		"a PRF output that is not an object":       `{"clientExtensionResults":{"prf":[1,2,3]}}`,
+	} {
+		t.Run("rejects "+name, func(t *testing.T) {
+			_, err := stripWebAuthnPRFResults(json.RawMessage(credential))
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestCredentialCreationWithoutExclusionsRemovesBrowserExclusionList(t *testing.T) {

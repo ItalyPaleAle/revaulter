@@ -123,6 +123,62 @@ func TestServerV2SignupFlow(t *testing.T) {
 	assert.Equal(t, finalizeBody["wrappedPrimaryKey"], res.Body["wrappedPrimaryKey"])
 }
 
+// TestServerV2LoginDiscardsPRFResults checks that login/finish verifies the assertion without the PRF output, which the web client keeps in the browser
+// Older clients still send the PRF output in several encodings, so the server must discard it rather than reject the login
+func TestServerV2LoginDiscardsPRFResults(t *testing.T) {
+	setTestConfig(t, "v2-login-prf-results.db", map[string]any{
+		"baseUrl":         testWebAuthnOrigin,
+		"webauthnRpId":    testWebAuthnRPID,
+		"webauthnOrigins": []string{testWebAuthnOrigin},
+	})
+
+	srv := newTestServer(t, nil, nil, nil)
+	startTestServer(t, srv)
+	client := clientForListener(srv.appListener)
+	pk := newTestPasskey(t, webauthncose.AlgES256)
+
+	// Register the passkey but don't finalize the signup
+	// The PRF output is discarded before the handler distinguishes signups from users in the database, and signups are not subject to the wrapped-key rate limit
+	res := doSignupTestRequest(t, client, http.MethodPost, "/v2/auth/register/begin", map[string]any{"displayName": "Dave"}, nil)
+	require.Equal(t, http.StatusOK, res.StatusCode)
+	signupID := stringField(t, res.Body, "challengeId")
+	userHandle, err := base64.RawURLEncoding.DecodeString(signupID)
+	require.NoError(t, err)
+
+	registerBody := map[string]any{
+		"challengeId": signupID,
+		"credential":  pk.attestationResponse(t, stringField(t, res.Body, "challenge")),
+	}
+	res = doSignupTestRequest(t, client, http.MethodPost, "/v2/auth/register/finish", registerBody, nil)
+	require.Equal(t, http.StatusOK, res.StatusCode, "register/finish failed: %v", res.Body)
+
+	login := func(t *testing.T, extensions map[string]any) signupTestResponse {
+		t.Helper()
+
+		res := doSignupTestRequest(t, client, http.MethodPost, "/v2/auth/login/begin", nil, nil)
+		require.Equal(t, http.StatusOK, res.StatusCode)
+
+		body := map[string]any{
+			"challengeId": stringField(t, res.Body, "challengeId"),
+			"credential":  pk.assertionResponseWithExtensions(t, stringField(t, res.Body, "challenge"), userHandle, extensions),
+		}
+		return doSignupTestRequest(t, client, http.MethodPost, "/v2/auth/login/finish", body, nil)
+	}
+
+	for _, tt := range testLoginExtensionOutputs {
+		t.Run(tt.name, func(t *testing.T) {
+			res := login(t, tt.extensions)
+			require.Equal(t, http.StatusOK, res.StatusCode, "login/finish failed: %v", res.Body)
+			assert.Equal(t, true, res.Body["authenticated"])
+		})
+	}
+
+	t.Run("rejects a malformed PRF output", func(t *testing.T) {
+		res := login(t, map[string]any{"prf": []int{1, 2, 3}})
+		require.Equal(t, http.StatusBadRequest, res.StatusCode)
+	})
+}
+
 // signupTestLogin begins a sign-in, and returns the body for login/finish with the passkey's assertion
 func signupTestLogin(t *testing.T, client *http.Client, pk *testPasskey, userHandle []byte) map[string]any {
 	t.Helper()

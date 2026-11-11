@@ -246,8 +246,21 @@ func (pk *testPasskey) attestationResponse(t *testing.T, challenge string) json.
 	})
 }
 
-// assertionResponse builds the login credential a browser posts to the server
+// assertionResponse builds the login credential the web client posts to the server
 func (pk *testPasskey) assertionResponse(t *testing.T, challenge string, userHandle []byte) json.RawMessage {
+	t.Helper()
+
+	return pk.assertionResponseWithExtensions(t, challenge, userHandle, map[string]any{
+		// Safari returns appid false without being asked when authenticating with some cross-platform security keys
+		"appid": false,
+		// The web client reports that PRF is enabled but never sends the PRF output, which stays in the browser
+		"prf": map[string]any{"enabled": true},
+	})
+}
+
+// assertionResponseWithExtensions builds a login credential with the given client extension outputs
+// A nil map omits clientExtensionResults entirely
+func (pk *testPasskey) assertionResponseWithExtensions(t *testing.T, challenge string, userHandle []byte, extensions map[string]any) json.RawMessage {
 	t.Helper()
 
 	pk.signCount++
@@ -258,7 +271,7 @@ func (pk *testPasskey) assertionResponse(t *testing.T, challenge string, userHan
 	signature, err := pk.sign(append(authData, clientDataHash[:]...))
 	require.NoError(t, err)
 
-	return marshalTestJSON(t, map[string]any{
+	credential := map[string]any{
 		"id":    base64.RawURLEncoding.EncodeToString(pk.credentialID),
 		"rawId": base64.RawURLEncoding.EncodeToString(pk.credentialID),
 		"type":  "public-key",
@@ -268,15 +281,46 @@ func (pk *testPasskey) assertionResponse(t *testing.T, challenge string, userHan
 			"signature":         base64.RawURLEncoding.EncodeToString(signature),
 			"userHandle":        base64.RawURLEncoding.EncodeToString(userHandle),
 		},
-		"clientExtensionResults": map[string]any{
-			// Safari returns appid false without being asked when authenticating with some cross-platform security keys
-			"appid": false,
-			"prf": map[string]any{
-				"enabled": true,
-				"results": map[string]any{"first": base64.RawURLEncoding.EncodeToString(make([]byte, 32))},
-			},
-		},
-	})
+	}
+	if extensions != nil {
+		credential["clientExtensionResults"] = extensions
+	}
+
+	return marshalTestJSON(t, credential)
+}
+
+// testLoginExtensionOutputs lists the client extension outputs that login must accept
+// The current web client never sends the PRF results, while older clients sent them in several encodings, which the server must discard
+var testLoginExtensionOutputs = []struct {
+	name       string
+	extensions map[string]any
+}{
+	{
+		name:       "current client without PRF results",
+		extensions: map[string]any{"appid": false, "prf": map[string]any{"enabled": true}},
+	},
+	{
+		name:       "client without extension results",
+		extensions: nil,
+	},
+	{
+		name: "older client sending base64url PRF results",
+		extensions: map[string]any{"prf": map[string]any{
+			"enabled": true,
+			"results": map[string]any{"first": "c2VjcmV0LXByZi1vdXRwdXQtdGhhdC1tdXN0LW5vdC1sZWFr"},
+		}},
+	},
+	{
+		name: "older client sending byte array PRF results",
+		extensions: map[string]any{"prf": map[string]any{
+			"enabled": true,
+			"results": map[string]any{"first": []int{251, 255, 0}, "second": []int{1, 2, 3}},
+		}},
+	},
+	{
+		name:       "client older than v2.5.0 sending PRF results as empty objects",
+		extensions: map[string]any{"prf": map[string]any{"results": map[string]any{"first": map[string]any{}}}},
+	},
 }
 
 func marshalTestJSON(t *testing.T, value any) json.RawMessage {
@@ -416,6 +460,45 @@ func TestWebAuthnCeremoniesAcrossCredentialAlgorithms(t *testing.T) {
 			require.NoError(t, err, "login must succeed for %s", name)
 			assert.Equal(t, pk.credentialID, loginCredential.ID)
 			assert.Equal(t, uint32(1), loginCredential.Authenticator.SignCount)
+		})
+	}
+}
+
+// go-webauthn must verify an assertion after the PRF output is discarded, so login never depends on the server seeing it
+func TestLoginVerifiesWithoutPRFResults(t *testing.T) {
+	for _, tt := range testLoginExtensionOutputs {
+		t.Run(tt.name, func(t *testing.T) {
+			wa := newTestWebAuthn(t)
+			user, err := newV2WebAuthnUserForRegistration("user-prf", "Test User")
+			require.NoError(t, err)
+
+			s := &Server{webAuthn: wa}
+			creation, registrationSession, err := s.beginWebAuthnSession(user)
+			require.NoError(t, err)
+
+			pk := newTestPasskey(t, webauthncose.AlgES256)
+			jr := newTestJSONRequest(t, pk.attestationResponse(t, creation.Response.Challenge.String()))
+			credential, err := wa.FinishRegistration(user, *registrationSession, jr)
+			require.NoError(t, err)
+			user.credentials = append(user.credentials, *credential)
+
+			// Request the PRF extension the same way RouteV2AuthLoginBegin does
+			_, loginSession, err := wa.BeginDiscoverableLogin(
+				webauthnlib.WithAssertionExtensions(webauthnlib.WithExtensionPRFSupport()),
+			)
+			require.NoError(t, err)
+
+			assertion := pk.assertionResponseWithExtensions(t, loginSession.Challenge, user.WebAuthnID(), tt.extensions)
+			stripped, err := stripWebAuthnPRFResults(assertion)
+			require.NoError(t, err)
+			assert.NotContains(t, string(stripped), `"results"`)
+
+			handler := func(_ []byte, _ []byte) (webauthnlib.User, error) {
+				return user, nil
+			}
+			loginCredential, err := wa.FinishDiscoverableLogin(handler, *loginSession, newTestJSONRequest(t, stripped))
+			require.NoError(t, err)
+			assert.Equal(t, pk.credentialID, loginCredential.ID)
 		})
 	}
 }
