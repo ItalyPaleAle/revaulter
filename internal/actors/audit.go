@@ -161,13 +161,61 @@ func (h *Host) pruneAuditLog(ctx context.Context, now time.Time) {
 		)
 	}
 
-	// Remove the envelopes of requests that the revaulter.user actors missed, for example after their state was lost
+	// Expire the requests that the revaulter.user actors missed, for example after their state was lost, so the audit log records how they ended
+	expired, err := h.expireOverdueRequests(ctx, now.Add(-RequestRemoveGrace))
+	if err != nil {
+		h.log.WarnContext(ctx, "Failed to expire overdue requests", slog.Any("error", err))
+	} else if expired > 0 {
+		h.log.InfoContext(ctx, "Expired overdue requests", slog.Int("expired", expired))
+	}
+
+	// Remove the envelopes of finished requests that the revaulter.user actors missed
 	removed, err = h.db.RequestPayloadStore().DeleteExpired(ctx, now.Add(-RequestRemoveGrace))
 	if err != nil {
 		h.log.WarnContext(ctx, "Request payload prune failed", slog.Any("error", err))
 	} else if removed > 0 {
 		h.log.InfoContext(ctx, "Expired request payloads pruned", slog.Int64("removed", removed))
 	}
+}
+
+// expireOverdueRequests expires the pending requests whose deadline is before the given time, and records each expiry in the audit log
+// If a revaulter.user actor still has one of these requests, it takes the expired status the next time it handles it
+func (h *Host) expireOverdueRequests(ctx context.Context, before time.Time) (int, error) {
+	expired, err := db.ExecuteInTransaction(ctx, h.db, userActorDBTimeout, func(ctx context.Context, tx *db.DbTx) ([]db.RequestPayload, error) {
+		rows, rErr := tx.RequestPayloadStore().ExpireOverdue(ctx, before)
+		if rErr != nil || len(rows) == 0 {
+			return nil, rErr
+		}
+
+		// Expiry is performed by the system, and the request's owner is both the actor and the target
+		events := make([]db.AuditEventInput, len(rows))
+		for i := range rows {
+			events[i] = db.AuditEventInput{
+				EventType:    db.AuditRequestExpire,
+				Outcome:      db.AuditOutcomeSuccess,
+				AuthMethod:   db.AuditAuthMethodSystem,
+				ActorUserID:  &rows[i].UserID,
+				TargetUserID: &rows[i].UserID,
+				RequestState: &rows[i].State,
+			}
+		}
+
+		rErr = tx.AuditStore().InsertMany(ctx, events)
+		if rErr != nil {
+			return nil, rErr
+		}
+
+		return rows, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	if len(expired) > 0 {
+		h.NudgeAuditStream()
+	}
+
+	return len(expired), nil
 }
 
 // auditPruneCutoff returns the created_at threshold for the recurring audit prune

@@ -52,7 +52,7 @@ func canonicalFixture() fixtureBackup {
 	const ts = int64(1700000000)
 
 	return fixtureBackup{
-		SchemaLevel: 6,
+		SchemaLevel: 7,
 		Tables: []fixtureTable{
 			tableFixture("v2_audit_events", [][]any{
 				{fxAuditID1, ts, "auth.login.finish", "success", "session", fxUserAID, fxUserAID, nil, nil, fxRequestID, "http-1", "127.0.0.1", "ua/1.0", `{"flow":"webauthn"}`},

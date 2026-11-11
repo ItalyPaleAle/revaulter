@@ -11,6 +11,13 @@ import (
 	"github.com/italypaleale/revaulter/internal/utils/logging"
 )
 
+const (
+	// createAttempts is how many times Create calls the actor before giving up
+	createAttempts = 3
+	// createRetryDelay is how long Create waits before its first retry, growing with each attempt
+	createRetryDelay = 200 * time.Millisecond
+)
+
 var (
 	// ErrRequestNotModifiable is returned when a request doesn't exist, isn't pending, or can't be changed anymore
 	// Requests of other users live in other actors, so they are reported the same way, and callers can't probe for another user's requests
@@ -35,9 +42,26 @@ func (h *Host) User(userID string) UserClient {
 
 // Create stores a new pending request, with its envelope and audit event, and notifies the user's list streams
 // It returns ErrTooManyPendingRequests if the user has too many pending requests
-// Creating a request that already exists is a no-op, so a call can be retried safely
+// Creating a request that already exists is a no-op, so a failed call is retried with the same input a few times
 func (c UserClient) Create(ctx context.Context, in CreateRequestInput) error {
-	res, err := invoke[userCreateRes](ctx, c.host, actorTypeUser, c.userID, userMethodCreate, in)
+	var (
+		res userCreateRes
+		err error
+	)
+	for attempt := range createAttempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return err
+			case <-time.After(time.Duration(attempt) * createRetryDelay):
+			}
+		}
+
+		res, err = invoke[userCreateRes](ctx, c.host, actorTypeUser, c.userID, userMethodCreate, in)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return err
 	}

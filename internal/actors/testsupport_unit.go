@@ -10,8 +10,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/italypaleale/francis/actor"
 	"github.com/stretchr/testify/require"
 )
+
+// testClientWrapper wraps the client an actor uses for its state and alarms, so tests can inject failures
+// The client passed to it is an actor.Client of the actor's state type, and it must return a client of the same type
+var testClientWrapper func(actorType string, actorID string, client any) any
+
+// wrapActorClient returns the client an actor uses for its state and alarms, wrapped by testClientWrapper if it's set
+func wrapActorClient[T any](actorType string, actorID string, client actor.Client[T]) actor.Client[T] {
+	if testClientWrapper == nil {
+		return client
+	}
+
+	wrapped, ok := testClientWrapper(actorType, actorID, client).(actor.Client[T])
+	if !ok {
+		return client
+	}
+	return wrapped
+}
 
 // TestPeerAddress returns a loopback address with a UDP port that is currently free, for the peer server of a host in tests
 func TestPeerAddress(t *testing.T) string {
