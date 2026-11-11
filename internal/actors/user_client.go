@@ -258,7 +258,10 @@ func (h *Host) repairUserActors(ctx context.Context) (repaired int, err error) {
 		for _, st := range list.States {
 			_, err = invoke[struct{}](ctx, h, actorTypeUser, st.ActorID, userMethodRepair, nil)
 			if err != nil {
-				h.log.WarnContext(ctx, "Failed to repair user actor", slog.String("userId", st.ActorID), slog.Any("error", err))
+				h.log.WarnContext(ctx, "Failed to repair user actor",
+					slog.String("userId", st.ActorID),
+					slog.Any("error", err),
+				)
 				continue
 			}
 			repaired++

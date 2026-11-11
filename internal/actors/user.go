@@ -609,6 +609,7 @@ func (a *userActor) create(ctx context.Context, in CreateRequestInput) (userCrea
 			if err != nil {
 				return userCreateRes{}, err
 			}
+
 			a.notify(ctx, waiters, prevBell)
 		}
 
@@ -628,14 +629,18 @@ func (a *userActor) create(ctx context.Context, in CreateRequestInput) (userCrea
 			return storedRequest{}, rErr
 		}
 
-		if created && in.Audit != nil {
+		recorded := created && in.Audit != nil
+		if recorded {
 			_, rErr = tx.AuditStore().Insert(ctx, *in.Audit)
 			if rErr != nil {
 				return storedRequest{}, rErr
 			}
 		}
 
-		return storedRequest{status: status, recorded: created && in.Audit != nil}, nil
+		return storedRequest{
+			status:   status,
+			recorded: recorded,
+		}, nil
 	})
 	if err != nil {
 		return userCreateRes{}, err
@@ -676,6 +681,7 @@ func (a *userActor) notify(ctx context.Context, waiters map[string]string, bell 
 	for state, waiter := range waiters {
 		a.wakeWaiter(ctx, state, waiter, waiterReasonDone)
 	}
+
 	a.ringBell(ctx, bell)
 }
 
@@ -747,14 +753,18 @@ func (a *userActor) finishStored(ctx context.Context, state string, status db.V2
 			return storedRequest{}, rErr
 		}
 
-		if applied && audit != nil {
+		recorded := applied && audit != nil
+		if recorded {
 			_, rErr = tx.AuditStore().Insert(ctx, a.requestAuditEvent(*audit, state, r))
 			if rErr != nil {
 				return storedRequest{}, fmt.Errorf("failed to write audit event: %w", rErr)
 			}
 		}
 
-		return storedRequest{status: current, recorded: applied && audit != nil}, nil
+		return storedRequest{
+			status:   current,
+			recorded: recorded,
+		}, nil
 	})
 	if err != nil {
 		return storedRequest{}, err
@@ -947,6 +957,7 @@ func (a *userActor) subscribe(ctx context.Context, in userStateReq) (Subscriptio
 	if err != nil {
 		return Subscription{}, err
 	}
+
 	err = a.expireOne(ctx, &st, in.State, time.Now())
 	if err != nil {
 		return Subscription{}, err
