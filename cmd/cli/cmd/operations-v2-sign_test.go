@@ -165,6 +165,60 @@ func TestSignValidateInputFileComputesSHA512ForEd25519ph(t *testing.T) {
 	require.Equal(t, base64.RawURLEncoding.EncodeToString(expected[:]), f.resolvedValueB64)
 }
 
+// Only Ed25519 sends the message itself to the browser, so only Ed25519 inputs are limited in size
+func TestSignValidateInputSizeLimit(t *testing.T) {
+	large := make([]byte, 3*maxInputBytes)
+	for i := range large {
+		large[i] = byte(i)
+	}
+	sha256Sum := sha256.Sum256(large)
+	sha512Sum := sha512.Sum512(large)
+
+	tests := []struct {
+		name      string
+		algorithm string
+		format    string
+		size      int
+		wantValue string
+		wantErr   string
+	}{
+		{name: "ES256 above the limit", algorithm: protocolv2.SigningAlgES256, size: len(large), wantValue: base64.RawURLEncoding.EncodeToString(sha256Sum[:])},
+		{name: "Ed25519ph above the limit", algorithm: protocolv2.SigningAlgEd25519ph, size: len(large), wantValue: base64.RawURLEncoding.EncodeToString(sha512Sum[:])},
+		{name: "ES256 JWS above the limit", algorithm: protocolv2.SigningAlgES256, format: "jws", size: len(large)},
+		{name: "Ed25519 at the limit", algorithm: protocolv2.SigningAlgEd25519, size: maxInputBytes, wantValue: base64.RawURLEncoding.EncodeToString(large[:maxInputBytes])},
+		{name: "Ed25519 above the limit", algorithm: protocolv2.SigningAlgEd25519, size: maxInputBytes + 1, wantErr: "maximum allowed size"},
+		{name: "Ed25519 JWS above the limit", algorithm: protocolv2.SigningAlgEd25519, format: "jws", size: maxInputBytes + 1, wantErr: "maximum allowed size"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "msg.bin")
+			err := os.WriteFile(path, large[:tt.size], 0o600)
+			require.NoError(t, err)
+
+			f := newSignFlagsWithRequired(t)
+			f.Algorithm = tt.algorithm
+			f.Input = path
+			if tt.format != "" {
+				f.Format = tt.format
+			}
+
+			err = f.Validate()
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+
+			if tt.format == "jws" {
+				require.Equal(t, base64.RawURLEncoding.EncodeToString(large[:tt.size]), f.jwsPayloadSegment)
+				return
+			}
+			require.Equal(t, tt.wantValue, f.resolvedValueB64)
+		})
+	}
+}
+
 func TestSignValidateFormatJwsWithInputBuildsSegments(t *testing.T) {
 	dir := t.TempDir()
 	msg := []byte("jws-payload")

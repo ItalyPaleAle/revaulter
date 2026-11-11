@@ -45,10 +45,9 @@ func newSshAgentCmd() *cobra.Command {
 		Short: "Run an SSH key agent that routes signing through Revaulter",
 		Long: `Starts a local SSH agent that listens on a Unix socket.
 
-SSH clients point SSH_AUTH_SOCK at the socket. When they request a signature, the agent sends a sign request to the Revaulter server. The user approves via their browser and passkey, and the resulting ECDSA signature is returned to SSH.
+SSH clients point SSH_AUTH_SOCK at the socket. When they request a signature, the agent sends a sign request to the Revaulter server. The user approves via their browser and passkey, and the resulting signature is returned to SSH.
 
-Note: The signing key must be published from the Revaulter web interface before the agent will advertise it. Publishing attaches an anchor-signed proof that binds the key to your pinned anchor, which is what stops a compromised server from substituting a key of its own. Run "revaulter trust" (or any other revaulter CLI command) at least once with a TTY to pin the server anchor before running the
-agent in a non-interactive environment.`,
+Note: The signing key must be published from the Revaulter web interface before the agent will advertise it. Publishing attaches an anchor-signed proof that binds the key to your pinned anchor, which is what stops a compromised server from substituting a key of its own. Run "revaulter-cli trust" (or any other revaulter-cli command) at least once with a TTY to pin the server anchor before running the agent in a non-interactive environment.`,
 		RunE: f.Run,
 	}
 

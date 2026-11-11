@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"maps"
 	"os"
@@ -707,25 +708,56 @@ func readMaybeStdin(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// openMaybeStdin opens a file path for reading or, when path is "-", returns stdin
+func openMaybeStdin(path string) (io.ReadCloser, error) {
+	if path == "-" {
+		return io.NopCloser(os.Stdin), nil
+	}
+
+	// #nosec G304 - user-supplied input path is intentional
+	return os.Open(path)
+}
+
 // resolveFromInput reads the message file (or stdin) and derives the algorithm-specific bytes to sign
 // When the output format is JWS, a protected header is constructed so the signing input is "<header>.<payload>" in JWS compact form
+// Only Ed25519 sends the message itself to the browser, so only Ed25519 inputs are subject to the input size limit
 func (f *v2OperationFlagsSign) resolveFromInput() error {
-	data, err := readMaybeStdin(f.Input)
+	in, err := openMaybeStdin(f.Input)
 	if err != nil {
 		return fmt.Errorf("failed to read input: %w", err)
 	}
+	defer in.Close()
 
-	err = ensureWithinInputLimit("input", len(data))
-	if err != nil {
-		return err
+	// ES256 and Ed25519ph send only a digest, so without JWS the input is hashed while it's read, and it can be of any size
+	if !f.jwsOutput && f.Algorithm != protocolv2.SigningAlgEd25519 {
+		valueB64, hashErr := hashSignInput(f.Algorithm, in)
+		if hashErr != nil {
+			return hashErr
+		}
+		f.resolvedValueB64 = valueB64
+		return nil
+	}
+
+	var data []byte
+	if f.Algorithm == protocolv2.SigningAlgEd25519 {
+		// Stop reading just past the limit, so an oversized input isn't loaded in full
+		data, err = io.ReadAll(io.LimitReader(in, maxInputBytes+1))
+		if err != nil {
+			return fmt.Errorf("failed to read input: %w", err)
+		}
+		if len(data) > maxInputBytes {
+			return fmt.Errorf("input exceeds the maximum allowed size of %d KB for Ed25519; use ES256 or Ed25519ph to sign larger inputs", maxInputBytes>>10)
+		}
+	} else {
+		// A JWS embeds the payload, so it must be read in full
+		data, err = io.ReadAll(in)
+		if err != nil {
+			return fmt.Errorf("failed to read input: %w", err)
+		}
 	}
 
 	if !f.jwsOutput {
-		valueB64, resolveErr := encodeSignInputValue(f.Algorithm, data)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		f.resolvedValueB64 = valueB64
+		f.resolvedValueB64 = base64.RawURLEncoding.EncodeToString(data)
 		return nil
 	}
 
@@ -778,6 +810,26 @@ func encodeSignInputValue(algorithm string, data []byte) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported signing algorithm %q", algorithm)
 	}
+}
+
+// hashSignInput returns the digest that the browser signs for algorithms that sign a hash of the message, reading the input as a stream
+func hashSignInput(algorithm string, r io.Reader) (string, error) {
+	var h hash.Hash
+	switch algorithm {
+	case protocolv2.SigningAlgES256:
+		h = sha256.New()
+	case protocolv2.SigningAlgEd25519ph:
+		h = sha512.New()
+	default:
+		return "", fmt.Errorf("unsupported signing algorithm %q", algorithm)
+	}
+
+	_, err := io.Copy(h, r)
+	if err != nil {
+		return "", fmt.Errorf("failed to read input: %w", err)
+	}
+
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil)), nil
 }
 
 func signJWSProtectedAlg(algorithm string) string {
